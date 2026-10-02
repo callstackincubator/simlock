@@ -4,8 +4,10 @@
  * `GatewayService` directly, so a change *behind* one of these shapes (a call timeout, the
  * drain-flag split, a truncation guard) is not a change the coordinator has to see.
  *
- * Nothing here has an implementation of its own: `WorkerLink` satisfies `WorkerDispatchTarget`,
- * `WorkerRegistry` satisfies `FleetViews`, and `GatewayService` satisfies `WorkerDirectory`.
+ * Nothing here has an implementation of its own beyond `liveClient`, the one reading of a
+ * target's reachability: `WorkerLink` satisfies `WorkerDispatchTarget`, `WorkerRegistry`
+ * satisfies `FleetViews`, and `GatewayService` satisfies `WorkerDirectory`. The component relay
+ * (ADR 0010 §7) codes against the same seam.
  * These shapes are #118's now: `refresh()` on `WorkerDispatchTarget` is this PR's own addition
  * (see its doc comment) -- the seam changes here, not around it, when one of these shapes turns
  * out to be missing something the coordinator needs.
@@ -40,8 +42,22 @@ export interface WorkerDispatchTarget {
    * interface's other members are read from (a lease event, the periodic tick); this is the one
    * more call site, and `WorkerLink#refresh` already accepts being called with no arguments.
    * Never rejects, mirroring `WorkerLink#refresh`'s own best-effort contract.
+   *
+   * `includeCatalog` also re-reads the catalog: ADR 0010 §7's relay asks for it after a worker
+   * answers `installed`, and awaits it, so the fleet catalog lists the component by the time the
+   * relay answers whenever that refresh succeeds.
    */
-  refresh(): Promise<void>;
+  refresh(options?: { readonly includeCatalog?: boolean }): Promise<void>;
+}
+
+/**
+ * The one answer to "is there a session to call this worker on right now": the link exists, is
+ * reachable, and has a client. `FleetLeaseCoordinator` and the component relay both ask it.
+ */
+export function liveClient(
+  target: WorkerDispatchTarget | undefined,
+): SimlockAdminClient | undefined {
+  return target?.reachable === true ? target.client() : undefined;
 }
 
 /** Resolves a worker id to its live link. `GatewayService` satisfies this;

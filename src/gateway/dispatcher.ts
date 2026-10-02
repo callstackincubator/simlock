@@ -7,14 +7,16 @@
  * Three populations of operations live in the table below:
  *
  * 1. **Answered from the fleet**: `status.get` and `catalog.get` (aggregated, §20/§21),
- *    `worker.*` (§8/§23), `events.*` (the gateway's own bus, which carries every worker's
+ *    `worker.*` (§8/§23, and ADR 0010 §7's `worker.install-component`, relayed to the workers it
+ *    names by `./component-relay.ts`), `events.*` (the gateway's own bus, which carries every worker's
  *    republished events, §22), `config.get` (the gateway's own config, §34), `token.*` (a
  *    gateway mints its own credentials, §24), and -- as of #118 -- the lease *lifecycle*
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
  *    through `FleetLeaseCoordinator`.
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
  *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
- *    and `component.install` (ADR 0010 §7), which installs on one machine.
+ *    and `component.install` (ADR 0010 §7), which installs on one machine; its message points at
+ *    `worker.install-component`, which names the workers to install on.
  * 3. *(Formerly "refused until #118" -- the fleet queue, routing, and lease/exec forwarding this
  *    module now implements. Nothing is left in this population; the type below still enforces
  *    that every operation but `daemon.stop` is accounted for.)*
@@ -41,7 +43,9 @@ import {
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
+import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
+import type { WorkerDirectory } from "./fleet-ports.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -87,6 +91,9 @@ export interface GatewayDispatcherOptions {
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
   readonly workers: WorkerRegistry;
+  /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
+   * satisfies it. */
+  readonly directory: WorkerDirectory;
   readonly tokens?: GatewayTokenStore;
   /**
    * C-2, ADR 0005 §8: "revoking closes the uplink". Called after a successful `token.revoke`
@@ -157,6 +164,7 @@ export class GatewayDispatcher {
       "worker.drain": this.#workerDrain,
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
+      "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
       "list.get": this.#listGet,
 
@@ -167,7 +175,8 @@ export class GatewayDispatcher {
       // ADR 0010 §7: a gateway owns no components and has no download policy of its own.
       "component.install": unsupportedByDesign(
         "component.install",
-        "component.install installs on one machine; run it against a worker",
+        "component.install installs on one machine; on a gateway, name the workers to install on " +
+          "(simlock component install --worker <id> or --all-workers)",
       ),
       "component.list": unsupportedByDesign(
         "component.list",
@@ -279,6 +288,19 @@ export class GatewayDispatcher {
     removed: await this.options.workers.remove(input.workerId),
     workerId: input.workerId,
   });
+
+  /** ADR 0010 §7: the gateway asks each worker; each worker's own policy decides. The HTTP
+   * stream opens once the targets are resolved, which is this session's `onStarted`. */
+  #workerInstallComponent: Handler<"worker.install-component"> = (input, session) =>
+    relayComponentInstall(
+      {
+        clock: this.options.clock,
+        directory: this.options.directory,
+        views: this.options.workers,
+      },
+      input,
+      { onAsking: session.onStarted, onProgress: session.onComponentProgress },
+    );
 
   /**
    * ADR 0005 §14/§20: a non-admin session sees only the fleet leases *it* owns -- resolved

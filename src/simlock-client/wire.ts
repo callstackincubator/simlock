@@ -50,8 +50,11 @@ export interface CallHooks {
   /** ADR 0005 §19a's `started` push, routed by frame id like `output`. Fires once, between the
    * spawn and the first chunk; a call that never sees it simply never had a process. */
   readonly onStarted?: (() => void) | undefined;
-  /** ADR 0010 §6's `component-progress` push, routed by frame id like `progress`. */
-  readonly onComponentProgress?: ((progress: ComponentInstallProgress) => void) | undefined;
+  /** ADR 0010 §6's `component-progress` push, routed by frame id like `progress`. `workerId` is
+   * set when a gateway relays the update from one of its workers (§7). */
+  readonly onComponentProgress?:
+    | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
+    | undefined;
 }
 
 interface PendingCall extends CallHooks {
@@ -317,7 +320,7 @@ export class SimlockWire {
         // already settled or was never this connection's (ADR 0003 §8).
         const requestId = parsed.data.requestId;
         const id = typeof requestId === "number" ? requestId : Number(requestId);
-        this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress);
+        this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress, parsed.data.workerId);
         return;
       }
       case "lease-lost": {

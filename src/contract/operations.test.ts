@@ -67,6 +67,12 @@ const ROLE_MATRIX: ReadonlyArray<{
   // ADR 0010 §6: an operator's consent to a download.
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
+  // ADR 0010 §7: the same consent, given for a set of workers through their gateway.
+  {
+    name: "worker.install-component",
+    input: { platform: "ios", version: "26.4", workers: "all" },
+    role: "admin",
+  },
 ];
 
 describe("operation role matrix", () => {
@@ -132,6 +138,11 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
   { name: "component.list", input: {}, effect: "read" },
+  {
+    name: "worker.install-component",
+    input: { platform: "ios", version: "26.4", workers: "all" },
+    effect: "write",
+  },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
@@ -159,6 +170,37 @@ describe("operation effects", () => {
 
   it.each(EFFECT_MATRIX)("$name with $input is a $effect", ({ name, input, effect }) => {
     expect(resolvedEffect(name, input)).toBe(effect);
+  });
+});
+
+describe("worker.install-component input", () => {
+  const parse = (input: Record<string, unknown>) =>
+    OPERATIONS["worker.install-component"].input.safeParse({
+      platform: "android",
+      version: "35",
+      ...input,
+    }).success;
+
+  it("accepts all workers, or 1 to 64 distinct worker ids", () => {
+    expect(parse({ workers: "all" })).toBe(true);
+    expect(parse({ workers: ["wrk_1"] })).toBe(true);
+    expect(parse({ workers: Array.from({ length: 64 }, (_, index) => `wrk_${index}`) })).toBe(true);
+  });
+
+  it.each([
+    ["no worker", []],
+    ["65 workers", Array.from({ length: 65 }, (_, index) => `wrk_${index}`)],
+    ["the same worker twice", ["wrk_1", "wrk_1"]],
+    ["an empty worker id", [""]],
+    ["a word other than all", "every"],
+  ])("refuses a worker list that is %s", (_label, workers) => {
+    expect(parse({ workers })).toBe(false);
+  });
+
+  it("checks the version with component.install's own schema", () => {
+    expect(parse({ version: "-35", workers: "all" })).toBe(false);
+    expect(parse({ version: "26 4", workers: "all" })).toBe(false);
+    expect(parse({ version: "x".repeat(65), workers: "all" })).toBe(false);
   });
 });
 

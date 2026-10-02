@@ -691,6 +691,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
       config,
       coordinator: fleetCoordinator,
+      directory: gatewayService,
       eventHistory,
       health: () => daemon.health,
       host: fitHostFacts({ ...options.hostSystem, tools: [] }),

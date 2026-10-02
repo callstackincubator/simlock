@@ -1133,7 +1133,14 @@ export class DaemonServer {
       case "worker.remove":
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
       case "component.install":
-        return this.#installComponent(connection, frame.id, frame.payload);
+        return this.#installComponent(connection, frame.id, "component.install", frame.payload);
+      case "worker.install-component":
+        return this.#installComponent(
+          connection,
+          frame.id,
+          "worker.install-component",
+          frame.payload,
+        );
       case "component.list":
         return this.#dispatcher.dispatch(
           "component.list",
@@ -1288,16 +1295,21 @@ export class DaemonServer {
    * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
    * is dropped): the install carries on for every call joined to it, and a client that
    * reconnects repeats the request to join it again.
+   *
+   * A gateway's `worker.install-component` takes the same path: its progress names the worker
+   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher has
+   * no handler for it and answers `UNKNOWN_REQUEST`.
    */
   #installComponent(
     connection: Connection,
     requestId: RequestId,
+    operation: "component.install" | "worker.install-component",
     value: unknown,
   ): Promise<unknown> {
-    return this.#dispatcher.dispatch("component.install", value ?? {}, {
+    return this.#dispatcher.dispatch(operation, value ?? {}, {
       ...this.#session(connection),
-      onComponentProgress: (progress) => {
-        void this.#pushComponentProgress(connection.socket, requestId, progress).catch(
+      onComponentProgress: (progress, workerId) => {
+        void this.#pushComponentProgress(connection.socket, requestId, progress, workerId).catch(
           () => undefined,
         );
       },
@@ -1309,12 +1321,13 @@ export class DaemonServer {
     socket: IpcConnection,
     requestId: RequestId,
     progress: ComponentProgress,
+    workerId: string | undefined,
   ): Promise<void> {
     return writeFrame(socket, {
       push: "component-progress",
       payload: this.#parseOutput(
         PUSH_SCHEMAS["component-progress"],
-        { progress, requestId },
+        { progress, requestId, ...(workerId === undefined ? {} : { workerId }) },
         "push:component-progress",
       ),
     });

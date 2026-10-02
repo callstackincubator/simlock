@@ -1972,12 +1972,127 @@ describe("CLI: component install (ADR 0010 §6)", () => {
         ),
       ).resolves.toBe(0);
       expect(output.stdout).toBe(
-        "Usage: simlock component install <ios|android> <version>\n" +
+        "Usage: simlock component install <ios|android> <version> [--worker <id>... | --all-workers]\n" +
           "       simlock component list [--platform <ios|android>]\n",
       );
       expect(connected).toBe(false);
     },
   );
+});
+
+describe("CLI: component install on a gateway's workers (ADR 0010 §7)", () => {
+  /** Every stderr line but the agent-fallback notice the fake connection causes. */
+  function progressLines(stderr: string): unknown[] {
+    return stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown)
+      .filter((line) => !Object.hasOwn(line as object, "notice"));
+  }
+
+  it("--all-workers prints progress with each worker's id, one result line, and exits 15 when one worker is refused", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const results = [
+      { outcome: "installed" as const, version: "35", workerId: "wrk_a" },
+      {
+        error: { code: "DOWNLOADS_DISABLED", message: "Downloads are disabled" },
+        outcome: "refused" as const,
+        workerId: "wrk_b",
+      },
+    ];
+    const client = fakeClient({
+      installComponentOnWorkers: async (input, options) => {
+        asked.push(input);
+        options?.onProgress?.({ stage: "waiting", workerId: "wrk_a" });
+        options?.onProgress?.({ fraction: 0.5, stage: "downloading", workerId: "wrk_b" });
+        return { results };
+      },
+    });
+
+    await expect(
+      runCli(
+        ["component", "install", "android", "35", "--all-workers"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      ),
+    ).resolves.toBe(15);
+
+    expect(asked).toEqual([{ platform: "android", version: "35", workers: "all" }]);
+    expect(progressLines(output.stderr)).toEqual([
+      { stage: "waiting", workerId: "wrk_a" },
+      { fraction: 0.5, stage: "downloading", workerId: "wrk_b" },
+    ]);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stdout)).toEqual({ results });
+  });
+
+  it("exits 0 when every named worker ends installed or already-installed, and names each --worker given", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      installComponentOnWorkers: async (input) => {
+        asked.push(input);
+        return {
+          results: [
+            { outcome: "installed", version: "26.4", workerId: "wrk_a" },
+            { outcome: "already-installed", version: "26.4", workerId: "wrk_b" },
+          ],
+        };
+      },
+    });
+
+    await expect(
+      runCli(
+        ["component", "install", "ios", "26.4", "--worker", "wrk_a", "--worker", "wrk_b"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ platform: "ios", version: "26.4", workers: ["wrk_a", "wrk_b"] }]);
+  });
+
+  it.each(["skipped", "failed", "unknown"] as const)(
+    "exits 15 when a worker ends %s",
+    async (outcome) => {
+      const output = outputCapture();
+      const client = fakeClient({
+        installComponentOnWorkers: async () => ({
+          results: [
+            { outcome: "installed", version: "35", workerId: "wrk_a" },
+            { error: { code: "WORKER_UNREACHABLE", message: "gone" }, outcome, workerId: "wrk_b" },
+          ],
+        }),
+      });
+
+      await expect(
+        runCli(
+          ["component", "install", "android", "35", "--all-workers"],
+          output.environmentWith({ connectAdmin: async () => client }),
+        ),
+      ).resolves.toBe(15);
+    },
+  );
+
+  it("refuses --worker together with --all-workers as USAGE, without connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    await expect(
+      runCli(
+        ["component", "install", "android", "35", "--worker", "wrk_a", "--all-workers"],
+        output.environmentWith({
+          connectAdmin: async () => {
+            connected = true;
+            return fakeClient();
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(connected).toBe(false);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+      error: { code: "USAGE" },
+    });
+  });
 
   it("lists the command in the usage banner", async () => {
     const output = outputCapture();
@@ -4144,6 +4259,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
         platform: input.platform,
         version: input.version,
       }),
+    installComponentOnWorkers: () => Promise.resolve({ results: [] }),
     ...overrides,
   };
   return base;

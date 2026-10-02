@@ -56,7 +56,7 @@ import {
 import { SerializedDecision } from "../core/serialized-decision.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import type { WorkerDirectory } from "./fleet-ports.js";
+import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -760,8 +760,7 @@ export class FleetLeaseCoordinator {
   // fallow-ignore-next-line complexity -- one attempt, every exit of which is named in the doc comment above.
   async #attempt(waiter: FleetWaiter, decision: RoutingDecision, model: string): Promise<void> {
     const workerId = decision.workerId;
-    const target = this.options.directory.target(workerId);
-    const client = target?.reachable === true ? target.client() : undefined;
+    const client = liveClient(this.options.directory.target(workerId));
     if (client === undefined) {
       // The view named a worker that is no longer reachable by the time we got here -- the same
       // "stale, not wrong" story as a worker's own `NO_CAPACITY`, just discovered a step earlier.
@@ -1006,8 +1005,7 @@ export class FleetLeaseCoordinator {
     workerId: string,
     fn: (client: SimlockAdminClient) => Promise<Result>,
   ): Promise<Result> {
-    const target = this.options.directory.target(workerId);
-    const client = target?.reachable === true ? target.client() : undefined;
+    const client = liveClient(this.options.directory.target(workerId));
     if (client === undefined) {
       throw new DispatchError("WORKER_UNREACHABLE", `Worker ${workerId} is not reachable`, {
         workerId,

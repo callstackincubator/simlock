@@ -391,6 +391,44 @@ describe("pushes", () => {
     expect(onProgress).toHaveBeenCalledTimes(2);
   });
 
+  it("hands installComponentOnWorkers each relayed update with its workerId, and drops one that names no worker", async () => {
+    // ADR 0010 §7: a gateway sets `workerId` on every `component-progress` push it relays.
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const onProgress = vi.fn();
+    const installPromise = client.installComponentOnWorkers(
+      { platform: "android", version: "35", workers: "all" },
+      { onProgress },
+    );
+    await flushMicrotasks();
+    const call = connection.lastSentOf("worker.install-component")!;
+    expect(call.payload).toEqual({ platform: "android", version: "35", workers: "all" });
+
+    connection.push("component-progress", {
+      progress: { stage: "waiting" },
+      requestId: call.id,
+      workerId: "wrk_a",
+    });
+    connection.push("component-progress", { progress: { stage: "waiting" }, requestId: call.id });
+    connection.push("component-progress", {
+      progress: { fraction: 0.5, stage: "downloading" },
+      requestId: call.id,
+      workerId: "wrk_b",
+    });
+    const result = { results: [{ outcome: "installed", version: "35", workerId: "wrk_a" }] };
+    connection.reply(call.id, result);
+
+    await expect(installPromise).resolves.toEqual(result);
+    expect(onProgress.mock.calls.map(([progress]) => progress)).toEqual([
+      { stage: "waiting", workerId: "wrk_a" },
+      { fraction: 0.5, stage: "downloading", workerId: "wrk_b" },
+    ]);
+  });
+
   it("routes device.exec output chunks to that call's onOutput, in order, and stops at its reply", async () => {
     // ADR 0005 §19a: `output` is request-scoped like `progress`, so it reaches the call that is
     // still waiting on its frame id and nothing else.

@@ -261,10 +261,49 @@ const result = await admin.installComponent(
   agent session, `NO_DRIVER`, `INSUFFICIENT_DISK_SPACE`,
   `LICENSE_NOT_ACCEPTED`, `DOWNLOAD_TIMEOUT` once `downloads.timeoutMs`,
   waiting included, runs out, and `UNSUPPORTED_IN_GATEWAY_MODE` from a
-  gateway.
+  gateway, which installs only on workers it is told to (below).
 - Concurrent calls, and lease requests with `allowDownload`, for the same
   component share one download, and each gets its result. A dropped
   connection does not stop the download; calling again joins it.
+
+### On a gateway's workers: `installComponentOnWorkers`
+
+`installComponentOnWorkers({ platform, version, workers }, { onProgress? })`
+asks a gateway to install a component on its workers — the call behind
+`simlock component install --worker`/`--all-workers`. `workers` is `"all"`
+or a list of 1 to 64 distinct worker ids from `listWorkers()`.
+
+```ts
+const { results } = await admin.installComponentOnWorkers(
+  { platform: "android", version: "35", workers: "all" },
+  { onProgress: (progress) => console.error(progress) },
+);
+// onProgress: { stage: "downloading", fraction: 0.41, workerId: "3f81a2c4" }
+// results: [
+//   { workerId: "3f81a2c4", label: "mac-studio-2", outcome: "installed", version: "35" },
+//   { workerId: "9b07de11", outcome: "refused", error: { code: "DOWNLOADS_DISABLED", message: "..." } },
+// ]
+```
+
+- Every targeted worker is asked at the same time and installs the
+  component under its own `downloads.policy`, disk check and
+  `downloads.timeoutMs`. A drained worker is asked too.
+- `results` has one entry per worker, in ascending worker id. `outcome` is
+  `installed` or `already-installed` (with `version`), `refused` (the
+  worker's policy is `"never"`), `failed` (the worker's own error code),
+  `skipped` (`"all"` only: the worker could not be asked), or `unknown` (its
+  connection dropped, or it did not answer within its own
+  `downloads.timeoutMs` plus one minute; the install carries on). Every
+  outcome but the first two carries `error: { code, message }`. The call
+  resolves either way; read the outcomes.
+- It rejects before any worker is asked with `UNKNOWN_WORKER` for an id the
+  gateway does not know, `WORKER_UNREACHABLE` for a named worker it cannot
+  ask, `FORBIDDEN` for an agent session, and `UNKNOWN_REQUEST` from a daemon
+  that is not a gateway.
+- A worker's new component is in the gateway's `getCatalog()` by the time
+  the call resolves, unless the gateway could not read that worker's
+  catalog just then; its next read brings it in. Nothing is retried or kept
+  for a worker that was away.
 
 ## What is installed: `listComponents`
 

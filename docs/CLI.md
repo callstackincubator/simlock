@@ -58,11 +58,11 @@ command starts it again) to bring the platform up.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
-| 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down) |
+| 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down), or a worker named with `component install --worker` cannot be asked |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
-| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker |
+| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker, or for `component install` name the workers with `--worker` or `--all-workers` |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — an operation this daemon's mode does not implement (`worker list` against a worker), or a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
@@ -77,16 +77,19 @@ command starts it again) to bring the platform up.
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
-| 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` naming a worker the gateway does not know |
+| 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
+| 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
 
-Every row but 14 matches the `cliExitCode` column of the contract's error
-table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
-maintain a second mapping; 14 is not a daemon error code but an outcome of a
-`lease` that stays alive, so it lives beside the table's other `lease`
-outcome, 0.
+Every row but 14 and 15 matches the `cliExitCode` column of the contract's
+error table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does
+not maintain a second mapping. 14 and 15 are not daemon error codes but
+outcomes of a command that succeeded: 14 of a `lease` that stays alive, so it
+lives beside the table's other `lease` outcome, 0; 15 of an install on
+several workers, whose per-worker report on stdout says which worker ended
+how.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
@@ -104,9 +107,10 @@ implement them:
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
-  `nuke`, `cleanup`, `doctor`, `driver.passthrough`, `component install` and
-  `component list` stay per-worker operations rather than waiting on some later fleet-wide
-  version.
+  `nuke`, `cleanup`, `doctor`, `driver.passthrough` and `component list`
+  stay per-worker operations rather than waiting on some later fleet-wide
+  version. `component install` without a worker flag answers it too; with
+  `--worker` or `--all-workers` it installs on the workers you name.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
@@ -740,6 +744,15 @@ something the client cannot run, and handing it one would be worse than an
 error. That is why those two commands switch to `device.exec` here rather
 than failing.
 
+**`simlock component install` needs workers named.** A gateway owns no
+components, so without a flag the command answers
+`UNSUPPORTED_IN_GATEWAY_MODE` (exit 2) and says to name workers. With
+`--worker <id>` (repeatable) or `--all-workers`, it asks each of those
+workers to install the component, all at the same time, and reports one
+result per worker. Each worker decides for itself under its own
+`downloads.policy`; the gateway has no download policy of its own. See
+[On a gateway's workers](#on-a-gateways-workers).
+
 `simlock config get` on a gateway returns the gateway's own configuration,
 not any worker's. `simlock daemon <start|stop|status|logs>` manages the
 gateway process itself, exactly as it manages a worker's.
@@ -1172,7 +1185,7 @@ custom. If `devices.xml` cannot be read, the built-in models are still
 listed. A custom model is marked `(custom)` in the human view of `simlock
 catalog` and listed in `customModels` in `--json`.
 
-## `simlock component install <ios|android> <version>`
+## `simlock component install <ios|android> <version> [--worker <id>... | --all-workers]`
 
 Installs one iOS simulator runtime or Android system image, without leasing
 a device. Use it to prepare a machine before agents need the component,
@@ -1215,12 +1228,71 @@ appears in `simlock catalog` at once.
   `INSUFFICIENT_DISK_SPACE` (exit 12).
 - **Stopping.** Stopping the daemon ends the install; nothing resumes it.
   Run the command again.
-- **Gateway.** A gateway owns no components and answers
-  `UNSUPPORTED_IN_GATEWAY_MODE`; run the command against the worker.
+- **Gateway.** A gateway owns no components. Without a worker flag it
+  answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2) and says to name workers;
+  see below.
 
 The command takes no `--json`: its output is already JSON, so the flag is a
 usage error (exit 2), as is a missing or extra argument or a platform other
 than `ios` or `android`.
+
+### On a gateway's workers
+
+Against a gateway, name the workers to install on: `--worker <id>`, once per
+worker, or `--all-workers`. Giving both is a usage error (exit 2). The ids
+are the ones `simlock worker list` shows.
+
+```sh
+simlock component install android 35 --all-workers
+simlock component install ios 26.4 --worker 3f81a2c4 --worker 9b07de11
+```
+
+Every targeted worker is asked at the same time, and each one installs the
+component itself, exactly as if the command had run on that machine: its own
+`downloads.policy`, Android license setting, disk check and
+`downloads.timeoutMs` apply. A worker set to `downloads.policy: "never"`
+refuses. One worker's failure does not stop the others. A drained worker is
+asked like any other: draining stops new leases, not maintenance.
+
+Progress lines on stderr name the worker they came from. The result is one
+JSON line on stdout with one entry per worker, in ascending worker id:
+
+```text
+{"stage":"downloading","fraction":0.41,"workerId":"3f81a2c4"}    (stderr)
+{"results":[{"workerId":"3f81a2c4","label":"mac-studio-2","outcome":"installed","version":"35"},{"workerId":"9b07de11","outcome":"refused","error":{"code":"DOWNLOADS_DISABLED","message":"Downloads are disabled by configuration: downloads.policy is \"never\""}}]}
+```
+
+| `outcome` | Meaning |
+|---|---|
+| `installed` | the worker installed the component; `version` is the exact one |
+| `already-installed` | the worker already had it |
+| `refused` | the worker's `downloads.policy` is `"never"` |
+| `failed` | the worker answered with an error; `error.code` is the worker's own (`DOWNLOAD_TIMEOUT`, `INSUFFICIENT_DISK_SPACE`, …) |
+| `skipped` | `--all-workers` only: the worker could not be asked — it is disconnected, speaks an incompatible protocol, or the gateway has not read its config yet |
+| `unknown` | the worker's connection dropped during its install, or it did not answer within its own `downloads.timeoutMs` plus one minute; the install carries on on the worker |
+
+Every outcome but `installed` and `already-installed` carries
+`error: {code, message}`. The command exits `0` when every worker ended
+`installed` or `already-installed`, and `15` otherwise.
+
+- **Named workers are checked first.** An id the gateway does not know fails
+  the whole command with `UNKNOWN_WORKER` (exit 12), and a named worker that
+  cannot be asked fails it with `WORKER_UNREACHABLE` (exit 1). Either way no
+  worker is asked.
+- **Nothing is kept for later.** A skipped worker is not asked when it comes
+  back, and nothing is retried. Run the command again.
+- **After an `unknown`.** The worker finishes its install on its own. Once
+  it is connected again, `simlock catalog` shows whether the component is
+  there; running the command again reports `already-installed` for it.
+- **The catalog.** A worker's new component appears in the gateway's
+  `simlock catalog` by the time the command prints its result, unless the
+  gateway could not read that worker's catalog just then (its connection
+  dropped, or it did not answer); the gateway's next read of it brings the
+  component in.
+- **While it runs**, `simlock worker list` shows the install under each
+  worker that is installing.
+- The gateway never downloads, stores or forwards a runtime or system image
+  itself.
 
 ## `simlock component list [--platform <ios|android>]`
 

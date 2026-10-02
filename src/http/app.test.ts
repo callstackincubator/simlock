@@ -1392,6 +1392,63 @@ describe("POST /v1/components/install", () => {
     ]);
   });
 
+  it("with workers, dispatches worker.install-component, streams progress with each workerId, and ends with the results", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const responsePromise = postInstall(app, {
+      platform: "android",
+      version: "35",
+      workers: ["wrk_a", "wrk_b"],
+    });
+    const call = await waitForDispatch(dispatcher, "worker.install-component");
+    expect(call.input).toEqual({ platform: "android", version: "35", workers: ["wrk_a", "wrk_b"] });
+
+    call.session.onStarted?.();
+    call.session.onComponentProgress?.({ stage: "waiting" }, "wrk_a");
+    const response = await answeredWhileOpen(responsePromise);
+    expect(response.status).toBe(200);
+
+    const framesPromise = readSseFrames(response, 3);
+    await Promise.resolve();
+    call.session.onComponentProgress?.({ fraction: 0.5, stage: "downloading" }, "wrk_b");
+    const result = {
+      results: [
+        { outcome: "installed", version: "35", workerId: "wrk_a" },
+        {
+          error: { code: "DOWNLOADS_DISABLED", message: "never" },
+          outcome: "refused",
+          workerId: "wrk_b",
+        },
+      ],
+    };
+    call.resolve(result);
+
+    expect(await framesPromise).toEqual([
+      { data: { stage: "waiting", workerId: "wrk_a" }, event: "progress" },
+      { data: { fraction: 0.5, stage: "downloading", workerId: "wrk_b" }, event: "progress" },
+      { data: result, event: "result" },
+    ]);
+  });
+
+  it("with workers, answers the gateway operation's UNKNOWN_WORKER as a JSON 404 rather than a stream", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["worker.install-component"] = () => {
+      throw new DispatchError("UNKNOWN_WORKER", "Unknown worker: wrk_nope");
+    };
+
+    const response = await postInstall(app, {
+      platform: "android",
+      version: "35",
+      workers: ["wrk_nope"],
+    });
+
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      "UNKNOWN_WORKER",
+    );
+    expect(response.status).toBe(404);
+  });
+
   it("refuses a body with a field the operation does not take with 400, dispatching nothing", async () => {
     const { app, dispatcher } = buildHarness();
 

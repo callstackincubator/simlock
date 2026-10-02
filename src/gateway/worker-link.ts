@@ -116,8 +116,9 @@ export class WorkerLink {
   #unsubscribeEvents: (() => Promise<void>) | undefined;
   #closed = false;
   #refreshing = false;
-  /** The one follow-up refresh queued behind the one in flight, if any. */
-  #queuedRefresh: RefreshOptions | undefined;
+  /** The one follow-up refresh queued behind the one in flight, if any, and the promise every
+   * caller that queued it waits on. */
+  #queuedRefresh: QueuedRefresh | undefined;
   /** P1/C-1: consecutive `status.get` timeouts, reset to 0 the instant any `status.get` answers
    * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
    * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
@@ -275,13 +276,17 @@ export class WorkerLink {
    * most one queued follow-up: a burst of worker events (a lease granted, its device leased,
    * its capacity changed) must not become a burst of round trips, but the *last* event in a
    * burst must still be reflected.
+   *
+   * Resolves once a refresh that started after this call has finished, so a caller that awaits
+   * it reads a view at least as new as the moment it asked: a call that coalesces into the
+   * queued follow-up waits for that follow-up, not for the one already in flight. Never rejects.
    */
   async refresh(options: RefreshOptions = {}): Promise<void> {
     const client = this.#client;
     if (client === undefined || this.#closed) return;
     if (this.#refreshing) {
-      this.#queuedRefresh = mergeQueuedRefresh(this.#queuedRefresh, options);
-      return;
+      this.#queuedRefresh = queueRefresh(this.#queuedRefresh, options);
+      return this.#queuedRefresh.done;
     }
     this.#refreshing = true;
     try {
@@ -322,7 +327,11 @@ export class WorkerLink {
       this.#refreshing = false;
       const queued = this.#queuedRefresh;
       this.#queuedRefresh = undefined;
-      if (queued !== undefined && !this.#closed) void this.refresh(queued);
+      // A link on its way out refreshes nothing more; its waiters are released all the same.
+      if (queued !== undefined) {
+        if (this.#closed) queued.resolve();
+        else void this.refresh(queued.options).then(queued.resolve);
+      }
     }
   }
 
@@ -504,16 +513,28 @@ const INSTALL_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 interface RefreshOptions {
+  /** Also re-read the catalog and the config, as on connect and on the periodic tick. */
   readonly includeCatalog?: boolean;
 }
 
+interface QueuedRefresh {
+  readonly options: RefreshOptions;
+  readonly done: Promise<void>;
+  readonly resolve: () => void;
+}
+
 /** One queued refresh stands for every request that queued; it reads the catalog when any of
- * them asked for it. */
-function mergeQueuedRefresh(
-  queued: RefreshOptions | undefined,
-  next: RefreshOptions,
-): RefreshOptions {
-  return { includeCatalog: queued?.includeCatalog === true || next.includeCatalog === true };
+ * them asked for it, and every one of them waits on the same `done`. */
+function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): QueuedRefresh {
+  const options = {
+    includeCatalog: queued?.options.includeCatalog === true || next.includeCatalog === true,
+  };
+  if (queued !== undefined) return { ...queued, options };
+  let resolve!: () => void;
+  const done = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { done, options, resolve };
 }
 
 /** What a worker's view keeps of its `status.get`. */

@@ -9,6 +9,8 @@
 import type { z } from "zod";
 
 import type {
+  ComponentInstallInput,
+  ComponentInstallOutput,
   ExecInput,
   ExecOptions,
   ExecOutput,
@@ -20,6 +22,7 @@ import type {
   LeaseReleaseOutput,
   LeaseRenewInput,
   LeaseRequestInput,
+  InstallComponentOptions,
   RequestLeaseOptions,
   SimlockAdminClient,
   StatusGetOutput,
@@ -232,6 +235,10 @@ export class ScriptedWorkerClient {
    * still lands in `calls` before it hangs, so a test can tell it was attempted.
    */
   readonly hangingCalls = new Set<string>();
+  /** `status.get` calls wait on this while it is set -- `holdStatus()` sets it, and the function
+   * that returns lets every waiting and later call through. Unlike `hangingCalls`, a held call
+   * answers once released. */
+  #statusHold: Promise<void> | undefined;
   /** Makes the closure `subscribeEvents` returns hang forever instead of resolving -- the exact
    * shape of D2's `events.unsubscribe` round trip that never answers. Read at call time, not
    * captured when the closure is created, so a test can flip this after the worker is already
@@ -267,6 +274,19 @@ export class ScriptedWorkerClient {
   lastRequestLeaseOptions: RequestLeaseOptions | undefined;
   /** The input of the last `lease.request` forwarded to this worker. */
   lastRequestLeaseInput: LeaseRequestInput | undefined;
+  /**
+   * ADR 0010 §7: how this worker answers a relayed `component.install`. Defaults to `installed`
+   * with the version asked for; a test replaces it to refuse, fail, hang, or report progress.
+   */
+  installComponentHandler: (
+    input: ComponentInstallInput,
+    options: InstallComponentOptions,
+  ) => Promise<ComponentInstallOutput> = async (input) => ({
+    component: input.version,
+    outcome: "installed",
+    platform: input.platform,
+    version: input.version,
+  });
 
   constructor(
     readonly role: "admin" | "agent" = "admin",
@@ -296,9 +316,22 @@ export class ScriptedWorkerClient {
     return this as unknown as SimlockAdminClient;
   }
 
+  /** Holds every `status.get` until the returned function is called. */
+  holdStatus(): () => void {
+    let release!: () => void;
+    this.#statusHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      this.#statusHold = undefined;
+      release();
+    };
+  }
+
   async getStatus(): Promise<StatusGetOutput> {
     this.calls.push("status.get");
     if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
+    await this.#statusHold;
     this.#throwIfFailing();
     // Parsed through the operation's output schema, as the real client parses every answer:
     // that parse is where the contract bounds what a worker claims (safety rule 10).
@@ -359,7 +392,7 @@ export class ScriptedWorkerClient {
 
   /** #118: `FleetLeaseCoordinator#exec` forwards here with the namespaced requester -- assert
    * on `calls` (test: "device.exec forwarding sends the namespaced requesterId"). */
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  // fallow-ignore-next-line unused-class-member complexity -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces, which the audit cannot follow; one scripted outcome per branch of a real exec.
   async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
@@ -371,6 +404,17 @@ export class ScriptedWorkerClient {
     if (outcome?.kind === "hang") return new Promise<never>(() => {});
     for (const chunk of outcome?.output ?? []) onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };
+  }
+
+  /** ADR 0010 §7: the gateway's relay asks through this -- scripted by `installComponentHandler`. */
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async installComponent(
+    input: ComponentInstallInput,
+    options: InstallComponentOptions = {},
+  ): Promise<ComponentInstallOutput> {
+    this.calls.push(`component.install:${input.platform}:${input.version}`);
+    this.#throwIfFailing();
+    return this.installComponentHandler(input, options);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.

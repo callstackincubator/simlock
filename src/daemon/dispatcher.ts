@@ -186,8 +186,8 @@ export class Dispatcher {
    * to the compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
    * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
    *
-   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`) are excluded
-   * from the type rather than given handlers that throw. A worker daemon has no worker
+   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`; ADR 0010 §7:
+   * `worker.install-component`) are excluded from the type rather than given handlers that throw. A worker daemon has no worker
    * registry to answer them from, and the honest answer is the one `dispatch()`'s own
    * missing-handler guard already gives -- `UNKNOWN_REQUEST`, "this daemon does not implement
    * that operation". Excluding them here also means adding a gateway operation cannot silently

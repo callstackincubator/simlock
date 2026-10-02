@@ -47,6 +47,7 @@ import type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  InstallComponentOnWorkersOptions,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -74,6 +75,8 @@ import type {
   TokenRevokeOutput,
   WorkerDrainInput,
   WorkerDrainOutput,
+  WorkerInstallComponentInput,
+  WorkerInstallComponentOutput,
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
@@ -104,6 +107,7 @@ export type {
   EventsReplayOutput,
   EventsSubscribeOutput,
   EventsUnsubscribeOutput,
+  InstallComponentOnWorkersOptions,
   InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
@@ -130,8 +134,11 @@ export type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  WorkerComponentProgress,
   WorkerDrainInput,
   WorkerDrainOutput,
+  WorkerInstallComponentInput,
+  WorkerInstallComponentOutput,
   WorkerListOutput,
   WorkerRemoveOutput,
   WorkerUndrainOutput,
@@ -247,6 +254,17 @@ export interface SimlockAdminClient extends SimlockClient {
     input: ComponentInstallInput,
     options?: InstallComponentOptions,
   ): Promise<ComponentInstallOutput>;
+
+  /**
+   * ADR 0010 §7, gateway-only: installs one component on named workers (`workers: [ids]`) or on
+   * every connected one (`workers: "all"`). Every targeted worker is asked at the same time and
+   * answers for itself; the result lists one entry per worker. `options.onProgress` hears each
+   * worker's progress with its `workerId`. A worker answers `UNKNOWN_REQUEST`.
+   */
+  installComponentOnWorkers(
+    input: WorkerInstallComponentInput,
+    options?: InstallComponentOnWorkersOptions,
+  ): Promise<WorkerInstallComponentOutput>;
 }
 
 /** Internal: builds either client. `admin` toggles only which methods the returned object
@@ -375,6 +393,7 @@ function buildDegradedClient(
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
     installComponent: () => rejected(),
+    installComponentOnWorkers: () => rejected(),
   };
   return client;
 }
@@ -589,6 +608,28 @@ class SimlockClientImpl {
       { onComponentProgress: options.onProgress },
     );
     return this.#parseOutput("component.install", payload);
+  }
+
+  async installComponentOnWorkers(
+    input: WorkerInstallComponentInput,
+    options: InstallComponentOnWorkersOptions = {},
+  ): Promise<WorkerInstallComponentOutput> {
+    const { onProgress } = options;
+    const payload = await this.#callRaw(
+      "worker.install-component",
+      this.#parseInput("worker.install-component", input),
+      {
+        // A gateway always names the worker; an update that names none cannot be attributed
+        // to one, so it is dropped rather than guessed.
+        onComponentProgress:
+          onProgress === undefined
+            ? undefined
+            : (progress, workerId) => {
+                if (workerId !== undefined) onProgress({ ...progress, workerId });
+              },
+      },
+    );
+    return this.#parseOutput("worker.install-component", payload);
   }
 
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput> {
