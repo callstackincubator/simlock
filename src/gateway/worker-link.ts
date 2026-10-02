@@ -18,12 +18,12 @@
 import { z } from "zod";
 
 import type { EventBus, EventName } from "../bus/index.js";
-import { isSimlockError, statusDeviceSchema } from "../contract/index.js";
+import { grantedDeviceSchema, isSimlockError, statusDeviceSchema } from "../contract/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import type { WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
+import type { WorkerGrantedDevice, WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
 
 /**
  * How long the gateway waits for one round trip to a worker before giving up on it.
@@ -108,6 +108,18 @@ export interface WorkerLinkOptions {
  * `driverData` -- an opaque, driver-defined blob -- from crossing the fleet into a gateway
  * client's `status.get`. */
 const viewDevicesSchema = z.array(statusDeviceSchema);
+
+/** The same `list.get` answer narrowed to the grant shape instead, which keeps `driverDeviceId`
+ * for the lease payload a gateway serves its holder (`GET /v1/leases/{id}`). Kept off the view,
+ * in the registry beside it: see `WorkerGrantedDevice`. `list.get`'s contract also admits a
+ * device without `driverDeviceId`, so one that does not parse is left out on its own rather than
+ * failing the view's refresh; its lease then answers `UNKNOWN_LEASE` rather than a made-up udid. */
+function grantedDevices(devices: readonly unknown[]): WorkerGrantedDevice[] {
+  return devices.flatMap((device) => {
+    const parsed = grantedDeviceSchema.safeParse(device);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 export class WorkerLink {
   readonly workerId: string;
@@ -364,9 +376,14 @@ export class WorkerLink {
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
     if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    // The leases come from `status.get` and the devices from the `list.get` after it, and a
+    // worker keeps a device while a lease holds it, so a lease reported here names a device in
+    // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
+    // never visible before its device.
     this.options.registry.refresh(this.workerId, {
       ...viewStatus(status),
       devices: viewDevicesSchema.parse(devices),
+      grantedDevices: grantedDevices(devices),
       version: client.daemonVersion,
       ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
       ...(config === undefined ? {} : viewConfig(config)),

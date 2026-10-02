@@ -33,6 +33,8 @@ function buildHarness(
   overrides: {
     readonly config?: HttpGatewayDeps["config"];
     readonly leaseRequests?: HttpGatewayDeps["leaseRequests"];
+    /** A gateway's device reader, in place of the fake worker registry. */
+    readonly registry?: HttpGatewayDeps["registry"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -67,7 +69,7 @@ function buildHarness(
     leaseRequests: overrides.leaseRequests ?? dispatcher.requests,
     logger,
     ownerRoutedFacts,
-    registry,
+    registry: overrides.registry ?? registry,
     tokens,
   });
 
@@ -970,6 +972,40 @@ describe("lease routes", () => {
       platform: "ios",
       udid: "ABCD-1234",
     });
+    expect(body.lease).not.toHaveProperty("worker");
+    expect(body.lease).not.toHaveProperty("workerId");
+  });
+
+  it("GET /v1/leases/:id on a gateway builds the lease from its own worker's device, not another worker's with the same device id", async () => {
+    const device = (workerId: string, udid: string) => ({
+      ...makeDevice({ driverDeviceId: udid, id: "dev_1" }),
+      workerId,
+    });
+    const { app, dispatcher } = buildHarness({
+      registry: {
+        snapshot: { devices: [device("wrk_a", "UDID-A"), device("wrk_b", "UDID-B")] },
+      },
+    });
+    dispatcher.handlers["lease.list"] = () => ({
+      leases: [
+        {
+          ...makeLease({ deviceId: "dev_1", id: "wrk_b.lse_1", ownerId: "tok_agent" }),
+          worker: { id: "wrk_b", label: "mac-b" },
+          workerId: "wrk_b",
+        },
+      ],
+    });
+
+    const response = await app.request("/v1/leases/wrk_b.lse_1", { headers: agentAuth });
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { lease: unknown }).lease).toMatchObject({
+      deviceId: "dev_1",
+      id: "wrk_b.lse_1",
+      udid: "UDID-B",
+      worker: { id: "wrk_b", label: "mac-b" },
+      workerId: "wrk_b",
+    });
   });
 
   it("404s an unknown lease id", async () => {
@@ -1381,8 +1417,10 @@ describe("lease routes", () => {
     dispatcher.handlers["lease.release"] = (input) => {
       const leaseId = (input as { leaseId: string }).leaseId;
       registry.leases = registry.leases.filter((lease) => lease.id !== leaseId);
+      // Not `reclaiming`: that is also the route's default for a device it cannot find, so only
+      // another state proves the answer is read from the registry.
       registry.devices = registry.devices.map((device) =>
-        device.id === "dev_1" ? { ...device, state: "reclaiming" } : device,
+        device.id === "dev_1" ? { ...device, state: "quarantined" } : device,
       );
       return { leaseId };
     };
@@ -1393,7 +1431,7 @@ describe("lease routes", () => {
     });
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({
-      device: { id: "dev_1", state: "reclaiming" },
+      device: { id: "dev_1", state: "quarantined" },
       released: true,
     });
   });

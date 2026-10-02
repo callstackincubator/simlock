@@ -12,7 +12,11 @@
 import type { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
-import { workerViewSchema, type ProtocolRange } from "../contract/index.js";
+import {
+  type grantedDeviceSchema,
+  type ProtocolRange,
+  workerViewSchema,
+} from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -36,6 +40,18 @@ export type WorkerViewSnapshot = Pick<
   | "queueDepth"
   | "version"
 >;
+
+/** A worker's device in the shape a grant carries it: what `GET /v1/leases/{id}` builds a lease
+ * payload from. Kept beside a view, never on it, because a view is what `status.get` and
+ * `worker.list` show every agent, and `driverDeviceId` is only the lease holder's to see. */
+export type WorkerGrantedDevice = z.infer<typeof grantedDeviceSchema>;
+
+/** What one refresh over the uplink commits: the view's fields, and the same devices in the
+ * grant shape. Both come from one refresh and land in one call, so a lease the view reports is
+ * never visible before the device it names. */
+export type WorkerRefresh = Partial<WorkerViewSnapshot> & {
+  readonly grantedDevices?: readonly WorkerGrantedDevice[];
+};
 
 export interface WorkerRegistryOptions {
   readonly clock: Clock;
@@ -70,6 +86,9 @@ export interface WorkerRegistryOptions {
 
 export class WorkerRegistry {
   readonly #workers = new Map<string, WorkerView>();
+  /** Each worker's devices in the grant shape (see `WorkerGrantedDevice`). Set by `refresh`,
+   * which writes nothing for a worker with no view, and deleted with the view by `#forget`. */
+  readonly #grantedDevices = new Map<string, readonly WorkerGrantedDevice[]>();
   /**
    * Drained worker ids, including ids with no view yet. Kept beside the views rather than only
    * on them because drain outlives a view: an operator drains a machine, the machine is turned
@@ -100,6 +119,20 @@ export class WorkerRegistry {
 
   view(workerId: string): WorkerView | undefined {
     return this.#workers.get(workerId);
+  }
+
+  /**
+   * Every worker's devices in the grant shape, each with the `workerId` it came from: what a
+   * gateway's `GET /v1/leases/{id}` builds the lease payload from. Ordered by worker id, as
+   * `views()` is. The caller matches a device by worker and id together, never by id alone.
+   */
+  grantedDevices(): readonly (WorkerGrantedDevice & { readonly workerId: string })[] {
+    return this.views().flatMap((view) =>
+      (this.#grantedDevices.get(view.id) ?? []).map((device) => ({
+        ...device,
+        workerId: view.id,
+      })),
+    );
   }
 
   /**
@@ -252,15 +285,17 @@ export class WorkerRegistry {
    * previous value standing rather than blank it. A refresh for a worker whose view is gone
    * (removed while a status call was in flight) is dropped rather than resurrecting it.
    */
-  refresh(workerId: string, snapshot: Partial<WorkerViewSnapshot>): void {
+  refresh(workerId: string, refresh: WorkerRefresh): void {
     const existing = this.#workers.get(workerId);
     if (existing === undefined) return;
+    const { grantedDevices, ...snapshot } = refresh;
     const next: WorkerView = {
       ...existing,
       ...snapshot,
       lastSeenAt: this.options.clock.now(),
     };
     this.#workers.set(workerId, next);
+    if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
     this.#warnOnLowerMaxTtl(existing, next);
     this.#notifyViewsChanged();
   }
@@ -455,6 +490,7 @@ export class WorkerRegistry {
     { clearDrain }: { clearDrain: boolean },
   ): Promise<void> {
     this.#workers.delete(view.id);
+    this.#grantedDevices.delete(view.id);
     if (clearDrain && this.#drained.delete(view.id)) {
       await this.options.drainStore?.save([...this.#drained]);
     }

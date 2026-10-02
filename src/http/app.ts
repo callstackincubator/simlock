@@ -24,6 +24,7 @@ import { pipeSse } from "./sse.js";
 import type { TokenIdentity } from "./token-store.js";
 import {
   buildLeasePayload,
+  type HttpLeaseDevice,
   isTerminalStage,
   type LeaseRequestInput,
   type LeaseRequestReader,
@@ -31,12 +32,25 @@ import {
   type TrackedRequestView,
 } from "./tracker.js";
 
+/**
+ * The device fields the lease routes read: what a lease payload is built from, plus two that
+ * only one kind of daemon has. A worker's own registry record carries `state`, which `DELETE
+ * /v1/leases/:id` reports; a gateway holds no device state of its own and leaves it out rather
+ * than inventing one. A gateway's device carries the `workerId` it lives on, because a device
+ * id is one worker's claim and is matched only together with the lease's own `workerId`.
+ */
+export interface HttpRegistryDevice extends HttpLeaseDevice {
+  readonly state?: DeviceRecord["state"];
+  readonly workerId?: string;
+}
+
 /** Minimal structural read surface -- narrower than importing the `Registry` class itself. Kept
  * for the one thing dispatcher operations don't hand back: a device record for a specific
- * lease's `GET /v1/leases/:id` decoration (there is no per-id device operation). */
+ * lease's `GET /v1/leases/:id` decoration (there is no per-id device operation). A worker
+ * passes its registry; a gateway passes the devices its worker views hold in the grant shape. */
 export interface HttpRegistryReader {
   readonly snapshot: {
-    readonly devices: readonly DeviceRecord[];
+    readonly devices: readonly HttpRegistryDevice[];
   };
 }
 
@@ -344,7 +358,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
     const lease = await findOwnedLease(deps, session, c.req.param("id"));
-    const device = findDevice(deps, lease.deviceId);
+    const device = findDevice(deps, lease);
     if (device === undefined) throw unknownLease(lease.id);
     // ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
     // restart reports the lease's real width rather than a mode default standing in for a
@@ -555,13 +569,17 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     // the handler answers `UNKNOWN_LEASE`/404 for a nonexistent one, matching the socket
     // transport exactly -- unlike the `lease.list`-filtered `findOwnedLease`, which always
     // answered 404 for both cases.
-    const deviceId = await findLeaseDeviceId(deps, session, id);
+    const lease = await findLeaseForDecoration(deps, session, id);
 
     await deps.dispatch("lease.release", { leaseId: id }, session);
 
-    const device = deviceId === undefined ? undefined : findDevice(deps, deviceId);
+    // A gateway holds no device state, so its answer is always the `reclaiming` default.
+    const device = lease === undefined ? undefined : findDevice(deps, lease);
     return c.json(
-      { device: { id: deviceId ?? id, state: device?.state ?? "reclaiming" }, released: true },
+      {
+        device: { id: lease?.deviceId ?? id, state: device?.state ?? "reclaiming" },
+        released: true,
+      },
       202,
     );
   });
@@ -704,17 +722,17 @@ async function findOwnedLease(
   return lease;
 }
 
-/** Best-effort `deviceId` lookup for a lease id, scoped to what the session's `lease.list`
- * would show it (own leases; admin sees all) -- used only to decorate a response after an
+/** Best-effort lease lookup for a lease id, scoped to what the session's `lease.list` would
+ * show it (own leases; admin sees all) -- used only to decorate a response after an
  * authoritative dispatch has already decided whether the request is allowed. Never used to
  * gate access itself (see the `DELETE /v1/leases/:id` route). */
-async function findLeaseDeviceId(
+async function findLeaseForDecoration(
   deps: HttpGatewayDeps,
   session: ReturnType<typeof buildHttpSession>,
   id: string,
-): Promise<string | undefined> {
+) {
   const { leases } = await deps.dispatch("lease.list", {}, session);
-  return leases.find((candidate) => candidate.id === id)?.deviceId;
+  return leases.find((candidate) => candidate.id === id);
 }
 
 function serializeRequest(
@@ -742,8 +760,16 @@ function serializeRequest(
   }
 }
 
-function findDevice(deps: HttpGatewayDeps, id: string): DeviceRecord | undefined {
-  return deps.registry.snapshot.devices.find((device) => device.id === id);
+/** The device a lease names. On a gateway both carry the `workerId` they came from, and a
+ * device matches only on the lease's own worker: a device id is that worker's claim, so another
+ * worker reporting the same id never answers for it. On a worker neither carries one. */
+function findDevice(
+  deps: HttpGatewayDeps,
+  lease: { readonly deviceId: string; readonly workerId?: string | undefined },
+): HttpRegistryDevice | undefined {
+  return deps.registry.snapshot.devices.find(
+    (device) => device.id === lease.deviceId && device.workerId === lease.workerId,
+  );
 }
 
 async function parseRenewBody(c: {

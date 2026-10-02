@@ -152,6 +152,54 @@ describe("WorkerRegistry", () => {
     expect(workers.view("wrk_1")).toBeUndefined();
   });
 
+  it("lists each worker's granted devices under that worker's id, and keeps them through a refresh that carries none", () => {
+    const { workers } = registry();
+    const granted = (udid: string) => ({
+      driverDeviceId: udid,
+      id: "dev_1",
+      mode: "full" as const,
+      spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+    });
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.connected("wrk_b", undefined, "0.3.0");
+    workers.refresh("wrk_a", { grantedDevices: [granted("UDID-A")] });
+    workers.refresh("wrk_b", { grantedDevices: [granted("UDID-B")] });
+    workers.refresh("wrk_b", { queueDepth: 1 });
+
+    expect(
+      workers
+        .grantedDevices()
+        .map(({ driverDeviceId, workerId }) => ({ driverDeviceId, workerId })),
+    ).toEqual([
+      { driverDeviceId: "UDID-A", workerId: "wrk_a" },
+      { driverDeviceId: "UDID-B", workerId: "wrk_b" },
+    ]);
+  });
+
+  it("forgets a worker's granted devices with its view, so a worker re-added under that id lists none of them", async () => {
+    const { workers } = registry();
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", {
+      grantedDevices: [
+        {
+          driverDeviceId: "UDID-1",
+          id: "dev_1",
+          mode: "full",
+          spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+        },
+      ],
+    });
+    expect(workers.grantedDevices().map(({ id, workerId }) => ({ id, workerId }))).toEqual([
+      { id: "dev_1", workerId: "wrk_1" },
+    ]);
+
+    workers.disconnected("wrk_1");
+    await workers.remove("wrk_1");
+    workers.connected("wrk_1", undefined, "0.3.0");
+
+    expect(workers.grantedDevices()).toEqual([]);
+  });
+
   describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
     it("warns once a worker's own cap is refreshed in below the gateway's", () => {
       const logger = new RecordingLogger();
