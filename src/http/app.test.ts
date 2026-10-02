@@ -1767,7 +1767,8 @@ describe("hardening from review", () => {
  * ADR 0005 §23. The routes themselves are thin -- one dispatch each -- so what is worth
  * asserting is which daemon has them at all, that they reach the right operation with the id
  * from the path, and that a refusal's typed `details` reach the body. What a worker's own
- * dispatcher answers on them is covered end to end in `e2e/single-host-fleet.test.ts`.
+ * dispatcher answers for all four operations is proven in `src/daemon/dispatcher.test.ts`;
+ * `e2e/single-host-fleet.test.ts` drives `GET /v1/workers` and the drain route end to end.
  */
 describe("worker routes", () => {
   function gatewayHarness() {

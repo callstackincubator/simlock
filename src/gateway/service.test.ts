@@ -179,7 +179,12 @@ describe("GatewayService", () => {
       state: "downloading" as const,
       waiters: 2,
     };
+    const capacity = {
+      ...statusFixture().capacity,
+      global: { maxRunning: 4, overLimit: false, reserved: 1, running: 2, warm: 1 },
+    };
     worker.status = statusFixture({
+      capacity,
       daemon: { health: "starting", mode: "worker" },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
@@ -200,7 +205,7 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
 
     expect(harness.service.workers.view("wrk_1")).toEqual({
-      capacity: statusFixture().capacity,
+      capacity,
       catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
         .platforms,
       connection: "connected",

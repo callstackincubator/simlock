@@ -611,10 +611,11 @@ export class Dispatcher {
 
   /**
    * ADR 0012 §1: this host as its own fleet of one. The fields a gateway reads over the uplink
-   * come from the same four reads, made here against this dispatcher's own handlers and parsed
-   * through their output schemas, so they are what a gateway would have received; the
-   * contract's one builder turns them into a view. `drained` is always `false`: a gateway that
-   * drained this worker holds that flag, not this host.
+   * come from the same four reads, made here against this dispatcher's own handlers; the
+   * contract's one builder turns them into a view. The parses only turn the handlers' core
+   * records into the wire types the builder takes: `worker.list`'s own output schema, applied
+   * by `dispatch()`, is what bounds and narrows the view on the wire. `drained` is always
+   * `false`: a gateway that drained this worker holds that flag, not this host.
    */
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     const [status, devices, catalog] = await Promise.all([
