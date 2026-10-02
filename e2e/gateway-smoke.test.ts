@@ -338,6 +338,74 @@ describe("gateway smoke", () => {
 
     await fetch(`${baseUrl}/v1/leases/${leaseId}`, { headers: auth, method: "DELETE" });
   });
+
+  // #186: the gateway issued this lease and still holds it, so its single-lease read answers it
+  // rather than `404 UNKNOWN_LEASE`, in the shape `docs/HTTP-API.md` gives a gateway lease: the
+  // lease the request resource reports, plus `workerId`/`worker` naming the machine it lives on.
+  it("serves GET /v1/leases/{id} for a lease the gateway granted over HTTP: the granted lease, naming its worker (#186)", async () => {
+    const { baseUrl, gateway } = await startFleet(
+      [{ label: "worker-a", models: ["Pixel 8"] }],
+      "smoke-agent",
+    );
+    const auth = await agentAuth(gateway);
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "the gateway's HTTP port accepting connections" },
+    );
+
+    const created = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ device: "Pixel 8", platform: "android" }),
+      headers: auth,
+      method: "POST",
+    });
+    expect(created.status).toBe(201);
+    const requestId = ((await created.json()) as { request: { id: string } }).request.id;
+
+    let grantedLease: { id: string } | undefined;
+    await waitFor(
+      async () => {
+        const polled = await fetch(`${baseUrl}/v1/lease-requests/${requestId}?wait=10`, {
+          headers: auth,
+        });
+        const view = (await polled.json()) as {
+          request: { state: string; lease?: { id: string } };
+        };
+        grantedLease = view.request.lease;
+        return view.request.state === "granted";
+      },
+      { label: "the fleet granted the lease request", timeout: 30_000 },
+    );
+    if (grantedLease === undefined)
+      throw new Error("expected the granted request to carry a lease");
+
+    const listed = await gateway.cli(["worker", "list", "--json"]);
+    expect(listed.code).toBe(0);
+    const workerA = (listed.json as { workers: WorkerView[] }).workers.find(
+      (view) => view.label === "worker-a",
+    );
+    if (workerA === undefined) throw new Error("expected worker-a in the gateway's worker list");
+
+    const fetched = await fetch(`${baseUrl}/v1/leases/${grantedLease.id}`, { headers: auth });
+    expect({ body: await fetched.json(), status: fetched.status }).toEqual({
+      body: {
+        lease: {
+          ...grantedLease,
+          worker: { id: workerA.id, label: "worker-a" },
+          workerId: workerA.id,
+        },
+      },
+      status: 200,
+    });
+
+    await fetch(`${baseUrl}/v1/leases/${grantedLease.id}`, { headers: auth, method: "DELETE" });
+  });
+
   it("queues a fleet-wide FIFO behind a full worker, refuses --no-wait, and serves the waiter on release", async () => {
     // One worker that can run exactly one device, so the fleet's whole capacity is one lease.
     // ADR §10: the gateway keeps a single fleet-wide queue and reports the same codes and
