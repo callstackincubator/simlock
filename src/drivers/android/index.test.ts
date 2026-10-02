@@ -2992,6 +2992,34 @@ describe("AndroidDriver emulator registration", () => {
   });
 });
 
+describe("AndroidDriver console ports across a restart", () => {
+  it("readies a stopped device and one provisioned after a restart each at an address its own emulator answers (#52)", async () => {
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+
+    // The first daemon: provision, boot and stop a device. Stopped, it holds its console
+    // port only in its driver data -- nothing is listening there any more. Each call gets
+    // the device as the last one returned it, which is what the registry commits.
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    await before.resolveSpec(spec);
+    const stopped = await before.makeReady(await before.provision(spec));
+    await before.shutdown(stopped);
+
+    // A restart is a new process: a new driver on a new runner, the same machine and root.
+    const after = await createDriver(filesystem, host.runner(), { ids: ["two"] });
+    await after.resolveSpec(spec);
+    const provisioned = await after.provision(spec);
+    const readyProvisioned = await after.makeReady(provisioned);
+    const readyStopped = await after.makeReady(stopped);
+
+    expect({
+      provisioned: host.avdAnswering(readyProvisioned.address),
+      stopped: host.avdAnswering(readyStopped.address),
+    }).toEqual({ provisioned: "simlock_two", stopped: "simlock_one" });
+  });
+});
+
 describe("AndroidDriver pre-root devices", () => {
   it("re-proves an intact root by re-running the validation its start was judged by", async () => {
     const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
