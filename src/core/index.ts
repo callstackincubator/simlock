@@ -7,6 +7,8 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  REDACTED_VALUE,
+  redactConfig,
 } from "./config.js";
 export {
   type DeviceMode,

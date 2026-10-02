@@ -13,6 +13,7 @@ import {
   type LeaseHealthMonitor,
   NoDriverError,
   type Nuke,
+  redactConfig,
   UnknownPassthroughToolError,
 } from "../core/index.js";
 import type {
@@ -529,9 +530,13 @@ export class DaemonServer {
       }),
     );
 
+    // Redacted: the payload lands in the ring and `events.jsonl`, and the log line in
+    // `daemon.log`, none of which is as guarded as `config.json`. `this.options.config` itself
+    // stays whole -- `config.get` answers from it.
+    const configSnapshot = redactConfig(this.options.config);
     this.options.eventBus.emit(
       "daemon.started",
-      { configSnapshot: this.options.config, version: this.options.version },
+      { configSnapshot, version: this.options.version },
       "daemon",
     );
     // After `daemon.started`, because these are facts about the daemon that just started
@@ -543,7 +548,7 @@ export class DaemonServer {
       this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
     }
     this.#logger.info("Daemon started", {
-      config: this.options.config,
+      config: configSnapshot,
       protocolVersion: this.#protocolRange.max,
       protocolRange: this.#protocolRange,
       socketPath: this.options.host.endpoint,

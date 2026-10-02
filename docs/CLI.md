@@ -1670,7 +1670,7 @@ daemon was asked to do and what went wrong; what happened to leases and
 devices is in `simlock events`, not here. It records:
 
 - **Startup and shutdown**: version, protocol version, socket path, effective
-  config, socket claim, driver discovery, and why a driver was skipped.
+  config (with `gateway.token` shown as `[redacted]`), socket claim, driver discovery, and why a driver was skipped.
 - **Every request that changes something**, on every frontend (CLI, MCP,
   HTTP, and a gateway's dispatch): one `operation` line when it finishes,
   with the operation, who asked (`principal`, and `requesterId` or `leaseId`

@@ -5,10 +5,12 @@ import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type Config,
   type DriverToolVersion,
   FakeDriver,
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
+  REDACTED_VALUE,
 } from "../core/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
@@ -71,6 +73,16 @@ async function start(
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };
+}
+
+/** A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
+ * fails fast, and the fake clock never fires its retry. */
+async function unreachableGatewayUrl(): Promise<string> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address() as { readonly port: number };
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return `ws://127.0.0.1:${port}`;
 }
 
 async function writeModule(contents: string): Promise<string> {
@@ -138,6 +150,59 @@ describe("startDaemon", () => {
     );
     const record = sink.records.find((entry) => entry.message === "Daemon started");
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
+  });
+
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and events.jsonl, while config.get still returns it", async () => {
+    const secret = "secret-join-token-170";
+    const { daemon, directory, sink } = await start({
+      configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
+    });
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "operator",
+      role: "admin",
+    } as const;
+
+    const replayed = await daemon.dispatch("events.replay", {}, admin);
+    const eventFile = await readFile(join(directory, "events.jsonl"), "utf8");
+    const config = (await daemon.dispatch("config.get", {}, admin)) as {
+      readonly gateway: { readonly token?: string };
+    };
+
+    // The fixture is real: the daemon did log its start and emit `daemon.started` to both
+    // the ring and the file, so "absent" below means redacted, not never written.
+    expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
+    expect(eventFile).toContain('"daemon.started"');
+    expect(JSON.stringify(replayed)).toContain('"daemon.started"');
+    expect({
+      daemonLog: JSON.stringify(sink.records).includes(secret),
+      eventsReplay: JSON.stringify(replayed).includes(secret),
+      eventsJsonl: eventFile.includes(secret),
+    }).toEqual({ daemonLog: false, eventsReplay: false, eventsJsonl: false });
+    expect(config.gateway.token).toBe(secret);
+  });
+
+  it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
+    const { daemon, sink } = await start({
+      configOverrides: {
+        gateway: { token: "secret-join-token-170", url: await unreachableGatewayUrl() },
+      },
+    });
+    const replayed = (await daemon.dispatch(
+      "events.replay",
+      {},
+      { manageEventSubscription: () => undefined, principal: "operator", role: "admin" },
+    )) as readonly { readonly event: string; readonly payload: unknown }[];
+
+    const started = replayed.find((envelope) => envelope.event === "daemon.started");
+    const logged = sink.records.find((record) => record.message === "Daemon started");
+    const snapshot = (started?.payload as { readonly configSnapshot?: Config } | undefined)
+      ?.configSnapshot;
+    const loggedConfig = logged?.fields?.config as Config | undefined;
+    expect({
+      eventToken: snapshot?.gateway.token,
+      logToken: loggedConfig?.gateway.token,
+    }).toEqual({ eventToken: REDACTED_VALUE, logToken: REDACTED_VALUE });
   });
 
   it("runs no prerequisite check at startup convergence, and runs every check on each doctor.run", async () => {

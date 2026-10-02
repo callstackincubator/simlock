@@ -248,8 +248,9 @@ export interface Config {
     /** A join token minted on the gateway with `simlock token create --role worker`.
      * Worker-side. It is a secret, and it sits in the daemon's config file like any other
      * value there: `config.get` is admin-role and returns the config as written, so this key
-     * is exactly as sensitive as `config.json`'s file permissions make it. See
-     * docs/CONFIGURATION.md. */
+     * is exactly as sensitive as `config.json`'s file permissions make it. Everywhere else the
+     * config is written out -- the startup log line, `daemon.started` -- goes through
+     * `redactConfig`. See docs/CONFIGURATION.md. */
     readonly token?: string;
     /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
@@ -301,6 +302,22 @@ export interface Config {
     /** Floor under the multiplied estimate, for a driver whose estimate is near zero. */
     readonly minimumThresholdMs: number;
   };
+}
+
+/** What `redactConfig` puts in place of a secret's value. */
+export const REDACTED_VALUE = "[redacted]";
+
+/**
+ * The config with its secrets masked, for every place that writes the config somewhere other
+ * than `config.json` and `config.get`: the `Daemon started` log line and the `daemon.started`
+ * payload, which land in `daemon.log`, the event ring and `events.jsonl`. Masked rather than
+ * deleted so the copy keeps `Config`'s keys and a reader can still tell "set" from "unset".
+ * Returns a copy and never touches its input: the live config is what `config.get` answers
+ * and what the uplink presents, so the masked copy must never be handed to either.
+ */
+export function redactConfig(config: Config): Config {
+  if (config.gateway.token === undefined) return config;
+  return { ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } };
 }
 
 /**
