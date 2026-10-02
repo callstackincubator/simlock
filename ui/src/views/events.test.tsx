@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type ApiPath, type ApiResponse } from "../api";
+import type { Clock } from "../live/connection";
 import { Loaded } from "../live/route-state";
 import { connect, settle } from "../live/test-support";
 import { EventFeed } from "./event-feed";
@@ -10,6 +11,13 @@ import { type ConsoleEvent, MAX_EVENTS } from "./events-model";
 import type { WorkerView } from "./workers-model";
 
 const T0 = Date.parse("2026-10-02T11:30:00Z");
+
+/** Vitest's fake time and timers, as the live connection's tests use them. */
+const fakeClock: Clock = {
+  now: () => Date.now(),
+  setTimeout: (run, ms) => setTimeout(run, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 function envelope(seq: number, timestamp: number, event = "lease.granted", payload: unknown = {}) {
   return { event, module: "lease", payload, seq, timestamp };
@@ -30,7 +38,22 @@ function text(html: string): string {
 }
 
 /** What `GET /v1/events` answers: these events, or whatever this returns. */
-type Replay = unknown[] | (() => Promise<unknown>);
+type Replay = unknown[] | ((path: ApiPath) => Promise<unknown>);
+
+/**
+ * A daemon's event file: answers `GET /v1/events?since=<n>s|1h` with the events newer than that,
+ * by the fake clock, as the daemon does.
+ */
+function eventLog(
+  events: readonly ReturnType<typeof envelope>[],
+): (path: ApiPath) => Promise<unknown> {
+  return (path) => {
+    const match = /since=(\d+)(s|h)$/.exec(path);
+    if (match === null) throw new Error(`Unexpected path ${path}`);
+    const ms = Number(match[1]) * (match[2] === "h" ? 3_600_000 : 1_000);
+    return Promise.resolve({ events: events.filter((event) => event.timestamp > Date.now() - ms) });
+  };
+}
 
 /**
  * The events view's feed on a live connection to a scripted daemon. `replay` is what
@@ -43,10 +66,10 @@ function openView(first: Replay = []) {
   live.daemon.reads = async (path) => {
     if (!path.startsWith("/v1/events?")) return { body: {}, date: null };
     replays.push(path);
-    const body = typeof replay === "function" ? await replay() : { events: replay };
+    const body = typeof replay === "function" ? await replay(path) : { events: replay };
     return { body, date: null } satisfies ApiResponse<unknown>;
   };
-  const feed = new EventFeed(async (path) => (await live.daemon.get(path)).body);
+  const feed = new EventFeed(async (path) => (await live.daemon.get(path)).body, fakeClock);
   live.connection.onEvent(feed.streamEvent);
   live.connection.onStreamOpened(feed.streamOpened);
   const stop = feed.start();
@@ -194,6 +217,20 @@ describe("the events view", () => {
     expect(view.shown()).toEqual([`9@${T0}`]);
   });
 
+  it("a stream that first opens after the last hour loaded loads it again", async () => {
+    const view = openView([]);
+    await settle();
+    const sent = view.replays.length;
+    view.replayWith([envelope(1, T0)]);
+
+    // The stream's headers took longer than the load: its first open comes after.
+    view.feed.streamOpened({});
+    await settle();
+
+    expect(view.replays.slice(sent)).toEqual(["/v1/events?since=1h"]);
+    expect(view.shown()).toEqual([`1@${T0}`]);
+  });
+
   it("the view keeps the newest 1000 events", async () => {
     const view = openView();
     view.replayWith(
@@ -260,11 +297,37 @@ describe("the events view", () => {
   });
 
   it("an empty list says why it is empty", () => {
-    const render = (filtered: boolean) =>
-      text(renderToStaticMarkup(<EventList events={[]} workers={undefined} filtered={filtered} />));
+    const leases: ConsoleEvent[] = [{ event: "lease.granted", payload: {}, seq: 1, timestamp: T0 }];
+    const render = (events: ConsoleEvent[], filter: "all" | "device") =>
+      text(renderToStaticMarkup(<EventList events={events} workers={undefined} filter={filter} />));
 
-    expect(render(false)).toBe("No events in the last hour.");
-    expect(render(true)).toBe("No events of this kind.");
+    expect(render([], "all")).toBe("No events in the last hour.");
+    expect(render([], "device")).toBe("No events in the last hour.");
+    expect(render(leases, "device")).toBe("No events of this kind.");
+  });
+
+  it("the filter shows only the events about the subject it names", () => {
+    const events: ConsoleEvent[] = [
+      "lease.granted",
+      "device.ready",
+      "worker.connected",
+      "component.installed",
+      "daemon.started",
+      "gizmo.frobnicated",
+    ].map((event, index) => ({ event, payload: {}, seq: index, timestamp: T0 - index }));
+    const names = (filter: "all" | "lease" | "device" | "worker" | "component" | "other") =>
+      [
+        ...renderToStaticMarkup(
+          <EventList events={events} workers={undefined} filter={filter} />,
+        ).matchAll(/<span class="event-name mono">([^<]*)<\/span>/g),
+      ].map((match) => match[1]);
+
+    expect(names("all")).toHaveLength(6);
+    expect(names("lease")).toEqual(["lease.granted"]);
+    expect(names("device")).toEqual(["device.ready"]);
+    expect(names("worker")).toEqual(["worker.connected"]);
+    expect(names("component")).toEqual(["component.installed"]);
+    expect(names("other")).toEqual(["daemon.started", "gizmo.frobnicated"]);
   });
 
   it("a worker the console does not know, or that has no label, shows as its id", () => {
@@ -394,14 +457,13 @@ describe("the events view", () => {
     // Nothing of its own: the connection says the daemon is lost.
     expect(view.feed.snapshot()).toEqual({});
 
-    // Back, with an event from half an hour ago in its log.
+    // Back, with an event from half an hour ago in its log: only the last hour holds it.
     const earlier = envelope(1, Date.now() - 30 * 60_000);
-    view.replayWith([earlier]);
+    view.replayWith(eventLog([earlier]));
     view.daemon.health = "up";
     await vi.advanceTimersByTimeAsync(8_000);
     expect(view.connection.state().phase).toBe("connected");
 
-    expect(view.replays.at(-1)).toBe("/v1/events?since=1h");
     expect(view.shown()).toEqual([`1@${earlier.timestamp}`]);
   });
 
@@ -431,5 +493,143 @@ describe("the events view", () => {
     expect(view.feed.snapshot()).toBe(before);
     // The stream opening again asked for nothing.
     expect(view.replays).toHaveLength(2);
+  });
+});
+
+describe("the events view's loads", () => {
+  it("a closed view shows no refusal and sends no retry that would arrive after", async () => {
+    const refused = openView(() => Promise.reject(new ApiError(500, "INTERNAL", "Internal error")));
+    refused.stop();
+    await settle();
+    expect(refused.feed.snapshot()).toEqual({});
+
+    const lost = openView(() => Promise.reject(new TypeError("Failed to fetch")));
+    await settle();
+    const sent = lost.replays.length;
+    lost.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lost.replays).toHaveLength(sent);
+  });
+
+  it("a replay that holds the same event twice shows it once", async () => {
+    const view = openView([envelope(1, T0), envelope(1, T0), envelope(2, T0 + 1)]);
+    await settle();
+
+    expect(view.shown()).toEqual([`2@${T0 + 1}`, `1@${T0}`]);
+  });
+
+  it("an event already shown changes nothing", async () => {
+    const view = openView([envelope(1, T0)]);
+    await settle();
+    const before = view.feed.snapshot();
+    let changes = 0;
+    view.feed.subscribe(() => {
+      changes += 1;
+    });
+
+    view.daemon.openStream()?.send(frame(envelope(1, T0)));
+    await settle();
+
+    expect(view.feed.snapshot()).toBe(before);
+    expect(changes).toBe(0);
+  });
+
+  it("a refusal stays shown while the stream adds events, and those events show", async () => {
+    const refusal = new ApiError(500, "INTERNAL", "Internal error");
+    const view = openView(() => Promise.reject(refusal));
+    await settle();
+    expect(view.feed.snapshot()).toEqual({ data: [], error: refusal });
+
+    view.daemon.openStream()?.send(frame(envelope(1, T0)));
+    await settle();
+
+    expect(view.feed.snapshot().error).toBe(refusal);
+    expect(view.shown()).toEqual([`1@${T0}`]);
+  });
+
+  it("a load that fails at the network level is sent again while the stream stays open", async () => {
+    let failures = 2;
+    const view = openView(() => {
+      if (failures > 0) {
+        failures -= 1;
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return Promise.resolve({ events: [envelope(1, T0)] });
+    });
+    await settle();
+    expect(view.replays).toEqual(["/v1/events?since=1h"]);
+    expect(view.feed.snapshot()).toEqual({});
+
+    // After 1 second, and after 2 more.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(view.replays).toHaveLength(2);
+    expect(view.feed.snapshot()).toEqual({});
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(view.replays).toEqual(
+      ["/v1/events?since=1h", "/v1/events?since=1h"].concat(["/v1/events?since=1h"]),
+    );
+    expect(view.connection.state().phase).toBe("connected");
+    expect(view.shown()).toEqual([`1@${T0}`]);
+  });
+
+  it("a gap not loaded before the daemon goes away again is loaded with the next one", async () => {
+    const view = openView([]);
+    await settle();
+    view.daemon.health = "up";
+
+    // The first outage: the stream ends, with an event sent just after, and the daemon is back
+    // after 1 s; the load of that gap does not reach it.
+    view.daemon.openStream()?.end();
+    await settle();
+    const missed = envelope(1, Date.now() + 200);
+    view.replayWith(() => Promise.reject(new TypeError("Failed to fetch")));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(view.replays.at(-1)).toBe("/v1/events?since=1s");
+
+    // The second outage, before that load is sent again, then 30 s more of failed loads.
+    view.daemon.openStream()?.end();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(view.shown()).toEqual([]);
+
+    // The daemon answers again. The load reaches back to the first gap, not just the second.
+    view.replayWith(eventLog([missed]));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(view.connection.state().phase).toBe("connected");
+    expect(view.shown()).toEqual([`1@${missed.timestamp}`]);
+  });
+
+  it("a stream that opens while a load is out is loaded again after it", async () => {
+    let answer: (body: unknown) => void = () => {};
+    const view = openView([]);
+    await settle();
+    expect(view.replays).toHaveLength(2);
+    view.replayWith(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    // A gap load goes out; the stream closes and opens again before it answers.
+    view.visibility.set(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    view.visibility.set(false);
+    await settle();
+    expect(view.replays.at(-1)).toBe("/v1/events?since=2s");
+    view.visibility.set(true);
+    await vi.advanceTimersByTimeAsync(3_000);
+    view.visibility.set(false);
+    await settle();
+    expect(view.replays).toHaveLength(3);
+
+    view.replayWith([envelope(1, T0)]);
+    answer({ events: [] });
+    await settle();
+
+    // Again, from the first gap's start: the answer may be older than what the second missed.
+    expect(view.replays.slice(3)).toEqual(["/v1/events?since=5s"]);
+    expect(view.shown()).toEqual([`1@${T0}`]);
   });
 });

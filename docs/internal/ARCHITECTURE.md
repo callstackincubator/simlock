@@ -67,7 +67,11 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   marks a route as one the screen reads, and `LiveConnection` refetches every
   such route on each event from `GET /v1/events/stream` and every second,
   one request per route at a time; it also owns the disconnect, backoff and
-  recovery rules and the clock offset behind `useNow()`. See
+  recovery rules and the clock offset behind `useNow()`. The one exception
+  is the events view, whose list is not a route's latest answer: its feed
+  (`ui/src/views/event-feed.ts`) takes each event off the stream through the
+  live layer and loads `GET /v1/events` itself, for the last hour and for
+  each gap the stream left. See
   [CONSOLE.md](../CONSOLE.md) for the user's side and
   [DESIGN.md](DESIGN.md) for the style.
 - **CLI**: by default it acquires a lease, prints one JSON result line on

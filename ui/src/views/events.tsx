@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { useApi } from "../console-context";
+import { browserClock } from "../live/browser";
 import { useLiveEvents, useLiveResource, useStreamOpened } from "../live/live-context";
 import { Loaded } from "../live/route-state";
 import { EventFeed } from "./event-feed";
@@ -30,7 +31,7 @@ const FILTERS: readonly { readonly value: Subject | "all"; readonly label: strin
  */
 export function EventsView() {
   const api = useApi();
-  const [feed] = useState(() => new EventFeed((path) => api.getJson(path)));
+  const [feed] = useState(() => new EventFeed((path) => api.getJson(path), browserClock));
   useLiveEvents(feed.streamEvent);
   useStreamOpened(feed.streamOpened);
   useEffect(() => feed.start(), [feed]);
@@ -56,17 +57,7 @@ export function EventsView() {
         ))}
       </fieldset>
       <Loaded state={state}>
-        {(events) => (
-          <EventList
-            events={
-              filter === "all"
-                ? events
-                : events.filter((event) => subjectOf(event.event) === filter)
-            }
-            workers={workers}
-            filtered={filter !== "all"}
-          />
-        )}
+        {(events) => <EventList events={events} workers={workers} filter={filter} />}
       </Loaded>
     </section>
   );
@@ -77,16 +68,16 @@ export function EventList(props: {
   readonly events: readonly ConsoleEvent[];
   /** The workers the daemon lists, to name an event's worker; `undefined` until read. */
   readonly workers: readonly WorkerView[] | undefined;
-  readonly filtered?: boolean;
+  /** Only the events about this subject; all of them when absent. */
+  readonly filter?: Subject | "all";
 }) {
-  const { events, filtered = false, workers } = props;
-  if (events.length === 0) {
-    return (
-      <p className="muted">
-        {filtered ? "No events of this kind." : "No events in the last hour."}
-      </p>
-    );
-  }
+  const { filter = "all", workers } = props;
+  if (props.events.length === 0) return <p className="muted">No events in the last hour.</p>;
+  const events =
+    filter === "all"
+      ? props.events
+      : props.events.filter((event) => subjectOf(event.event) === filter);
+  if (events.length === 0) return <p className="muted">No events of this kind.</p>;
   return (
     <ol className="events">
       {events.map((event) => {
