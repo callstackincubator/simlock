@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { testComponentWiring } from "./test-wiring.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -10,10 +11,10 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import {
-  type CleanupRule,
-  type Config,
   automaticCleanupRules,
   CleanupReaper,
+  type CleanupRule,
+  type Config,
   FakeDriver,
   LeaseEngine,
   Registry,
@@ -137,6 +138,12 @@ async function createHarness(
   });
   const cleanupConfig = options.cleanupConfig ?? config();
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config: cleanupConfig,
     drivers: [driver],

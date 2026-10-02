@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { testComponentWiring } from "./test-wiring.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -12,6 +13,7 @@ import {
 import type { CapacityLimits, ResourceStrategyOptions } from "./capacity/index.js";
 import {
   BootTimeoutError,
+  type ComponentInstaller,
   type Config,
   DriverCrashError,
   FakeDriver,
@@ -21,6 +23,7 @@ import {
   QueueTimeoutError,
   Registry,
   RequestCancelledError,
+  RuntimeMissingError,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -105,6 +108,8 @@ function withCapacity(
 
 async function createHarness(
   options: {
+    /** Stands in for the installer, when a test needs to see whether it was reached at all. */
+    readonly components?: Pick<ComponentInstaller, "install">;
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     /** The state directory of an earlier harness: loading it again is a daemon restart. */
@@ -140,10 +145,18 @@ async function createHarness(
     capacity: { strategy: "resource", config: withCapacity(resourceOptions(baseConfig), options) },
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
+  const drivers = options.drivers ?? [driver];
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock,
+      components: options.components,
+      drivers,
+      eventBus: bus,
+      registry,
+    }),
     clock,
     config: engineConfig,
-    drivers: options.drivers ?? [driver],
+    drivers,
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -210,6 +223,44 @@ describe("LeaseEngine", () => {
     await expect(second).resolves.toMatchObject({ device: { id: first.device.id } });
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+  });
+
+  it("fails warm-pool re-readiness of a device whose runtime is gone without calling the installer", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const asked: unknown[] = [];
+    const harness = await createHarness({
+      components: {
+        install: async (call) => {
+          asked.push(call);
+          return { outcome: "installed", version: "26.5" };
+        },
+      },
+      driver,
+    });
+    const first = await harness.engine.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    // The runtime the device was made on is gone, so bringing it back fails the way a driver
+    // reports a missing runtime: downloadable, naming the component.
+    driver.failOn("makeReady", 2, new RuntimeMissingError("ios", "26.5", { component: "26.5" }));
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    // The warm pool did try to bring the device back, it failed, and the failure went nowhere
+    // near an install.
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+    expect(harness.registry.snapshot.devices.map((device) => device.state)).toEqual(["shutdown"]);
+    expect(asked).toEqual([]);
+    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
   });
 
   it("tells a waiter queued behind a reclaim how long that reclaim runs", async () => {
@@ -1608,6 +1659,12 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       statePath: restartStatePath,
     });
     const engine1 = new LeaseEngine({
+      ...testComponentWiring({
+        clock: clock1,
+        drivers: [driver],
+        eventBus: bus1,
+        registry: registry1,
+      }),
       clock: clock1,
       config: config(),
       drivers: [driver],
@@ -1645,6 +1702,12 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       statePath: restartStatePath,
     });
     const engine2 = new LeaseEngine({
+      ...testComponentWiring({
+        clock: clock2,
+        drivers: [driver],
+        eventBus: bus2,
+        registry: registry2,
+      }),
       clock: clock2,
       config: config(),
       drivers: [driver],
@@ -1836,20 +1899,22 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     });
+    const beforeRegistry = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem,
+      idGenerator,
+      leaseIdentity: freshIos,
+      statePath,
+    });
     const before = new LeaseEngine({
       clock,
+      ...testComponentWiring({ clock, drivers: [driver], eventBus: bus, registry: beforeRegistry }),
       config: config({ identity: freshIos }),
       drivers: [driver],
       eventBus: bus,
       idGenerator,
-      registry: await Registry.load({
-        clock,
-        eventBus: bus,
-        filesystem,
-        idGenerator,
-        leaseIdentity: freshIos,
-        statePath,
-      }),
+      registry: beforeRegistry,
       systemStats,
     });
     const granted = await before.request(request, { ownerId: "a", requesterId: "a" });
@@ -1866,6 +1931,12 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       statePath,
     });
     const after = new LeaseEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: bus,
+        registry: registry,
+      }),
       clock,
       config: config({ identity: reusable, defaultTtlMs: 14_400_000 }),
       drivers: [driver],
@@ -1961,6 +2032,12 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       statePath,
     });
     const engine = new LeaseEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: bus,
+        registry: registry,
+      }),
       clock,
       config: config({ identity: freshIos }),
       drivers: [driver],

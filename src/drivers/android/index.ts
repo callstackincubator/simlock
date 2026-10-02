@@ -3,8 +3,10 @@ import { dirname, join } from "node:path";
 import type { DeviceSpec } from "../../core/domain.js";
 import {
   BootTimeoutError,
+  type ComponentInstallProgress,
+  type ComponentInstallResult,
+  type ComponentReceipt,
   type DeviceRequest,
-  DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
@@ -13,6 +15,7 @@ import {
   type DriverEstimate,
   type DriverReality,
   type DriverToolVersion,
+  type InstalledComponent,
   LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedMark,
@@ -21,6 +24,7 @@ import {
   type PassthroughContext,
   type ReclaimResult,
   RuntimeMissingError,
+  sameReceipt,
 } from "../../core/driver.js";
 import {
   ensureOwnedRoot,
@@ -28,8 +32,7 @@ import {
   type LegacyDevice,
   OwnedRootError,
 } from "../../core/index.js";
-import { stableError } from "../../core/stable-error.js";
-import type { ComponentInstallDiagnostic } from "../diagnostics.js";
+import { runInstallerProcess } from "../installer-process.js";
 import {
   isMissingPathError,
   type Clock,
@@ -80,11 +83,6 @@ const DEFAULT_ADB_SERVER_PORT = 5038;
 // already attached, short enough that a lost announcement costs seconds, not the whole
 // readiness timeout.
 const REGISTRATION_RETRY_AFTER_MS = 5_000;
-// Mirrors `downloads.timeoutMs`'s config default (`src/core/config.ts`) -- used only when a
-// caller constructs the driver directly without threading the configured value through (tests,
-// `SIMLOCK_DRIVERS_MODULE`). See the iOS driver's `DEFAULT_DOWNLOAD_TIMEOUT_MS` for the same
-// pattern.
-const DEFAULT_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 // `sdkmanager --licenses` prompts once per outstanding license with a bare `y/N`. Answering
 // more times than there are real licenses is harmless -- the extra `y`s land after the prompt
 // loop has already exited and sdkmanager simply never reads them -- so this just needs to be
@@ -95,8 +93,9 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
-// Conservative estimate for a system-image download+install -- checked before `sdkmanager
-// --install` ever starts, so a full disk fails fast instead of filling up mid-download.
+// Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
+// before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
+// mid-download.
 const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
 // Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
@@ -161,16 +160,6 @@ export interface AndroidDriverOptions {
    * `~/.android/devices.xml`, so a name defined in both resolves to the built-in.
    */
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
-  /**
-   * Disk-space preflight, shared with every other driver that installs components -- see the
-   * iOS driver's `IosSimctlDriverOptions.diskSpaceGuard` for why a bare `assertDiskSpace` call
-   * isn't enough on its own. Defaults to a private, driver-local guard when omitted (tests,
-   * `SIMLOCK_DRIVERS_MODULE`); production wiring (`src/daemon/main.ts`) passes one shared
-   * instance to every driver.
-   */
-  readonly diskSpaceGuard?: DiskSpaceGuard;
-  /** Per-install timeout for `sdkmanager`; defaults to `downloads.timeoutMs`'s own default. */
-  readonly downloadTimeoutMs?: number;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
@@ -202,8 +191,7 @@ export interface AndroidDriverOptions {
 
 export type AndroidDriverDiagnostic =
   | { readonly avdName: string; readonly kind: "snapshot-cold-boot"; readonly readyAfterMs: number }
-  | DeviceProfileSourceDiagnostic
-  | ComponentInstallDiagnostic;
+  | DeviceProfileSourceDiagnostic;
 
 export class SdkMissingError extends Error {
   constructor(readonly searchedPaths: readonly string[]) {
@@ -442,13 +430,10 @@ export class AndroidDriver implements Driver {
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
-  readonly #diskSpaceGuard: DiskSpaceGuard;
-  readonly #downloadTimeoutMs: number;
   /** `android.emulator` as emulator flags, fixed for this driver's lifetime. */
   readonly #emulatorFlags: readonly string[];
   /** The part of `android.emulator` a clean baseline depends on; see `baselineLaunchInputs`. */
   readonly #baselineLaunchInputs: readonly string[];
-  readonly #installLocks = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -458,6 +443,7 @@ export class AndroidDriver implements Driver {
   readonly #registrar: AdbRegistrar;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
+  readonly componentFootprint: { readonly path: string; readonly bytes: number };
 
   private constructor(
     options: AndroidDriverOptions,
@@ -473,8 +459,6 @@ export class AndroidDriver implements Driver {
     this.#baseEnv = options.env;
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
-    this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
-    this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
     this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
@@ -486,6 +470,8 @@ export class AndroidDriver implements Driver {
     this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
+    // System images land under the SDK root, so that is the volume an install is reserved on.
+    this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Read only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -743,10 +729,8 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async resolveSpec(
-    request: DeviceRequest,
-    options: { readonly allowDownload: boolean; readonly requesterId?: string },
-  ): Promise<DeviceSpec> {
+  /** Never installs: a missing API level throws, naming it as the component to install. */
+  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
     }
@@ -761,12 +745,7 @@ export class AndroidDriver implements Driver {
     // Every model pairs with every installed API level, whatever the image's ABI -- the same
     // list `listCatalog` reports for each model (ADR 0008 §3).
     if (!installed.includes(apiLevel)) {
-      if (!options.allowDownload) {
-        throw new RuntimeMissingError(this.platform, apiLevel);
-      }
-
-      const packageName = systemImagePackage(apiLevel, "google_apis", this.#hostAbi);
-      await this.#installSystemImage(packageName, options.requesterId);
+      throw new RuntimeMissingError(this.platform, apiLevel, { component: apiLevel });
     }
 
     this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
@@ -1187,100 +1166,69 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * Dedupes concurrent installs of the same system-image package behind one in-flight promise
-   * -- mirrors the iOS driver's `#downloadLocks`, sized to a package instead of a whole
-   * `xcodebuild` invocation. The map entry is removed once the install settles (success or
-   * failure), so a later, non-concurrent call starts a fresh attempt rather than replaying a
-   * stale result.
+   * The installed image an API level means -- the one `provision` would use -- with its
+   * receipt, or `undefined` when no image of that level is installed. Never installs.
    */
-  async #installSystemImage(packageName: string, requesterId: string | undefined): Promise<void> {
-    const inFlight = this.#installLocks.get(packageName);
-    if (inFlight !== undefined) {
-      return inFlight;
-    }
-
-    const promise = this.#installSystemImageOnce(packageName, requesterId).finally(() => {
-      if (this.#installLocks.get(packageName) === promise) {
-        this.#installLocks.delete(packageName);
-      }
-    });
-    this.#installLocks.set(packageName, promise);
-    return promise;
+  async findComponent(component: string): Promise<InstalledComponent | undefined> {
+    const image = this.#matchingImage(await this.#installedImages(), component);
+    return image === undefined ? undefined : this.#installedComponent(image);
   }
 
   /**
-   * Disk preflight (via the shared `DiskSpaceGuard`, released once the install settles either
-   * way), then the actual `sdkmanager` install, wrapped with `component.install-*` diagnostics
-   * -- split from `#installSystemImageOrThrow` below so the license-retry branching stays its
-   * own single-responsibility function rather than growing this one's complexity. A preflight
-   * failure is reported before any diagnostic fires: no install was actually attempted, so
-   * there is nothing to report as started or failed. The try/catch means a caller sees exactly
-   * one `install-failed` regardless of which branch below throws, never one per attempt.
-   *
-   * `component-installed` is a verified fact, not "`sdkmanager` exited 0 (possibly after a
-   * license-accept retry)": once the install call itself succeeds, this re-scans
-   * `#installedImages` and only reports `component-installed` once the package actually
-   * installed is present there. Absent (a "reported success but nothing showed up" case)
-   * reports `component-install-failed` instead and throws, matching the iOS driver's
-   * post-download verification.
+   * Installs the `google_apis` image of this API level for the host's ABI with `sdkmanager`,
+   * accepting licenses first when `sdkmanager` refuses on one and `acceptAndroidLicenses`
+   * allows it, then re-scans `system-images`. Every `sdkmanager` run ends on `signal` and has
+   * no timeout of its own.
    */
-  // fallow-ignore-next-line complexity -- reservation, install, and post-install verification are one attempt with one exit per outcome.
-  async #installSystemImageOnce(
-    packageName: string,
-    requesterId: string | undefined,
-  ): Promise<void> {
-    const release = await this.#diskSpaceGuard.reserve(
-      this.#filesystem,
-      this.platform,
-      ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
-      this.#sdk.root,
+  async installComponent(
+    component: string,
+    options: {
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<ComponentInstallResult> {
+    const packageName = systemImagePackage(component, "google_apis", this.#hostAbi);
+    const before = await Promise.all(
+      (await this.#installedImages()).map(async (image) => this.#imageReceipt(image)),
     );
-    try {
-      this.#onDiagnostic?.({
-        componentId: packageName,
-        kind: "component-install-started",
-        ...(requesterId === undefined ? {} : { requesterId }),
-      });
-      const startedAt = this.#clock.now();
-      try {
-        await this.#installSystemImageOrThrow(packageName);
-      } catch (error: unknown) {
-        this.#onDiagnostic?.({
-          componentId: packageName,
-          durationMs: this.#clock.now() - startedAt,
-          error: stableError(error),
-          kind: "component-install-failed",
-          ...(requesterId === undefined ? {} : { requesterId }),
-        });
-        throw error;
-      }
+    await this.#installSystemImageOrThrow(packageName, options);
 
-      const images = await this.#installedImages();
-      if (
-        !images.some(
-          (image) => systemImagePackage(image.apiLevel, image.tag, image.abi) === packageName,
-        )
-      ) {
-        const message = `sdkmanager reported success but ${packageName} is still not installed`;
-        this.#onDiagnostic?.({
-          componentId: packageName,
-          durationMs: this.#clock.now() - startedAt,
-          error: message,
-          kind: "component-install-failed",
-          ...(requesterId === undefined ? {} : { requesterId }),
-        });
-        throw new DriverCrashError(message);
-      }
-
-      this.#onDiagnostic?.({
-        componentId: packageName,
-        durationMs: this.#clock.now() - startedAt,
-        kind: "component-installed",
-        ...(requesterId === undefined ? {} : { requesterId }),
-      });
-    } finally {
-      release();
+    const image = (await this.#installedImages()).find(
+      (candidate) =>
+        systemImagePackage(candidate.apiLevel, candidate.tag, candidate.abi) === packageName,
+    );
+    if (image === undefined) {
+      throw new DriverCrashError(
+        `sdkmanager reported success but ${packageName} is still not installed`,
+      );
     }
+    const installed = await this.#installedComponent(image);
+    const wasThere = before.some((receipt) => sameReceipt(receipt, installed.receipt));
+    return { ...installed, outcome: wasThere ? "already-installed" : "installed" };
+  }
+
+  async #installedComponent(image: SystemImage): Promise<InstalledComponent> {
+    return { receipt: await this.#imageReceipt(image), version: image.apiLevel };
+  }
+
+  /**
+   * The one function that builds this driver's receipt (ADR 0010 §5): the package, its
+   * revision, and a stamp of the image's own `source.properties` -- which file it is and when it
+   * was written -- so an image deleted and installed again at the same revision differs.
+   */
+  async #imageReceipt(image: SystemImage): Promise<ComponentReceipt> {
+    let stamp = "";
+    try {
+      const stat = await this.#filesystem.stat(`${image.path}/source.properties`);
+      stamp = `${stat.identity}@${String(stat.modifiedAtMs)}`;
+    } catch {
+      // No metadata file to stamp: the package and revision still name the image.
+    }
+    return {
+      package: systemImagePackage(image.apiLevel, image.tag, image.abi),
+      revision: image.version,
+      stamp,
+    };
   }
 
   /**
@@ -1288,10 +1236,14 @@ export class AndroidDriver implements Driver {
    * on an unaccepted one and `acceptAndroidLicenses` allows it -- never otherwise: license
    * consent is independent of, and never implied by, download permission.
    */
-  async #installSystemImageOrThrow(packageName: string): Promise<void> {
-    const result = await this.#processRunner.run(this.#sdk.sdkmanager, ["--install", packageName], {
-      timeoutMs: this.#downloadTimeoutMs,
-    });
+  async #installSystemImageOrThrow(
+    packageName: string,
+    options: {
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<void> {
+    const result = await this.#sdkmanager(["--install", packageName], options);
     if (result.code === 0 && !hasUnacceptedLicense(result)) {
       return;
     }
@@ -1304,11 +1256,9 @@ export class AndroidDriver implements Driver {
       throw new AndroidLicenseNotAcceptedError(packageName);
     }
 
-    await this.#acceptLicenses();
+    await this.#acceptLicenses(options);
 
-    const retry = await this.#processRunner.run(this.#sdk.sdkmanager, ["--install", packageName], {
-      timeoutMs: this.#downloadTimeoutMs,
-    });
+    const retry = await this.#sdkmanager(["--install", packageName], options);
     if (retry.code !== 0 || hasUnacceptedLicense(retry)) {
       throw new DriverCrashError(
         `${this.#sdk.sdkmanager} --install ${packageName} still failed after accepting licenses: ` +
@@ -1317,18 +1267,53 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #acceptLicenses(): Promise<void> {
-    const result = await this.#processRunner.run(this.#sdk.sdkmanager, ["--licenses"], {
+  async #acceptLicenses(options: {
+    readonly onProgress: (progress: ComponentInstallProgress) => void;
+    readonly signal: AbortSignal;
+  }): Promise<void> {
+    const result = await this.#sdkmanager(["--licenses"], {
+      ...options,
       // `sdkmanager --licenses` prompts once per outstanding license; answering more times
       // than there are real licenses is harmless (see `LICENSE_ACCEPT_ANSWERS`).
       input: "y\n".repeat(LICENSE_ACCEPT_ANSWERS),
-      timeoutMs: this.#downloadTimeoutMs,
     });
     if (result.code !== 0) {
       throw new DriverCrashError(
         `${this.#sdk.sdkmanager} --licenses failed: ${result.stderr || result.stdout}`,
       );
     }
+  }
+
+  /** One `sdkmanager` run, ended by `signal`; a run that was ended fails the install. */
+  async #sdkmanager(
+    args: readonly string[],
+    options: {
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
+      readonly input?: string;
+    },
+  ): Promise<ProcessResult> {
+    let outcome;
+    try {
+      outcome = await runInstallerProcess(
+        this.#processRunner,
+        this.#clock,
+        this.#sdk.sdkmanager,
+        args,
+        options,
+      );
+    } catch (error: unknown) {
+      throw new DriverCrashError(
+        `${this.#sdk.sdkmanager} ${args.join(" ")} failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (outcome.stopped) {
+      throw new DriverCrashError(
+        `${this.#sdk.sdkmanager} ${args.join(" ")} was ended before it finished`,
+      );
+    }
+    return outcome.result;
   }
 
   async #installedImages(): Promise<SystemImage[]> {

@@ -1,6 +1,9 @@
 import type { Clock } from "../ports/index.js";
 import type { DeviceMode, DeviceSpec, Platform } from "./domain.js";
 import {
+  type ComponentInstallProgress,
+  type ComponentInstallResult,
+  type ComponentReceipt,
   type DeviceRequest,
   type Driver,
   type DriverCatalogEntry,
@@ -8,6 +11,7 @@ import {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type InstalledComponent,
   type LegacyDevice,
   type ObservedRunState,
   type PassthroughCommand,
@@ -19,6 +23,8 @@ import {
 
 export type FakeDriverOperation =
   | "resolveSpec"
+  | "findComponent"
+  | "installComponent"
   | "provision"
   | "makeReady"
   | "reclaim"
@@ -41,6 +47,10 @@ export interface FakeDriverCall {
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   readonly clock: Clock;
+  /** What `componentFootprint` states. Defaults to nothing to reserve, at the device root. */
+  readonly componentFootprint?: { readonly path: string; readonly bytes: number };
+  /** The percentages every `installComponent` reports through `onProgress`, in order. */
+  readonly installProgress?: readonly number[];
   /** Stands in for a real driver's owned root; nothing here validates or creates it. */
   readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
@@ -111,6 +121,12 @@ export class FakeDriver implements Driver {
   readonly platform: Platform;
   readonly deviceRoot: string;
   readonly #availableOsVersions: Set<string>;
+  /** One receipt per installed version; an install replaces it with a new one. */
+  readonly #receipts: Map<string, ComponentReceipt>;
+  #installCount = 0;
+  readonly #install: Pick<FakeDriverOptions, "componentFootprint" | "installProgress">;
+  #holdInstalls = false;
+  readonly #pendingInstalls: (() => void)[] = [];
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
@@ -161,6 +177,12 @@ export class FakeDriver implements Driver {
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
+    this.#install = options;
+    this.#receipts = preinstalledReceipts(this.#availableOsVersions);
+  }
+
+  get componentFootprint(): { readonly path: string; readonly bytes: number } {
+    return this.#install.componentFootprint ?? { bytes: 0, path: this.deviceRoot };
   }
 
   get calls(): readonly FakeDriverCall[] {
@@ -186,11 +208,9 @@ export class FakeDriver implements Driver {
     this.#legacyDevices.delete(device.deviceId);
   }
 
-  async resolveSpec(
-    request: DeviceRequest,
-    options: { readonly allowDownload: boolean; readonly requesterId?: string },
-  ): Promise<DeviceSpec> {
-    await this.#beforeCall("resolveSpec", request, options);
+  /** Never installs: a version that is not available throws, naming it as the component. */
+  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+    await this.#beforeCall("resolveSpec", request);
     this.#assertMatchingPlatform(request.platform);
 
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
@@ -199,13 +219,10 @@ export class FakeDriver implements Driver {
 
     const osVersion = request.osVersion ?? newestVersion(this.#availableOsVersions);
     if (osVersion === undefined) {
-      throw new RuntimeMissingError(this.platform, "default");
+      throw new RuntimeMissingError(this.platform, "default", { component: "latest" });
     }
     if (!this.#availableOsVersions.has(osVersion)) {
-      if (!options.allowDownload) {
-        throw new RuntimeMissingError(this.platform, osVersion);
-      }
-      this.#availableOsVersions.add(osVersion);
+      throw new RuntimeMissingError(this.platform, osVersion, { component: osVersion });
     }
 
     return {
@@ -216,6 +233,69 @@ export class FakeDriver implements Driver {
         ? { mode: "slim" as const }
         : {}),
     };
+  }
+
+  /** `"latest"` is not a version, so it is never found here -- only an install run can tell. */
+  async findComponent(component: string): Promise<InstalledComponent | undefined> {
+    await this.#beforeCall("findComponent", component);
+    return this.#installed(component);
+  }
+
+  /**
+   * Makes `component` available and logs the call. `"latest"` is the newest available version,
+   * or a version called `latest` when there is none. Scripted through `failOn("installComponent",
+   * n, error)`, `holdInstalls()` (it then waits for `releaseInstalls()` or its signal) and the
+   * `installProgress` option.
+   */
+  async installComponent(
+    component: string,
+    options: {
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<ComponentInstallResult> {
+    await this.#beforeCall("installComponent", component);
+    for (const percent of this.#install.installProgress ?? []) {
+      options.onProgress({ percent, stage: "downloading" });
+    }
+    if (this.#holdInstalls) await this.#heldInstall(options.signal);
+    const version =
+      component === "latest" ? (newestVersion(this.#availableOsVersions) ?? component) : component;
+    const existing = this.#installed(version);
+    if (existing !== undefined) return { ...existing, outcome: "already-installed" };
+    this.#installCount += 1;
+    const receipt = { install: String(this.#installCount), version };
+    this.#availableOsVersions.add(version);
+    this.#receipts.set(version, receipt);
+    return { outcome: "installed", receipt, version };
+  }
+
+  holdInstalls(): void {
+    this.#holdInstalls = true;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- a test-only control: tests end a held install with it.
+  releaseInstalls(): void {
+    this.#holdInstalls = false;
+    for (const resolve of this.#pendingInstalls.splice(0)) resolve();
+  }
+
+  #installed(version: string): InstalledComponent | undefined {
+    const receipt = this.#receipts.get(version);
+    return this.#availableOsVersions.has(version) && receipt !== undefined
+      ? { receipt: { ...receipt }, version }
+      : undefined;
+  }
+
+  #heldInstall(signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(abortReason(signal));
+        return;
+      }
+      this.#pendingInstalls.push(resolve);
+      signal.addEventListener("abort", () => reject(abortReason(signal)), { once: true });
+    });
   }
 
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
@@ -419,6 +499,14 @@ export class FakeDriver implements Driver {
       throw new FakeDriverUnknownDeviceError(device.deviceId);
     }
   }
+}
+
+function preinstalledReceipts(versions: ReadonlySet<string>): Map<string, ComponentReceipt> {
+  return new Map([...versions].map((version) => [version, { preinstalled: version }]));
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("Install aborted");
 }
 
 function addressFor(deviceId: string, bootCount: number): string {

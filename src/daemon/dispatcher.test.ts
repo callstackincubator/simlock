@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
   CleanupReaper,
+  type Config,
   Doctor,
   FakeDriver,
   type HostFacts,
@@ -11,7 +13,6 @@ import {
   Nuke,
   PassthroughRefusedError,
   Registry,
-  type Config,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
@@ -158,6 +159,12 @@ async function buildDispatcher(
     overrides.capacity,
   );
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config,
     drivers: [driver],
@@ -891,15 +898,16 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
   // `config.downloads.policy`, HTTP passes `allowDownload` through unclamped"). Since HTTP now
   // calls this same `lease.request` handler (see `src/http/tracker.ts`), proving the clamp
   // here proves it for both frontends -- there is exactly one implementation of it left.
-  it("clamps allowDownload:true to false when downloads.policy is 'never'", async () => {
+  it("starts no install for allowDownload:true when downloads.policy is 'never'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "never" });
-    await dispatcher.dispatch(
-      "lease.request",
-      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-      session(),
-    );
-    const resolveCalls = driver.calls.filter((call) => call.operation === "resolveSpec");
-    expect(resolveCalls.at(-1)?.arguments[1]).toMatchObject({ allowDownload: false });
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+        session(),
+      ),
+    ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
   });
 
   it("catalog.get does not list an uninstalled runtime under downloads.policy 'always'", async () => {
@@ -942,15 +950,18 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     },
   );
 
-  it("leaves allowDownload:true untouched when downloads.policy is 'on-request'", async () => {
+  it("installs for allowDownload:true when downloads.policy is 'on-request'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "on-request" });
     await dispatcher.dispatch(
       "lease.request",
-      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
       session(),
     );
-    const resolveCalls = driver.calls.filter((call) => call.operation === "resolveSpec");
-    expect(resolveCalls.at(-1)?.arguments[1]).toMatchObject({ allowDownload: true });
+    expect(
+      driver.calls
+        .filter((call) => call.operation === "installComponent")
+        .map((call) => call.arguments),
+    ).toEqual([["27.0"]]);
   });
 });
 

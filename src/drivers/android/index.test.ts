@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Driver } from "../../core/driver.js";
-import { DiskSpaceGuard, InsufficientDiskSpaceError } from "../../core/index.js";
 import {
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
@@ -124,9 +123,11 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    await expect(
-      driver.resolveSpec({ model: "Pixel 8", platform: "android" }, { allowDownload: false }),
-    ).resolves.toEqual({ model: "Pixel 8", osVersion: "34", platform: "android" });
+    await expect(driver.resolveSpec({ model: "Pixel 8", platform: "android" })).resolves.toEqual({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
   });
 
   it("resolves the newest installed matching image and prefers the host ABI", async () => {
@@ -142,39 +143,24 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    await expect(
-      driver.resolveSpec({ model: "Pixel 8", platform: "android" }, { allowDownload: false }),
-    ).resolves.toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
-  });
-
-  it("fails for a missing image unless downloads are explicitly allowed", async () => {
-    const filesystem = await androidFilesystem();
-    const runner = new InstallReflectingProcessRunner(
-      [
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.sdkmanager, [
-          "--install",
-          "system-images;android-35;google_apis;arm64-v8a",
-        ]),
-      ],
-      filesystem,
-    );
-    const driver = await createDriver(filesystem, runner);
-    const request = { model: "Pixel 8", osVersion: "35", platform: "android" } as const;
-
-    await expect(driver.resolveSpec(request, { allowDownload: false })).rejects.toMatchObject({
-      name: "RuntimeMissingError",
-    });
-    await expect(driver.resolveSpec(request, { allowDownload: true })).resolves.toEqual({
+    await expect(driver.resolveSpec({ model: "Pixel 8", platform: "android" })).resolves.toEqual({
       model: "Pixel 8",
       osVersion: "35",
       platform: "android",
     });
-    expect(runner.calls.at(-1)).toMatchObject({
-      args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
-      command: binaries.sdkmanager,
-    });
+  });
+
+  it("rejects a missing image naming its API level as the component, and starts no sdkmanager", async () => {
+    const filesystem = await androidFilesystem();
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await expect(
+      driver.resolveSpec({ model: "Pixel 8", osVersion: "35", platform: "android" }),
+    ).rejects.toMatchObject({ component: "35", downloadable: true, name: "RuntimeMissingError" });
+    expect(runner.calls.map((call) => call.command)).not.toContain(binaries.sdkmanager);
   });
 
   it("allocates different even ports for concurrent provisions and skips adb-owned ports", async () => {
@@ -211,10 +197,7 @@ describe("AndroidDriver", () => {
     const first = await createDriver(firstFilesystem, runner, { ids: ["first"] });
     const second = await createDriver(secondFilesystem, runner, { ids: ["second"] });
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
-    await Promise.all([
-      first.resolveSpec(spec, { allowDownload: false }),
-      second.resolveSpec(spec, { allowDownload: false }),
-    ]);
+    await Promise.all([first.resolveSpec(spec), second.resolveSpec(spec)]);
 
     const [firstDevice, secondDevice] = await Promise.all([
       first.provision(spec),
@@ -874,10 +857,11 @@ describe("AndroidDriver", () => {
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_delete-me"]),
     ]);
     const driver: Driver = await createDriver(filesystem, runner, { ids: ["delete-me"] });
-    const spec = await driver.resolveSpec(
-      { model: "Pixel 8", osVersion: "34", platform: "android" },
-      { allowDownload: false },
-    );
+    const spec = await driver.resolveSpec({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
     const device = await driver.provision(spec);
 
     await expect(driver.destroy(device)).resolves.toBeUndefined();
@@ -978,9 +962,11 @@ describe("AndroidDriver", () => {
     expect(pairs).toHaveLength(4);
 
     for (const { model, osVersion } of pairs) {
-      await expect(
-        driver.resolveSpec({ model, osVersion, platform: "android" }, { allowDownload: false }),
-      ).resolves.toEqual({ model, osVersion, platform: "android" });
+      await expect(driver.resolveSpec({ model, osVersion, platform: "android" })).resolves.toEqual({
+        model,
+        osVersion,
+        platform: "android",
+      });
     }
   });
 
@@ -1059,9 +1045,9 @@ describe("AndroidDriver", () => {
 
     for (const { model, name } of names) {
       for (const spelling of [name.toUpperCase(), name.toLowerCase()]) {
-        await expect(
-          driver.resolveSpec({ model: spelling, platform: "android" }, { allowDownload: false }),
-        ).resolves.toEqual({ model, osVersion: "34", platform: "android" });
+        await expect(driver.resolveSpec({ model: spelling, platform: "android" })).resolves.toEqual(
+          { model, osVersion: "34", platform: "android" },
+        );
       }
     }
   });
@@ -1295,10 +1281,11 @@ describe("AndroidDriver", () => {
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
-    const spec = await driver.resolveSpec(
-      { model: "Pixel 8", osVersion: "34", platform: "android" },
-      { allowDownload: false },
-    );
+    const spec = await driver.resolveSpec({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
     const device = await driver.provision(spec);
 
     await driver.makeReady(device);
@@ -1337,10 +1324,11 @@ describe("AndroidDriver", () => {
       markWriteExpectation("emulator-5554", "device-2"),
     ]);
     const driver = await createDriver(filesystem, runner, { ids: ["one"] });
-    const spec = await driver.resolveSpec(
-      { model: "Pixel 8", osVersion: "34", platform: "android" },
-      { allowDownload: false },
-    );
+    const spec = await driver.resolveSpec({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
     const device = await driver.provision(spec);
 
     await expect(driver.makeReady(device)).rejects.toBe(permissionError);
@@ -1395,8 +1383,8 @@ describe("AndroidDriver", () => {
       ids: ["one"],
     });
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
-    await driverA.resolveSpec(spec, { allowDownload: false });
-    await driverB.resolveSpec(spec, { allowDownload: false });
+    await driverA.resolveSpec(spec);
+    await driverB.resolveSpec(spec);
 
     const deviceA = await driverA.provision(spec);
     const deviceB = await driverB.provision(spec);
@@ -1560,10 +1548,11 @@ describe("AndroidDriver", () => {
       ]);
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
 
-      const spec = await driver.resolveSpec(
-        { model: "Custom A", osVersion: "34", platform: "android" },
-        { allowDownload: false },
-      );
+      const spec = await driver.resolveSpec({
+        model: "Custom A",
+        osVersion: "34",
+        platform: "android",
+      });
       expect(spec).toEqual({ model: "Custom A", osVersion: "34", platform: "android" });
 
       const device = await driver.provision(spec);
@@ -1599,10 +1588,11 @@ describe("AndroidDriver", () => {
           processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ]);
         const driver = await createDriver(filesystem, runner, { ids: ["one"] });
-        const spec = await driver.resolveSpec(
-          { model: "Custom A", osVersion: "34", platform: "android" },
-          { allowDownload: false },
-        );
+        const spec = await driver.resolveSpec({
+          model: "Custom A",
+          osVersion: "34",
+          platform: "android",
+        });
         return driver.provision(spec);
       };
 
@@ -1636,10 +1626,11 @@ describe("AndroidDriver", () => {
       ]);
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
 
-      const spec = await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "34", platform: "android" },
-        { allowDownload: false },
-      );
+      const spec = await driver.resolveSpec({
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
       await driver.provision(spec);
 
       // Only one `avdmanager list device` call happened (asserted implicitly by the runner
@@ -1709,10 +1700,11 @@ describe("AndroidDriver", () => {
         tcpProbe: new FakeTcpProbe([adbServerPort]),
       });
 
-      const spec = await driver.resolveSpec(
-        { model: "Evil Phone", osVersion: "34", platform: "android" },
-        { allowDownload: false },
-      );
+      const spec = await driver.resolveSpec({
+        model: "Evil Phone",
+        osVersion: "34",
+        platform: "android",
+      });
 
       await expect(driver.provision(spec)).rejects.toThrow(/line break/);
       // The rejected merge must never have reached the filesystem at all.
@@ -1734,10 +1726,7 @@ describe("AndroidDriver", () => {
       });
 
       await expect(
-        driver.resolveSpec(
-          { model: "Nonexistent Model", osVersion: "34", platform: "android" },
-          { allowDownload: false },
-        ),
+        driver.resolveSpec({ model: "Nonexistent Model", osVersion: "34", platform: "android" }),
       ).rejects.toMatchObject({ name: "UnknownModelError" });
 
       expect(diagnostics).toEqual([
@@ -1755,7 +1744,6 @@ describe("AndroidDriver", () => {
     it("fails naming downloads.acceptAndroidLicenses when licenses are unaccepted and the flag is off", async () => {
       const filesystem = await androidFilesystem();
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         {
           match: {
             args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
@@ -1766,12 +1754,7 @@ describe("AndroidDriver", () => {
       ]);
       const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: false });
 
-      const error = await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((caught: unknown) => caught);
+      const error = await installFor(driver, "35").catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(AndroidLicenseNotAcceptedError);
       expect((error as Error).message).toContain("downloads.acceptAndroidLicenses");
@@ -1788,7 +1771,6 @@ describe("AndroidDriver", () => {
         "The licenses have not been accepted.\n";
       const filesystem = await androidFilesystem();
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         {
           match: {
             args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
@@ -1799,12 +1781,7 @@ describe("AndroidDriver", () => {
       ]);
       const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: false });
 
-      const error = await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((caught: unknown) => caught);
+      const error = await installFor(driver, "35").catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(AndroidLicenseNotAcceptedError);
     });
@@ -1813,7 +1790,6 @@ describe("AndroidDriver", () => {
       const filesystem = await androidFilesystem();
       const runner = new InstallReflectingProcessRunner(
         [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
           {
             match: {
               args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
@@ -1831,12 +1807,10 @@ describe("AndroidDriver", () => {
       );
       const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: true });
 
-      await expect(
-        driver.resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        ),
-      ).resolves.toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
+      await expect(installFor(driver, "35")).resolves.toMatchObject({
+        outcome: "installed",
+        version: "35",
+      });
 
       const licensesCall = runner.calls.find(
         (call) => call.command === binaries.sdkmanager && call.args[0] === "--licenses",
@@ -1849,7 +1823,6 @@ describe("AndroidDriver", () => {
     it("still fails when the install is rejected again after accepting licenses", async () => {
       const filesystem = await androidFilesystem();
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         {
           match: {
             args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
@@ -1868,377 +1841,191 @@ describe("AndroidDriver", () => {
       ]);
       const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: true });
 
-      await expect(
-        driver.resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        ),
-      ).rejects.toMatchObject({ name: "DriverCrashError" });
+      await expect(installFor(driver, "35")).rejects.toMatchObject({ name: "DriverCrashError" });
     });
   });
 
-  it("dedupes concurrent resolveSpec calls for the same missing system image behind one sdkmanager install", async () => {
-    const filesystem = await androidFilesystem();
-    const runner = new InstallReflectingProcessRunner(
-      [
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.sdkmanager, [
-          "--install",
-          "system-images;android-35;google_apis;arm64-v8a",
-        ]),
-      ],
-      filesystem,
-    );
-    const driver = await createDriver(filesystem, runner);
-    const request = { model: "Pixel 8", osVersion: "35", platform: "android" } as const;
+  describe("component install", () => {
+    const package35 = "system-images;android-35;google_apis;arm64-v8a";
 
-    const [first, second] = await Promise.all([
-      driver.resolveSpec(request, { allowDownload: true }),
-      driver.resolveSpec(request, { allowDownload: true }),
-    ]);
+    it("installs the google_apis image for the host ABI with no timeout of its own, and reports it installed with its package, revision and stamp", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new InstallReflectingProcessRunner(
+        [processResult(binaries.sdkmanager, ["--install", package35])],
+        filesystem,
+      );
+      const driver = await createDriver(filesystem, runner);
 
-    expect(first).toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
-    expect(second).toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
-    expect(runner.calls.filter((call) => call.args[0] === "--install")).toHaveLength(1);
-  });
+      const result = await installFor(driver, "35");
 
-  describe("component install diagnostics", () => {
-    it("reports component-install-started then component-installed with a duration on a clean install", async () => {
+      expect(result).toEqual({
+        outcome: "installed",
+        receipt: { package: package35, revision: "1", stamp: expect.stringMatching(/^.+@\d+$/) },
+        version: "35",
+      });
+      expect(runner.calls.find((call) => call.args[0] === "--install")?.options).toEqual({});
+    });
+
+    it("reports already-installed when the image was there before sdkmanager ran", async () => {
+      const filesystem = await androidFilesystem({
+        images: [["35", "google_apis", "arm64-v8a"]],
+      });
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.sdkmanager, ["--install", package35]),
+      ]);
+      const driver = await createDriver(filesystem, runner);
+
+      await expect(installFor(driver, "35")).resolves.toMatchObject({
+        outcome: "already-installed",
+        version: "35",
+      });
+    });
+
+    it("gives two installs of one package, with an uninstall between them, different receipts", async () => {
       const filesystem = await androidFilesystem();
       const runner = new InstallReflectingProcessRunner(
         [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.sdkmanager, [
-            "--install",
-            "system-images;android-35;google_apis;arm64-v8a",
-          ]),
+          processResult(binaries.sdkmanager, ["--install", package35]),
+          processResult(binaries.sdkmanager, ["--install", package35]),
         ],
         filesystem,
       );
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-      });
+      const driver = await createDriver(filesystem, runner);
 
-      await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true },
-      );
+      const first = await installFor(driver, "35");
+      await filesystem.rm(`${sdk}/system-images/android-35`);
+      const second = await installFor(driver, "35");
 
-      expect(diagnostics).toEqual([
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          kind: "component-install-started",
-        },
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          durationMs: 0,
-          kind: "component-installed",
-        },
-      ]);
+      expect(first.outcome).toBe("installed");
+      expect(second.outcome).toBe("installed");
+      expect(second.receipt).not.toEqual(first.receipt);
     });
 
-    it("reports component-install-failed with a stable error summary when the install is rejected outright", async () => {
+    it("fails when sdkmanager exits 0 but the image is still not installed", async () => {
+      const filesystem = await androidFilesystem();
+      // A plain ScriptedProcessRunner: sdkmanager claims success, and nothing lands on disk.
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.sdkmanager, ["--install", package35]),
+      ]);
+      const driver = await createDriver(filesystem, runner);
+
+      const error = await installFor(driver, "35").catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        message: expect.stringContaining(`${package35} is still not installed`),
+        name: "DriverCrashError",
+      });
+    });
+
+    it("fails with sdkmanager's own output when the install is rejected outright", async () => {
       const filesystem = await androidFilesystem();
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         {
-          match: {
-            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
-            command: binaries.sdkmanager,
-          },
+          match: { args: ["--install", package35], command: binaries.sdkmanager },
           result: { code: 1, stderr: "no network", stdout: "" },
         },
       ]);
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      const driver = await createDriver(filesystem, runner);
+
+      await expect(installFor(driver, "35")).rejects.toMatchObject({
+        message: expect.stringContaining("no network"),
+        name: "DriverCrashError",
       });
-
-      await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((error: unknown) => error);
-
-      expect(diagnostics).toEqual([
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          kind: "component-install-started",
-        },
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          durationMs: 0,
-          error: expect.stringContaining("DriverCrashError:"),
-          kind: "component-install-failed",
-        },
-      ]);
     });
 
-    it("reports exactly one component-install-failed for a license-retry failure, not one per attempt", async () => {
-      const licenseNotAcceptedOutput =
-        "Warning: License for package Android SDK Platform 35 not accepted.\n\n" +
-        "1 package(s) were skipped due to license issues. Please accept the license(s) and try " +
-        "again.\nTo resolve, run: sdkmanager --licenses\n";
+    it("reports each percentage sdkmanager prints as progress, and nothing for a line without one", async () => {
       const filesystem = await androidFilesystem();
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        {
-          match: {
-            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
-            command: binaries.sdkmanager,
+      const runner = new InstallReflectingProcessRunner(
+        [
+          {
+            ...processResult(binaries.sdkmanager, ["--install", package35]),
+            stdoutLines: [
+              "[=====      ] 25% Downloading x86_64-35_r09.zip...",
+              "Unzipping",
+              "[===========] 100% Unzipping...",
+            ],
           },
-          result: { code: 1, stderr: "", stdout: licenseNotAcceptedOutput },
-        },
-        processResult(binaries.sdkmanager, ["--licenses"], "All licenses accepted.\n"),
-        {
-          match: {
-            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
-            command: binaries.sdkmanager,
-          },
-          result: { code: 1, stderr: "still refusing", stdout: "" },
-        },
-      ]);
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        acceptAndroidLicenses: true,
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-      });
-
-      await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((error: unknown) => error);
-
-      const installDiagnostics = diagnostics.filter((diagnostic) =>
-        diagnostic.kind.startsWith("component-install"),
+        ],
+        filesystem,
       );
-      expect(installDiagnostics).toEqual([
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          kind: "component-install-started",
-        },
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          durationMs: 0,
-          error: expect.stringContaining("DriverCrashError:"),
-          kind: "component-install-failed",
-        },
+      const driver = await createDriver(filesystem, runner);
+      const progress: unknown[] = [];
+
+      await installFor(driver, "35", { onProgress: (report) => progress.push(report) });
+
+      expect(progress).toEqual([
+        { percent: 25, stage: "downloading" },
+        { percent: 100, stage: "downloading" },
       ]);
     });
 
-    it("fails disk preflight before ever invoking sdkmanager, and reports no diagnostic", async () => {
-      const filesystem = await androidFilesystem({ freeDiskBytes: 1024 });
+    it.each([
+      ["the install", ["--install", package35]],
+      ["the license step", ["--licenses"]],
+    ] as const)("ends %s when the signal fires, and fails the install", async (_step, hanging) => {
+      const filesystem = await androidFilesystem();
+      const licenseRefusal = {
+        match: { args: ["--install", package35], command: binaries.sdkmanager },
+        result: {
+          code: 1,
+          stderr: "",
+          stdout: "Warning: License for package Android SDK Platform 35 not accepted.\n",
+        },
+      };
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        ...(hanging[0] === "--licenses" ? [licenseRefusal] : []),
+        { hangs: true, match: { args: [...hanging], command: binaries.sdkmanager } },
       ]);
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: true });
+      const controller = new AbortController();
+
+      let error: unknown;
+      void installFor(driver, "35", { signal: controller.signal }).catch((caught: unknown) => {
+        error = caught;
       });
-
-      const error = await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((caught: unknown) => caught);
-
-      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
-      expect((error as Error).message).toMatch(/needs ~2\.0 GiB.*only 0\.0 GiB available/);
-      // The device-profile lookup ran (avdmanager list device), but no sdkmanager call at all.
-      expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
-      expect(diagnostics).toEqual([]);
-    });
-
-    it("checks disk space on the SDK's own volume, not the daemon's working directory", async () => {
-      class RecordingFilesystem extends MemoryFilesystem {
-        readonly diskFreePaths: string[] = [];
-
-        override async diskFree(path: string): Promise<number> {
-          this.diskFreePaths.push(path);
-          return super.diskFree(path);
-        }
+      const spawned = hanging[0] === "--licenses" ? 2 : 1;
+      for (let tick = 0; tick < 100 && runner.handles.length < spawned; tick += 1) {
+        await Promise.resolve();
       }
-      const recordingFilesystem = new RecordingFilesystem();
-      const filesystem = await androidFilesystem({}, recordingFilesystem);
-      const runner = new InstallReflectingProcessRunner(
-        [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.sdkmanager, [
-            "--install",
-            "system-images;android-35;google_apis;arm64-v8a",
-          ]),
-        ],
-        filesystem,
+      expect(runner.handles).toHaveLength(spawned);
+      controller.abort();
+      for (let tick = 0; tick < 50 && error === undefined; tick += 1) {
+        await Promise.resolve();
+      }
+
+      // Settled within a few microtasks of the signal: the kill ended it, not a timer.
+      expect(error).toMatchObject({
+        message: expect.stringContaining("was ended before it finished"),
+        name: "DriverCrashError",
+      });
+    });
+
+    it("finds the image an API level means with its receipt, and nothing for a level that is not installed", async () => {
+      const filesystem = await androidFilesystem();
+      await filesystem.writeFileAtomic(
+        `${sdk}/system-images/android-34/google_apis/arm64-v8a/source.properties`,
+        "Pkg.Revision=7\n",
       );
+      const runner = new ScriptedProcessRunner([]);
       const driver = await createDriver(filesystem, runner);
 
-      await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true },
-      );
-
-      expect(recordingFilesystem.diskFreePaths).toEqual([sdk]);
-    });
-
-    it("reports component-install-failed, never component-installed, when sdkmanager exits 0 but the image never shows up", async () => {
-      const filesystem = await androidFilesystem();
-      // Deliberately a plain ScriptedProcessRunner, not InstallReflectingProcessRunner: sdkmanager
-      // claims success, but nothing ever lands in the filesystem's system-images tree -- the
-      // "reported success but still not installed" case the post-install re-scan exists to catch.
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.sdkmanager, [
-          "--install",
-          "system-images;android-35;google_apis;arm64-v8a",
-        ]),
-      ]);
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      await expect(driver.findComponent("34")).resolves.toEqual({
+        receipt: {
+          package: "system-images;android-34;google_apis;arm64-v8a",
+          revision: "7",
+          stamp: expect.stringMatching(/^.+@\d+$/),
+        },
+        version: "34",
       });
-
-      const error = await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((caught: unknown) => caught);
-
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain(
-        "sdkmanager reported success but system-images;android-35;google_apis;arm64-v8a is still not installed",
-      );
-      expect(diagnostics).toEqual([
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          kind: "component-install-started",
-        },
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          durationMs: 0,
-          error: expect.stringContaining("still not installed"),
-          kind: "component-install-failed",
-        },
-      ]);
+      await expect(driver.findComponent("35")).resolves.toBeUndefined();
+      expect(runner.calls).toEqual([]);
     });
 
-    it("carries requesterId through to component-install diagnostics when resolveSpec's caller knows one", async () => {
+    it("states 2 GiB on the SDK root as the footprint of one install", async () => {
       const filesystem = await androidFilesystem();
-      const runner = new InstallReflectingProcessRunner(
-        [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.sdkmanager, [
-            "--install",
-            "system-images;android-35;google_apis;arm64-v8a",
-          ]),
-        ],
-        filesystem,
-      );
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const driver = await createDriver(filesystem, runner, {
-        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-      });
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
-      await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true, requesterId: "agent-7" },
-      );
-
-      expect(diagnostics).toEqual([
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          kind: "component-install-started",
-          requesterId: "agent-7",
-        },
-        {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          durationMs: 0,
-          kind: "component-installed",
-          requesterId: "agent-7",
-        },
-      ]);
-    });
-
-    it("respects disk-space reservations already outstanding on a shared DiskSpaceGuard", async () => {
-      const filesystem = await androidFilesystem({ freeDiskBytes: 2.5 * 1024 ** 3 });
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-      ]);
-      const diskSpaceGuard = new DiskSpaceGuard();
-      // Stands in for another driver's (or another install's) concurrent reservation against the
-      // same shared guard -- 2 of the 2.5 GiB free is already spoken for, leaving less than the
-      // 2 GiB `ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES` floor this install needs.
-      const releaseOther = await diskSpaceGuard.reserve(filesystem, "ios", 1.5 * 1024 ** 3, sdk);
-      const driver = await createDriver(filesystem, runner, { diskSpaceGuard });
-
-      const error = await driver
-        .resolveSpec(
-          { model: "Pixel 8", osVersion: "35", platform: "android" },
-          { allowDownload: true },
-        )
-        .catch((caught: unknown) => caught);
-
-      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
-      expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
-      releaseOther();
-    });
-  });
-
-  describe("download timeout", () => {
-    it("threads the configured downloadTimeoutMs into the sdkmanager install call", async () => {
-      const filesystem = await androidFilesystem();
-      const runner = new InstallReflectingProcessRunner(
-        [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.sdkmanager, [
-            "--install",
-            "system-images;android-35;google_apis;arm64-v8a",
-          ]),
-        ],
-        filesystem,
-      );
-      const driver = await createDriver(filesystem, runner, { downloadTimeoutMs: 42_000 });
-
-      await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true },
-      );
-
-      const installCall = runner.calls.find(
-        (call) => call.command === binaries.sdkmanager && call.args[0] === "--install",
-      );
-      expect(installCall?.options.timeoutMs).toBe(42_000);
-    });
-
-    it("defaults to the same 20-minute timeout as before this option existed", async () => {
-      const filesystem = await androidFilesystem();
-      const runner = new InstallReflectingProcessRunner(
-        [
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.sdkmanager, [
-            "--install",
-            "system-images;android-35;google_apis;arm64-v8a",
-          ]),
-        ],
-        filesystem,
-      );
-      const driver = await createDriver(filesystem, runner);
-
-      await driver.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true },
-      );
-
-      const installCall = runner.calls.find(
-        (call) => call.command === binaries.sdkmanager && call.args[0] === "--install",
-      );
-      expect(installCall?.options.timeoutMs).toBe(20 * 60_000);
+      expect(driver.componentFootprint).toEqual({ bytes: 2 * 1024 ** 3, path: sdk });
     });
   });
 });
@@ -2328,7 +2115,7 @@ describe("AndroidDriver.create", () => {
     });
 
     expect(driver.leaseEnvironment()).toEqual({ ANDROID_ADB_SERVER_PORT: "5199" });
-    await driver.resolveSpec({ model: "Pixel 8", platform: "android" }, { allowDownload: false });
+    await driver.resolveSpec({ model: "Pixel 8", platform: "android" });
     expect(runner.calls[0]?.options).toEqual({
       env: { ...scopedEnv, ANDROID_ADB_SERVER_PORT: "5199" },
     });
@@ -2780,16 +2567,13 @@ live(
       simlockHome: join(tmpdir(), `simlock-live-android-${process.pid}`),
       tcpProbe: new NodeTcpProbe(),
     });
-    const spec = await driver.resolveSpec(
-      {
-        model: process.env.SIMLOCK_LIVE_ANDROID_MODEL ?? "Pixel 8",
-        platform: "android",
-        ...(process.env.SIMLOCK_LIVE_ANDROID_API === undefined
-          ? {}
-          : { osVersion: process.env.SIMLOCK_LIVE_ANDROID_API }),
-      },
-      { allowDownload: false },
-    );
+    const spec = await driver.resolveSpec({
+      model: process.env.SIMLOCK_LIVE_ANDROID_MODEL ?? "Pixel 8",
+      platform: "android",
+      ...(process.env.SIMLOCK_LIVE_ANDROID_API === undefined
+        ? {}
+        : { osVersion: process.env.SIMLOCK_LIVE_ANDROID_API }),
+    });
     const device = await driver.provision(spec);
     const coldStartedAt = Date.now();
 
@@ -2905,10 +2689,7 @@ async function provisionedHarness(
       : { readinessTimeoutMs: options.readinessTimeoutMs }),
     tcpProbe,
   });
-  const spec = await driver.resolveSpec(
-    { model: "Pixel 8", osVersion: "34", platform: "android" },
-    { allowDownload: false },
-  );
+  const spec = await driver.resolveSpec({ model: "Pixel 8", osVersion: "34", platform: "android" });
   const device = await driver.provision(spec);
 
   return { clock, device, driver, filesystem, runner, tcpProbe };
@@ -2979,8 +2760,6 @@ async function createDriver(
     readonly acceptAndroidLicenses?: boolean;
     readonly clock?: FakeClock;
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
-    readonly diskSpaceGuard?: DiskSpaceGuard;
-    readonly downloadTimeoutMs?: number;
     readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
@@ -3020,8 +2799,6 @@ async function createDriver(
  * without the helper itself turning into a pile of conditionals. */
 function onlyProvided(options: {
   readonly acceptAndroidLicenses?: boolean;
-  readonly diskSpaceGuard?: DiskSpaceGuard;
-  readonly downloadTimeoutMs?: number;
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
@@ -3030,10 +2807,6 @@ function onlyProvided(options: {
     ...(options.acceptAndroidLicenses === undefined
       ? {}
       : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
-    ...(options.diskSpaceGuard === undefined ? {} : { diskSpaceGuard: options.diskSpaceGuard }),
-    ...(options.downloadTimeoutMs === undefined
-      ? {}
-      : { downloadTimeoutMs: options.downloadTimeoutMs }),
     ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.readinessTimeoutMs === undefined
@@ -3262,13 +3035,33 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
           const match = /^system-images;android-(.+);(.+);(.+)$/.exec(packageName);
           if (match !== null) {
             const [, api, tag, abi] = match;
-            void this.#filesystem.mkdirp(`${sdk}/system-images/android-${api}/${tag}/${abi}`);
+            const imagePath = `${sdk}/system-images/android-${api}/${tag}/${abi}`;
+            void this.#filesystem
+              .mkdirp(imagePath)
+              .then(() =>
+                this.#filesystem.writeFileAtomic(
+                  `${imagePath}/source.properties`,
+                  "Pkg.Revision=1\n",
+                ),
+              );
           }
         }
       });
     }
     return handle;
   }
+}
+
+/** `installComponent` with a no-op progress callback and a signal that never fires. */
+function installFor(
+  driver: AndroidDriver,
+  component: string,
+  options: { onProgress?: (progress: unknown) => void; signal?: AbortSignal } = {},
+) {
+  return driver.installComponent(component, {
+    onProgress: options.onProgress ?? (() => undefined),
+    signal: options.signal ?? new AbortController().signal,
+  });
 }
 
 function processResult(command: string, args: readonly (string | RegExp)[], stdout = "") {

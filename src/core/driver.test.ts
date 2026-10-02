@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "../ports/index.js";
-import { assertDiskSpace, DiskSpaceGuard, InsufficientDiskSpaceError } from "./driver.js";
+import {
+  assertDiskSpace,
+  DiskSpaceGuard,
+  InsufficientDiskSpaceError,
+  sameReceipt,
+} from "./driver.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -106,5 +111,17 @@ describe("DiskSpaceGuard", () => {
       guard.reserve(filesystem, "android", 6 * gibibyte, "/volume"),
     ).rejects.toBeInstanceOf(InsufficientDiskSpaceError);
     releaseSecond();
+  });
+});
+
+describe("sameReceipt", () => {
+  it("matches only the same keys with the same values", () => {
+    const receipt = { build: "23F77", image: "IMG-1" };
+
+    expect(sameReceipt(receipt, { image: "IMG-1", build: "23F77" })).toBe(true);
+    expect(sameReceipt(receipt, { build: "23F77", image: "IMG-2" })).toBe(false);
+    expect(sameReceipt(receipt, { ...receipt, stamp: "x" })).toBe(false);
+    expect(sameReceipt({ ...receipt, stamp: "x" }, receipt)).toBe(false);
+    expect(sameReceipt({ build: "23F77" }, { image: "23F77" })).toBe(false);
   });
 });

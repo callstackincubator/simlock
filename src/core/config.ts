@@ -122,7 +122,10 @@ export interface Config {
     readonly policy: DownloadPolicy;
     /** Explicit legal consent for Android SDK licenses, independent of `policy`. */
     readonly acceptAndroidLicenses: boolean;
-    /** Per-install timeout; downloads run minutes, not seconds. */
+    /**
+     * One budget per install request, from its arrival, covering the wait behind another
+     * download and the download itself (ADR 0010 §3); downloads run minutes, not seconds.
+     */
     readonly timeoutMs: number;
   };
   readonly idle: {

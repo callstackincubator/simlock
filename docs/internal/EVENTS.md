@@ -82,18 +82,19 @@ consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-d
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name), requester id (when the triggering resolution knew one) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
-| `component.installed` | platform, component id, duration, requester id | the install succeeded **and** a post-install re-scan confirmed the component the request actually needed is present (paired with the requested device type, for iOS) — never fired on a bare exit-0 | driver-diagnostics | implemented |
-| `component.install-failed` | platform, component id, duration, stable error summary, requester id | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry), **or** the installer exited 0 but the post-install re-scan could not confirm the component | driver-diagnostics | implemented |
+| `component.install-started` | platform, component id (the string the install was asked for: an iOS runtime version, `latest`, or a bare major; an Android API level), requester id (of the request that started the install, when known) | once per install, after the free-disk check passed and disk was set aside, just before `xcodebuild -downloadPlatform` / `sdkmanager --install` runs | component-installer | implemented |
+| `component.installed` | platform, component id, version (the exact version now installed), already present (`true` when the installer ran and found the component already there), duration, requester id | once per install, when the installer finished **and** a fresh read confirmed the component — never on a bare exit 0 | component-installer | implemented |
+| `component.install-failed` | platform, component id, duration, stable error summary, requester id | once per install, when it failed: the installer failed (a license retry included), it ran out of `downloads.timeoutMs`, the daemon stopped, the installer exited 0 but a fresh read could not confirm the component, or the component installed but its record could not be stored | component-installer | implemented |
 
-Drivers never touch the event bus directly (architecture rule 5): both drivers report these
-facts through their own `onDiagnostic` callback (mirroring the Android driver's pre-existing
-diagnostic pattern), and `src/daemon/main.ts` bridges that diagnostic to the bus at driver
-construction time — hence the `driver-diagnostics` emitter rather than `IosSimctlDriver` /
-`AndroidDriver`. A disk-preflight failure (`InsufficientDiskSpaceError`) happens before any
-diagnostic fires: no install was attempted, so nothing is reported as started or failed. See
-"Device requests" and "Fresh-state strategy" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a
-missing component gets to this point, and `docs/internal/KNOWN-PITFALLS.md` for the requester-visible
+`ComponentInstaller` (`src/core/component-installer.ts`) is the only emitter (ADR 0010 §3):
+drivers install but never emit (architecture rule 5). The events fire once per install, not
+once per request that joined it, and only for an install that reached the driver -- a call
+that ends as `already-installed` from `findComponent`, as not needed, or refused by the disk
+reservation (`InsufficientDiskSpaceError`) emits nothing. `component.installed` is emitted after
+the component record is committed to the registry (events rule 3); with `alreadyPresent: true`
+nothing was recorded (ADR 0010 §5). `requesterId` is the requester whose call started the
+install. See "Device requests" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a missing
+component gets to this point, and `docs/internal/KNOWN-PITFALLS.md` for the requester-visible
 progress gap this leaves.
 
 ## System

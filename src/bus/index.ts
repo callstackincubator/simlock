@@ -129,13 +129,18 @@ export interface EventMap {
   };
   "component.install-started": {
     readonly platform: string;
+    /** The component string the install was asked for: a version, or a driver's word for newest. */
     readonly componentId: string;
-    /** The requester on whose behalf this install runs, when the triggering resolution knew one. */
+    /** The requester whose call started this install, when one is known. */
     readonly requesterId?: string;
   };
   "component.installed": {
     readonly platform: string;
     readonly componentId: string;
+    /** The exact version now installed. */
+    readonly version: string;
+    /** True when the installer ran and the component was already there; nothing was recorded. */
+    readonly alreadyPresent: boolean;
     readonly durationMs: number;
     readonly requesterId?: string;
   };

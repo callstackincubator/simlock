@@ -20,6 +20,7 @@
  * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
  */
 import {
+  ComponentInstallTimeoutError,
   IdempotencyConflictError,
   InsufficientDiskSpaceError,
   LeaseRequestForbiddenError,
@@ -125,6 +126,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof LicenseNotAcceptedError) {
     return "LICENSE_NOT_ACCEPTED";
+  }
+  if (error instanceof ComponentInstallTimeoutError) {
+    return "DOWNLOAD_TIMEOUT";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
 import {
+  CleanupReaper,
   type Config,
   type DriverRejection,
-  CleanupReaper,
   FakeDriver,
   InsufficientDiskSpaceError,
   LeaseEngine,
@@ -2041,10 +2042,11 @@ describe("DaemonServer download policy", () => {
     });
 
     expect(grant.ok).toBe(true);
-    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
-      allowDownload: true,
-      requesterId: "agent-1",
-    });
+    expect(
+      driver.calls
+        .filter((call) => call.operation === "installComponent")
+        .map((call) => call.arguments),
+    ).toEqual([["26.5"]]);
     await client.close();
   });
 
@@ -2066,10 +2068,7 @@ describe("DaemonServer download policy", () => {
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(response.error?.message).toContain("downloads.policy");
-    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
-      allowDownload: false,
-      requesterId: "agent-1",
-    });
+    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
     await client.close();
   });
 
@@ -2823,6 +2822,12 @@ async function createHarness(
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config,
     describeFailure: describeLeaseRequestFailure,

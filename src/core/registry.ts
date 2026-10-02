@@ -21,7 +21,7 @@ import {
   type Platform,
   transition,
 } from "./domain.js";
-import type { DeviceRequest } from "./driver.js";
+import type { ComponentReceipt, DeviceRequest } from "./driver.js";
 import {
   type LeaseRequestLimits,
   type LeaseRequestOutcome,
@@ -64,6 +64,20 @@ export interface RegistryOptions {
 export interface RegistrySnapshot {
   readonly devices: readonly DeviceRecord[];
   readonly leases: readonly LeaseRecord[];
+  readonly components: readonly ComponentRecord[];
+}
+
+/**
+ * The fourth record type: a component Simlock installed (ADR 0010 §5). `receipt` is the
+ * driver's own, opaque to the core and compared only for equality -- a component is Simlock's
+ * when a record's receipt equals the receipt of something installed now. One record per platform
+ * and version: a later install of the same version replaces it.
+ */
+export interface ComponentRecord {
+  readonly platform: Platform;
+  readonly version: string;
+  readonly installedAt: number;
+  readonly receipt: ComponentReceipt;
 }
 
 export interface RegisterDeviceInput {
@@ -122,14 +136,15 @@ export class RegistryEventError extends Error {
 }
 
 /**
- * The third record type beside devices and leases: every lease request, stored before it is
- * queued (see `LeaseRequestBook`). Written through the same `#commit` as the other two, so a
- * request's record and the lease it was granted are never on disk in two separate files.
+ * Devices, leases, lease requests (stored before they are queued, see `LeaseRequestBook`) and
+ * the components Simlock installed (`ComponentRecord`). All four are written through one
+ * `#commit`, so no two of them are ever on disk in separate files.
  */
 export class Registry implements LeaseRequestStore<LeaseGrant> {
   #devices: DeviceRecord[] = [];
   #leases: LeaseRecord[] = [];
   #leaseRequests: readonly LeaseRequestRecord[] = [];
+  #components: readonly ComponentRecord[] = [];
   #unknownState: Record<string, unknown> = {};
   readonly #unknownDeviceFields = new Map<string, Record<string, unknown>>();
   readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
@@ -160,7 +175,24 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return {
       devices: this.#devices.map((device) => ({ ...device, spec: { ...device.spec } })),
       leases: this.#leases.map((lease) => ({ ...lease })),
+      components: this.#components.map(cloneComponent),
     };
+  }
+
+  /**
+   * Stores the record of a component Simlock installed, replacing one with the same platform
+   * and version (ADR 0010 §5). `ComponentInstaller` calls it before it emits
+   * `component.installed`, so the event never describes an install the registry does not hold.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through ComponentInstaller's registry port.
+  async recordComponent(record: ComponentRecord): Promise<void> {
+    const components = [
+      ...this.#components.filter(
+        (existing) => existing.platform !== record.platform || existing.version !== record.version,
+      ),
+      cloneComponent(record),
+    ];
+    await this.#commit(this.#devices, this.#leases, this.#leaseRequests, components);
   }
 
   async registerDevice({
@@ -256,7 +288,6 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * reached from WarmPoolCoordinator for the lease-end paths -- emits `device.quarantined`
    * (and, for a lease-end failure, `device.purge-failed`) after this commits.
    */
-  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (
@@ -626,6 +657,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     devices: DeviceRecord[],
     leases: LeaseRecord[],
     leaseRequests: readonly LeaseRequestRecord[] = this.#leaseRequests,
+    components: readonly ComponentRecord[] = this.#components,
   ): Promise<void> {
     await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
     await this.options.filesystem.writeFileAtomic(
@@ -644,11 +676,13 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
           ...this.#unknownLeaseRequestFields.get(record.id),
           ...record,
         })),
+        components,
       }),
     );
     this.#devices = devices;
     this.#leases = leases;
     this.#leaseRequests = leaseRequests;
+    this.#components = components;
   }
 
   #restore(contents: string): void {
@@ -663,7 +697,12 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
     }
 
-    this.#unknownState = unknownFields(parsed, ["devices", "leases", "leaseRequests"]);
+    this.#unknownState = unknownFields(parsed, [
+      "devices",
+      "leases",
+      "leaseRequests",
+      "components",
+    ]);
     this.#devices = parsed.devices.map((device) => {
       const record = parseDevice(device);
       this.#unknownDeviceFields.set(
@@ -681,6 +720,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       return record;
     });
     this.#leaseRequests = this.#restoreLeaseRequests(parsed.leaseRequests);
+    this.#components = restoreComponents(parsed.components);
   }
 
   /**
@@ -782,6 +822,43 @@ function cloneDevice(device: DeviceRecord): DeviceRecord {
 
 function cloneLease(lease: LeaseRecord): LeaseRecord {
   return { ...lease };
+}
+
+function cloneComponent(record: ComponentRecord): ComponentRecord {
+  return { ...record, receipt: { ...record.receipt } };
+}
+
+/**
+ * A state file written before components were recorded has no `components` key and loads with
+ * none. A record that does not parse is dropped rather than failing the load, like a lease
+ * request: losing it only means Simlock no longer claims that component, which errs towards
+ * never removing it (safety rule 1).
+ */
+function restoreComponents(value: unknown): ComponentRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate: unknown) => {
+    const record = parseComponent(candidate);
+    return record === undefined ? [] : [record];
+  });
+}
+
+function parseComponent(value: unknown): ComponentRecord | undefined {
+  if (
+    !isObject(value) ||
+    !isPlatform(value.platform) ||
+    typeof value.version !== "string" ||
+    typeof value.installedAt !== "number" ||
+    !isObject(value.receipt) ||
+    !Object.values(value.receipt).every((field) => typeof field === "string")
+  ) {
+    return undefined;
+  }
+  return {
+    installedAt: value.installedAt,
+    platform: value.platform,
+    receipt: { ...(value.receipt as Record<string, string>) },
+    version: value.version,
+  };
 }
 
 function cloneLeaseRequest(record: LeaseRequestRecord): LeaseRequestRecord {

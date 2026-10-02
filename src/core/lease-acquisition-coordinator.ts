@@ -16,7 +16,13 @@ import {
   type Platform,
   sameSpec,
 } from "./domain.js";
-import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
+import type { ComponentInstaller } from "./component-installer.js";
+import {
+  BootTimeoutError,
+  type DeviceRequest,
+  type Driver,
+  RuntimeMissingError,
+} from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import type { AcquisitionMaintenance } from "./nuke-service.js";
@@ -88,6 +94,11 @@ export type AcquisitionQueue = Pick<
 
 export interface LeaseAcquisitionCoordinatorOptions {
   readonly claims: AcquisitionClaims;
+  /**
+   * The one installer in the core (ADR 0010 §3). A request whose runtime is missing and that
+   * may download calls it directly (architecture rule 5); nothing else on this path installs.
+   */
+  readonly components: Pick<ComponentInstaller, "install">;
   readonly decisions: AcquisitionDecision;
   /**
    * The worker's default device mode per platform, built from config at the composition root
@@ -267,17 +278,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
       const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
-      const resolved = await driver.resolveSpec(
-        { ...request, mode },
-        {
-          allowDownload: options.allowDownload ?? false,
-          // The waiter is the one place that knows which requester triggered this resolution;
-          // threaded through so a component install a driver ends up doing on this request's
-          // behalf can attribute its diagnostics (and the resulting `component.install-*` events)
-          // to it.
-          requesterId: options.requesterId,
-        },
-      );
+      const resolved = await this.#resolveOrInstall(driver, { ...request, mode }, options);
       // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
       // driver that returns the wrong thing still cannot put a full request on a slim device.
       waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
@@ -289,6 +290,46 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
+  }
+
+  /**
+   * Resolves the request; when its runtime is missing, a download could supply it, and the
+   * request may download, asks the installer for it and resolves once more. The installer skips
+   * the install when, by the time this call reaches the front of its queue, `resolveSpec` no
+   * longer fails with `RuntimeMissingError` -- another install made the runtime available.
+   * Without `allowDownload` the first failure stands and the installer is never called.
+   */
+  async #resolveOrInstall(
+    driver: Driver,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): Promise<DeviceSpec> {
+    try {
+      return await driver.resolveSpec(request);
+    } catch (error: unknown) {
+      if (
+        !(error instanceof RuntimeMissingError) ||
+        !error.downloadable ||
+        error.component === undefined ||
+        options.allowDownload !== true
+      ) {
+        throw error;
+      }
+      await this.options.components.install({
+        component: error.component,
+        platform: request.platform,
+        requesterId: options.requesterId,
+        stillNeeded: async () => {
+          try {
+            await driver.resolveSpec(request);
+            return false;
+          } catch (stillMissing: unknown) {
+            return stillMissing instanceof RuntimeMissingError;
+          }
+        },
+      });
+      return driver.resolveSpec(request);
+    }
   }
 
   /**

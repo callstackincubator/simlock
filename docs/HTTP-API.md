@@ -826,7 +826,7 @@ Every failure is the same shape the daemon protocol uses:
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine's devices, asked of a gateway) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
-| 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`) |
+| 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a lease request's runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
 Three notes on these codes.
 

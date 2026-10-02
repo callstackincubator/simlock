@@ -12,10 +12,7 @@ describe("DriverCatalog", () => {
     const catalog = new DriverCatalog([driver]);
 
     await expect(
-      catalog.resolveSpec(
-        { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        { allowDownload: false },
-      ),
+      catalog.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
     ).resolves.toEqual({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
   });
 

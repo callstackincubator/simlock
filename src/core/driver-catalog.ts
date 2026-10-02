@@ -67,11 +67,8 @@ export class DriverCatalog {
     throw new UnknownPassthroughToolError(tool);
   }
 
-  async resolveSpec(
-    request: DeviceRequest,
-    options: { readonly allowDownload: boolean; readonly requesterId?: string },
-  ): Promise<DeviceSpec> {
-    return this.get(request.platform).resolveSpec(request, options);
+  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+    return this.get(request.platform).resolveSpec(request);
   }
 
   /**

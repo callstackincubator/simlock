@@ -292,53 +292,51 @@ this has to be a TCP port and cannot live as a socket file inside
 `drivers.android.adbServerPort` exists and why two Simlock instances on one
 machine need distinct values for it.
 
-## Component downloads: per-request blocking, the bounded-default edge case, and no progress push
+## Component downloads: one at a time per platform, the bounded-default edge case, and no progress push
 
-The iOS driver's `resolveSpec` (`src/drivers/ios/index.ts`) can now run
-`xcodebuild -downloadPlatform iOS` when a requested runtime is missing and
-downloads are permitted. Two things worth knowing about that path:
+A lease request that may download and whose runtime is missing calls
+`ComponentInstaller` (`src/core/component-installer.ts`, ADR 0010 §3), which
+runs `xcodebuild -downloadPlatform iOS` or `sdkmanager --install` through the
+driver. Three things worth knowing about that path:
 
-**Only the requesting lease waits.** `resolveSpec` runs inside
-`LeaseAcquisitionCoordinator#resolveAndDrive`, per request, outside the
-serialized decision gate and outside the FIFO head — a slow download (tens
-of minutes for a ~7 GB runtime) blocks only the request that triggered it.
-Concurrent requests for the *same* missing runtime are deduped behind an
-in-driver promise (one `xcodebuild` invocation, all callers await it); a
-request for a different model or version proceeds independently and is
-never queued behind someone else's download.
+**A platform runs one download at a time.** Installs queue per platform,
+first come first served. Requests for the *same* component join one install;
+a request for a *different* runtime on the same platform waits for the
+running download to end before its own starts — a second missing iOS runtime
+can wait tens of minutes behind the first. An iOS and an Android download run
+side by side. The wait spends the request's own `downloads.timeoutMs`, which
+is counted from when it arrived and never restarts, so on a busy machine the
+operator raises it. Only the requests that need a download wait: the
+installer runs outside the serialized decision gate and outside the FIFO
+head, so a request for an installed runtime proceeds as before. Two
+requests that name the same runtime differently (no `--os` beside an
+explicit version) do not join; the second waits its turn and starts no
+download when the first made its runtime available.
 
 **The bounded-default edge case.** When no `--os` is given and no installed
-runtime pairs with the model, the driver has to guess a version to
-download: unbounded models (no `maxRuntimeVersion` cap) get a plain
-`-downloadPlatform iOS` (latest), but a model with a bounded max (like an
+runtime pairs with the model, the iOS driver has to name a component to
+download: unbounded models (no `maxRuntimeVersion` cap) get `latest`, a plain
+`-downloadPlatform iOS`, but a model with a bounded max (like an
 older device type whose newest compatible runtime is a specific release)
-gets `-buildVersion <major from maxRuntimeVersion>` — just the major
-version number, since the exact patch release isn't known offline (Apple's
-downloadables index isn't parsed in v1; see `docs/internal/IDEAS.md`). If Xcode
-doesn't have a build matching that bare major version, the download fails
-and the caller is told to pass `--os <version>` explicitly rather than
-retrying blind.
+gets the major from `maxRuntimeVersion` — `-buildVersion <major>`, just the
+major version number, since the exact patch release isn't known offline
+(Apple's downloadables index isn't parsed in v1; see `docs/internal/IDEAS.md`).
+If Xcode doesn't have a build matching that bare major version, the download
+fails and the request fails with it; passing `--os <version>` explicitly is
+the way out.
 
 **No requester-visible progress during a download (#67 stage 4).** The
 requester's lease-progress stream (`LeaseProgress` in `src/core/wait-queue.ts`
 — `queued` / `provisioning` / `booting` / `reclaiming`, relayed as CLI stderr
-JSON lines and MCP `notifications/progress`) has no `downloading` stage. Both
-drivers' `resolveSpec` — where a runtime or system-image install actually
-happens — runs before `LeaseAcquisitionCoordinator#drive`'s provisioning
-step, and `Driver.resolveSpec`'s signature carries no progress callback the
-way `provision`/`makeReady` do. A CLI or MCP caller waiting on a
-multi-minute install today sees nothing on the wire between its request and
-either the eventual grant or a timeout; the only visibility is the daemon's
-own `component.install-started` bus event (`simlock events --follow`, and
-the event file behind `simlock events --since`), which never reaches the
-waiting connection itself. There is no `daemon.log` line for it. Threading a
-`downloading` stage through would mean widening the `Driver` interface
-(`resolveSpec` gaining an `onProgress`-shaped option, both drivers
-implementing it), a new `LeaseProgress` variant, and CLI/MCP wire changes —
-real protocol machinery, not a small addition, so it was deliberately not
-built in stage 4. `component.install-started`'s payload already carries
-enough (`platform`, `componentId`) that a future pass wiring this through
-would mostly be plumbing, not new information to invent.
+JSON lines and MCP `notifications/progress`) has no `downloading` stage. The
+installer already hands every call the driver's percentage and a `waiting`
+report (`ComponentInstallRequest.onProgress`), but the lease path does not pass
+one, so a CLI or MCP caller waiting on a multi-minute install sees nothing on
+the wire between its request and either the eventual grant or a failure; the
+only visibility is the daemon's own `component.install-started` bus event
+(`simlock events --follow`, and the event file behind `simlock events
+--since`). There is no `daemon.log` line for it. Wiring it through is #210: a
+new `LeaseProgress` variant and CLI/MCP wire changes.
 
 ## An iOS runtime download outlives the runtime, and only Xcode can reclaim it (#79)
 

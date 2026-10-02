@@ -6,13 +6,14 @@ import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { Doctor } from "./doctor.js";
-import type { DriverRejection } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
+import type { DriverRejection } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
+import { testComponentWiring } from "./test-wiring.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {
@@ -419,6 +420,12 @@ describe("Doctor", () => {
       processes: [],
     });
     const leaseEngine = new LeaseEngine({
+      ...testComponentWiring({
+        clock: clock,
+        drivers: [driver],
+        eventBus: eventBus,
+        registry: registry,
+      }),
       clock,
       config: config(),
       drivers: [driver],

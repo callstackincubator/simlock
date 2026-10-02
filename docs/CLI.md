@@ -43,6 +43,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device; use a new key |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
 | 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
+| 10 | `DOWNLOAD_TIMEOUT` | a runtime download, including the time spent waiting for another download on the same platform, outlived `downloads.timeoutMs` |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
@@ -152,7 +153,11 @@ granted.
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
-  Through a gateway the flag has no effect.
+  A platform downloads one component at a time: a lease for a second missing
+  runtime on the same platform waits until the running download ends, and
+  leases for the same missing runtime share one download. The whole wait,
+  queued download included, counts against `downloads.timeoutMs`; running out
+  is `DOWNLOAD_TIMEOUT` (exit 10). Through a gateway the flag has no effect.
 - `--ttl <duration>` — the lease's initial TTL, replacing
   `lease.defaultTtlMs` (15m) for this lease. Asking for more than
   `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
@@ -172,14 +177,16 @@ granted.
   work regardless. For Android, this runs `sdkmanager --install`; an
   unaccepted SDK license fails naming `downloads.acceptAndroidLicenses`
   (config) unless that flag is set, in which case licenses are accepted
-  automatically and the install retried once. Both drivers check free disk
-  space before starting either install and fail fast, naming required vs.
-  available bytes, instead of risking a full disk mid-download. Every
-  install attempt (including a license-triggered retry) emits
-  `component.install-started` / `component.installed` /
-  `component.install-failed` on the event bus (`simlock events --follow`);
-  see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
-  (below) does not yet reflect an in-flight download.
+  automatically and the install retried once. Free disk space is checked
+  before any install starts, counting the downloads already running on
+  either platform, and a download that does not fit fails fast, naming
+  required vs. available bytes, instead of risking a full disk mid-download.
+  Each download (including a license-triggered retry) emits
+  `component.install-started` and then `component.installed` or
+  `component.install-failed` on the event bus once, however many leases share
+  it (`simlock events --follow`); see [EVENTS.md](EVENTS.md#components). The
+  requester's own progress stream (below) does not yet reflect an in-flight
+  download.
 - `--mode <slim|full>` — the device mode this lease asks for. Without it, the
   lease gets the default mode of the worker that serves it (`ios.defaultMode`,
   `full` unless configured). `full` is a guarantee: a `full` lease never gets a
