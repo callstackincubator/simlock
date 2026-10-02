@@ -229,6 +229,16 @@ describe("parseDevicesXml", () => {
     ]);
   });
 
+  it.each([
+    ["511", undefined],
+    ["512", "1"],
+    ["1535", "1"],
+    ["1536", "2"],
+  ])("rounds %s KiB of ram to the nearest MiB", (kib, mib) => {
+    const [profile] = parseDevicesXml(devicesXmlWithRam(`<d:ram unit="KiB">${kib}</d:ram>`));
+    expect(profile?.hardwareProperties["hw.ramSize"]).toBe(mib);
+  });
+
   it("reads the unit with surrounding whitespace, which the schema's token type allows", () => {
     expect(parseDevicesXml(devicesXmlWithRam('<d:ram unit=" GiB ">2</d:ram>'))).toEqual([
       {
