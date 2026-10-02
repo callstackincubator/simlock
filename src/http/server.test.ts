@@ -237,11 +237,14 @@ describe("HttpGateway", () => {
   it("the daemon warns once at start when the console is not built", async () => {
     const { gateway, port, warnings } = await started(await emptyRoot());
     try {
+      // Already logged once the listener is up, before any request arrives.
+      const atStart = warnings();
       const page = await fetch(`http://127.0.0.1:${port}/`);
       await fetch(`http://127.0.0.1:${port}/workers`);
 
+      expect(atStart).toEqual(["The web console is not built; console paths answer 404"]);
       expect(page.status).toBe(404);
-      expect(warnings()).toEqual(["The web console is not built; console paths answer 404"]);
+      expect(warnings()).toEqual(atStart);
     } finally {
       await gateway.stop();
     }

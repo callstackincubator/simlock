@@ -16,20 +16,20 @@ export interface Session {
 }
 
 /**
- * `storage` may be missing or refuse writes (a browser with site data blocked). The console then
+ * `storage` is asked for lazily, because a browser with site data blocked throws on merely
+ * reading `window.sessionStorage`; it may also refuse each read and write. The console then
  * still signs in, and the token lives only as long as the page.
  */
-export function createSession(storage: Storage | undefined): Session {
+export function createSession(storage: () => Storage): Session {
   const listeners = new Set<() => void>();
-  let current = read(storage);
+  let current = attempt(() => storage().getItem(STORAGE_KEY) ?? undefined);
   const update = (token: string | undefined) => {
     current = token;
-    try {
-      if (token === undefined) storage?.removeItem(STORAGE_KEY);
-      else storage?.setItem(STORAGE_KEY, token);
-    } catch {
-      // Kept in memory only; see above.
-    }
+    attempt(() =>
+      token === undefined
+        ? storage().removeItem(STORAGE_KEY)
+        : storage().setItem(STORAGE_KEY, token),
+    );
     for (const listener of listeners) listener();
   };
   return {
@@ -43,9 +43,10 @@ export function createSession(storage: Storage | undefined): Session {
   };
 }
 
-function read(storage: Storage | undefined): string | undefined {
+/** Runs a storage call, treating a refusal as "nothing stored". */
+function attempt<T>(call: () => T): T | undefined {
   try {
-    return storage?.getItem(STORAGE_KEY) ?? undefined;
+    return call();
   } catch {
     return undefined;
   }

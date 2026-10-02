@@ -9,12 +9,18 @@ export type SignInOutcome =
   | { readonly kind: "unreachable" }
   | { readonly kind: "failed"; readonly status: number };
 
+const TOKEN_SHAPE = /^[\x21-\x7e]+$/;
+
 /**
  * First `GET /v1/healthz`, to learn whether the daemon is up at all; then `GET /v1/workers`, a
  * read only an operator token may make, in both modes. A timeout on the second while the first
  * answered means the daemon is still starting: its reads wait until it is ready.
  */
 export async function checkToken(token: string, fetch: Fetch): Promise<SignInOutcome> {
+  // A token is printable ASCII. Anything else, such as a "…" copied from a document, cannot be
+  // one the daemon issued, and cannot go in a header either: `fetch` would refuse it with the
+  // same error as a network failure, and the screen would wrongly say the daemon is down.
+  if (!TOKEN_SHAPE.test(token)) return { kind: "unknown-token" };
   try {
     const up = await send("/v1/healthz", { fetch }, async (response) => response.ok);
     if (!up) return { kind: "unreachable" };

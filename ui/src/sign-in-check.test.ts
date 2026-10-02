@@ -67,6 +67,18 @@ describe("checkToken", () => {
     expect(refusalMessage({ kind: "unreachable" })).toBe("The daemon cannot be reached.");
   });
 
+  it("calls a token with a character no token has unknown, without asking the daemon", async () => {
+    const asked: string[] = [];
+    const recording: Fetch = (input, init) => {
+      asked.push(input);
+      return daemon(200, 200)(input, init);
+    };
+
+    expect(await checkToken("slk_abc…", recording)).toEqual({ kind: "unknown-token" });
+    expect(await checkToken("slk_a b", recording)).toEqual({ kind: "unknown-token" });
+    expect(asked).toEqual([]);
+  });
+
   it("says the daemon cannot be reached when something else answers /v1/healthz", async () => {
     // A daemon always answers its liveness route with 200; a proxy with no daemon behind it
     // answers 502.

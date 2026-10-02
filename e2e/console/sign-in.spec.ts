@@ -30,6 +30,29 @@ test.describe("sign-in", () => {
 
     await expect(nav.locator("[aria-current='page']")).toHaveText("Events");
     await expect(page).toHaveTitle("Events · Simlock");
+
+    // The browser's back and forward move between the console's pages too.
+    await page.goBack();
+    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Workers");
+    await page.goForward();
+    await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
+  });
+
+  test("signing in with an empty field asks the daemon nothing", async ({ page }) => {
+    await page.goto("/");
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/v1/")) asked.push(request.url());
+    });
+
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByLabel("Operator token").fill("   ");
+    await page.getByRole("button", { name: "Sign in" }).click();
+
+    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(asked).toEqual([]);
   });
 
   test("a token pasted with spaces around it signs in", async ({ daemon, page }) => {

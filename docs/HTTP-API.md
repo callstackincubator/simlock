@@ -148,9 +148,10 @@ daemon answered:
 
 **`consoleUrl`** is the web console's address (see [CONSOLE.md](CONSOLE.md)):
 `http://<http.host>:<http.port>/`, with `localhost` for a host of `0.0.0.0` or
-`::` and an IPv6 host in brackets. Since HTTP has to be on to reach this route,
-an HTTP answer always carries it; over the unix socket it is absent while HTTP
-is off. An older daemon sends none.
+`::` and an IPv6 host in brackets. It is present whenever HTTP is on, so an
+HTTP answer carries it; over the unix socket it is absent while HTTP is off.
+It is also left out if the address would be longer than 512 characters, which
+no real host name is. An older daemon sends none.
 
 Beside it, **`host`** says what machine the daemon runs on: the operating
 system, its version, the CPU architecture, and the version of each platform

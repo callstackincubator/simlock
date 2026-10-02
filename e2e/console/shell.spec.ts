@@ -60,16 +60,18 @@ test.describe("the shell", () => {
     expect(controls).toEqual(["Skip to content", "Sign out", ...NAV_LABELS]);
     expect(visited).toEqual(controls);
 
-    // Each control does its job from the keyboard. Focus is on the last nav link, Events.
-    await page.keyboard.press(back);
-    await expect(page.getByRole("link", { name: "Attention" })).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/attention$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
+    // Each control does its job from the keyboard. Focus is on the last nav link, Events; walk
+    // back through every nav link and open each one with Enter.
+    for (const [index, label] of [...NAV_LABELS].reverse().entries()) {
+      if (index > 0) await page.keyboard.press(back);
+      await expect(page.getByRole("link", { name: label })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(new RegExp(`/${label.toLowerCase()}$`));
+      await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
+    }
 
-    // Back past Waiting, Leases, Workers and Sign out to the skip link, which moves focus to
-    // the view.
-    await pressTimes(back, 5);
+    // Back past Sign out to the skip link, which moves focus to the view.
+    await pressTimes(back, 2);
     await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toBeFocused();

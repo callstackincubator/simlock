@@ -62,6 +62,32 @@ describe("createApiClient", () => {
     expect(await outcome).toBeInstanceOf(RequestTimeoutError);
   });
 
+  it("the 10 seconds cover reading the body, not only the headers", async () => {
+    vi.useFakeTimers();
+    // Headers at once, then a body that never ends, as a real fetch's body does until its
+    // request is aborted.
+    const stalledBody: Fetch = async (_input, init) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            init.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+          },
+        }),
+        { status: 200 },
+      );
+    const api = createApiClient({ fetch: stalledBody, signOut: () => {}, token: () => "slk_op" });
+
+    const outcome = api.getJson("/v1/workers").then(
+      () => "answered",
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await Promise.race([outcome, Promise.resolve("pending")])).toBeInstanceOf(
+      RequestTimeoutError,
+    );
+  });
+
   it("sends the token only as a bearer header, to a relative /v1 path", async () => {
     const { calls, fetch } = answering(200, { workers: [] });
     const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
