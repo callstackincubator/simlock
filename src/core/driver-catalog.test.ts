@@ -86,6 +86,25 @@ describe("DriverCatalog", () => {
     expect(android.calls).toEqual([]);
   });
 
+  it("still lists the other platforms when one driver's catalog rejects", async () => {
+    const clock = new FakeClock();
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
+    android.failOn("listCatalog", 1, new Error("~/.android is not readable"));
+    const catalog = new DriverCatalog([ios, android]);
+
+    await expect(catalog.listCatalog()).resolves.toEqual([
+      {
+        defaultRuntime: "26.5",
+        modelAliases: {},
+        modelRuntimes: {},
+        models: [],
+        platform: "ios",
+        runtimes: ["26.5"],
+      },
+    ]);
+  });
+
   it("omits a platform with no registered driver instead of erroring", async () => {
     const catalog = new DriverCatalog([]);
 
