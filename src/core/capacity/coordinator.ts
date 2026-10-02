@@ -4,6 +4,9 @@ import type {
   CapacityPlatform,
   CapacityRefusal,
   CapacityStrategy,
+  PlannedCapacityDevice,
+  RamBudget,
+  RegisteredCapacityDevice,
   RunningCapacity,
 } from "./strategy.js";
 
@@ -20,6 +23,14 @@ interface ReservationEntry {
   readonly platform: CapacityPlatform;
 }
 
+/** A provisioning reservation holds the size of the mode it was planned with until released. */
+type ProvisioningEntry = PlannedCapacityDevice;
+
+/** A shut-down device being booted, by registry id. It counts at its full size until released. */
+interface BootEntry {
+  readonly deviceId: string;
+}
+
 /**
  * Stateful accounting around a pure capacity strategy.
  *
@@ -29,8 +40,9 @@ interface ReservationEntry {
  * corresponding operation ends.
  */
 export class CapacityCoordinator {
-  readonly #provisioningReservations: ReservationEntry[] = [];
+  readonly #provisioningReservations: ProvisioningEntry[] = [];
   readonly #runningReservations: ReservationEntry[] = [];
+  readonly #bootReservations: BootEntry[] = [];
 
   constructor(private readonly strategy: CapacityStrategy) {}
 
@@ -40,19 +52,16 @@ export class CapacityCoordinator {
    * until released, including before the device appears in a registry snapshot.
    */
   tryReserveProvisioning(
-    platform: CapacityPlatform,
+    device: PlannedCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
-    const provision = this.strategy.canProvision(platform, [
-      ...devices,
-      ...this.#provisioningReservations.map(asProvisioningDevice),
-    ]);
+    const provision = this.strategy.canProvision(device, this.#withReservations(devices));
     if (!provision.ok) return provision;
 
-    const running = this.canReserveRunning(platform, devices);
+    const running = this.canReserveRunning(device.platform, devices);
     if (!running.ok) return running;
 
-    const reservation = { platform };
+    const reservation: ProvisioningEntry = { mode: device.mode, platform: device.platform };
     this.#provisioningReservations.push(reservation);
     return {
       ok: true,
@@ -60,17 +69,55 @@ export class CapacityCoordinator {
     };
   }
 
-  /** Reserves a running slot for booting an already registered device. */
-  tryReserveRunning(
-    platform: CapacityPlatform,
+  /**
+   * Reserves a running slot and the RAM to boot the shut-down `device`. The RAM
+   * is checked first. Until released, the device counts at its full size in every
+   * decision, because it boots full before any slim pass.
+   */
+  tryReserveBoot(
+    device: RegisteredCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
-    const decision = this.canReserveRunning(platform, devices);
-    if (!decision.ok) return decision;
+    const boot = this.canBoot(device, devices);
+    if (!boot.ok) return boot;
+    const running = this.canReserveRunning(device.platform, devices);
+    if (!running.ok) return running;
 
-    const reservation = { platform };
-    this.#runningReservations.push(reservation);
-    return { ok: true, reservation: this.#reservation(this.#runningReservations, reservation) };
+    const runningEntry = { platform: device.platform };
+    this.#runningReservations.push(runningEntry);
+    const bootEntry = { deviceId: device.id };
+    this.#bootReservations.push(bootEntry);
+    const releaseRunning = this.#reservation(this.#runningReservations, runningEntry);
+    const releaseBoot = this.#reservation(this.#bootReservations, bootEntry);
+    return {
+      ok: true,
+      reservation: {
+        release: () => {
+          releaseRunning.release();
+          releaseBoot.release();
+        },
+      },
+    };
+  }
+
+  /**
+   * Reserves the RAM to boot a reclaimed `device` back to warm. It already holds
+   * its running slot, so only the RAM is checked and held.
+   */
+  tryReserveRewarm(
+    device: RegisteredCapacityDevice,
+    devices: readonly CapacityDevice[],
+  ): CapacityReservationAttempt {
+    const boot = this.canBoot(device, devices);
+    if (!boot.ok) return boot;
+
+    const bootEntry = { deviceId: device.id };
+    this.#bootReservations.push(bootEntry);
+    return { ok: true, reservation: this.#reservation(this.#bootReservations, bootEntry) };
+  }
+
+  canBoot(device: CapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision {
+    return this.strategy.canBoot(device, this.#withReservations(devices));
   }
 
   canReserveRunning(
@@ -88,16 +135,35 @@ export class CapacityCoordinator {
     return this.strategy.deviceLimit(platform);
   }
 
+  /**
+   * The RAM budget over `devices` alone: in-flight provisioning and boot
+   * reservations are left out, so the use reported equals what the listed devices
+   * add up to.
+   */
+  ramBudget(devices: readonly CapacityDevice[]): RamBudget | undefined {
+    return this.strategy.ramBudget(devices);
+  }
+
+  /** `devices` as every RAM decision sees them: booting devices at full, plus pending ones. */
+  #withReservations(devices: readonly CapacityDevice[]): CapacityDevice[] {
+    const booting = new Set(this.#bootReservations.map(({ deviceId }) => deviceId));
+    return [
+      ...devices.map((device) =>
+        device.id !== undefined && booting.has(device.id)
+          ? { ...device, mode: "full" as const }
+          : device,
+      ),
+      ...this.#provisioningReservations.map(asProvisioningDevice),
+    ];
+  }
+
   #allRunningReservations(): CapacityPlatform[] {
     return [...this.#provisioningReservations, ...this.#runningReservations].map(
       ({ platform }) => platform,
     );
   }
 
-  #reservation(
-    reservations: ReservationEntry[],
-    reservation: ReservationEntry,
-  ): CapacityReservation {
+  #reservation<Entry>(reservations: Entry[], reservation: Entry): CapacityReservation {
     let released = false;
     return {
       release: () => {
@@ -110,6 +176,6 @@ export class CapacityCoordinator {
   }
 }
 
-function asProvisioningDevice(reservation: ReservationEntry): CapacityDevice {
-  return { platform: reservation.platform, state: "provisioning" };
+function asProvisioningDevice(reservation: ProvisioningEntry): CapacityDevice {
+  return { mode: reservation.mode, platform: reservation.platform, state: "provisioning" };
 }

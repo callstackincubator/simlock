@@ -159,6 +159,72 @@ describe("aggregateStatus", () => {
     expect(status.capacity.ios.overLimit).toBe(true);
   });
 
+  it("sums the RAM budget over connected workers that report one, over when any worker is", () => {
+    const ramBudget = (limitGiB: number, usedGiB: number) => ({
+      limitBytes: limitGiB * 1024 ** 3,
+      overLimit: usedGiB > limitGiB,
+      usedBytes: usedGiB * 1024 ** 3,
+    });
+    const status = aggregateStatus(
+      [
+        view({ capacity: { ...capacity(1, 2), ramBudget: ramBudget(8, 3) }, id: "wrk_a" }),
+        view({ capacity: { ...capacity(1, 2), ramBudget: ramBudget(4, 5) }, id: "wrk_b" }),
+        // A `fixed` worker reports no budget and adds nothing to the sum.
+        view({ capacity: capacity(1, 2), id: "wrk_c" }),
+        view({
+          capacity: { ...capacity(1, 2), ramBudget: ramBudget(64, 1) },
+          connection: "disconnected",
+          id: "wrk_d",
+        }),
+      ],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    // 8 GiB used of a 12 GiB fleet limit, yet over: wrk_b is past its own 4 GiB.
+    expect(status.capacity.ramBudget).toEqual({
+      limitBytes: 12 * 1024 ** 3,
+      overLimit: true,
+      usedBytes: 8 * 1024 ** 3,
+    });
+    expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
+  });
+
+  it("is under its RAM limit when no worker is over its own", () => {
+    const status = aggregateStatus(
+      [
+        view({
+          capacity: {
+            ...capacity(1, 2),
+            ramBudget: { limitBytes: 8, overLimit: false, usedBytes: 8 },
+          },
+          id: "wrk_a",
+        }),
+      ],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    expect(status.capacity.ramBudget?.overLimit).toBe(false);
+  });
+
+  it("omits the RAM budget when no connected worker reports one", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: capacity(1, 2), id: "wrk_a" }),
+        view({
+          capacity: {
+            ...capacity(1, 2),
+            ramBudget: { limitBytes: 8, overLimit: false, usedBytes: 1 },
+          },
+          connection: "disconnected",
+          id: "wrk_b",
+        }),
+      ],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    expect(status.capacity).not.toHaveProperty("ramBudget");
+  });
+
   it("stamps every device and lease with the worker it lives on", () => {
     const status = aggregateStatus(
       [

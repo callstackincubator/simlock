@@ -1,6 +1,10 @@
 import type { FilterStage } from "../pipeline.js";
 
 /**
+ * The policy before ADR 0009 §2 and §3, kept only so the conformance tests can run the three
+ * legacy stages (`routing.test.ts`, `routing/warm-then-free.test.ts`). No registered policy uses
+ * it: `takes-requests` and `can-serve` replace it.
+ *
  * Drops a worker that is disconnected, incompatible, or drained; that lacks the requested
  * platform in its catalog at all; that lacks the requested `model`; that lacks the requested
  * `osVersion` (when the request named one) among its reported runtimes; or whose own

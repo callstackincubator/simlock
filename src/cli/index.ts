@@ -1858,6 +1858,10 @@ function formatWorkers(workers: WorkerView[]): string {
     .join("\n");
 }
 
+function formatGibibytes(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+}
+
 /** `macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9` -- the machine, then each tool. */
 function formatHost(host: StatusGetOutput["host"]): string {
   const system = `${host.os} ${host.osVersion} ${host.arch}`;
@@ -1991,6 +1995,13 @@ function formatStatus(status: StatusGetOutput): string {
     const usage = capacity[platform];
     return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}`;
   });
+  const ramBudget = capacity.ramBudget;
+  const ramLines =
+    ramBudget === undefined
+      ? []
+      : [
+          `RAM budget: ${formatGibibytes(ramBudget.usedBytes)}/${formatGibibytes(ramBudget.limitBytes)} used${ramBudget.overLimit ? " (over limit)" : ""}`,
+        ];
   // ADR 0005 §20: on a gateway every device and lease names the worker it lives on, and the
   // fleet itself is a block of its own above them. On a worker `workers` is absent and this is
   // exactly the output it has always been.
@@ -2020,6 +2031,7 @@ function formatStatus(status: StatusGetOutput): string {
     `Host: ${formatHost(host)}`,
     globalLine,
     ...capacityLines,
+    ...ramLines,
     ...workerLines,
     ...deviceLines,
     ...leaseLines,

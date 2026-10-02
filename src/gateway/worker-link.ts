@@ -10,8 +10,8 @@
  * those events onto the gateway's own bus with `workerId` added.
  *
  * One call §7 does not name is here too: `config.get`, read once per session for the worker's
- * `downloads.policy`. It is a routing input rather than decoration (§13: a request needing a
- * download is only eligible on a worker whose policy allows one), it never changes without a
+ * `downloads.policy` and `lease.maxTtlMs`. The policy is shown on the view for display only:
+ * routing counts installed runtimes and never reads it (ADR 0009 §3). Neither changes without a
  * worker restart -- which is a new session anyway -- and the uplink session is admin, so the
  * gateway may read it.
  */

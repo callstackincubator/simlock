@@ -69,7 +69,12 @@ import {
   type FleetWaiter,
   type LeaseRequestOptions,
 } from "./queue.js";
-import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
+import {
+  matchRequest,
+  type RoutableRequest,
+  type RoutingDecision,
+  type RoutingPolicy,
+} from "./routing.js";
 import { viewLoadKey } from "./routing/view-state.js";
 
 export interface FleetExecInput {
@@ -701,11 +706,12 @@ export class FleetLeaseCoordinator {
       const eligibleWorkers = this.options.views
         .views()
         .filter((worker) => !claimedThisPass.has(worker.id) && !this.#refused(waiter, worker));
-      const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
+      const request = routable(waiter);
+      const decision = this.options.routing.select(request, eligibleWorkers);
       if (decision === undefined) continue;
       claimedThisPass.add(decision.workerId);
       if (waiter === candidate) candidateAttempted = true;
-      this.#beginAttempt(waiter, decision);
+      this.#beginAttempt(waiter, decision, forwardedModel(request, eligibleWorkers, decision));
     }
     return candidateAttempted;
   }
@@ -718,9 +724,9 @@ export class FleetLeaseCoordinator {
    * `#settleGrant` while `queue.resolve` quietly answers `false`, leaving an orphan lease no
    * client holds a reference to release.
    */
-  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision): void {
+  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, model: string): void {
     if (!this.#queue.markProcessing(waiter)) return;
-    void this.#attempt(waiter, decision);
+    void this.#attempt(waiter, decision, model);
   }
 
   /**
@@ -752,7 +758,7 @@ export class FleetLeaseCoordinator {
    * queued waiter needs, and nothing else would ever schedule that second look.
    */
   // fallow-ignore-next-line complexity -- one attempt, every exit of which is named in the doc comment above.
-  async #attempt(waiter: FleetWaiter, decision: RoutingDecision): Promise<void> {
+  async #attempt(waiter: FleetWaiter, decision: RoutingDecision, model: string): Promise<void> {
     const workerId = decision.workerId;
     const target = this.options.directory.target(workerId);
     const client = target?.reachable === true ? target.client() : undefined;
@@ -800,7 +806,7 @@ export class FleetLeaseCoordinator {
         client.requestLease(
           {
             platform: waiter.request.platform,
-            model: waiter.request.model,
+            model,
             ...(waiter.request.osVersion === undefined
               ? {}
               : { osVersion: waiter.request.osVersion }),
@@ -813,7 +819,8 @@ export class FleetLeaseCoordinator {
             // `ownerId` instead of deriving it from the connection -- see
             // `daemon/dispatcher.ts`'s `#leaseRequest`.
             owner: waiter.options.ownerId,
-            allowDownload: waiter.options.allowDownload ?? false,
+            // ADR 0009 §3: a download is never triggered through a gateway.
+            allowDownload: false,
             // ADR §12: worker queues never hold gateway traffic. Every dispatch is `noWait`
             // regardless of what the original caller asked the gateway for -- the *gateway's
             // own* queue is where a "wait" request actually waits.
@@ -1116,11 +1123,25 @@ export class FleetLeaseCoordinator {
   }
 }
 
+/**
+ * ADR 0009 §3: the worker is sent its own name for the model, so it resolves exactly what routing
+ * matched. The client's name is kept only for a worker the catalog does not match, which no
+ * registered policy picks.
+ */
+function forwardedModel(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+  decision: RoutingDecision,
+): string {
+  const view = views.find((worker) => worker.id === decision.workerId);
+  return (view === undefined ? undefined : matchRequest(view, request)) ?? request.model;
+}
+
 function routable(waiter: FleetWaiter): RoutableRequest {
   return {
     platform: waiter.request.platform as Platform,
     model: waiter.request.model,
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
-    allowDownload: waiter.options.allowDownload ?? false,
+    allowDownload: false,
   };
 }

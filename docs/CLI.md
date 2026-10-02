@@ -153,7 +153,8 @@ granted.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
   iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
-  them; install the runtime through Xcode first.
+  them; install the runtime through Xcode first. Through a gateway the flag
+  has no effect.
 - `--ttl <duration>` — the lease's initial TTL, replacing
   `lease.defaultTtlMs` (15m) for this lease. Asking for more than
   `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
@@ -567,12 +568,19 @@ differs.
 
 **Leasing is identical.** `simlock lease` takes the same flags and prints the
 same grant line, including `--ttl`, `--no-wait`, `--timeout`, and
-`--allow-download` (forwarded to the chosen worker, which clamps it through
-its own `downloads.policy`). The request waits in the gateway's own
-fleet-wide FIFO queue, reporting `queued` with a `queuePosition` exactly as a
-worker's queue does, and is dispatched to the worker best placed to serve it
-— a machine with a matching warm device first, otherwise the one with the
-most free capacity. You do not name a machine and there is no flag to; where
+`--allow-download`, which is accepted and has no effect through a gateway:
+only runtimes already installed on a worker count, and no download is
+started. The request waits in the gateway's own fleet-wide FIFO queue,
+reporting `queued` with a `queuePosition` exactly as a worker's queue does.
+
+The gateway sends a request only to a worker that can serve it. `--device`
+matches a worker's model in any letter case and by any other name that
+worker's catalog lists for it, such as an Android AVD id (`pixel_7`). When
+`--os` is given, the worker must pair that runtime with the model; without
+it, the model must pair with at least one installed runtime. A worker that
+has the model and the runtime but cannot pair them is passed over. Among the
+workers that can serve it, the request goes to a machine with a matching warm
+device first, otherwise the one with the most free capacity. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
 
 The grant carries one additional block so you can see where it landed:
@@ -628,9 +636,8 @@ runtime annotated with the workers that have it — so a `--device` the
 catalog lists is leasable *somewhere*, not necessarily everywhere. A model is
 paired with a runtime when at least one connected worker pairs them itself;
 one worker having the model and another having the runtime does not make a
-pair. `simlock worker list --json` shows each worker's own pairings. The
-gateway does not yet pick a worker by its pairings, so a listed pair can
-still be sent to a worker that cannot pair them.
+pair. `simlock worker list --json` shows each worker's own pairings. A
+request goes only to a worker that pairs the model with the runtime.
 
 **`simlock events`** shows the fleet: every worker's business events are
 republished on the gateway's bus with `workerId` added to the payload,
@@ -803,9 +810,9 @@ why its Android catalog looks thin, trimmed to one worker:
 ```
 
 `downloads.policy` and `lease.maxTtlMs` are that worker's own effective
-config, read when its uplink connects and again on every periodic refresh —
-routing needs the policy to know whether a machine may install a missing
-runtime before sending it a request that needs one. `catalog` is what that
+config, read when its uplink connects and again on every periodic refresh.
+The policy is shown for reference; routing does not read it, since no
+download is started through a gateway. `catalog` is what that
 worker can lease, each model with the runtimes it pairs with. `host` is the
 machine: operating system, its version, CPU architecture, and the version of
 each platform tool its drivers use (`xcode` with its build; the Android
@@ -960,16 +967,28 @@ and `list --devices` well before it crosses the threshold that would make
 Human-oriented overview: daemon health *and mode*, the host it runs on
 (`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
-platform), every managed device with its state and device mode
+platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
+managed device with its state and device mode
 (`Device dev_7: ready, mode slim`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
 renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
 
+The RAM budget line appears only under the `resource` capacity strategy
+(see [CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)); under
+`fixed` there is none. In `--json` it is `capacity.ramBudget`:
+`limitBytes` (the machine's RAM minus 4 GiB left for the OS), `usedBytes`
+(the sizes of every listed device that is not deleted, each by its mode) and
+`overLimit`. The line reads `(over limit)` when the use is past the limit,
+for example after a restart with larger per-device sizes; until a device
+is deleted, none is created, and no shut-down slim device boots if its slim
+size is smaller than the full size.
+
 Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
-`running (gateway)`, capacity is summed across the connected workers, one line
+`running (gateway)`, capacity is summed across the connected workers (the RAM
+budget over those that report one, over its limit when any worker is), one line
 per worker precedes the devices, and every device and lease names the worker it
 lives on (`Device dev_7 on wrk_a: leased, mode full`). `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createRoutingPolicy,
+  composeRoutingPolicy,
   DEFAULT_ROUTING_POLICY,
+  eligible,
+  freeCapacity,
   isRoutingPolicyName,
   routingPolicyNames,
+  warmHit,
 } from "./routing.js";
 import { catalogFixture, deviceFixture, statusFixture } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -45,7 +48,7 @@ describe("routing registry", () => {
 });
 
 describe("warm-then-free policy", () => {
-  const policy = createRoutingPolicy("warm-then-free");
+  const policy = composeRoutingPolicy([eligible, warmHit, freeCapacity]);
 
   it("prefers a worker with a matching device already in the ready state (a warm hit)", () => {
     const cold = view("wrk_cold");

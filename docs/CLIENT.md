@@ -217,11 +217,12 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 Against a gateway the catalog is the union of the connected workers'. A
 model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
-runtime. The gateway does not yet use the pairings to pick a worker, so a
-pair it lists can still go to a worker that has the model and the runtime
-but cannot pair them, and that request fails there. `modelAliases` and
-`images` are the unions of each worker's own. The gateway does not yet route
-by another name, so ask it for a model by its name in `models`.
+runtime. The gateway sends a request only to a worker that pairs the model
+with the runtime. `modelAliases` and `images` are the unions of each
+worker's own. A model may be asked for by any name a worker lists for it, in
+any letter case, and the gateway sends that worker its own name for it.
+`allowDownload` has no effect through a gateway: only installed runtimes
+count.
 
 ## What machine answered: `getStatus().host`
 

@@ -1132,6 +1132,44 @@ describe("loadConfig legacy capacity keys", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("loads the slim sizes from capacity.config.ramBudget and from the legacy top-level ramBudget, absent by default", async () => {
+    const fromCapacity = await load({
+      capacity: {
+        strategy: "resource",
+        config: {
+          ramBudget: {
+            androidSlimBytesPerDevice: 2 * gibibyte,
+            iosSlimBytesPerDevice: 0.75 * gibibyte,
+          },
+        },
+      },
+    });
+    const fromLegacy = await load({ ramBudget: { iosSlimBytesPerDevice: 0.5 * gibibyte } });
+    const byDefault = await load({});
+
+    expect(resourceOptions(fromCapacity).ramBudget).toEqual({
+      androidBytesPerDevice: 4 * gibibyte,
+      androidSlimBytesPerDevice: 2 * gibibyte,
+      iosBytesPerDevice: 1.5 * gibibyte,
+      iosSlimBytesPerDevice: 0.75 * gibibyte,
+    });
+    expect(resourceOptions(fromLegacy).ramBudget.iosSlimBytesPerDevice).toBe(0.5 * gibibyte);
+    expect(resourceOptions(byDefault).ramBudget).not.toHaveProperty("iosSlimBytesPerDevice");
+    expect(resourceOptions(byDefault).ramBudget).not.toHaveProperty("androidSlimBytesPerDevice");
+  });
+
+  it.each([
+    ["iosSlimBytesPerDevice", -1],
+    ["iosSlimBytesPerDevice", "1GiB"],
+    ["androidSlimBytesPerDevice", -1],
+    ["androidSlimBytesPerDevice", null],
+  ])("rejects a %s of %j, naming the key", async (key, value) => {
+    await expect(
+      load({ capacity: { strategy: "resource", config: { ramBudget: { [key]: value } } } }),
+    ).rejects.toThrow(`capacity.config.ramBudget.${key}`);
+    await expect(load({ ramBudget: { [key]: value } })).rejects.toThrow(`ramBudget.${key}`);
+  });
+
   it("prefers capacity.config over the legacy spelling within one layer", async () => {
     const config = await load({
       capacity: { strategy: "resource", config: { limits: { maxRunning: 9 } } },

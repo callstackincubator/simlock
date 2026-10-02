@@ -25,7 +25,7 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.token`                   | **Worker side.** The join token (`simlock token create --role worker`, minted on the gateway) this worker presents when it opens its uplink. Required whenever `gateway.url` is set.                                          | unset                                                            |
 | `gateway.label`                   | **Worker side.** Display name for this worker in `simlock worker list`, `status`, the console, and on the lease's `worker` block. Display-only: nothing routes on it and it need not be unique.                              | the worker's own id                                              |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
-| `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: warm hit first, then the most free running capacity for the platform.                     | `warm-then-free`                                                 |
+| `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: among workers that can serve the request, warm hit first, then the most free running capacity for the platform. | `warm-then-free`                                                 |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
@@ -206,6 +206,14 @@ does not apply to it. It reads:
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
 | `log.*`, `eventBuffer.*`, `eventLog.*` | logging and the event history, as anywhere |
+
+**A worker's `downloads.policy` does not apply to requests through a
+gateway.** The gateway sends a request only to a worker whose catalog already
+has what it asks for: the model under any name the worker lists for it, in
+any letter case, paired with the requested runtime (or, with none requested,
+with at least one installed runtime). It never asks a worker to download, so
+`--allow-download` has no effect through a gateway, whatever each worker's
+policy says.
 
 **Both ends have a `lease.*` block, and on a fleet lease the gateway's is the
 one that decides the width.** A request arriving at a gateway with no `ttlMs`
@@ -459,7 +467,9 @@ strategy's own options, so its shape depends on the strategy you selected.
 
 Device and running ceilings derived from the machine, with a RAM budget on
 top: a device is only created if its budgeted RAM still fits under the
-machine's total, minus 4 GiB left for the OS.
+machine's total, minus 4 GiB left for the OS. Each device that has booted
+counts by its own mode, at the slim or the full size for its platform. A
+device that has not booted yet counts at the full size.
 
 | Property                                        | Description                                                     | Default                                                                     |
 | ----------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -470,6 +480,8 @@ machine's total, minus 4 GiB left for the OS.
 | `capacity.config.limits.android.maxRunning`     | Max Android emulators running at once.                          | Same as `capacity.config.limits.android.maxDevices`                         |
 | `capacity.config.ramBudget.iosBytesPerDevice`   | RAM reserved per iOS simulator when computing capacity.         | `1.5 GiB`                                                                    |
 | `capacity.config.ramBudget.androidBytesPerDevice` | RAM reserved per Android emulator when computing capacity.    | `4 GiB`                                                                      |
+| `capacity.config.ramBudget.iosSlimBytesPerDevice` | RAM reserved per slim iOS simulator. Optional. | `capacity.config.ramBudget.iosBytesPerDevice` |
+| `capacity.config.ramBudget.androidSlimBytesPerDevice` | RAM reserved per slim Android emulator. Optional; has no effect yet, because Android devices are always full. | `capacity.config.ramBudget.androidBytesPerDevice` |
 
 Running limits are independent of managed-device limits — an omitted
 `maxRunning` defaults to its corresponding `maxDevices` value (and, at the
@@ -489,6 +501,62 @@ global level, to their sum):
   }
 }
 ```
+
+#### Sizing slim and full devices
+
+A worker can hold slim and full devices side by side (see
+[Device mode: slim and full](#device-mode-slim-and-full)), and the RAM
+budget counts each one at the size of the mode it has:
+
+```json
+{
+  "capacity": {
+    "strategy": "resource",
+    "config": {
+      "limits": {
+        "maxRunning": 12,
+        "ios": { "maxDevices": 12, "maxRunning": 12 }
+      },
+      "ramBudget": {
+        "iosBytesPerDevice": 4294967296,
+        "iosSlimBytesPerDevice": 1073741824
+      }
+    }
+  }
+}
+```
+
+- **With no slim size set**, a slim device counts at its platform's full
+  size, so nothing changes for an existing config.
+- **Every new device needs room for the full size.** A slim device boots
+  full and is slimmed after, so it uses the full size until then. A device
+  counts at the full size until it has booted, whatever mode it asked for.
+  Booting a shut-down slim device needs the same room; if there is none, it
+  stays shut down and a request for it waits. A slim size pays off once
+  devices have booted: in a budget that fits two full devices, with slim
+  ones at half that size, three slim devices fit.
+- **A device counts by the mode it has, not the one it asked for.** A
+  `slim` request on a runtime that cannot be slimmed gets a full device. A
+  slim device whose slimming fails comes up full. Either one counts at the
+  full size from then on, and keeps its lease. One exception: when Simlock
+  reboots a leased slim device to recover it, the device comes back full
+  but still counts at the slim size until it is next prepared.
+- **Over the limit.** Restarting with larger sizes than the devices were
+  admitted under can put the use above the limit. `simlock status` then
+  shows the RAM budget `(over limit)`. Until a device is deleted, no new
+  device is created, in either mode, and no shut-down slim device boots if
+  its slim size is smaller than the full size.
+  Releasing a lease does not lower the use, because the device still exists;
+  idle devices are still handed out.
+- **Raise the limits with the slim size.** The device and running limits
+  still apply. A smaller slim size gives you more devices only where RAM is
+  what stops full ones; with the default limits (half the CPU count for
+  iOS) the device limit is often reached first. Raise
+  `limits.ios.maxDevices`, `limits.ios.maxRunning` and `limits.maxRunning`
+  together with it.
+
+`simlock status` shows the budget's limit and what is in use, and the use
+always equals the sizes of the devices it lists, each by its mode.
 
 ### `fixed`
 

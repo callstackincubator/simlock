@@ -277,6 +277,15 @@ export const statusCapacitySchema = z.object({
     used: z.number(),
   }),
   global: runningCapacityEntrySchema.extend({ warm: z.number() }),
+  /** Present only under a strategy that keeps a RAM budget. `usedBytes` counts every
+   * non-deleted device by the mode it reports, without in-flight provisioning. */
+  ramBudget: z
+    .object({
+      limitBytes: z.number().finite(),
+      usedBytes: z.number().finite().nonnegative(),
+      overLimit: z.boolean(),
+    })
+    .optional(),
 });
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
@@ -524,7 +533,9 @@ const resourceCapacityConfigSchema = z.object({
     limits: capacityLimitsSchema,
     ramBudget: z.object({
       iosBytesPerDevice: z.number(),
+      iosSlimBytesPerDevice: z.number().optional(),
       androidBytesPerDevice: z.number(),
+      androidSlimBytesPerDevice: z.number().optional(),
     }),
   }),
 });
@@ -725,11 +736,10 @@ export const workerViewSchema = z.object({
   capacity: statusCapacitySchema.optional(),
   /**
    * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
-   * connects. It is on the view because it is a *routing input*, not decoration: ADR 0005 §13
-   * says a request that would need a download is only eligible on a worker whose policy allows
-   * one, and #118's policy reads it from here rather than asking at dispatch time. Absent for
-   * a worker whose `config.get` the gateway could not read (an incompatible one, or a call
-   * that failed).
+   * connects. Display only: routing counts installed runtimes and never reads it, and the
+   * gateway forwards every request with `allowDownload: false` (ADR 0009 §3). Absent for a
+   * worker whose `config.get` the gateway could not read (an incompatible one, or a call that
+   * failed).
    */
   downloads: z.object({ policy: z.enum(["never", "on-request", "always"]) }).optional(),
   /**

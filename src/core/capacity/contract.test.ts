@@ -24,7 +24,7 @@ describe.each(Object.keys(capacityStrategies) as CapacityStrategyName[])(
   "capacity strategy contract: %s",
   (name) => {
     it("permits provisioning on an empty machine", () => {
-      expect(build(name).canProvision("ios", [])).toEqual({ ok: true });
+      expect(build(name).canProvision({ mode: "full", platform: "ios" }, [])).toEqual({ ok: true });
     });
 
     it("reports a positive device limit for both platforms", () => {
@@ -37,17 +37,23 @@ describe.each(Object.keys(capacityStrategies) as CapacityStrategyName[])(
     it("ignores deleted devices when deciding whether another may be created", () => {
       const strategy = build(name);
       const deleted: CapacityDevice[] = Array.from({ length: 50 }, () => ({
+        mode: "full",
         platform: "ios",
         state: "deleted",
       }));
 
-      expect(strategy.canProvision("ios", deleted)).toEqual({ ok: true });
+      expect(strategy.canProvision({ mode: "full", platform: "ios" }, deleted)).toEqual({
+        ok: true,
+      });
     });
 
     it("counts a reservation against running capacity exactly like a running device", () => {
       const strategy = build(name);
       const reserved = strategy.runningCapacity([], ["ios"]).ios;
-      const running = strategy.runningCapacity([{ platform: "ios", state: "ready" }], []).ios;
+      const running = strategy.runningCapacity(
+        [{ mode: "full" as const, platform: "ios", state: "ready" }],
+        [],
+      ).ios;
 
       expect(reserved.reserved).toBe(1);
       expect(running.running).toBe(1);
@@ -58,7 +64,7 @@ describe.each(Object.keys(capacityStrategies) as CapacityStrategyName[])(
       const strategy = build(name);
       const saturated: CapacityDevice[] = Array.from(
         { length: strategy.runningCapacity([], []).global.maxRunning },
-        () => ({ platform: "ios", state: "ready" }),
+        () => ({ mode: "full" as const, platform: "ios", state: "ready" }),
       );
       const decision = strategy.canReserveRunning("ios", saturated, []);
 
@@ -67,8 +73,37 @@ describe.each(Object.keys(capacityStrategies) as CapacityStrategyName[])(
       expect(["global-running-limit", "platform-running-limit"]).toContain(decision.reason);
     });
 
+    it("counts running slots without regard to mode", () => {
+      const strategy = build(name);
+      const slim = strategy.runningCapacity(
+        [{ mode: "slim", platform: "ios", state: "ready" }],
+        [],
+      );
+      const full = strategy.runningCapacity(
+        [{ mode: "full", platform: "ios", state: "ready" }],
+        [],
+      );
+
+      expect(slim).toEqual(full);
+      expect(slim.ios.running).toBe(1);
+
+      const saturated = (mode: "slim" | "full"): CapacityDevice[] =>
+        Array.from({ length: slim.global.maxRunning }, () => ({
+          mode,
+          platform: "ios",
+          state: "ready",
+        }));
+      expect(strategy.canReserveRunning("ios", saturated("slim"), [])).toEqual(
+        strategy.canReserveRunning("ios", saturated("full"), []),
+      );
+      expect(strategy.canReserveRunning("ios", saturated("slim"), []).ok).toBe(false);
+    });
+
     it("does not count devices in non-running states towards running capacity", () => {
-      const capacity = build(name).runningCapacity([{ platform: "ios", state: "shutdown" }], []);
+      const capacity = build(name).runningCapacity(
+        [{ mode: "full" as const, platform: "ios", state: "shutdown" }],
+        [],
+      );
 
       expect(capacity.ios.running).toBe(0);
       expect(capacity.global.running).toBe(0);
@@ -76,7 +111,7 @@ describe.each(Object.keys(capacityStrategies) as CapacityStrategyName[])(
 
     it("treats an unknown lifecycle state as not running rather than throwing", () => {
       const capacity = build(name).runningCapacity(
-        [{ platform: "android", state: "unknown-to-core" }],
+        [{ mode: "full" as const, platform: "android", state: "unknown-to-core" }],
         [],
       );
 

@@ -1,6 +1,15 @@
 import type { EventBus } from "../bus/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
-import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity/index.js";
+import {
+  capacityDevice,
+  capacityDevices,
+  type CapacityDecision,
+  type CapacityDevice,
+  type CapacityReservation,
+  type CapacityReservationAttempt,
+  type RegisteredCapacityDevice,
+  type RunningCapacity,
+} from "./capacity/index.js";
 import {
   type DeviceRecord,
   type DeviceSpec,
@@ -50,6 +59,10 @@ export interface WarmPoolRegistry {
 export interface WarmPoolCapacityReader {
   runningCapacity(devices: readonly CapacityDevice[]): RunningCapacity;
   canReserveRunning(platform: Platform, devices: readonly CapacityDevice[]): CapacityDecision;
+  tryReserveRewarm(
+    device: RegisteredCapacityDevice,
+    devices: readonly CapacityDevice[],
+  ): CapacityReservationAttempt;
 }
 
 /** Where a release-time purge failure is handed off once the reclaim attempt commits. */
@@ -97,11 +110,12 @@ export class WarmPoolCoordinator {
       return;
     }
 
-    const keepReady = await this.options.decisions.run(async () =>
-      this.#mayRemainWarm(released.device),
+    const warm = await this.options.decisions.run(async () =>
+      this.#warmDecision(released.device, result.state),
     );
-    const disposition = await this.#disposition(driver, released, result.state, keepReady);
+    const disposition = await this.#disposition(driver, released, result.state, warm.keepReady);
     await this.options.decisions.run(async () => {
+      warm.reservation?.release();
       await this.options.registry.transitionDevice(
         released.device.id,
         disposition.state,
@@ -287,6 +301,24 @@ export class WarmPoolCoordinator {
     });
   }
 
+  /**
+   * Whether the reclaimed device stays warm. One the reclaim shut down needs a
+   * boot to stay warm, and a boot runs at the full size before any slim pass, so
+   * it stays warm only if that fits; the reservation holds the room while it boots.
+   */
+  #warmDecision(
+    device: DeviceRecord,
+    reclaimedState: "ready" | "shutdown",
+  ): { readonly keepReady: boolean; readonly reservation?: CapacityReservation } {
+    if (!this.#mayRemainWarm(device)) return { keepReady: false };
+    if (reclaimedState === "ready") return { keepReady: true };
+    const rewarm = this.options.capacity.tryReserveRewarm(
+      capacityDevice(device),
+      capacityDevices(this.options.registry.snapshot.devices),
+    );
+    return rewarm.ok ? { keepReady: true, reservation: rewarm.reservation } : { keepReady: false };
+  }
+
   #mayRemainWarm(device: DeviceRecord): boolean {
     const devices = capacityDevices(this.options.registry.snapshot.devices);
     const capacity = this.options.capacity.runningCapacity(devices);
@@ -300,10 +332,6 @@ export class WarmPoolCoordinator {
     if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
     return this.options.capacity.canReserveRunning(head.spec.platform, devices).ok;
   }
-}
-
-function capacityDevices(devices: readonly DeviceRecord[]): readonly CapacityDevice[] {
-  return devices.map((device) => ({ platform: device.spec.platform, state: device.state }));
 }
 
 /**

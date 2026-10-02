@@ -172,7 +172,7 @@ function withFreeIos(free: number): WorkerView["capacity"] {
 
 describe("warm-then-free as a list of stages", () => {
   it("the composed three-stage list picks the same worker and reason as the function on main for every generated fleet", () => {
-    const policy = createRoutingPolicy("warm-then-free");
+    const policy = composeRoutingPolicy([eligible, warmHit, freeCapacity]);
     const outcomes = new Set<string>();
 
     for (let seed = 1; seed <= 5_000; seed++) {
