@@ -151,7 +151,10 @@ cancelled.
 
 **Attention** lists everything that needs you, in one place. Each item names
 its worker and links to that worker's page. An item leaves the list as soon as
-its condition clears. The console only shows these; it does not fix them.
+the daemon reports that its condition cleared. A gateway keeps a disconnected
+worker's devices and RAM use as the worker last reported them, so their items
+stay until the worker reconnects or is removed. The console only shows these;
+it does not fix them.
 
 | Item | What it means |
 | --- | --- |

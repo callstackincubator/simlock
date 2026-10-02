@@ -169,6 +169,26 @@ describe("the attention list", () => {
     );
   });
 
+  it("a stalled device on a disconnected worker shows no time in its state", () => {
+    // A gateway keeps a disconnected worker's devices as last reported, with an age it can no
+    // longer count from.
+    const workers = [
+      worker({
+        connection: "disconnected",
+        devices: [
+          device("dev_stuck", { stalled: true, state: "reclaiming", transitionAgeMs: 90_000 }),
+        ],
+        lastSeenAt: NOW - 10_000,
+      }),
+    ];
+
+    const shown = text(
+      renderToStaticMarkup(<AttentionList items={attentionItems(workers)} now={NOW} />),
+    );
+
+    expect(shown).toContain("stalled Device dev_stuck on wrk_1 : stuck reclaiming.");
+  });
+
   it("says so when nothing needs attention", () => {
     const html = renderToStaticMarkup(<AttentionList items={[]} now={NOW} />);
 

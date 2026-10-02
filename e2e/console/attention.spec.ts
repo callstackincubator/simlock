@@ -20,7 +20,12 @@ interface WorkerView {
   readonly connection: string;
   readonly drained: boolean;
   readonly capacity?: { readonly ramBudget?: { readonly overLimit: boolean } };
-  readonly devices: readonly { readonly id: string; readonly state: string; stalled?: boolean }[];
+  readonly devices: readonly {
+    readonly id: string;
+    readonly state: string;
+    readonly stalled?: boolean;
+    readonly transitionAgeMs?: number;
+  }[];
 }
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -299,11 +304,15 @@ test.describe("the attention view", () => {
         return (
           view?.capacity?.ramBudget?.overLimit === true &&
           view.devices.some((device) => device.state === "quarantined") &&
-          view.devices.some((device) => device.stalled === true)
+          view.devices.some(
+            (device) => device.state === "provisioning" && (device.transitionAgeMs ?? 0) > 1_000,
+          )
         );
       });
       const quarantined = view?.devices.find((device) => device.state === "quarantined");
-      const stalled = view?.devices.find((device) => device.stalled === true);
+      const stalled = view?.devices.find((device) => device.state === "provisioning");
+      // Past its one-second threshold, and nothing works on it since the restart.
+      expect(stalled?.stalled, "the stranded device is reported stalled").toBe(true);
 
       await openAttention(page, host);
 

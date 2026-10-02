@@ -69,6 +69,15 @@ function resolvePassthroughOverride(
   return override ?? engine;
 }
 
+/** The claims the stall test reads: a test's own, or the engine's. Pulled out of
+ * `buildDispatcher` for the same reason as `resolvePassthroughOverride`. */
+function resolveClaimsOverride(
+  engine: LeaseEngine,
+  override: { isClaimed(deviceId: string): boolean } | undefined,
+): { isClaimed(deviceId: string): boolean } {
+  return override ?? engine.claimReader;
+}
+
 function resolveEventHistoryOverride(
   eventBus: EventBus,
   filesystem: MemoryFilesystem,
@@ -185,6 +194,8 @@ async function buildDispatcher(
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
     readonly http?: Config["http"];
+    /** Stands in for the engine's operation claims in the stall test, so a test can hold one. */
+    readonly claims?: { isClaimed(deviceId: string): boolean };
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -283,7 +294,7 @@ async function buildDispatcher(
     queue: engine,
     reaper,
     registry,
-    stalls: { claims: engine.claimReader, drivers: [driver] },
+    stalls: { claims: resolveClaimsOverride(engine, overrides.claims), drivers: [driver] },
     tokens,
     version: "1.2.3",
   });
@@ -1172,6 +1183,30 @@ describe("Dispatcher: device mode on every surface", () => {
       expect(byId.get(leased.device.id)).toBeDefined();
       expect(byId.get(leased.device.id)).not.toHaveProperty("stalled");
     }
+  });
+
+  it("status leaves stalled off a device past its threshold that a live operation holds", async () => {
+    // The same rule as `doctor`: a claim says work is in progress, however long it takes.
+    const claimed = new Set<string>();
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-booting",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+    clock.advance(60_001);
+    const stalled = async () =>
+      (await dispatcher.dispatch("status.get", {}, session())).devices.find(
+        (entry) => entry.id === device.id,
+      )?.stalled;
+
+    claimed.add(device.id);
+    expect(await stalled()).toBeUndefined();
+    claimed.delete(device.id);
+    expect(await stalled()).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
