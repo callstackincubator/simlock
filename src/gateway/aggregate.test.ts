@@ -300,15 +300,6 @@ describe("aggregateStatus", () => {
       ]);
     });
 
-    it("leaves a disconnected worker's last-known installs out", () => {
-      const status = aggregateStatus(
-        [view({ connection: "disconnected", id: "wrk_a", installs: [install("26.4", 10)] })],
-        { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
-      );
-
-      expect(status.installs).toEqual([]);
-    });
-
     it("keeps the 16 oldest across the fleet, so the list fits the contract's bound", () => {
       const status = aggregateStatus(
         [

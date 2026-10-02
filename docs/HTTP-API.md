@@ -753,12 +753,14 @@ simulated (hence the thin Android catalog), trimmed to one worker:
 `downloads.policy` and `downloads.timeoutMs` are that worker's own effective
 config, read when its uplink connects, again on every periodic refresh, and
 after the worker installs a component. The policy is shown for reference;
-routing does not read it, since no lease request through a gateway starts a
-download.
+routing does not read it, since no download is started through a gateway.
 
 `installs` is the worker's own `installs` list from its
-[`GET /v1/status`](#get-v1status), refreshed as soon as an install starts or
-ends there. A worker that does not send one shows an empty list.
+[`GET /v1/status`](#get-v1status). It is re-read when an install on that
+worker starts, finishes or fails, and on every periodic refresh, so an
+install queued behind another may appear only then. A worker that does not
+send one shows an empty list; a disconnected or incompatible worker shows
+none.
 
 `catalog` is what that worker can lease, each model with the runtimes it
 pairs with, and lists a newly installed component as soon as its install

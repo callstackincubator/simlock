@@ -292,7 +292,36 @@ describe("WorkerRegistry", () => {
     },
   );
 
-  it("keeps a disconnected view with everything it last reported", () => {
+  it("drops a worker's installs from its view when it disconnects or turns incompatible", () => {
+    const { workers } = registry();
+    const installs = [
+      {
+        component: "26.4",
+        platform: "ios" as const,
+        since: 1,
+        state: "downloading" as const,
+        waiters: 1,
+      },
+    ];
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.connected("wrk_2", undefined, "0.3.0");
+    workers.refresh("wrk_1", { installs });
+    workers.refresh("wrk_2", { installs });
+
+    workers.disconnected("wrk_1");
+    const incompatible = workers.incompatible(
+      "wrk_2",
+      undefined,
+      { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+      "0.2.0",
+    );
+
+    expect(workers.view("wrk_1")?.installs).toBeUndefined();
+    expect(incompatible.installs).toBeUndefined();
+    expect(workers.view("wrk_2")?.installs).toBeUndefined();
+  });
+
+  it("keeps a disconnected view with the leases it last reported", () => {
     const { clock, events, workers } = registry();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });

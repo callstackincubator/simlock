@@ -483,7 +483,7 @@ describe("GatewayService", () => {
       await harness.service.stop();
     });
 
-    it("re-reads the catalog for a component.installed that arrives while another refresh is in flight", async () => {
+    it("re-reads the catalog for a component.installed that queues behind a refresh in flight, and keeps it when another event queues after it", async () => {
       const worker = new ScriptedWorkerClient();
       worker.catalog = catalogFixture([
         { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
@@ -493,9 +493,11 @@ describe("GatewayService", () => {
       worker.catalog = catalogFixture([
         { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0", "26.4"] },
       ]);
-      // The first starts a refresh without the catalog; the second queues behind it.
+      // The first starts a refresh without the catalog; the other two share the one queued
+      // behind it, and the last does not ask for the catalog.
       worker.pushEvent({ event: "lease.granted" });
       worker.pushEvent({ event: "component.installed" });
+      worker.pushEvent({ event: "lease.released" });
 
       await vi.waitFor(() =>
         expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([

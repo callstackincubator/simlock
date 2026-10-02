@@ -97,13 +97,12 @@ export function aggregateStatus(
 }
 
 /**
- * ADR 0010 §3/§7: the connected workers' installs, each naming its worker. Connected only, like
- * capacity: what a machine that dropped off was installing is a last-known fact, not one in
- * progress. The fleet list has the same bound as one worker's, so it keeps the oldest.
+ * ADR 0010 §3/§7: the workers' installs, each naming its worker. Only a connected worker's view
+ * lists any: `WorkerRegistry` drops them when a worker disconnects or turns incompatible. The
+ * fleet list has the same bound as one worker's, so it keeps the oldest.
  */
 function fleetInstalls(views: readonly WorkerView[]): NonNullable<StatusOutput["installs"]> {
   return views
-    .filter((view) => view.connection === "connected")
     .flatMap((view) => (view.installs ?? []).map((install) => ({ ...install, workerId: view.id })))
     .sort((a, b) => a.since - b.since)
     .slice(0, INSTALL_LIST_LIMIT);

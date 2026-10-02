@@ -845,20 +845,22 @@ describe("ComponentInstaller.inProgress", () => {
     ]);
   });
 
-  it("does not list a waiting install whose only call timed out, though it is still in its queue", async () => {
+  it("does not list a waiting install once its only call has timed out", async () => {
     const harness = await createHarness({ clock: new ManualClock() });
     harness.ios.holdInstalls();
 
     void harness.installer.install(ios("27.0"));
-    void harness.installer.install(ios("28.0")).catch(() => undefined);
+    const waiting = track(harness.installer.install(ios("28.0")));
     await flush();
     expect(harness.installer.inProgress().map((install) => install.component)).toEqual([
       "27.0",
       "28.0",
     ]);
+    // Timer 1 is the budget of the call for 28.0.
     (harness.clock as ManualClock).fire(1);
     await flush();
 
+    expect(waiting.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
     expect(harness.installer.inProgress().map((install) => install.component)).toEqual(["27.0"]);
   });
 

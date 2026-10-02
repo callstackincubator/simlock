@@ -156,14 +156,16 @@ export class ComponentInstaller {
   /**
    * The installs waiting or running, read from the queues themselves (architecture rule 12):
    * the oldest `MAX_LISTED_INSTALLS`, oldest first. An install no call waits on any more is not
-   * listed: it has ended for everyone who asked, even while it is still in its queue.
+   * listed: it has ended for everyone who asked, even while it is still in its queue. That
+   * covers an `ended` install too, which never has a call: settling it empties its list, and
+   * nothing joins it after.
    */
   // fallow-ignore-next-line unused-class-member -- called through the dispatcher's `components` option, a `Pick` of this class.
   inProgress(): readonly ComponentInstallInProgress[] {
     const listed: ComponentInstallInProgress[] = [];
     for (const queue of this.#queues.values()) {
       for (const install of queue) {
-        if (install.state === "ended" || install.calls.length === 0) continue;
+        if (install.calls.length === 0) continue;
         listed.push({
           component: install.component,
           platform: install.platform,

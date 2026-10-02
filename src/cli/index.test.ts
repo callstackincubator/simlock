@@ -1897,7 +1897,20 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
                     },
                   ],
                 },
-                { ...connectedWorker, id: "wrk_2", installs: [] },
+                {
+                  ...connectedWorker,
+                  id: "wrk_2",
+                  installs: [
+                    {
+                      component: "35",
+                      platform: "android" as const,
+                      since: 31_000,
+                      state: "waiting" as const,
+                      waiters: 1,
+                    },
+                  ],
+                },
+                { ...connectedWorker, id: "wrk_3", installs: [] },
               ],
             }),
         }),
@@ -1908,6 +1921,10 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     expect(output.stdout).toContain(
       "1 lease(s)\n  Install ios 26.4: downloading for 60s, 2 waiters\nwrk_2 (mac-mini-1): connected",
     );
+    expect(output.stdout).toContain(
+      "1 lease(s)\n  Install android 35: waiting for 30s, 1 waiter\nwrk_3 (mac-mini-1): connected",
+    );
+    expect(output.stdout.match(/Install /g)).toHaveLength(2);
   });
 
   it("says so plainly when no worker has ever connected", async () => {

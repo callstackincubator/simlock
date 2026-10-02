@@ -821,10 +821,12 @@ why its Android catalog looks thin, trimmed to one worker:
 worker's own effective config, read when its uplink connects, again on every
 periodic refresh, and after the worker installs a component.
 The policy is shown for reference; routing does not read it, since no
-lease request through a gateway starts a download. `installs` lists the
+download is started through a gateway. `installs` lists the
 component installs waiting or running on that worker, whoever started them,
-in the shape [`simlock status`](#simlock-status) describes; it changes as
-soon as an install starts or ends there. `catalog` is what that
+in the shape [`simlock status`](#simlock-status) describes. It is re-read
+when an install on that worker starts, finishes or fails, and on every
+periodic refresh, so an install queued behind another may appear only then.
+A disconnected or incompatible worker lists none. `catalog` is what that
 worker can lease, each model with the runtimes it pairs with, and lists a
 newly installed component as soon as its install ends. `host` is the
 machine: operating system, its version, CPU architecture, and the version of

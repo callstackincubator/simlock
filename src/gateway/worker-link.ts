@@ -9,11 +9,11 @@
  * change capacity, leases or installs (ADR 0010 §7), and a periodic refresh as a backstop -- plus §22's republishing of
  * those events onto the gateway's own bus with `workerId` added.
  *
- * One call §7 does not name is here too: `config.get`, read once per session for the worker's
- * `downloads.policy`, `downloads.timeoutMs` and `lease.maxTtlMs`. The policy is shown on the view for display only:
- * routing counts installed runtimes and never reads it (ADR 0009 §3). Neither changes without a
- * worker restart -- which is a new session anyway -- and the uplink session is admin, so the
- * gateway may read it.
+ * One call §7 does not name is here too: `config.get`, for the worker's `downloads.policy`,
+ * `downloads.timeoutMs` and `lease.maxTtlMs`, read with the catalog: on connect, on every
+ * periodic refresh, and after `component.installed`. The policy is shown on the view for display
+ * only: routing counts installed runtimes and never reads it (ADR 0009 §3). The uplink session is
+ * admin, so the gateway may read it.
  */
 import { z } from "zod";
 
@@ -343,8 +343,8 @@ export class WorkerLink {
       Promise.all([
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
-        // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
-        // them keeps the per-event refresh down to the two calls that actually go stale.
+        // Read on the same pass as the catalog: neither changes with a lease or a device, so
+        // the per-event refresh stays at the two calls that do.
         includeCatalog ? client.getConfig() : undefined,
       ]),
       "view refresh",
