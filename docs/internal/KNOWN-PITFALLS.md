@@ -333,7 +333,11 @@ single line, read when the install is already over, whose last percentage is
 100. `runInstallerProcess` therefore spawns with
 `lineEnd: "carriage-return-too"`, which ends a line at a bare `\r` as well.
 Anything else that reads an installer's progress must do the same, or it
-reports nothing until the end.
+reports nothing until the end. `xcodebuild` also formats its numbers in the
+user's locale, so in a region with a decimal comma it prints `9,7%`; the
+parser accepts a dot or a comma before the decimals (#260). A locale whose
+digits are not ASCII (Arabic `٩٫٧٪`) still matches nothing, so that download
+reports no progress at all rather than wrong progress.
 
 ## An iOS runtime download outlives the runtime, and only Xcode can reclaim it (#79)
 
