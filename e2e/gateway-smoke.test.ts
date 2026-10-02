@@ -406,6 +406,100 @@ describe("gateway smoke", () => {
     await fetch(`${baseUrl}/v1/leases/${grantedLease.id}`, { headers: auth, method: "DELETE" });
   });
 
+  // #253: `docs/HTTP-API.md` ("The lease object") gives a gateway-issued lease `workerId` and
+  // `worker`, and the request resource embeds that object once `granted`. It is handed out in
+  // two places: the `201` when the grant lands before any progress, and the stored request read
+  // back. The first request provisions, so its `201` is not granted; it warms the device. The
+  // second finds that device free and is granted inside its own `201`. All three leases count.
+  it("returns workerId and worker on a gateway-granted lease, in POST /v1/lease-requests' 201 and in GET /v1/lease-requests/{id} (#253)", async () => {
+    const { baseUrl, gateway } = await startFleet(
+      [{ label: "worker-a", models: ["Pixel 8"] }],
+      "smoke-agent",
+    );
+    const auth = await agentAuth(gateway);
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "the gateway's HTTP port accepting connections" },
+    );
+
+    const listed = await gateway.cli(["worker", "list", "--json"]);
+    expect(listed.code).toBe(0);
+    const workerA = (listed.json as { workers: WorkerView[] }).workers.find(
+      (view) => view.label === "worker-a",
+    );
+    if (workerA === undefined) throw new Error("expected worker-a in the gateway's worker list");
+
+    interface RequestBody {
+      readonly request: {
+        readonly id: string;
+        readonly state: string;
+        readonly lease?: Record<string, unknown>;
+      };
+    }
+    const submit = async (): Promise<RequestBody> => {
+      const created = await fetch(`${baseUrl}/v1/lease-requests`, {
+        body: JSON.stringify({ device: "Pixel 8", platform: "android" }),
+        headers: auth,
+        method: "POST",
+      });
+      expect(created.status).toBe(201);
+      return (await created.json()) as RequestBody;
+    };
+    const readGranted = async (requestId: string): Promise<RequestBody> => {
+      let body: RequestBody | undefined;
+      await waitFor(
+        async () => {
+          const polled = await fetch(`${baseUrl}/v1/lease-requests/${requestId}?wait=10`, {
+            headers: auth,
+          });
+          body = (await polled.json()) as RequestBody;
+          return body.request.state === "granted";
+        },
+        { label: "the fleet granted the lease request", timeout: 30_000 },
+      );
+      if (body === undefined) throw new Error("expected the granted request to be read back");
+      return body;
+    };
+    const release = async (body: RequestBody): Promise<void> => {
+      const leaseId = body.request.lease?.id;
+      if (typeof leaseId !== "string") throw new Error("expected the granted lease to have an id");
+      const released = await fetch(`${baseUrl}/v1/leases/${leaseId}`, {
+        headers: auth,
+        method: "DELETE",
+      });
+      expect(released.status).toBe(202);
+    };
+
+    const first = await submit();
+    const firstRead = await readGranted(first.request.id);
+    await release(firstRead);
+
+    const second = await submit();
+    const secondRead = await readGranted(second.request.id);
+
+    const namesWorkerA = expect.objectContaining({
+      worker: { id: workerA.id, label: "worker-a" },
+      workerId: workerA.id,
+    });
+    expect({
+      firstRequestRead: firstRead.request.lease,
+      secondRequestCreated: { lease: second.request.lease, state: second.request.state },
+      secondRequestRead: secondRead.request.lease,
+    }).toEqual({
+      firstRequestRead: namesWorkerA,
+      secondRequestCreated: { lease: namesWorkerA, state: "granted" },
+      secondRequestRead: namesWorkerA,
+    });
+
+    await release(secondRead);
+  });
+
   it("queues a fleet-wide FIFO behind a full worker, refuses --no-wait, and serves the waiter on release", async () => {
     // One worker that can run exactly one device, so the fleet's whole capacity is one lease.
     // ADR §10: the gateway keeps a single fleet-wide queue and reports the same codes and
