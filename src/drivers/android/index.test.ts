@@ -456,6 +456,74 @@ describe("AndroidDriver", () => {
     );
   });
 
+  /**
+   * #237: a timer the driver leaves armed holds the event loop open, so a daemon that logged
+   * "Daemon stopped" stays alive until it fires. Both shutdowns here -- the one `makeReady`
+   * does to restart from the new baseline, and the one the test asks for -- see the emulator
+   * exit at once, so neither has anything left to wait for.
+   */
+  it("leaves no timer armed once each shutdown has seen its emulator exit", async () => {
+    const harness = await provisionedHarness({
+      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+    });
+    await harness.driver.makeReady(harness.device);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const running = harness.runner.handles[launch];
+    expect(running, "no running emulator").toBeDefined();
+
+    const shutdown = harness.driver.shutdown(harness.device);
+    // The emulator answers `emu kill` by exiting.
+    running?.kill("SIGTERM");
+    await shutdown;
+
+    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+  });
+
+  it("kills an emulator that has not exited within the readiness timeout of a shutdown", async () => {
+    const harness = await provisionedHarness({
+      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+      readinessTimeoutMs: 2_000,
+    });
+    await harness.driver.makeReady(harness.device);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const running = harness.runner.handles[launch];
+    if (running === undefined) throw new Error("no running emulator");
+    const kill = vi.spyOn(running, "kill");
+
+    // The emulator ignores `emu kill`: only the timeout can end the wait.
+    const armedBefore = harness.clock.pendingTimerCount;
+    const shutdown = harness.driver.shutdown(harness.device);
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
+    expect(kill).not.toHaveBeenCalled();
+    harness.clock.advance(2_000);
+    await shutdown;
+
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+  });
+
+  it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
+    const harness = await provisionedHarness({
+      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+    });
+    await harness.driver.makeReady(harness.device);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const running = harness.runner.handles[launch];
+    if (running === undefined) throw new Error("no running emulator");
+    // A child that emits `error` rejects its wait instead of resolving it.
+    vi.spyOn(running, "wait").mockRejectedValue(new Error("spawn error"));
+
+    await expect(harness.driver.shutdown(harness.device)).rejects.toThrow("spawn error");
+
+    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+  });
+
   it("validates a new clean baseline by restarting from it before becoming ready", async () => {
     const harness = await provisionedHarness();
 
@@ -3186,6 +3254,8 @@ async function provisionedHarness(
     readonly forReclaim?: boolean;
     readonly initialAdbFailures?: number;
     readonly readinessTimeoutMs?: number;
+    /** Invocations the test makes after the harness's own, in order. */
+    readonly afterwards?: readonly ScriptedProcessExpectation[];
   } = {},
 ) {
   const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
@@ -3261,6 +3331,7 @@ async function provisionedHarness(
     );
   }
 
+  expectations.push(...(options.afterwards ?? []));
   const runner = new ScriptedProcessRunner(expectations);
   const driver = await createDriver(filesystem, runner, {
     clock,
