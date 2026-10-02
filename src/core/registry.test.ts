@@ -16,6 +16,70 @@ class ObservingFilesystem extends MemoryFilesystem {
   }
 }
 
+describe("Registry: component records", () => {
+  async function load(filesystem: MemoryFilesystem) {
+    const clock = new FakeClock(1_000);
+    return Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+  }
+
+  it("keeps one record per platform and version, the latest install replacing the earlier one", async () => {
+    const filesystem = new MemoryFilesystem();
+    const registry = await load(filesystem);
+
+    await registry.recordComponent({
+      installedAt: 1,
+      platform: "android",
+      receipt: { stamp: "first" },
+      version: "35",
+    });
+    await registry.recordComponent({
+      installedAt: 2,
+      platform: "ios",
+      receipt: { image: "IMG" },
+      version: "35",
+    });
+    await registry.recordComponent({
+      installedAt: 3,
+      platform: "android",
+      receipt: { stamp: "second" },
+      version: "35",
+    });
+
+    expect(registry.snapshot.components).toEqual([
+      { installedAt: 2, platform: "ios", receipt: { image: "IMG" }, version: "35" },
+      { installedAt: 3, platform: "android", receipt: { stamp: "second" }, version: "35" },
+    ]);
+  });
+
+  it("drops a stored component record whose receipt is not all strings, and keeps the others", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        components: [
+          { installedAt: 1, platform: "ios", receipt: { image: 7 }, version: "26.5" },
+          { installedAt: 2, platform: "ios", receipt: { image: "IMG" }, version: "26.4" },
+        ],
+        devices: [],
+        leases: [],
+      }),
+    );
+
+    const registry = await load(filesystem);
+
+    expect(registry.snapshot.components).toEqual([
+      { installedAt: 2, platform: "ios", receipt: { image: "IMG" }, version: "26.4" },
+    ]);
+  });
+});
+
 describe("Registry", () => {
   it("loads an empty registry when no state file exists", async () => {
     const clock = new FakeClock(1_000);

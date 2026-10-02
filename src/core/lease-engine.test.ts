@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { testComponentWiring } from "./test-wiring.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -23,7 +24,6 @@ import {
   Registry,
   RequestCancelledError,
   RuntimeMissingError,
-  testComponentWiring,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -248,14 +248,17 @@ describe("LeaseEngine", () => {
       ownerId: "a",
       requesterId: "a",
     });
-    driver.uninstall("26.5");
+    // The runtime the device was made on is gone, so bringing it back fails the way a driver
+    // reports a missing runtime: downloadable, naming the component.
     driver.failOn("makeReady", 2, new RuntimeMissingError("ios", "26.5", { component: "26.5" }));
 
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
 
-    // The warm pool did try to bring the device back, and that failure went nowhere near an install.
+    // The warm pool did try to bring the device back, it failed, and the failure went nowhere
+    // near an install.
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+    expect(harness.registry.snapshot.devices.map((device) => device.state)).toEqual(["shutdown"]);
     expect(asked).toEqual([]);
     expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
   });

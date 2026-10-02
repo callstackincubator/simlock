@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { events, withDaemon } from "./helpers/index.js";
+import { events, waitFor, withDaemon } from "./helpers/index.js";
 
 const MISSING = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "19.0"] as const;
 
@@ -11,22 +11,32 @@ describe("lease-triggered component installs", () => {
       ios: {
         availableOsVersions: ["18.4"],
         knownModels: ["iPhone 16"],
-        // Long enough that the second request arrives while the first install still runs.
-        latencyMs: { installComponent: 1_000 },
+        // Long enough that the second request surely arrives while the first install runs.
+        latencyMs: { installComponent: 3_000 },
       },
     });
     await env.driverLog.clear();
 
-    const [first, second] = await Promise.all(
-      ["agent-a", "agent-b"].map((agentId) =>
-        env.cli([...MISSING, "--allow-download", "--agent-id", agentId, "--detach"], {
-          timeout: 30_000,
-        }),
-      ),
+    const first = env.cliBackground([
+      ...MISSING,
+      "--allow-download",
+      "--agent-id",
+      "agent-a",
+      "--detach",
+    ]);
+    await waitFor(
+      async () =>
+        (await env.driverLog.calls()).some((call) => call.operation === "installComponent"),
+      { label: "the first lease's install started" },
     );
+    const second = await env.cli(
+      [...MISSING, "--allow-download", "--agent-id", "agent-b", "--detach"],
+      { timeout: 30_000 },
+    );
+    const firstResult = await first.waitForExit(30_000);
 
-    expect(first?.code, first?.stderr).toBe(0);
-    expect(second?.code, second?.stderr).toBe(0);
+    expect(firstResult.code, firstResult.stderr).toBe(0);
+    expect(second.code, second.stderr).toBe(0);
     const installs = (await env.driverLog.calls()).filter(
       (call) => call.operation === "installComponent",
     );

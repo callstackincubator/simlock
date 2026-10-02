@@ -431,7 +431,7 @@ export class IosSimctlDriver implements Driver {
       throw new IosRuntimeUnpairedError(deviceType.name, osVersion);
     }
 
-    throw new IosRuntimeMissingError(
+    throw missingRuntime(
       osVersion,
       `iOS ${osVersion} is not installed; pass --allow-download (or set downloads.policy) ` +
         `to download it`,
@@ -452,7 +452,7 @@ export class IosSimctlDriver implements Driver {
       return this.#commitResolution(deviceType, paired);
     }
 
-    throw new IosRuntimeMissingError(
+    throw missingRuntime(
       "default",
       `No installed iOS runtime pairs with ${deviceType.name}; pass --allow-download (or ` +
         `set downloads.policy) to download a compatible runtime`,
@@ -497,7 +497,7 @@ export class IosSimctlDriver implements Driver {
       readonly signal: AbortSignal;
     },
   ): Promise<ComponentInstallResult> {
-    if (component !== LATEST_COMPONENT && isTooOldToDownload(component)) {
+    if (belowDownloadFloor(component)) {
       throw new IosDownloadFloorError(component);
     }
     const before = await this.#installedReceipts();
@@ -505,7 +505,11 @@ export class IosSimctlDriver implements Driver {
       component === LATEST_COMPONENT
         ? ["-downloadPlatform", "iOS"]
         : ["-downloadPlatform", "iOS", "-buildVersion", component];
-    await this.#xcodebuildOrThrow(args, options);
+    try {
+      await this.#xcodebuildOrThrow(args, options);
+    } catch (error: unknown) {
+      throw withBareMajorHint(component, error);
+    }
 
     const [catalog, images] = await Promise.all([this.#loadCatalog(), this.#loadRuntimeImages()]);
     const runtime = runtimeForComponent(catalog, component);
@@ -1582,6 +1586,26 @@ export class IosSimctlDriver implements Driver {
   }
 }
 
+/**
+ * The error for a runtime that is not installed: downloadable, naming `component`, unless the
+ * component predates `IOS_DOWNLOAD_FLOOR` -- then no download can help, and saying so here keeps
+ * such a request from queueing for an install `installComponent` would refuse anyway.
+ */
+function missingRuntime(
+  osVersion: string,
+  message: string,
+  component: string,
+): RuntimeMissingError {
+  return belowDownloadFloor(component)
+    ? new IosDownloadFloorError(component)
+    : new IosRuntimeMissingError(osVersion, message, component);
+}
+
+/** The one floor check, for `resolveSpec` and `installComponent` alike. `latest` has none. */
+function belowDownloadFloor(component: string): boolean {
+  return component !== LATEST_COMPONENT && isTooOldToDownload(component);
+}
+
 class IosRuntimeMissingError extends RuntimeMissingError {
   constructor(osVersion: string, message: string, component: string) {
     super("ios", osVersion, { component });
@@ -1631,7 +1655,7 @@ class IosRuntimeUnpairedError extends RuntimeMissingError {
 /**
  * A requested version predates Xcode's automatic download support (`xcodebuild
  * -downloadPlatform` only reaches back to iOS 16.0 -- see `IOS_DOWNLOAD_FLOOR`), thrown by
- * `installComponent` before `xcodebuild` runs. Not a driver crash: nothing went wrong, the
+ * `resolveSpec` and by `installComponent` before `xcodebuild` runs. Not a driver crash: nothing went wrong, the
  * request is simply outside what a download can ever do.
  * `RuntimeMissingError` with `downloadable: false` reports that distinction the same way the
  * out-of-range and unpaired-runtime errors do, rather than surfacing as an opaque internal error.
@@ -1894,6 +1918,19 @@ function installedComponent(runtime: Runtime, images: readonly RuntimeImage[]): 
  * the newest of that major for a bare major (the bounded default), and that exact version
  * otherwise.
  */
+/**
+ * A bare major is the driver's own guess at a bounded model's newest runtime, and Xcode may have
+ * no build matching it: a crash there tells the requester to name an exact release instead.
+ */
+function withBareMajorHint(component: string, error: unknown): unknown {
+  if (component === LATEST_COMPONENT || component.includes(".")) return error;
+  if (!(error instanceof DriverCrashError)) return error;
+  return new DriverCrashError(
+    `Could not download a default iOS runtime (tried ${component}): ${error.message}; ` +
+      `pass --os <version> to request an exact release`,
+  );
+}
+
 function runtimeForComponent(catalog: SimctlCatalog, component: string): Runtime | undefined {
   const available = catalog.runtimes.filter((runtime) => runtime.isAvailable);
   if (component === LATEST_COMPONENT) return newestRuntime(available);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { testComponentWiring } from "./test-wiring.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -17,7 +18,6 @@ import {
   FakeDriver,
   LeaseEngine,
   Registry,
-  testComponentWiring,
 } from "./index.js";
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";

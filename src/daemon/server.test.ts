@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
 import {
@@ -15,7 +16,6 @@ import {
   PassthroughRefusedError,
   Registry,
   RuntimeMissingError,
-  testComponentWiring,
 } from "../core/index.js";
 import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
 import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";

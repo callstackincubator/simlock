@@ -330,6 +330,39 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
     expect(installs(driver)).toEqual(["26.5"]);
   });
 
+  it("attributes the install a lease request starts to that request's requester", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ drivers: [driver] });
+    const started: unknown[] = [];
+    harness.bus.subscribe("component.install-started", (envelope) => {
+      started.push(envelope.payload);
+    });
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "owner",
+      requesterId: "agent-7",
+    });
+
+    expect(started).toEqual([{ componentId: "26.5", platform: "ios", requesterId: "agent-7" }]);
+  });
+
+  it("starts no install when resolving again fails some other way by the time the request reaches the front, and fails with that error", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const broken = new DriverCrashError("simctl list failed");
+    // The first resolve finds the runtime missing; the check at the front of the queue breaks.
+    driver.failOn("resolveSpec", 2, broken);
+    driver.failOn("resolveSpec", 3, broken);
+    const harness = await createHarness({ drivers: [driver] });
+
+    await expect(
+      harness.coordinator.request(request, { allowDownload: true, ownerId: "a", requesterId: "a" }),
+    ).rejects.toBe(broken);
+    expect(installs(driver)).toEqual([]);
+  });
+
   it("fails a request without allowDownload for a missing runtime with RuntimeMissingError, and never calls the installer", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });

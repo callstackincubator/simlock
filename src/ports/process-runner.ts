@@ -781,7 +781,8 @@ class ScriptedProcessHandle implements ProcessHandle {
     }
   }
 
-  kill(_signal: NodeJS.Signals = "SIGTERM"): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    if (this.expectation.ignoresSigterm === true && signal !== "SIGKILL") return;
     this.#finish({ code: null, stderr: "", stdout: "" });
   }
 

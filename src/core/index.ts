@@ -83,4 +83,3 @@ export { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
 export { ComponentInstaller } from "./component-installer.js";
 export { SerializedDecision } from "./serialized-decision.js";
-export { testComponentWiring } from "./test-wiring.js";

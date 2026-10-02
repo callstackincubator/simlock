@@ -225,6 +225,41 @@ describe("startDaemon", () => {
     );
   });
 
+  it("ends a running component install on shutdown, before the drivers are disposed", async () => {
+    const clock = new FakeClock(1_000);
+    const events: string[] = [];
+    class InstallingDriver extends FakeDriver {
+      override async installComponent(
+        component: string,
+        options: Parameters<FakeDriver["installComponent"]>[1],
+      ) {
+        events.push("install-started");
+        options.signal.addEventListener("abort", () => events.push("install-ended"));
+        return super.installComponent(component, options);
+      }
+
+      async dispose(): Promise<void> {
+        events.push("disposed");
+      }
+    }
+    const driver = new InstallingDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const { daemon } = await start({ drivers: [driver] });
+
+    const lease = daemon
+      .dispatch(
+        "lease.request",
+        { allowDownload: true, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+      )
+      .catch((error: unknown) => error);
+    await expect.poll(() => events).toEqual(["install-started"]);
+    await daemon.stop("test");
+
+    expect(events).toEqual(["install-started", "install-ended", "disposed"]);
+    await expect(lease).resolves.toBeInstanceOf(Error);
+  });
+
   it("starts and reports no entry for a driver whose tool read fails, and every other tool", async () => {
     const clock = new FakeClock(1_000);
     const { daemon } = await start({

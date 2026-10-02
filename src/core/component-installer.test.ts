@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem, type TimerHandle } from "../ports/index.js";
+import { FakeClock, type Filesystem, MemoryFilesystem, type TimerHandle } from "../ports/index.js";
 import {
   ComponentInstaller,
   ComponentInstallerClosedError,
@@ -49,6 +49,7 @@ async function createHarness(
   options: {
     readonly clock?: FakeClock;
     readonly drivers?: (clock: FakeClock) => readonly FakeDriver[];
+    readonly filesystem?: (clock: FakeClock) => Pick<Filesystem, "diskFree">;
     readonly freeDiskBytes?: number;
   } = {},
 ) {
@@ -71,18 +72,41 @@ async function createHarness(
     idGenerator: { generate: () => "id" },
     statePath,
   });
+  // Every reservation the installer takes, and whether it gave it back.
+  const guard = new DiskSpaceGuard();
+  const reservations: { readonly bytes: number; released: boolean }[] = [];
   const installer = new ComponentInstaller({
     clock,
     decisions: new SerializedDecision(),
-    diskSpace: new DiskSpaceGuard(),
+    diskSpace: {
+      reserve: async (filesystem, platform, bytes, path) => {
+        const release = await guard.reserve(filesystem, platform, bytes, path);
+        const reservation = { bytes, released: false };
+        reservations.push(reservation);
+        return () => {
+          reservation.released = true;
+          release();
+        };
+      },
+    },
     drivers: new DriverCatalog(drivers),
     eventBus: bus,
-    filesystem: new MemoryFilesystem(options.freeDiskBytes),
+    filesystem: options.filesystem?.(clock) ?? new MemoryFilesystem(options.freeDiskBytes),
     registry,
     timeoutMs,
   });
   const ios = drivers.find((driver) => driver.platform === "ios") as FakeDriver;
-  return { bus, clock, drivers, events, installer, ios, registry, stateFilesystem };
+  return {
+    bus,
+    clock,
+    drivers,
+    events,
+    installer,
+    ios,
+    registry,
+    reservations,
+    stateFilesystem,
+  };
 }
 
 function installs(driver: FakeDriver): readonly unknown[] {
@@ -295,13 +319,24 @@ describe("ComponentInstaller", () => {
   });
 
   it("answers already-installed for an installed component with no reservation, no event and no install, even on a full disk", async () => {
-    const harness = await createHarness({ freeDiskBytes: 0 });
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          componentFootprint: { bytes: 8 * gibibyte, path: "/volume" },
+          platform: "ios",
+        }),
+      ],
+      freeDiskBytes: gibibyte,
+    });
 
     await expect(harness.installer.install(ios("26.5"))).resolves.toEqual({
       outcome: "already-installed",
       version: "26.5",
     });
     expect(installs(harness.ios)).toEqual([]);
+    expect(harness.reservations).toEqual([]);
     expect(harness.events).toEqual([]);
     expect(harness.registry.snapshot.components).toEqual([]);
   });
@@ -508,6 +543,192 @@ describe("ComponentInstaller", () => {
 
     expect(installs(harness.ios)).toEqual(["27.0"]);
   });
+
+  it("gives the disk back when an install ends, so the next install that fits alone starts", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          componentFootprint: { bytes: 6 * gibibyte, path: "/volume" },
+          platform: "ios",
+        }),
+      ],
+      freeDiskBytes: 10 * gibibyte,
+    });
+    harness.ios.failOn("installComponent", 1, new DriverCrashError("xcodebuild failed"));
+
+    await expect(harness.installer.install(ios("27.0"))).rejects.toThrow("xcodebuild failed");
+    await expect(harness.installer.install(ios("28.0"))).resolves.toMatchObject({
+      outcome: "installed",
+    });
+    await expect(harness.installer.install(ios("29.0"))).resolves.toMatchObject({
+      outcome: "installed",
+    });
+    expect(harness.reservations.map((reservation) => reservation.released)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("keeps the deadline of a call that ended as not-needed from ending the install the other calls joined", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    const notNeeded = track(
+      harness.installer.install(ios("27.0", { stillNeeded: async () => false })),
+    );
+    harness.clock.advance(1);
+    const needed = track(harness.installer.install(ios("27.0")));
+    await flush();
+    expect(notNeeded.result()).toEqual({ outcome: "not-needed" });
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+
+    // The not-needed call's budget runs out here; the install belongs to the other call now.
+    harness.clock.advance(timeoutMs - 1);
+    await flush();
+    expect(needed.settled()).toBe(false);
+    harness.clock.advance(1);
+    await flush();
+    expect(needed.error()).toEqual(new ComponentInstallTimeoutError("ios", "27.0", timeoutMs));
+  });
+
+  it("starts a new install for a call that arrives while a timed-out install's driver is still returning, after it returns", async () => {
+    let finishStubborn: (() => void) | undefined;
+    class StubbornDriver extends FakeDriver {
+      readonly started: string[] = [];
+
+      override async installComponent(
+        component: string,
+        options: Parameters<FakeDriver["installComponent"]>[1],
+      ) {
+        this.started.push(component);
+        if (this.started.length === 1) {
+          // Ignores its signal, like an installer that takes a while to die.
+          await new Promise<void>((resolve) => {
+            finishStubborn = resolve;
+          });
+          throw new DriverCrashError("ended late");
+        }
+        return super.installComponent(component, options);
+      }
+    }
+    const harness = await createHarness({
+      drivers: (clock) => [new StubbornDriver({ availableOsVersions: [], clock, platform: "ios" })],
+    });
+    const driver = harness.ios as StubbornDriver;
+
+    const first = track(harness.installer.install(ios("27.0")));
+    await flush();
+    harness.clock.advance(timeoutMs);
+    await flush();
+    expect(first.error()).toBeInstanceOf(ComponentInstallTimeoutError);
+    const second = track(harness.installer.install(ios("27.0")));
+    await flush();
+    expect(driver.started).toEqual(["27.0"]);
+
+    finishStubborn?.();
+    await flush();
+    expect(driver.started).toEqual(["27.0", "27.0"]);
+    expect(second.result()).toEqual({ outcome: "installed", version: "27.0" });
+  });
+
+  it("rejects only the call whose stillNeeded throws, and installs for the others joined to it", async () => {
+    const harness = await createHarness();
+    const failure = new Error("resolve failed");
+    // An install ahead keeps all three waiting, so each reaches the front with its check.
+    harness.ios.holdInstalls();
+    void harness.installer.install(ios("28.0"));
+    await flush();
+    harness.ios.releaseInstalls();
+
+    const [plain, throwing, notNeeded] = await Promise.allSettled([
+      harness.installer.install(ios("27.0")),
+      harness.installer.install(
+        ios("27.0", {
+          stillNeeded: async () => {
+            throw failure;
+          },
+        }),
+      ),
+      harness.installer.install(ios("27.0", { stillNeeded: async () => false })),
+    ]);
+
+    expect(plain).toEqual({
+      status: "fulfilled",
+      value: { outcome: "installed", version: "27.0" },
+    });
+    expect(throwing).toEqual({ reason: failure, status: "rejected" });
+    expect(notNeeded).toEqual({ status: "fulfilled", value: { outcome: "not-needed" } });
+    expect(installs(harness.ios)).toEqual(["28.0", "27.0"]);
+  });
+
+  it("keeps a throwing progress callback from reaching the install or the other calls", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({ availableOsVersions: [], clock, installProgress: [50], platform: "ios" }),
+      ],
+    });
+    const heard: ComponentInstallerProgress[] = [];
+
+    const [throwing, listening] = await Promise.allSettled([
+      harness.installer.install(
+        ios("27.0", {
+          onProgress: () => {
+            throw new Error("observer broke");
+          },
+        }),
+      ),
+      harness.installer.install(ios("27.0", { onProgress: (report) => heard.push(report) })),
+    ]);
+
+    expect(throwing).toMatchObject({ status: "fulfilled" });
+    expect(listening).toMatchObject({ status: "fulfilled" });
+    expect(heard).toEqual([{ percent: 50, stage: "downloading" }]);
+  });
+
+  it.each([
+    ["checking whether the component is installed", "findComponent"],
+    ["reserving disk", "diskFree"],
+  ] as const)(
+    "starts no install when the only call ran out of budget while the installer was %s",
+    async (_step, slow) => {
+      const harness = await createHarness({
+        drivers: (clock) => [
+          new FakeDriver({
+            availableOsVersions: [],
+            clock,
+            latencyMs: slow === "findComponent" ? { findComponent: timeoutMs + 1 } : {},
+            platform: "ios",
+          }),
+        ],
+        filesystem: (clock) => ({
+          diskFree: async () => {
+            if (slow === "diskFree") {
+              await new Promise<void>((resolve) => clock.setTimer(timeoutMs + 1, resolve));
+            }
+            return Number.MAX_SAFE_INTEGER;
+          },
+        }),
+      });
+
+      const call = track(harness.installer.install(ios("27.0")));
+      await flush();
+      harness.clock.advance(timeoutMs);
+      await flush();
+      expect(call.error()).toBeInstanceOf(ComponentInstallTimeoutError);
+      harness.clock.advance(1);
+      await flush();
+
+      expect(installs(harness.ios)).toEqual([]);
+      expect(harness.events).toEqual([]);
+      // Nothing reserved once the call is gone; a reservation already taken is given back.
+      expect(harness.reservations).toEqual(
+        slow === "findComponent" ? [] : [{ bytes: 0, released: true }],
+      );
+    },
+  );
 
   it("aborts the running install and rejects the waiting calls on close", async () => {
     const harness = await createHarness();

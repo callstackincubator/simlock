@@ -382,7 +382,7 @@ describe("IosSimctlDriver", () => {
       ).rejects.toMatchObject({ component: "latest", downloadable: true, osVersion: "default" });
     });
 
-    it("gives a clean RuntimeMissingError, not a parse-time DriverCrashError, when allowDownload is false", async () => {
+    it("gives a clean RuntimeMissingError, not a parse-time DriverCrashError, when no runtime is installed", async () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
       ]);
@@ -624,6 +624,106 @@ describe("IosSimctlDriver", () => {
       // Settled within a few microtasks of the signal: the kill ended it, not a timer.
       expect(error).toBeInstanceOf(DriverCrashError);
       expect((error as Error).message).toContain("was ended before it finished");
+    });
+
+    it.each([
+      [
+        "an exact version",
+        { model: "iPhone 7", osVersion: "13.0", platform: "ios" as const },
+        "13.0",
+      ],
+      ["no version", { model: "iPhone 7", platform: "ios" as const }, "15"],
+    ])(
+      "reports a missing runtime below the download floor as not downloadable, for %s",
+      async (_case, request, named) => {
+        const runner = new ScriptedProcessRunner([listed(pairingFixture)]);
+        const driver = await createDriver(runner);
+
+        const result = await driver.resolveSpec(request).catch((error: unknown) => error);
+
+        expect(result).toBeInstanceOf(RuntimeMissingError);
+        expect(result).toMatchObject({
+          component: undefined,
+          downloadable: false,
+          message: expect.stringContaining(`iOS ${named} predates`),
+        });
+      },
+    );
+
+    it("tells the requester to name an exact release when the download of a bare major fails", async () => {
+      const runner = new ScriptedProcessRunner([
+        listed(listFixture),
+        imagesListed(imagesBefore),
+        xcodebuild(["-downloadPlatform", "iOS", "-buildVersion", "18"], {
+          result: { code: 1, stderr: "no such build", stdout: "" },
+        }),
+      ]);
+      const driver = await createDriver(runner);
+
+      const result = await install(driver, "18").catch((error: unknown) => error);
+
+      expect(result).toBeInstanceOf(DriverCrashError);
+      expect((result as Error).message).toMatch(/tried 18.*no such build.*pass --os <version>/);
+    });
+
+    it("names the image whose build matches the runtime's when two images provide one runtime identifier", async () => {
+      const twoBuilds = JSON.stringify({
+        devicetypes: (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes,
+        runtimes: [
+          {
+            buildversion: "23F79",
+            identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            isAvailable: true,
+            name: "iOS 26.5",
+            supportedDeviceTypes: [],
+            version: "26.5",
+          },
+        ],
+      });
+      const runner = new ScriptedProcessRunner([
+        listed(twoBuilds),
+        imagesListed([
+          { build: "23F77", id: "IMG-OLD", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-5" },
+          { build: "23F79", id: "IMG-NEW", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-5" },
+        ]),
+      ]);
+      const driver = await createDriver(runner);
+
+      await expect(driver.findComponent("26.5")).resolves.toEqual({
+        receipt: { build: "23F79", image: "IMG-NEW" },
+        version: "26.5",
+      });
+    });
+
+    it("kills xcodebuild with SIGKILL when it ignores the SIGTERM its signal sent", async () => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        listed(listFixture),
+        imagesListed(imagesBefore),
+        xcodebuild(["-downloadPlatform", "iOS", "-buildVersion", "18.6"], {
+          hangs: true,
+          ignoresSigterm: true,
+        }),
+      ]);
+      const driver = await createDriver(runner, clock);
+      const controller = new AbortController();
+
+      let error: unknown;
+      void install(driver, "18.6", { signal: controller.signal }).catch((caught: unknown) => {
+        error = caught;
+      });
+      for (let tick = 0; tick < 50 && runner.handles.length < 3; tick += 1) {
+        await Promise.resolve();
+      }
+      controller.abort();
+      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+      expect(error).toBeUndefined();
+
+      clock.advance(10_000);
+      for (let tick = 0; tick < 50 && error === undefined; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(error).toBeInstanceOf(DriverCrashError);
     });
 
     it("finds an installed version with its receipt, and nothing for latest, a bare major or a missing version", async () => {

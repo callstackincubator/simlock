@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
@@ -12,7 +13,6 @@ import {
   Nuke,
   PassthroughRefusedError,
   Registry,
-  testComponentWiring,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";

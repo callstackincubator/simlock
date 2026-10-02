@@ -5,16 +5,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
-import {
-  CleanupReaper,
-  type Config,
-  FakeDriver,
-  LeaseEngine,
-  Registry,
-  testComponentWiring,
-} from "../core/index.js";
+import { CleanupReaper, type Config, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
