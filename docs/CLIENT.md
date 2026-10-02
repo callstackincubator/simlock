@@ -267,6 +267,8 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
   is installed.
 - The catalog lists only what is installed. It never lists a runtime the
   daemon could download, whatever the download policy.
+- On a daemon, a platform whose tools cannot be read is left out, unless
+  `platform` names it: then `getCatalog` rejects with that error.
 
 Against a gateway the catalog is the union of the connected workers'. A
 model is paired with a runtime when at least one worker pairs them, and

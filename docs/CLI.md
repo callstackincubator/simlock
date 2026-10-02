@@ -1170,7 +1170,9 @@ from](#where-android-models-come-from).
 A
 platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
-command. `--platform` narrows to one platform. Read-only: this never
+command. On a daemon, a platform whose tools cannot be read is left out the
+same way, unless `--platform` names it: then the command fails with that error.
+`--platform` narrows to one platform. Read-only: this never
 downloads a runtime or system image, and lists only what is installed,
 whatever `downloads.policy` says.
 

@@ -749,7 +749,9 @@ catalog's `modelAliases` are a profile's other names that the matcher sends
 back to that profile. A listed model is in `customModels` when the profile
 the matcher sends its name to is a `devices.xml` one, so the mark and the
 resolution cannot disagree. The iOS driver matches a device type's name
-only.
+only. `DriverCatalog.listCatalog` leaves out and logs a driver whose catalog
+rejects when no platform is named, and fails with that driver's error when
+its platform is named.
 
 Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer and event
