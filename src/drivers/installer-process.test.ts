@@ -58,6 +58,36 @@ describe("runInstallerProcess", () => {
     expect(progress.map((report) => report.percent)).toEqual([10, 20, 30]);
   });
 
+  it("reads a percentage written with a decimal comma, as xcodebuild prints it in a region that uses one", async () => {
+    // Byte for byte as `xcodebuild -downloadPlatform iOS -buildVersion 18.4` wrote it under
+    // language English, region Poland: one `\n`, then `\r`-separated redraws, a line with only
+    // the title, a "Preparing" line, comma decimals in the percentage and the sizes, and a
+    // redraw padded with trailing spaces.
+    const title = "Downloading iOS 18.4 Universal Simulator (22E238):";
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["install"], command },
+        stderrLines: [
+          [
+            "Finding content...\n",
+            `${title} `,
+            `${title} Preparing to download...`,
+            `${title} 0,0% (73 kB of 8,86 GB)`,
+            `${title} 0,4% (39,4 MB of 8,86 GB)`,
+            `${title} 2,7% (235 MB of 8,86 GB)  `,
+            `${title} 9,7% (857,8 MB of 8,86 GB)`,
+          ].join("\r"),
+        ],
+      },
+    ]);
+    const clock = new FakeClock();
+
+    const { outcome, progress } = run(runner, clock);
+    await outcome;
+
+    expect(progress.map((report) => report.percent)).toEqual([0, 0.4, 2.7, 9.7]);
+  });
+
   it("reports each percentage while the installer is still running, before it exits", async () => {
     const runner = new ScriptedProcessRunner([
       {
