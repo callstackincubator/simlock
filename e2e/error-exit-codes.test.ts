@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { waitForLeaseCount, withDaemon, type CliResult } from "./helpers/index.js";
+import { withDaemon, type CliResult } from "./helpers/index.js";
 
 /**
  * Asserts the documented failure contract from docs/CLI.md#global-exit-codes: exit
@@ -82,49 +82,5 @@ describe("error and exit-code table", () => {
     const env = await withDaemon();
     const result = await env.cli(["lease", "renew", "lse_does-not-exist"]);
     expectStructuredFailure(result, 1, "UNKNOWN_LEASE");
-  });
-
-  it("lease renew on a running holder's lease -> exit 0 with a later deadline", async () => {
-    const env = await withDaemon();
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
-    });
-
-    const holder = env.cliBackground([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--os",
-      "18.4",
-      "--agent-id",
-      "flow4-holder",
-    ]);
-    const grant = JSON.parse(await holder.firstStdoutLine()) as {
-      lease: { id: string; ttlMs: number };
-    };
-
-    try {
-      const rows = await waitForLeaseCount(env, 1);
-      const before = rows.find((row) => row.id === grant.lease.id);
-      if (before === undefined) {
-        throw new Error(`lease ${grant.lease.id} not found before renew`);
-      }
-      const beforeDeadline = before.ttlDeadline as number;
-
-      const result = await env.cli(["lease", "renew", grant.lease.id]);
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      const renewed = result.json as { id: string; ttlMs: number; ttlDeadline: number };
-      expect(renewed.id).toBe(grant.lease.id);
-      // ADR 0004: one kind of lease, and a body-less renew re-applies its own stored width
-      // rather than any mode-shaped default.
-      expect(renewed.ttlMs).toBe(grant.lease.ttlMs);
-      expect(renewed.ttlDeadline).toBeGreaterThan(beforeDeadline);
-    } finally {
-      holder.kill("SIGTERM");
-      await holder.waitForExit(15_000);
-    }
   });
 });

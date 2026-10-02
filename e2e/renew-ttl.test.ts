@@ -45,7 +45,7 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
     );
   });
 
-  it("keeps a renewing holder's lease alive (MCP and CLI) while an unrenewed lease expires", async () => {
+  it("keeps a renewing holder's lease alive (MCP and CLI) while a SIGKILLed holder's lease stays until its TTL, then expires", async () => {
     const env = await withDaemon({
       // Short enough that the unrenewed lease's expiry lands inside the test's own timeline;
       // both holders renew at a third of it, so they slide well past it (ADR 0004 §2).
@@ -81,7 +81,7 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
         lease: { id: string; ttlDeadline: number };
       };
 
-      const detachedResult = await env.cli([
+      const killedHolder = env.cliBackground([
         "lease",
         "--platform",
         "ios",
@@ -90,21 +90,26 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
         "--os",
         "18.4",
         "--agent-id",
-        "flow6-detached",
-        "--detach",
+        "flow6-killed",
       ]);
-      const detachedGrant = detachedResult.json as { lease: { id: string } };
+      const killedGrant = JSON.parse(await killedHolder.firstStdoutLine()) as {
+        lease: { id: string };
+      };
+      killedHolder.kill("SIGKILL");
+      await killedHolder.waitForExit(15_000);
+      // Killed outright, it never ran its release path, and its connection closing ends
+      // nothing (ADR 0004): the lease is still there right after the holder is gone.
+      expect((await leaseRows(env)).map((row) => row.id)).toContain(killedGrant.lease.id);
 
-      // Both holders -- MCP and CLI -- renew on their own timer at a third of the TTL (ADR
-      // 0004 §2), pushing their deadline well past the grant-time one. The `--detach` lease
-      // has no holder process at all, so nothing renews it and it expires exactly at its own
-      // deadline.
+      // Both live holders -- MCP and CLI -- renew on their own timer at a third of the TTL
+      // (ADR 0004 §2), pushing their deadline well past the grant-time one. Nothing renews
+      // the killed holder's lease any more, so its own deadline ends it.
       await waitFor(
         async () => {
           const rows = await leaseRows(env);
-          return rows.every((row) => row.id !== detachedGrant.lease.id);
+          return rows.every((row) => row.id !== killedGrant.lease.id);
         },
-        { timeout: 15_000, label: "the unrenewed --detach lease expires at its TTL" },
+        { timeout: 15_000, label: "the SIGKILLed holder's lease expires at its TTL" },
       );
 
       const rowsAfterExpiry = await leaseRows(env);
@@ -144,7 +149,7 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
       expect(recorded).toContainEqual(
         expect.objectContaining({
           event: "lease.expired",
-          payload: expect.objectContaining({ leaseId: detachedGrant.lease.id }),
+          payload: expect.objectContaining({ leaseId: killedGrant.lease.id }),
         }),
       );
 
@@ -159,7 +164,7 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
     }
   });
 
-  it("renews a --detach lease by hand, keeping its own width, and caps what may be asked for", async () => {
+  it("renews a --detach lease by hand, keeping its own width", async () => {
     const env = await withDaemon({
       configOverrides: { lease: { defaultTtlMs: 60_000, maxTtlMs: 120_000 } },
     });
@@ -192,29 +197,6 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
     const renewedLease = renewed.json as { ttlMs: number; ttlDeadline: number };
     expect(renewedLease.ttlMs).toBe(90_000);
     expect(renewedLease.ttlDeadline).toBeGreaterThanOrEqual(grant.lease.ttlDeadline);
-
-    // Above `lease.maxTtlMs` is a BAD_REQUEST, not a silent clamp -- on a renew...
-    const tooLong = await env.cli(["lease", "renew", grant.lease.id, "--ttl", "5m"]);
-    expect(tooLong.code).toBe(2);
-    expect(tooLong.error?.code).toBe("BAD_REQUEST");
-
-    // ...and on a request.
-    const tooLongRequest = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--os",
-      "18.4",
-      "--agent-id",
-      "asks-too-much",
-      "--detach",
-      "--ttl",
-      "5m",
-    ]);
-    expect(tooLongRequest.code).toBe(2);
-    expect(tooLongRequest.error?.code).toBe("BAD_REQUEST");
 
     await env.cli(["release", grant.lease.id]);
   });

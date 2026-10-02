@@ -8,7 +8,7 @@ interface McpErrorPayload {
 }
 
 describe("MCP session semantics", () => {
-  it("exercises all four tools, and streams strictly increasing progress with human messages", async () => {
+  it("exercises all four tools, streams strictly increasing progress with human messages, and its lease is the one the CLI lists", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -52,6 +52,14 @@ describe("MCP session semantics", () => {
         held: true,
         id: leased.lease.id,
       });
+
+      // The CLI frontend must see the exact same lease, keyed by the same requester id.
+      const cliLeases = await env.cli(["list", "--leases"]);
+      expect(cliLeases.json).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: leased.lease.id, requesterId: "flow7-tools" }),
+        ]),
+      );
 
       const released = await mcp.client.callTool({
         name: "release_simulator",

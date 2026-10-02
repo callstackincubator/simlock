@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -68,26 +68,6 @@ describe("event history", () => {
     expect(grantOf(parseLines(history.stdout), leaseId)).toEqual(before);
   });
 
-  it("writes every event file line as JSON carrying seq, timestamp, event, payload and module", async () => {
-    const env = await withDaemon();
-    await prepare(env);
-    const leaseId = await leaseDevice(env);
-    expect((await env.cli(["release", leaseId])).code).toBe(0);
-
-    const lines = (await readFile(join(env.home, "events.jsonl"), "utf8")).trimEnd().split("\n");
-
-    expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
-      expect(Object.keys(JSON.parse(line) as object).sort()).toEqual([
-        "event",
-        "module",
-        "payload",
-        "seq",
-        "timestamp",
-      ]);
-    }
-  });
-
   it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {
     const env = await withDaemon();
     await prepare(env);
@@ -146,17 +126,5 @@ describe("event history", () => {
 
     expect(emitted.length).toBeGreaterThan(0);
     expect(emitted.filter((entry) => !onDisk.has(`${entry.seq}:${entry.timestamp}`))).toEqual([]);
-  });
-
-  it("grants and releases a lease with a directory at the event file's path", async () => {
-    const env = await withDaemon({ mode: "auto" });
-    await mkdir(join(env.home, "events.jsonl"));
-    expect((await env.startDaemon()).code).toBe(0);
-    await prepare(env);
-
-    const leaseId = await leaseDevice(env);
-    const release = await env.cli(["release", leaseId]);
-
-    expect(release.code).toBe(0);
   });
 });

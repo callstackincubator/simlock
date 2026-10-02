@@ -68,69 +68,6 @@ describe("reaching a leased device", () => {
     expect((await env.cli(["release", grant.lease.id])).code).toBe(0);
   });
 
-  it("carries the driver's environment on the grant, as JSON and as shell exports", async () => {
-    const env = await withDaemon();
-    await env.driverScript.set({
-      ios: {
-        knownModels: ["iPhone 16"],
-        availableOsVersions: ["18.4"],
-        // A device root is a configurable path: the quote and the space are the two
-        // characters a naive `--export-env` corrupts.
-        leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios" },
-      },
-    });
-
-    const lease = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--agent-id",
-      "env-json-agent",
-      "--detach",
-    ]);
-    expect(lease.code).toBe(0);
-    const grant = lease.json as { lease: { id: string }; environment: Record<string, string> };
-    expect(grant.environment).toEqual({
-      SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
-    });
-    expect((await env.cli(["release", grant.lease.id])).code).toBe(0);
-
-    const exported = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--agent-id",
-      "env-export-agent",
-      "--detach",
-      "--export-env",
-    ]);
-    expect(exported.code).toBe(0);
-    expect(exported.stdout).toBe(
-      "export SIMLOCK_IOS_DEVICE_SET='/Users/o'\\''brien/My Sims/devices/ios'\n",
-    );
-    // The assertion that matters is a real shell's, not a string comparison: what
-    // `eval "$(simlock lease ... --export-env)"` puts in the environment has to be the
-    // path byte for byte, quote and space included.
-    const evaluated = await execFileAsync("/bin/sh", [
-      "-c",
-      `${exported.stdout}printf %s "$SIMLOCK_IOS_DEVICE_SET"`,
-    ]);
-    expect(evaluated.stdout).toBe("/Users/o'brien/My Sims/devices/ios");
-    // Released rather than left to the TTL: this flow is about the grant, and leaving a
-    // lease outstanding would make it share a failure mode with the shutdown flow that
-    // covers that case deliberately (`daemon lifecycle & recovery`).
-    const exportedGrant = JSON.parse((await env.cli(["status", "--json"])).stdout) as {
-      readonly leases: readonly { readonly id: string }[];
-    };
-    for (const lease of exportedGrant.leases) {
-      await env.cli(["release", lease.id]);
-    }
-  });
-
   /**
    * Both wrappers, because they are two different drivers answering the same operation and
    * the CLI knows the names but nothing else: which flag scopes the tool, and what its

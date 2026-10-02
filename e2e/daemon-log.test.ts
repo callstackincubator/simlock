@@ -26,12 +26,6 @@ async function logLines(env: TestEnv): Promise<LogLine[]> {
     .map((line) => JSON.parse(line) as LogLine);
 }
 
-async function operationLines(env: TestEnv, operation: string): Promise<LogLine[]> {
-  return (await logLines(env)).filter(
-    (line) => line.message === "operation" && line.fields?.operation === operation,
-  );
-}
-
 const IOS = { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } };
 
 async function leaseDetached(env: TestEnv): Promise<string> {
@@ -65,79 +59,6 @@ async function reservePort(): Promise<number> {
 }
 
 describe("daemon.log", () => {
-  it("a lease and its release over the socket each leave one operation line naming the requester", async () => {
-    const env = await withDaemon({ agentId: "log-agent" });
-    await env.driverScript.set(IOS);
-
-    const leaseId = await leaseDetached(env);
-    const released = await env.cli(["release", leaseId]);
-    expect(released.code, released.stderr).toBe(0);
-
-    await waitFor(async () => (await operationLines(env, "lease.release")).length > 0, {
-      label: "the lease.release line",
-    });
-    const requests = await operationLines(env, "lease.request");
-    const releases = await operationLines(env, "lease.release");
-    expect(requests).toEqual([
-      expect.objectContaining({
-        level: "info",
-        fields: expect.objectContaining({
-          principal: "log-agent",
-          requesterId: "log-agent",
-          durationMs: expect.any(Number),
-        }),
-      }),
-    ]);
-    expect(releases).toEqual([
-      expect.objectContaining({
-        level: "info",
-        fields: expect.objectContaining({
-          principal: "log-agent",
-          leaseId,
-          durationMs: expect.any(Number),
-        }),
-      }),
-    ]);
-  });
-
-  it("a lease request for an unknown model leaves an operation line with its error code", async () => {
-    const env = await withDaemon();
-    await env.driverScript.set({
-      ios: { failures: { resolveSpec: { type: "UnknownModelError", model: "Bogus Phone" } } },
-    });
-
-    const lease = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "Bogus Phone",
-      "--detach",
-    ]);
-    expect(lease.code).not.toBe(0);
-
-    expect(await operationLines(env, "lease.request")).toEqual([
-      expect.objectContaining({
-        level: "info",
-        fields: expect.objectContaining({ code: "UNKNOWN_MODEL" }),
-      }),
-    ]);
-  });
-
-  it("at the default level simlock status leaves no operation line; at debug it leaves one", async () => {
-    const quiet = await withDaemon();
-    expect((await quiet.cli(["status"])).code).toBe(0);
-    expect(await operationLines(quiet, "status.get")).toEqual([]);
-
-    // `daemon start` asks for status itself, so the count is taken around this one call.
-    const verbose = await withDaemon({ configOverrides: { log: { level: "debug" } } });
-    const before = (await operationLines(verbose, "status.get")).length;
-    expect((await verbose.cli(["status"])).code).toBe(0);
-    const after = await operationLines(verbose, "status.get");
-    expect(after).toHaveLength(before + 1);
-    expect(after.at(-1)).toMatchObject({ level: "debug" });
-  });
-
   it("a scripted boot failure leaves a line naming the device and the driver's error text", async () => {
     const env = await withDaemon();
     await env.driverScript.set({

@@ -146,8 +146,8 @@ describe("readLogFile", () => {
  * `daemon/dispatcher.test.ts`, and `SimlockClientImpl`'s own suite in
  * `simlock-client/client.test.ts`; re-asserting it a third time through the CLI tested only that
  * this module still calls `client.foo()`, which the TypeScript compiler already guarantees
- * against `SimlockAdminClient`'s interface. `--bind-pid`/parent-watch termination races are not
- * covered by any suite in `pnpm run test` -- they survive only in the real-hardware e2e lanes.
+ * against `SimlockAdminClient`'s interface. `--bind-pid`/parent-watch termination is covered
+ * across real processes by the fast e2e lane (`e2e/parent-watch.test.ts`), not here.
  */
 describe("CLI: exit codes", () => {
   it.each([
