@@ -364,7 +364,99 @@ describe("ComponentInstaller", () => {
       { percent: 0, stage: "downloading" },
       { percent: 100, stage: "downloading" },
       { percent: 41.7, stage: "downloading" },
+      // The install succeeded with its last report below 100.
+      { percent: 100, stage: "downloading" },
     ]);
+  });
+
+  describe("final report of a successful install", () => {
+    /**
+     * Everything one call hears, in order, with `settled: <outcome>` or `failed` appended when
+     * its promise settles: the driver of iOS reports `installProgress`, and `failAfterProgress`
+     * makes it throw once it has reported.
+     */
+    async function heardUntilSettled(
+      component: string,
+      installProgress: readonly number[],
+      driverOptions: { readonly availableOsVersions?: readonly string[] } = {},
+      failAfterProgress = false,
+    ): Promise<unknown[]> {
+      class FailingDriver extends FakeDriver {
+        override async installComponent(
+          installed: string,
+          options: Parameters<FakeDriver["installComponent"]>[1],
+        ): ReturnType<FakeDriver["installComponent"]> {
+          for (const percent of installProgress)
+            options.onProgress({ percent, stage: "downloading" });
+          throw new DriverCrashError(`installing ${installed} failed`);
+        }
+      }
+      const Driver = failAfterProgress ? FailingDriver : FakeDriver;
+      const harness = await createHarness({
+        drivers: (clock) => [
+          new Driver({
+            availableOsVersions: driverOptions.availableOsVersions ?? [],
+            clock,
+            installProgress,
+            platform: "ios",
+          }),
+        ],
+      });
+      const heard: unknown[] = [];
+      await harness.installer
+        .install(ios(component, { onProgress: (report) => heard.push(report) }))
+        .then(
+          (outcome) => heard.push(`settled: ${outcome.outcome}`),
+          () => heard.push("failed"),
+        );
+      return heard;
+    }
+
+    it("reports 100 before it settles as installed when the driver last reported 99.3", async () => {
+      await expect(heardUntilSettled("27.0", [12, 99.3])).resolves.toEqual([
+        { stage: "downloading" },
+        { percent: 12, stage: "downloading" },
+        { percent: 99.3, stage: "downloading" },
+        { percent: 100, stage: "downloading" },
+        "settled: installed",
+      ]);
+    });
+
+    it("reports 100 before it settles as installed when the driver reported nothing", async () => {
+      await expect(heardUntilSettled("27.0", [])).resolves.toEqual([
+        { stage: "downloading" },
+        { percent: 100, stage: "downloading" },
+        "settled: installed",
+      ]);
+    });
+
+    it("does not report 100 twice when the driver already reported 100", async () => {
+      await expect(heardUntilSettled("27.0", [50, 100])).resolves.toEqual([
+        { stage: "downloading" },
+        { percent: 50, stage: "downloading" },
+        { percent: 100, stage: "downloading" },
+        "settled: installed",
+      ]);
+    });
+
+    it("reports no final 100 for a failed install", async () => {
+      await expect(heardUntilSettled("27.0", [40], {}, true)).resolves.toEqual([
+        { stage: "downloading" },
+        { percent: 40, stage: "downloading" },
+        "failed",
+      ]);
+    });
+
+    it("reports no final 100 for an install that ends already-installed", async () => {
+      // `latest` is never found before the install runs; the driver then finds 26.5 there.
+      await expect(
+        heardUntilSettled("latest", [40], { availableOsVersions: ["26.5"] }),
+      ).resolves.toEqual([
+        { stage: "downloading" },
+        { percent: 40, stage: "downloading" },
+        "settled: already-installed",
+      ]);
+    });
   });
 
   it("still lists a running install as downloading and one behind it as waiting after a call joined the running one", async () => {
@@ -835,7 +927,11 @@ describe("ComponentInstaller", () => {
 
     expect(throwing).toMatchObject({ status: "fulfilled" });
     expect(listening).toMatchObject({ status: "fulfilled" });
-    expect(heard).toEqual([{ stage: "downloading" }, { percent: 50, stage: "downloading" }]);
+    expect(heard).toEqual([
+      { stage: "downloading" },
+      { percent: 50, stage: "downloading" },
+      { percent: 100, stage: "downloading" },
+    ]);
   });
 
   it.each([
