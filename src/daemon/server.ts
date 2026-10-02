@@ -47,6 +47,7 @@ import {
   Dispatcher,
   DispatchError,
   type ContractDispatcher,
+  type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
 import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
@@ -163,6 +164,8 @@ export interface DaemonServerEngineOptions {
    * `DispatcherOptions.execEnv`). */
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
+  /** What a device's `stalled` flag is worked out from; see `DispatcherOptions.stalls`. */
+  readonly stalls?: DispatcherOptions["stalls"];
   /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
   readonly tokens?: TokenStore;
 }
@@ -311,6 +314,7 @@ function buildDispatcher(
     queue: options.queue,
     reaper: options.reaper,
     registry: options.registry,
+    ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
     version: options.version,
   });

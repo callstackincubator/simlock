@@ -48,6 +48,12 @@ export function Shell() {
             <li key={entry.path}>
               <Link to={entry.path} aria-current={entry === view ? "page" : undefined}>
                 {entry.label}
+                {entry.Badge === undefined ? null : (
+                  <>
+                    {" "}
+                    <entry.Badge />
+                  </>
+                )}
               </Link>
             </li>
           ))}

@@ -9,8 +9,8 @@ The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 This version has sign-in, the console's navigation (Workers, Leases, Waiting,
-Attention and Events), the Workers pages and the Waiting page. The other
-pages say "Coming soon" until their views are built.
+Attention and Events), the Workers pages, the Waiting page and the Attention
+page. The other pages say "Coming soon" until their views are built.
 
 ## Turn it on
 
@@ -146,6 +146,33 @@ host every request shows that host as its worker.
 
 A request leaves the list as soon as it gets its device, fails, or is
 cancelled.
+
+## Attention
+
+**Attention** lists everything that needs you, in one place. Each item names
+its worker and links to that worker's page. An item leaves the list as soon as
+its condition clears. The console only shows these; it does not fix them.
+
+| Item | What it means |
+| --- | --- |
+| `disconnected` | The gateway has lost its connection to the worker. |
+| `incompatible` | The worker and the gateway have no protocol version in common. The worker's page says which versions each speaks. |
+| `drained` | The worker gets no new leases (`simlock worker drain`). |
+| `over RAM budget` | The devices on the worker use more RAM than its budget allows, as `simlock status` reports with `(over limit)`. |
+| `quarantined` | A device Simlock could not clean up. It retries the cleanup in the background and leases the device to no one meanwhile. |
+| `stalled` | A device stuck `provisioning` or `reclaiming` for longer than it should take, with nothing working on it. `simlock doctor` reports the same devices. |
+
+The first three come from a gateway only: a single host has no gateway to lose
+or disagree with, and cannot be drained. The other three show on a single host
+too.
+
+The navigation shows how many items there are beside **Attention**, on every
+page. It shows no number while there are none.
+
+Each item shows within about a second of the daemon reporting it. A stalled
+device is the exception on a gateway: a device becomes stalled when its time
+runs out, not by anything happening, so the gateway sees it the next time it
+reads that worker, which it does at least every 30 seconds.
 
 ## Live updates
 

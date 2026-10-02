@@ -322,6 +322,26 @@ input[aria-invalid="true"] {
   color: var(--text);
 }
 
+/* A count beside a view's name, such as how many items need attention. A number, not a status:
+   no status colour, and never the accent. */
+.nav-count {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .main {
   grid-area: main;
   min-width: 0;
@@ -396,6 +416,35 @@ input[aria-invalid="true"] {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-4);
+}
+
+/* The attention list: one line per item, its status first. */
+
+.attention-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.attention-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.attention-list .status {
+  flex: none;
+  min-width: 10rem;
+}
+
+.attention-list .status + span {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
 /* Cards: one per worker. */

@@ -1065,7 +1065,12 @@ the background, and is never handed to a new requester.
 A device currently `provisioning` or `reclaiming` carries a derived
 `transitionAgeMs` — how long it has been in that state — visible in `status`
 and `list --devices` well before it crosses the threshold that would make
-`doctor` flag it as stalled.
+`doctor` flag it as stalled. Once it crosses it, with nothing working on it,
+`status` marks it `stalled`
+(`Device dev_7: provisioning, mode full (mid-transition 412000ms, stalled)`),
+and `--json` and `list --devices` carry `"stalled": true` on it. These are the
+devices `doctor` reports as `stalled-transition`; no other device carries the
+field.
 
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see

@@ -5,7 +5,7 @@ import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
-import { Doctor, type DoctorFinding, type DoctorReport } from "./doctor.js";
+import { Doctor, type DoctorFinding, type DoctorReport, isStalledTransition } from "./doctor.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -719,6 +719,140 @@ describe("Doctor", () => {
   });
 
   describe("stalled transitions", () => {
+    it("isStalledTransition holds for a provisioning device past its threshold with no claim", async () => {
+      const clock = new FakeClock(10_000);
+      const registry = await loadRegistry(clock, new EventBus(clock));
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "simlock-stuck",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      const stalled = (now: number) =>
+        isStalledTransition({
+          claims: new DeviceOperationClaims(),
+          config: config().stalledTransition,
+          device,
+          driver,
+          now,
+        });
+
+      // threshold = (provision 1_000 + boot 2_000) * thresholdMultiplier 3 = 9_000
+      expect(stalled(10_000 + 9_000)).toBe(false);
+      expect(stalled(10_000 + 9_001)).toBe(true);
+      // No driver for the platform: nothing to measure against, so no stall.
+      expect(
+        isStalledTransition({
+          claims: undefined,
+          config: config().stalledTransition,
+          device,
+          driver: undefined,
+          now: 10_000 + 9_001,
+        }),
+      ).toBe(false);
+    });
+
+    it("isStalledTransition does not hold for a device with a live operation claim", async () => {
+      const clock = new FakeClock(10_000);
+      const registry = await loadRegistry(clock, new EventBus(clock));
+      const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
+      const device = await readyDevice(registry, "simlock-erasing", "ios");
+      const lease = await registry.createLease({
+        deviceId: device.id,
+        requesterId: "agent",
+        ownerId: "agent",
+        ttlMs: 60_000,
+        ttlDeadline: 999_999,
+      });
+      await registry.beginRelease(lease.id);
+      const reclaiming = registry.snapshot.devices.find((entry) => entry.id === device.id);
+      expect(reclaiming?.state).toBe("reclaiming");
+      const claims = new DeviceOperationClaims();
+      const claim = claims.tryClaim(device.id, "reclaim");
+      const stalled = () =>
+        isStalledTransition({
+          claims,
+          config: config().stalledTransition,
+          device: reclaiming ?? device,
+          driver,
+          // Far past the reclaim threshold (2_000 * 3).
+          now: clock.now() + 600_000,
+        });
+
+      expect(stalled()).toBe(false);
+      // The same device, the same age, is a stall once no live operation accounts for it.
+      claim?.release();
+      expect(stalled()).toBe(true);
+    });
+
+    it("the doctor's stalled-transition finding is unchanged", async () => {
+      // The finding a stalled provisioning device and a stalled reclaiming device produced
+      // before the stall test became `isStalledTransition`, field for field, and none a moment
+      // before each threshold.
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await loadRegistry(clock, eventBus);
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000, reclaim: 4_000 },
+        platform: "ios",
+      });
+      const provisioning = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "simlock-stuck",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      const leased = await readyDevice(registry, "simlock-erasing", "ios");
+      const lease = await registry.createLease({
+        deviceId: leased.id,
+        requesterId: "agent",
+        ownerId: "agent",
+        ttlMs: 60_000,
+        ttlDeadline: 999_999,
+      });
+      await registry.beginRelease(lease.id);
+      const doctor = new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry });
+      const stalls = async () =>
+        (await doctor.reconcile()).findings.filter(
+          (finding) => finding.kind === "stalled-transition",
+        );
+
+      // Provisioning threshold: (1_000 + 2_000) * 3 = 9_000. Reclaim: 4_000 * 3 = 12_000.
+      clock.advance(9_000);
+      expect(await stalls()).toEqual([]);
+      clock.advance(1);
+      expect(await stalls()).toEqual([
+        {
+          ageMs: 9_001,
+          deviceId: provisioning.id,
+          enteredAt: 10_000,
+          kind: "stalled-transition",
+          platform: "ios",
+          state: "provisioning",
+          thresholdMs: 9_000,
+        },
+      ]);
+      clock.advance(3_000);
+      expect(await stalls()).toEqual([
+        expect.objectContaining({ deviceId: provisioning.id }),
+        {
+          ageMs: 12_001,
+          deviceId: leased.id,
+          enteredAt: 10_000,
+          kind: "stalled-transition",
+          platform: "ios",
+          state: "reclaiming",
+          thresholdMs: 12_000,
+        },
+      ]);
+    });
+
     it("reports a stalled-transition finding for a provisioning device past its driver-derived threshold", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);

@@ -283,6 +283,7 @@ async function buildDispatcher(
     queue: engine,
     reaper,
     registry,
+    stalls: { claims: engine.claimReader, drivers: [driver] },
     tokens,
     version: "1.2.3",
   });
@@ -1133,6 +1134,44 @@ describe("Dispatcher: device mode on every surface", () => {
     expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
       expected,
     );
+  });
+
+  it("status marks a stalled device with stalled: true and leaves others without it", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher();
+    const leased = await dispatcher.dispatch("lease.request", request, session());
+    const register = (driverDeviceId: string) =>
+      registry.registerDevice({
+        driverData: {},
+        driverDeviceId,
+        provisionDuration: 0,
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      });
+    const stuck = await register("driver-stuck");
+    // The fake driver estimates 0, so the threshold is the 60 s floor. The stuck device is past
+    // it; the fresh one, provisioning too, is not.
+    clock.advance(60_001);
+    const fresh = await register("driver-fresh");
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const list = (await dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
+    )) as { id: string; stalled?: boolean }[];
+    const { workers } = await dispatcher.dispatch(
+      "worker.list",
+      {},
+      session({ principal: "operator", role: "admin" }),
+    );
+
+    for (const devices of [status.devices, list, workers[0]?.devices ?? []]) {
+      const byId = new Map(devices.map((device) => [device.id, device]));
+      expect(byId.get(stuck.id)?.stalled).toBe(true);
+      expect(byId.get(fresh.id)).toBeDefined();
+      expect(byId.get(fresh.id)).not.toHaveProperty("stalled");
+      expect(byId.get(leased.device.id)).toBeDefined();
+      expect(byId.get(leased.device.id)).not.toHaveProperty("stalled");
+    }
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {

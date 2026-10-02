@@ -10,9 +10,12 @@ import {
   type DeviceRecord,
   type DeviceRequest,
   type Doctor,
+  type Driver,
   type HostFacts,
+  isStalledTransition,
   type Nuke,
   type Registry,
+  type StallInput,
   effectiveAllowDownload,
   RuntimeMissingError,
   transitionEnteredAt,
@@ -129,6 +132,17 @@ export interface DispatcherOptions {
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
+  /**
+   * What the `stalled` flag `status.get` and `list.get` put on a device is worked out from
+   * (`isStalledTransition`, with `config.stalledTransition` and the clock): the drivers this
+   * daemon runs, and its device operation claims, so a live operation is never read as a
+   * stall. Optional so the tests that never stall a device need not fabricate either; absent,
+   * no device is flagged.
+   */
+  readonly stalls?: {
+    readonly drivers: readonly Pick<Driver, "estimate" | "platform">[];
+    readonly claims: NonNullable<StallInput["claims"]>;
+  };
   /**
    * ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
    * owner of tokens.json." Optional so tests that don't exercise `token.*` (the overwhelming
@@ -804,11 +818,34 @@ export class Dispatcher {
     return this.options.tokens;
   }
 
-  /** Moved verbatim from `DaemonServer`; see its former comment there. */
-  #decorateDevice(device: DeviceRecord): DeviceRecord & { readonly transitionAgeMs?: number } {
+  /**
+   * A device as `status.get` and `list.get` report it: with `transitionAgeMs` while it is
+   * mid-transition, and `stalled: true` once that transition is a stall by the rule `doctor`
+   * reports (`isStalledTransition`). A device that is not stalled carries no `stalled` at all.
+   */
+  #decorateDevice(
+    device: DeviceRecord,
+  ): DeviceRecord & { readonly transitionAgeMs?: number; readonly stalled?: true } {
     const enteredAt = transitionEnteredAt(device);
     if (enteredAt === undefined) return device;
-    return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
+    const now = this.options.clock.now();
+    return {
+      ...device,
+      transitionAgeMs: now - enteredAt,
+      ...(this.#isStalled(device, now) ? { stalled: true as const } : {}),
+    };
+  }
+
+  #isStalled(device: DeviceRecord, now: number): boolean {
+    const stalls = this.options.stalls;
+    if (stalls === undefined) return false;
+    return isStalledTransition({
+      claims: stalls.claims,
+      config: this.options.config.stalledTransition,
+      device,
+      driver: stalls.drivers.find((driver) => driver.platform === device.spec.platform),
+      now,
+    });
   }
 }
 

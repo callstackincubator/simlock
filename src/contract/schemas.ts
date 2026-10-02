@@ -83,6 +83,9 @@ export const deviceRecordSchema = z.object({
   leaseIdentity: leaseIdentitySchema.optional(),
   /** Decoration added by `status.get`/`list.get`; absent for a device not mid-transition. */
   transitionAgeMs: z.number().optional(),
+  /** Decoration added by `status.get`/`list.get`: `true` for a device whose transition is a
+   * stall by the rule `doctor` reports; absent otherwise. */
+  stalled: z.boolean().optional(),
 });
 
 /**
@@ -106,6 +109,8 @@ export const deviceRecordSchema = z.object({
  * - `quarantineAttempts`, `quarantineNextRetryAt`: surfaced as purge-retry progress for a
  *   quarantined device, so a caller waiting on capacity can see why a slot isn't freeing up.
  * - `transitionAgeMs`: the mid-transition decoration, surfaced as "mid-transition <ms>".
+ * - `stalled`: the stall decoration, surfaced as "stalled": a caller waiting on capacity can see
+ *   that a slot is held by a transition that is not finishing.
  *
  * What stays off, and why: `driverDeviceId` (the driver address of a device the caller does
  * not hold is not actionable -- a non-owning agent cannot drive it, and a holder already gets
@@ -130,6 +135,13 @@ export const statusDeviceSchema = z.object({
   quarantineNextRetryAt: z.number().optional(),
   /** Decoration added by `status.get`; absent for a device not mid-transition. */
   transitionAgeMs: z.number().optional(),
+  /**
+   * Decoration added by `status.get`: `true` for a device stuck `provisioning` or `reclaiming`
+   * past its threshold, by the rule `doctor`'s `stalled-transition` finding uses; absent for
+   * every other device. A worker view copies it, so a gateway reports a worker's stall as the
+   * worker does.
+   */
+  stalled: z.boolean().optional(),
   /**
    * ADR 0005 §20: which worker this device lives on. Additive and gateway-only -- a worker
    * answers `status.get` about its own devices and has no second machine to name, so it never

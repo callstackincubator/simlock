@@ -316,6 +316,33 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("a gateway's worker view carries a worker device's stalled flag", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.devices = [
+      {
+        ...deviceFixture("dev_stuck"),
+        state: "provisioning" as const,
+        createdAt: 1,
+        driverData: {},
+        stalled: true,
+        transitionAgeMs: 120_000,
+      },
+      { ...deviceFixture("dev_ready", "ready"), createdAt: 1, driverData: {} },
+    ];
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
+
+    const [stuck, ready] = harness.service.workers.view("wrk_1")?.devices ?? [];
+    expect(stuck).toMatchObject({ id: "dev_stuck", stalled: true });
+    expect(ready?.id).toBe("dev_ready");
+    expect(ready).not.toHaveProperty("stalled");
+
+    await harness.service.stop();
+  });
+
   it("republishes a worker's events with its workerId, into its own ring buffer", async () => {
     const harness = fleet();
     await harness.service.start();
