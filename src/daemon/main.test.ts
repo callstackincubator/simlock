@@ -173,6 +173,7 @@ describe("startDaemon", () => {
     // the ring and the file, so "absent" below means redacted, not never written.
     expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
     expect(eventFile).toContain('"daemon.started"');
+    expect(JSON.stringify(replayed)).toContain('"daemon.started"');
     expect({
       daemonLog: JSON.stringify(sink.records).includes(secret),
       eventsReplay: JSON.stringify(replayed).includes(secret),
