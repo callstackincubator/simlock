@@ -16,7 +16,7 @@ import {
   type Platform,
   sameSpec,
 } from "./domain.js";
-import type { ComponentInstaller } from "./component-installer.js";
+import type { ComponentInstaller, ComponentInstallerProgress } from "./component-installer.js";
 import {
   BootTimeoutError,
   type DeviceRequest,
@@ -34,6 +34,7 @@ import { type SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 import {
   type LeaseGrant,
+  type LeaseProgress,
   type LeaseRequestOptions,
   type LeaseTiming,
   RequestCancelledError,
@@ -278,7 +279,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
       const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
-      const resolved = await this.#resolveOrInstall(driver, { ...request, mode }, options);
+      const resolved = await this.#resolveOrInstall(waiter, driver, { ...request, mode }, options);
       // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
       // driver that returns the wrong thing still cannot put a full request on a slim device.
       waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
@@ -298,8 +299,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * the install when, by the time this call reaches the front of its queue, `resolveSpec` no
    * longer fails with `RuntimeMissingError` -- another install made the runtime available.
    * Without `allowDownload` the first failure stands and the installer is never called.
+   *
+   * The installer's reports reach the requester as the `downloading` stage, through the queue
+   * like every other stage. A report equal to the last one sent is skipped, so a percentage is
+   * sent once per whole number.
    */
   async #resolveOrInstall(
+    waiter: AcquisitionWaiter,
     driver: Driver,
     request: DeviceRequest,
     options: LeaseRequestOptions,
@@ -315,8 +321,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       ) {
         throw error;
       }
+      const { component } = error;
+      let lastSent: DownloadingProgress | undefined;
       await this.options.components.install({
-        component: error.component,
+        component,
+        onProgress: (progress) => {
+          const next = downloadingProgress(component, progress);
+          if (lastSent !== undefined && sameDownloadingProgress(lastSent, next)) return;
+          lastSent = next;
+          this.options.queue.notifyProgress(waiter, next);
+        },
         platform: request.platform,
         requesterId: options.requesterId,
         stillNeeded: async () => {
@@ -789,4 +803,27 @@ function fullSpec(spec: DeviceSpec): DeviceSpec {
   if (spec.mode === undefined) return spec;
   const { mode: _mode, ...full } = spec;
   return full;
+}
+
+type DownloadingProgress = Extract<LeaseProgress, { readonly stage: "downloading" }>;
+
+/**
+ * The installer's report in the requester's words. `waiting` is a request still behind another
+ * install; `downloading` is its own install running, with the installer's percentage (already
+ * within 0..100) rounded down to a whole number.
+ */
+function downloadingProgress(
+  component: string,
+  progress: ComponentInstallerProgress,
+): DownloadingProgress {
+  if (progress.stage === "waiting") return { component, stage: "downloading", waiting: true };
+  const { percent } = progress;
+  return percent === undefined
+    ? { component, stage: "downloading", waiting: false }
+    : { component, percent: Math.floor(percent), stage: "downloading", waiting: false };
+}
+
+/** Both reports are for the one component a `#resolveOrInstall` call downloads. */
+function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
+  return left.waiting === right.waiting && left.percent === right.percent;
 }

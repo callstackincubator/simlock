@@ -174,6 +174,12 @@ export type RequestLeaseOutcome =
 
 type LeaseProgressLike =
   | { readonly stage: "queued"; readonly queuePosition: number }
+  | {
+      readonly stage: "downloading";
+      readonly component: string;
+      readonly waiting: boolean;
+      readonly percent?: number | undefined;
+    }
   | { readonly stage: "provisioning"; readonly etaMs: number }
   | { readonly stage: "booting"; readonly etaMs: number }
   | { readonly stage: "reclaiming"; readonly etaMs: number };

@@ -77,6 +77,7 @@ export function buildLeasePayload(
 
 export type RequestSnapshot =
   | { readonly stage: "queued"; readonly queuePosition: number }
+  | DownloadingProgress
   | { readonly stage: "reclaiming"; readonly etaSeconds: number }
   | { readonly stage: "provisioning"; readonly etaSeconds: number }
   | { readonly stage: "booting"; readonly etaSeconds: number }
@@ -325,11 +326,20 @@ export class LeaseRequestTracker {
   }
 }
 
+/** A request waiting on a component download: the same fields on the wire and in the resource. */
+interface DownloadingProgress {
+  readonly stage: "downloading";
+  readonly component: string;
+  readonly waiting: boolean;
+  readonly percent?: number | undefined;
+}
+
 /** Structural subset of `LeaseProgress` (`src/core/wait-queue.ts`) -- this module only ever
  * receives it through a dispatched `lease.request`'s session `onProgress` override, never
  * imports the core type directly. */
 type HttpLeaseProgress =
   | { readonly stage: "queued"; readonly queuePosition: number }
+  | DownloadingProgress
   | { readonly stage: "provisioning"; readonly etaMs: number }
   | { readonly stage: "booting"; readonly etaMs: number }
   | { readonly stage: "reclaiming"; readonly etaMs: number };
@@ -388,8 +398,22 @@ function toSnapshot(
   }
   // Open with no progress reported yet: the request is admitted and about to queue.
   if (progress === undefined) return { queuePosition: 1, stage: "queued" };
+  return openSnapshot(progress);
+}
+
+/** An open request's state, from the progress its live wait last reported. */
+function openSnapshot(progress: HttpLeaseProgress): RequestSnapshot {
   if (progress.stage === "queued")
     return { queuePosition: progress.queuePosition, stage: "queued" };
+  if (progress.stage === "downloading") {
+    const { component, percent, waiting } = progress;
+    return {
+      component,
+      stage: "downloading",
+      waiting,
+      ...(percent === undefined ? {} : { percent }),
+    };
+  }
   return { etaSeconds: toSeconds(progress.etaMs), stage: progress.stage };
 }
 

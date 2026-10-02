@@ -1358,6 +1358,9 @@ describe("Dispatcher: component.install", () => {
     );
 
     expect(progress).toEqual([
+      // The install's start, before the driver reports anything.
+      { stage: "downloading" },
+      // The driver's NaN, with its fraction left out.
       { stage: "downloading" },
       { fraction: 0, stage: "downloading" },
       { fraction: 0.5, stage: "downloading" },
@@ -1389,7 +1392,38 @@ describe("Dispatcher: component.install", () => {
 
     await first;
     await expect(second).resolves.toMatchObject({ outcome: "installed", version: "28.0" });
-    expect(progress).toEqual([{ stage: "waiting" }, { fraction: 0.41, stage: "downloading" }]);
+    expect(progress).toEqual([
+      { stage: "waiting" },
+      { stage: "downloading" },
+      { fraction: 0.41, stage: "downloading" },
+    ]);
+  });
+
+  it("tells a caller that joins an install already running its latest progress while the install is still running", async () => {
+    const { dispatcher, driver } = await buildDispatcher({
+      driverOptions: { installProgress: [41] },
+    });
+    driver.holdInstalls();
+    const first = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    await until(() => installCalls(driver).length === 1, "the first install started");
+
+    const progress: unknown[] = [];
+    const joined = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin({ onComponentProgress: (update) => progress.push(update) }),
+    );
+    await until(() => progress.length === 1, "the joining call heard the latest progress");
+    expect(progress).toEqual([{ fraction: 0.41, stage: "downloading" }]);
+
+    driver.releaseInstalls();
+    await first;
+    await expect(joined).resolves.toMatchObject({ outcome: "installed", version: "27.0" });
+    expect(installCalls(driver)).toHaveLength(1);
   });
 });
 

@@ -94,8 +94,8 @@ reservation (`InsufficientDiskSpaceError`) emits nothing. `component.installed` 
 the component record is committed to the registry (events rule 3); with `alreadyPresent: true`
 nothing was recorded (ADR 0010 §5). `requesterId` is the requester whose call started the
 install. See "Device requests" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a missing
-component gets to this point, and `docs/internal/KNOWN-PITFALLS.md` for the requester-visible
-progress gap this leaves.
+component gets to this point. The requester hears the install through its own `downloading`
+progress stage, a direct call chain from the installer, not these events (architecture rule 5).
 
 ## System
 

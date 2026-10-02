@@ -218,8 +218,8 @@ granted.
   `component.install-started` and then `component.installed` or
   `component.install-failed` on the event bus once, however many leases share
   it (`simlock events --follow`); see [EVENTS.md](EVENTS.md#components). The
-  requester's own progress stream (below) does not yet reflect an in-flight
-  download.
+  request's own progress stream (below) reports the download as the
+  `downloading` stage.
 - `--mode <slim|full>` — the device mode this lease asks for. Without it, the
   lease gets the default mode of the worker that serves it (`ios.defaultMode`,
   `full` unless configured). `full` is a guarantee: a `full` lease never gets a
@@ -338,6 +338,7 @@ reclaiming work is reported separately:
 
 ```json
 {"push":"progress","stage":"queued","queuePosition":1}
+{"push":"progress","stage":"downloading","component":"26.4","waiting":false,"percent":41}
 {"push":"progress","stage":"provisioning","etaMs":90000}
 {"push":"progress","stage":"booting","etaMs":60000}
 {"push":"progress","stage":"reclaiming","etaMs":34000}
@@ -345,6 +346,18 @@ reclaiming work is reported separately:
 
 `push` is the one field the CLI adds to identify the line's kind; everything
 else is the contract's `LeaseProgress` push, serialized as-is.
+
+`downloading` means the request waits on a download that `--allow-download`
+started or joined, before any device work. `component` names what is being
+downloaded, as the platform names it: an iOS version or an Android API
+level, for example. `waiting` is
+`true` while another download on the same platform runs ahead of this one,
+since a platform downloads one component at a time, and `false` once this
+download runs. `percent`, a whole number from 0 to 100, is there when the
+platform's installer printed one; it is left out at the start of a download
+and for an installer that prints no percentage. A request that joins a
+download already running gets the download's latest line at once. A request
+that needs no download never sees this stage.
 
 `reclaiming` follows `queued` when the device the request is waiting on is
 being purged for its previous holder: the position alone would not say that

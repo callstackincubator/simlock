@@ -706,6 +706,37 @@ describe("operation input/output round trips", () => {
     expect(() => PUSH_SCHEMAS.output.parse({ chunk: "hello", stream: "stdout" })).toThrow();
   });
 
+  it("the progress push carries the downloading stage with its component, whether it waits, and an optional whole percent", () => {
+    const pushes = [
+      { component: "26.4", stage: "downloading", waiting: true },
+      { component: "26.4", percent: 41, stage: "downloading", waiting: false },
+    ];
+    for (const progress of pushes) {
+      expect(PUSH_SCHEMAS.progress.parse({ progress, requestId: 7 })).toEqual({
+        progress,
+        requestId: 7,
+      });
+    }
+  });
+
+  // Each refused push beside the nearest one that is accepted, so the refusal is the bound's.
+  it.each([
+    ["a percent above 100", { percent: 101 }, { percent: 100 }],
+    ["a percent below 0", { percent: -1 }, { percent: 0 }],
+    ["a percent that is not whole", { percent: 41.7 }, { percent: 41 }],
+    [
+      "a component over 64 characters",
+      { component: "x".repeat(65) },
+      { component: "x".repeat(64) },
+    ],
+  ])("refuses a downloading progress push with %s", (_case, outside, inside) => {
+    const base = { component: "26.4", stage: "downloading", waiting: false };
+    const parse = (fields: object) =>
+      PUSH_SCHEMAS.progress.safeParse({ progress: { ...base, ...fields }, requestId: 7 }).success;
+    expect(parse(outside)).toBe(false);
+    expect(parse(inside)).toBe(true);
+  });
+
   it("config.get: round-trips a representative config", () => {
     const config = {
       mode: "worker",

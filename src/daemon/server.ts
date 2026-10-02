@@ -1221,7 +1221,12 @@ export class DaemonServer {
         ...this.#session(connection),
         onProgress: (progress) => {
           if (progressSocket !== undefined) {
-            void this.#pushProgress(progressSocket, requestId, progress);
+            // Progress is advisory: one that does not fit the push contract (a `downloading`
+            // component the driver named past the contract's bound) or a socket that went away
+            // is dropped, and the request carries on to its answer.
+            void this.#pushProgress(progressSocket, requestId, progress).catch(() => {
+              this.#logger.warn("A lease progress push was not sent", { stage: progress.stage });
+            });
           }
         },
       });

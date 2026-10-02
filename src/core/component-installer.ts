@@ -21,8 +21,15 @@ import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 
-/** What a caller hears while its call is open: the driver's own progress, or that it waits. */
-export type ComponentInstallerProgress = ComponentInstallProgress | { readonly stage: "waiting" };
+/**
+ * What a caller hears while its call is open: that it waits behind another install, that its
+ * install has started (`downloading` with no `percent`, before the driver reports anything), or
+ * the driver's own progress, its `percent` within 0..100 or left out when it was not a number.
+ */
+export type ComponentInstallerProgress =
+  | ComponentInstallProgress
+  | { readonly stage: "downloading"; readonly percent?: undefined }
+  | { readonly stage: "waiting" };
 
 export interface ComponentInstallRequest {
   readonly platform: Platform;
@@ -133,6 +140,8 @@ interface Install {
   readonly since: number;
   state: InstallState;
   abort: AbortController | undefined;
+  /** The last report its calls heard since it started running, told at once to a call that joins. */
+  latest: ComponentInstallerProgress | undefined;
 }
 
 interface InstallCall {
@@ -198,6 +207,7 @@ export class ComponentInstaller {
         // An observer, like `onProgress`: a throw there must not reach the install.
       }
       if (queue[0] !== install) notify(call, { stage: "waiting" });
+      else if (install.latest !== undefined) notify(call, install.latest);
       this.#pump(request.platform);
     });
   }
@@ -311,6 +321,7 @@ export class ComponentInstaller {
     const install: Install = {
       abort: undefined,
       calls: [],
+      latest: undefined,
       component: request.component,
       platform: request.platform,
       requesterId: request.requesterId,
@@ -392,6 +403,8 @@ export class ComponentInstaller {
     const abort = new AbortController();
     install.abort = abort;
     install.state = "running";
+    // Every call hears that its install started, before the driver reports anything.
+    this.#report(install, { stage: "downloading" });
     const startedAt = this.options.clock.now();
     const attribution =
       install.requesterId === undefined ? {} : { requesterId: install.requesterId };
@@ -404,7 +417,7 @@ export class ComponentInstaller {
     try {
       result = await driver.installComponent(install.component, {
         onProgress: (progress) => {
-          for (const call of install.calls) notify(call, progress);
+          this.#report(install, cleanPercent(progress));
         },
         signal: abort.signal,
       });
@@ -447,6 +460,12 @@ export class ComponentInstaller {
       "component-installer",
     );
     this.#settleAll(install, { outcome: { outcome: result.outcome, version: result.version } });
+  }
+
+  /** Tells every call on the install, and keeps the report for a call that joins later. */
+  #report(install: Install, progress: ComponentInstallerProgress): void {
+    install.latest = progress;
+    for (const call of install.calls) notify(call, progress);
   }
 
   /**
@@ -498,6 +517,15 @@ export class ComponentInstaller {
     if ("outcome" in result && result.outcome !== undefined) call.resolve(result.outcome);
     else call.reject(result.error);
   }
+}
+
+/**
+ * The one place a driver's percentage is cleaned for every caller: clamped to 0..100, and left
+ * out when it is not a finite number rather than guessed.
+ */
+function cleanPercent(progress: ComponentInstallProgress): ComponentInstallerProgress {
+  if (!Number.isFinite(progress.percent)) return { stage: "downloading" };
+  return { percent: Math.min(100, Math.max(0, progress.percent)), stage: "downloading" };
 }
 
 /** A caller's progress callback is an observer: a throw there must not reach the install. */

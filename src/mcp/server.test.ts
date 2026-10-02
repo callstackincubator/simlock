@@ -274,6 +274,79 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("relays the downloading stage as a notification naming the component, above queued and below provisioning, and never going down across queued, downloading, provisioning, booting", async () => {
+    const client = new FakeSimlockClient();
+    let onProgress: ((progress: unknown) => void) | undefined;
+    let resolveGrant!: (grant: ReturnType<typeof sampleGrant>) => void;
+    const grantPromise = new Promise<ReturnType<typeof sampleGrant>>((resolve) => {
+      resolveGrant = resolve;
+    });
+    client.requestLeaseImpl = (_input, options) => {
+      onProgress = options.onProgress as ((progress: unknown) => void) | undefined;
+      return grantPromise;
+    };
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const progressEvents: unknown[] = [];
+      const leaseCall = mcpClient.request(
+        {
+          method: "tools/call",
+          params: {
+            arguments: { allowDownload: true, model: "iPhone 17 Pro", platform: "ios" },
+            name: "lease_simulator",
+          },
+        },
+        CallToolResultSchema,
+        { onprogress: (progress) => progressEvents.push(progress) },
+      );
+      await waitFor(() => onProgress !== undefined);
+
+      onProgress!({ queuePosition: 2, stage: "queued" });
+      onProgress!({ component: "26.4", stage: "downloading", waiting: true });
+      onProgress!({ component: "26.4", stage: "downloading", waiting: false });
+      // Each stage at its highest value, then the next at its lowest: a stage whose base did not
+      // sit above the one before would land at or under it, and be lifted by one.
+      onProgress!({ component: "26.4", percent: 100, stage: "downloading", waiting: false });
+      onProgress!({ etaMs: 0, stage: "provisioning" });
+      onProgress!({ etaMs: 600_000, stage: "booting" });
+      await waitFor(() => progressEvents.length === 6);
+
+      expect(progressEvents).toEqual([
+        expect.objectContaining({ message: "Queued behind 2 other requests" }),
+        expect.objectContaining({
+          message: "Waiting for another download before downloading 26.4",
+        }),
+        expect.objectContaining({ message: "Downloading 26.4" }),
+        expect.objectContaining({ message: "Downloading 26.4 (100%)" }),
+        expect.objectContaining({ message: expect.stringMatching(/^Provisioning device/) }),
+        expect.objectContaining({ message: expect.stringMatching(/^Booting device/) }),
+      ]);
+      const values = progressEvents.map((event) => (event as { progress: number }).progress);
+      const [queued, waiting, started, percent, provisioning, booting] = values as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      // The reporter lifts a value that would go down to one above the last, so a gap wider than
+      // one is the stage's own placement, not that lift.
+      expect(waiting - queued).toBeGreaterThan(1);
+      expect(percent - started).toBeGreaterThan(1);
+      expect(provisioning - percent).toBeGreaterThan(1);
+      expect(booting - provisioning).toBeGreaterThan(1);
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+      expect(new Set(values).size).toBe(values.length);
+
+      resolveGrant(sampleGrant());
+      const lease = await leaseCall;
+      expect(lease.isError).not.toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
   it("emits nothing when the client supplied no progress token (MCP-only relay)", async () => {
     const client = new FakeSimlockClient();
     let onProgress: ((progress: unknown) => void) | undefined;

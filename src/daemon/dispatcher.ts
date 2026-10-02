@@ -679,13 +679,14 @@ export class Dispatcher {
 }
 
 /**
- * The installer's progress in the contract's words: a driver's percentage becomes a fraction
- * from 0 to 1, and one that is not a finite number is left out rather than guessed.
+ * The installer's progress in the contract's words: its percentage, already within 0..100,
+ * becomes a fraction from 0 to 1. With none (the install has just started, or the driver's was
+ * not a number) there is no fraction.
  */
 function toWireProgress(progress: ComponentInstallerProgress): ComponentProgress {
   if (progress.stage === "waiting") return { stage: "waiting" };
-  if (!Number.isFinite(progress.percent)) return { stage: "downloading" };
-  return { fraction: Math.min(1, Math.max(0, progress.percent / 100)), stage: "downloading" };
+  if (progress.percent === undefined) return { stage: "downloading" };
+  return { fraction: progress.percent / 100, stage: "downloading" };
 }
 
 /** A child that exited between the timer firing and the signal landing is not an error worth

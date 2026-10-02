@@ -292,12 +292,12 @@ this has to be a TCP port and cannot live as a socket file inside
 `drivers.android.adbServerPort` exists and why two Simlock instances on one
 machine need distinct values for it.
 
-## Component downloads: one at a time per platform, the bounded-default edge case, and no progress push
+## Component downloads: one at a time per platform, and the bounded-default edge case
 
 A lease request that may download and whose runtime is missing calls
 `ComponentInstaller` (`src/core/component-installer.ts`, ADR 0010 §3), which
 runs `xcodebuild -downloadPlatform iOS` or `sdkmanager --install` through the
-driver. Three things worth knowing about that path:
+driver. Two things worth knowing about that path:
 
 **A platform runs one download at a time.** Installs queue per platform,
 first come first served. Requests for the *same* component join one install;
@@ -324,19 +324,6 @@ major version number, since the exact patch release isn't known offline
 If Xcode doesn't have a build matching that bare major version, the download
 fails and the request fails with it; passing `--os <version>` explicitly is
 the way out.
-
-**No requester-visible progress during a download (#67 stage 4).** The
-requester's lease-progress stream (`LeaseProgress` in `src/core/wait-queue.ts`
-— `queued` / `provisioning` / `booting` / `reclaiming`, relayed as CLI stderr
-JSON lines and MCP `notifications/progress`) has no `downloading` stage. The
-installer already hands every call the driver's percentage and a `waiting`
-report (`ComponentInstallRequest.onProgress`), but the lease path does not pass
-one, so a CLI or MCP caller waiting on a multi-minute install sees nothing on
-the wire between its request and either the eventual grant or a failure; the
-only visibility is the daemon's own `component.install-started` bus event
-(`simlock events --follow`, and the event file behind `simlock events
---since`). There is no `daemon.log` line for it. Wiring it through is #210: a
-new `LeaseProgress` variant and CLI/MCP wire changes.
 
 ## An iOS runtime download outlives the runtime, and only Xcode can reclaim it (#79)
 

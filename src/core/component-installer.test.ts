@@ -279,9 +279,106 @@ describe("ComponentInstaller", () => {
     void harness.installer.install(ios("28.0", { onProgress: (report) => behind.push(report) }));
     await flush();
 
-    expect(firstA).toEqual([{ percent: 40, stage: "downloading" }]);
-    expect(firstB).toEqual([{ percent: 40, stage: "downloading" }]);
+    // The first report is the install's start, before the driver's own percentage.
+    expect(firstA).toEqual([{ stage: "downloading" }, { percent: 40, stage: "downloading" }]);
+    expect(firstB).toEqual([{ stage: "downloading" }, { percent: 40, stage: "downloading" }]);
     expect(behind).toEqual([{ stage: "waiting" }]);
+  });
+
+  it("tells a call that its install started, with no percent, before the driver reports anything, and a call behind it hears the same when its own turn comes", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [new FakeDriver({ availableOsVersions: [], clock, platform: "ios" })],
+    });
+    harness.ios.holdInstalls();
+    const first: ComponentInstallerProgress[] = [];
+    const behind: ComponentInstallerProgress[] = [];
+
+    void harness.installer.install(ios("27.0", { onProgress: (report) => first.push(report) }));
+    void harness.installer.install(ios("28.0", { onProgress: (report) => behind.push(report) }));
+    await flush();
+
+    // The driver is holding and has reported nothing: the start report is the installer's own.
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+    expect(first).toEqual([{ stage: "downloading" }]);
+    expect(behind).toEqual([{ stage: "waiting" }]);
+
+    harness.ios.releaseInstalls();
+    harness.ios.holdInstalls();
+    await flush();
+    expect(installs(harness.ios)).toEqual(["27.0", "28.0"]);
+    expect(behind).toEqual([{ stage: "waiting" }, { stage: "downloading" }]);
+  });
+
+  it("tells a call that joins a running install its latest report at once, and only that one", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          installProgress: [12, 41],
+          platform: "ios",
+        }),
+      ],
+    });
+    harness.ios.holdInstalls();
+    const early: ComponentInstallerProgress[] = [];
+    const joiner: ComponentInstallerProgress[] = [];
+
+    void harness.installer.install(ios("27.0", { onProgress: (report) => early.push(report) }));
+    await flush();
+    expect(early).toEqual([
+      { stage: "downloading" },
+      { percent: 12, stage: "downloading" },
+      { percent: 41, stage: "downloading" },
+    ]);
+
+    void harness.installer.install(ios("27.0", { onProgress: (report) => joiner.push(report) }));
+    // Synchronously, before anything else runs: the latest report, and only that one.
+    expect(joiner).toEqual([{ percent: 41, stage: "downloading" }]);
+    expect(early).toHaveLength(3);
+  });
+
+  it("tells its calls a driver's percentage clamped to 0..100, and one that is not a number as no percent", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          installProgress: [Number.NaN, -5, 150, 41.7],
+          platform: "ios",
+        }),
+      ],
+    });
+    const heard: ComponentInstallerProgress[] = [];
+
+    await harness.installer.install(ios("27.0", { onProgress: (report) => heard.push(report) }));
+
+    expect(heard).toEqual([
+      { stage: "downloading" },
+      { stage: "downloading" },
+      { percent: 0, stage: "downloading" },
+      { percent: 100, stage: "downloading" },
+      { percent: 41.7, stage: "downloading" },
+    ]);
+  });
+
+  it("still lists a running install as downloading and one behind it as waiting after a call joined the running one", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({ availableOsVersions: [], clock, installProgress: [41], platform: "ios" }),
+      ],
+    });
+    harness.ios.holdInstalls();
+
+    void harness.installer.install(ios("27.0"));
+    void harness.installer.install(ios("28.0"));
+    await flush();
+    void harness.installer.install(ios("27.0", { onProgress: () => undefined }));
+
+    expect(harness.installer.inProgress()).toEqual([
+      { component: "27.0", platform: "ios", since: 1_000, state: "downloading", waiters: 2 },
+      { component: "28.0", platform: "ios", since: 1_000, state: "waiting", waiters: 1 },
+    ]);
   });
 
   it("runs an iOS install and an Android install at the same time", async () => {
@@ -733,7 +830,7 @@ describe("ComponentInstaller", () => {
 
     expect(throwing).toMatchObject({ status: "fulfilled" });
     expect(listening).toMatchObject({ status: "fulfilled" });
-    expect(heard).toEqual([{ percent: 50, stage: "downloading" }]);
+    expect(heard).toEqual([{ stage: "downloading" }, { percent: 50, stage: "downloading" }]);
   });
 
   it.each([
