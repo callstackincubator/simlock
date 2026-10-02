@@ -1114,9 +1114,11 @@ Conclusions baked into the drivers:
   (whole path, or the same directory by `realpath`). Whatever answers on the
   serial is whoever holds the console port, so a collision fails the boot with
   `DriverCrashError` before a mark or a baseline capture touches that emulator,
-  and the shutdown or destroy that follows sends it no `emu kill`; an AVD name
-  proves nothing (safety rule 8). Reclaim's `emu avd snapshot load` still goes
-  to the serial before its readiness wait checks it.
+  and a shutdown or destroy that follows in the same daemon process sends it
+  no `emu kill`; an AVD name proves nothing (safety rule 8). Not covered yet: a
+  shutdown or destroy of a device that was never refused (or after a daemon
+  restart) still sends `emu kill` to its stored serial unchecked, and reclaim's
+  `emu avd snapshot load` goes to the serial before its readiness wait checks it.
 
 ## Leases
 

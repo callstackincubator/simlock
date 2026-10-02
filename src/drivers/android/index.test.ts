@@ -2783,37 +2783,50 @@ describe("AndroidDriver readiness on a taken console port", () => {
     });
   });
 
-  it.each([
-    ["exactly", `${avdDirectory}/simlock_one.avd\r\nOK\r\n`],
-    ["with a trailing slash", `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`],
-    // `/private/home` is a link to `/home` here; macOS's `/var` -> `/private/var` is the same
-    // comparison with the link on the device root's side.
-    [
-      "under another spelling that resolves to the same directory",
-      `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
-    ],
-  ])("readies a device whose emulator reports its AVD directory %s", async (label, answer) => {
-    const filesystem = await androidFilesystem();
-    filesystem.defineSymlink("/private/home", "/home");
-    const host = new EmulatorHost(filesystem);
-    const runner = answeringAvdPath(host.runner(), ok(answer));
-    const driver = await createDriver(filesystem, runner, { ids: ["one"] });
-    const spec = await driver.resolveSpec({
-      model: "Pixel 8",
-      osVersion: "34",
-      platform: "android",
-    });
-    const device = await driver.provision(spec);
-    if (label === "exactly") {
-      // An exact answer needs nothing from the filesystem: a directory that cannot be
-      // resolved this moment does not fail the boot.
-      filesystem.defineFailure(`${avdDirectory}/simlock_one.avd`, "EACCES");
-    }
+  it.each<{
+    readonly reported: string;
+    readonly answer: string;
+    readonly filesystem?: () => MemoryFilesystem;
+  }>([
+    { answer: `${avdDirectory}/simlock_one.avd\r\nOK\r\n`, reported: "exactly" },
+    { answer: `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`, reported: "with a trailing slash" },
+    // `/private/home` is a link to `/home`: the link is on the answer's side.
+    {
+      answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
+      reported: "through a link to the device root's directory",
+    },
+    // `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
+    // is on the device root's side, and the emulator answers with the resolved path.
+    {
+      answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
+      filesystem: () => new LinkedHomeFilesystem(),
+      reported: "resolved, when the device root's own path runs through a link",
+    },
+  ])(
+    "readies a device whose emulator reports its AVD directory $reported",
+    async ({ answer, filesystem: createFilesystem, reported }) => {
+      const filesystem = await androidFilesystem({}, createFilesystem?.());
+      if (createFilesystem === undefined) filesystem.defineSymlink("/private/home", "/home");
+      const host = new EmulatorHost(filesystem);
+      const runner = answeringAvdPath(host.runner(), ok(answer));
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      const device = await driver.provision(spec);
+      if (reported === "exactly") {
+        // An exact answer needs nothing from the filesystem: a directory that cannot be
+        // resolved this moment does not fail the boot.
+        filesystem.defineFailure(`${avdDirectory}/simlock_one.avd`, "EACCES");
+      }
 
-    const ready = await driver.makeReady(device);
+      const ready = await driver.makeReady(device);
 
-    expect(ready.address).toBe("emulator-5586");
-  });
+      expect(ready.address).toBe("emulator-5586");
+    },
+  );
 
   it.each<{
     readonly answered: string;
@@ -4188,6 +4201,17 @@ class WorkingDirectoryFilesystem extends MemoryFilesystem {
 
   override async realpath(path: string): Promise<string> {
     return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
+  }
+}
+
+/**
+ * A filesystem on which `/home` is a link to `/private/home`, as `/var` is to `/private/var`
+ * on macOS: every path under either spelling resolves to the `/private/home` one.
+ */
+class LinkedHomeFilesystem extends MemoryFilesystem {
+  override async realpath(path: string): Promise<string> {
+    const resolved = await super.realpath(path.replace(/^\/private\/home\//, "/home/"));
+    return resolved.replace(/^\/home\//, "/private/home/");
   }
 }
 
