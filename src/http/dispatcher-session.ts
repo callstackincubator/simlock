@@ -2,7 +2,7 @@ import type { z } from "zod";
 
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import type { LeaseProgress } from "../core/index.js";
-import type { OPERATIONS, OperationName, Role } from "../contract/index.js";
+import type { ComponentProgress, OPERATIONS, OperationName, Role } from "../contract/index.js";
 import type { TokenIdentity, TokenRole } from "./token-store.js";
 
 /**
@@ -60,8 +60,13 @@ export function buildHttpSession(
      * a promise, not just a hope that it will. */
     readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
     /** ADR 0005 §19e: the exec route opens its event stream here rather than on the first
-     * chunk, so a command that prints nothing still gets a `200` and its keepalives. */
+     * chunk, so a command that prints nothing still gets a `200` and its keepalives. The
+     * component install route opens its stream here too, once the install has admitted the
+     * call (ADR 0010 §6). */
     readonly onStarted?: () => void;
+    /** ADR 0010 §6: the component install route's own override -- each update becomes one SSE
+     * `progress` event on that request's response. Inert for every other route. */
+    readonly onComponentProgress?: (progress: ComponentProgress) => void;
     readonly manageEventSubscription?: (subscribe: boolean) => string | undefined;
   },
 ): DispatchSession {
@@ -75,5 +80,8 @@ export function buildHttpSession(
       : { onRequestAdmitted: extra.onRequestAdmitted }),
     ...(extra?.onOutput === undefined ? {} : { onOutput: extra.onOutput }),
     ...(extra?.onStarted === undefined ? {} : { onStarted: extra.onStarted }),
+    ...(extra?.onComponentProgress === undefined
+      ? {}
+      : { onComponentProgress: extra.onComponentProgress }),
   };
 }

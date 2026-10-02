@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, type Filesystem, MemoryFilesystem, type TimerHandle } from "../ports/index.js";
@@ -152,6 +152,40 @@ function ios(component: string, extra: Partial<ComponentInstallRequest> = {}) {
 }
 
 describe("ComponentInstaller", () => {
+  it("admits a call synchronously, before any progress, and a throwing onAdmitted does not stop its install", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+    const heard: string[] = [];
+    void harness.installer.install(ios("27.0")).catch(() => undefined);
+
+    const call = track(
+      harness.installer.install(
+        ios("28.0", {
+          onAdmitted: () => {
+            heard.push("admitted");
+            throw new Error("observer failure");
+          },
+          onProgress: (progress) => heard.push(progress.stage),
+        }),
+      ),
+    );
+    expect(heard).toEqual(["admitted", "waiting"]);
+
+    harness.ios.releaseInstalls();
+    await flush();
+    expect(call.result()).toEqual({ outcome: "installed", version: "28.0" });
+  });
+
+  it("refuses a platform with no driver without admitting the call", async () => {
+    const harness = await createHarness();
+    const onAdmitted = vi.fn();
+
+    await expect(
+      harness.installer.install({ component: "35", onAdmitted, platform: "android" }),
+    ).rejects.toMatchObject({ name: "NoDriverError" });
+    expect(onAdmitted).not.toHaveBeenCalled();
+  });
+
   it("runs one install for calls that name the same component, and every call gets its outcome", async () => {
     const harness = await createHarness();
     harness.ios.holdInstalls();

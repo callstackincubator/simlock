@@ -674,6 +674,43 @@ export const workerRemove = defineOperation({
   output: z.object({ workerId: z.string(), removed: z.boolean() }),
 });
 
+// ---- component.install (ADR 0010 §6) --------------------------------------------------------
+
+/**
+ * A component's version as the catalog lists it under `runtimes` (`26.4`, `35`), carried to the
+ * driver unread -- which is why its shape is bounded here, before it reaches one (safety rule
+ * 10): a driver builds an installer argument from it. One to 64 characters, none of them
+ * whitespace or a control character, and not starting with `-`, which an installer could read
+ * as an option.
+ */
+const componentVersionSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[^\s\p{Cc}]+$/u, "must contain no whitespace or control character")
+  .refine((version) => !version.startsWith("-"), "must not start with '-'");
+
+/**
+ * Installs one iOS simulator runtime or Android system image without leasing a device (ADR 0010
+ * §6). Admin-only: the command is an operator's consent to a multi-GB download, which
+ * `downloads.policy: "never"` still refuses (§4). Not durable: a daemon stop ends the install,
+ * and running it again is the recovery. `component` echoes the version asked for; `version` is
+ * the exact one installed or found.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const componentInstall = defineOperation({
+  name: "component.install",
+  role: "admin",
+  effect: "write",
+  input: z.object({ platform: platformSchema, version: componentVersionSchema }),
+  output: z.object({
+    platform: platformSchema,
+    component: z.string(),
+    outcome: z.enum(["installed", "already-installed"]),
+    version: z.string(),
+  }),
+});
+
 // ---- the full registry ----------------------------------------------------------------------
 
 export const OPERATIONS = {
@@ -703,6 +740,7 @@ export const OPERATIONS = {
   "worker.drain": workerDrain,
   "worker.undrain": workerUndrain,
   "worker.remove": workerRemove,
+  "component.install": componentInstall,
 } as const;
 
 /**

@@ -78,10 +78,18 @@ export type WorkerDrainOutput = OpOutput<"worker.drain">;
 export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
 export type WorkerRemoveOutput = OpOutput<"worker.remove">;
 
+// ---- components (ADR 0010 §6) ---------------------------------------------------------------
+
+export type ComponentInstallInput = OpInput<"component.install">;
+export type ComponentInstallOutput = OpOutput<"component.install">;
+
 // ---- pushes ---------------------------------------------------------------------------------
 
 export type LeaseProgress = z.infer<typeof leaseProgressSchema>;
 export type EventPush = z.infer<(typeof PUSH_SCHEMAS)["event"]>;
+export type ComponentInstallProgress = z.infer<
+  (typeof PUSH_SCHEMAS)["component-progress"]
+>["progress"];
 
 /**
  * One chunk of a running `device.exec` command's output. The `requestId` the push carries on
@@ -129,6 +137,10 @@ export interface ExecOptions {
    * output. A transport chooses its response shape on this, which is why a gateway forwarding
    * the command relays it rather than inferring one. */
   readonly onStarted?: () => void;
+}
+
+export interface InstallComponentOptions {
+  readonly onProgress?: (progress: ComponentInstallProgress) => void;
 }
 
 export interface RequestLeaseOptions {

@@ -35,7 +35,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
-| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine's devices and the daemon answering is a gateway; run it on the worker |
+| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — an operation this daemon's mode does not implement (`worker list` against a worker), or a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
@@ -51,6 +51,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` naming a worker the gateway does not know |
+| 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
@@ -76,8 +77,9 @@ implement them:
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
-  `nuke`, `cleanup`, `doctor`, and `driver.passthrough` stay per-worker
-  operations rather than waiting on some later fleet-wide version.
+  `nuke`, `cleanup`, `doctor`, `driver.passthrough` and `component install`
+  stay per-worker operations rather than waiting on some later fleet-wide
+  version.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
@@ -1116,6 +1118,56 @@ Against a gateway, `modelAliases` is the union of each worker's other names
 for a model, and `images` the union of their images. The gateway does not
 yet route by another name, so ask a gateway for a model by its name in
 `models`.
+
+## `simlock component install <ios|android> <version>`
+
+Installs one iOS simulator runtime or Android system image, without leasing
+a device. Use it to prepare a machine before agents need the component,
+instead of making the first lease wait for a multi-GB download.
+
+```sh
+simlock component install ios 26.4      # the iOS 26.4 simulator runtime
+simlock component install android 35    # the system image for API level 35
+```
+
+`<version>` is the string `simlock catalog` lists under `runtimes` once the
+component is installed. Admin only: an agent session gets `FORBIDDEN`.
+
+Progress is JSON lines on stderr, the result one JSON line on stdout:
+
+```text
+{"stage":"waiting"}                        (stderr: another download on this platform runs first)
+{"stage":"downloading","fraction":0.41}    (stderr)
+{"platform":"android","component":"35","outcome":"installed","version":"35"}
+```
+
+`outcome` is `installed`, or `already-installed` when the component was
+already there; running the command again changes nothing and succeeds.
+`version` is the exact version installed. `fraction`, from 0 to 1, is
+present when the platform's installer reports one. The installed component
+appears in `simlock catalog` at once.
+
+- **Consent.** The command is the consent to download, so no
+  `--allow-download` is needed. Under `downloads.policy: "never"` it fails
+  with `DOWNLOADS_DISABLED` (exit 12) and downloads nothing. Android
+  licenses stay their own switch, `downloads.acceptAndroidLicenses`. See
+  [CONFIGURATION.md](CONFIGURATION.md#downloads).
+- **One download per platform.** A command for another component on the same
+  platform waits its turn (`{"stage":"waiting"}`). A command or lease
+  request for the component already downloading joins that download, and
+  each one gets its result.
+- **Time.** `downloads.timeoutMs` counts from the moment the command is
+  made, waiting included; running out is `DOWNLOAD_TIMEOUT` (exit 10).
+- **Disk.** Too little free disk fails before the download starts, with
+  `INSUFFICIENT_DISK_SPACE` (exit 12).
+- **Stopping.** Stopping the daemon ends the install; nothing resumes it.
+  Run the command again.
+- **Gateway.** A gateway owns no components and answers
+  `UNSUPPORTED_IN_GATEWAY_MODE`; run the command against the worker.
+
+The command takes no `--json`: its output is already JSON, so the flag is a
+usage error (exit 2), as is a missing or extra argument or a platform other
+than `ios` or `android`.
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`
 

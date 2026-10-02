@@ -1239,6 +1239,115 @@ describe("lease routes", () => {
   });
 });
 
+/**
+ * ADR 0010 §6's HTTP frontend: one dispatched `component.install` turned into a stream of
+ * `progress` events and one terminal `result` or `error`. What the install does is the
+ * dispatcher's and the installer's business (`daemon/dispatcher.test.ts`).
+ */
+describe("POST /v1/components/install", () => {
+  /** The response, which must arrive while the dispatched install is still unsettled. */
+  async function answeredWhileOpen(response: Response | Promise<Response>): Promise<Response> {
+    const answered = await Promise.race([
+      Promise.resolve(response),
+      new Promise<"still waiting">((resolve) => setTimeout(() => resolve("still waiting"), 200)),
+    ]);
+    expect(answered, "the route waited for the install to settle").not.toBe("still waiting");
+    return answered as Response;
+  }
+
+  function postInstall(
+    app: App,
+    body: Record<string, unknown> = { platform: "android", version: "35" },
+    headers: Record<string, string> = operatorAuth,
+  ) {
+    return app.request("/v1/components/install", {
+      body: JSON.stringify(body),
+      headers: { ...headers, "content-type": "application/json" },
+      method: "POST",
+    });
+  }
+
+  it("streams progress events, including one sent before the stream opened, and ends with one result event", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const responsePromise = postInstall(app);
+    const call = await waitForDispatch(dispatcher, "component.install");
+    expect(call.input).toEqual({ platform: "android", version: "35" });
+    expect(call.session).toMatchObject({ principal: "tok_operator", role: "admin" });
+
+    call.session.onStarted?.();
+    call.session.onComponentProgress?.({ stage: "waiting" });
+    // The response is committed at admission, while the install is still open.
+    const response = await answeredWhileOpen(responsePromise);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+    const framesPromise = readSseFrames(response, 3);
+    await Promise.resolve();
+    call.session.onComponentProgress?.({ fraction: 0.41, stage: "downloading" });
+    const result = { component: "35", outcome: "installed", platform: "android", version: "35" };
+    call.resolve(result);
+    const frames = await framesPromise;
+
+    expect(frames).toEqual([
+      { data: { stage: "waiting" }, event: "progress" },
+      { data: { fraction: 0.41, stage: "downloading" }, event: "progress" },
+      { data: result, event: "result" },
+    ]);
+  });
+
+  it.each([
+    ["FORBIDDEN", 403],
+    ["DOWNLOADS_DISABLED", 403],
+    ["NO_DRIVER", 422],
+  ] as const)(
+    "answers %s, refused before the install admitted the call, as a JSON error with status %i",
+    async (code, status) => {
+      const { app, dispatcher } = buildHarness();
+      dispatcher.handlers["component.install"] = () => {
+        throw new DispatchError(code, `refused: ${code}`);
+      };
+
+      const response = await postInstall(app);
+
+      expect(response.status).toBe(status);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(code);
+    },
+  );
+
+  it("reports a failure after the install admitted the call as a terminal error event", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const responsePromise = postInstall(app);
+    const call = await waitForDispatch(dispatcher, "component.install");
+    call.session.onStarted?.();
+    const response = await answeredWhileOpen(responsePromise);
+    expect(response.status).toBe(200);
+
+    const framesPromise = readSseFrames(response, 1);
+    await Promise.resolve();
+    call.reject(new DispatchError("DOWNLOAD_TIMEOUT", "outlived downloads.timeoutMs"));
+    const frames = await framesPromise;
+
+    expect(frames).toEqual([
+      {
+        data: { error: { code: "DOWNLOAD_TIMEOUT", message: expect.any(String) } },
+        event: "error",
+      },
+    ]);
+  });
+
+  it("refuses a body with a field the operation does not take with 400, dispatching nothing", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const response = await postInstall(app, { platform: "ios", version: "26.4", force: true });
+
+    expect(response.status).toBe(400);
+    expect(dispatcher.calls).toEqual([]);
+  });
+});
+
 describe("operator-only listing routes", () => {
   it("GET /v1/leases (dispatches lease.list; an agent only sees its own)", async () => {
     const { app, registry } = buildHarness();

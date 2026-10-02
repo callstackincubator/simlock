@@ -582,6 +582,18 @@ describe("GatewayDispatcher", () => {
         });
       },
     );
+
+    it("component.install answers UNSUPPORTED_IN_GATEWAY_MODE, saying it installs on one machine (ADR 0010 §7)", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch("component.install", { platform: "android", version: "35" }, session()),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_IN_GATEWAY_MODE",
+        details: { operation: "component.install" },
+        message: "component.install installs on one machine; run it against a worker",
+      });
+    });
   });
 
   describe("lease lifecycle and device.exec (#118)", () => {

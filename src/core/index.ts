@@ -81,5 +81,9 @@ export {
 export { Nuke } from "./nuke.js";
 export { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
-export { ComponentInstaller } from "./component-installer.js";
+export {
+  ComponentInstaller,
+  ComponentInstallerClosedError,
+  type ComponentInstallerProgress,
+} from "./component-installer.js";
 export { SerializedDecision } from "./serialized-decision.js";

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
-import { describeSchemaIssues } from "../contract/index.js";
+import { type ComponentProgress, describeSchemaIssues } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -108,6 +108,24 @@ const execBodySchema = z
   })
   .strict();
 
+/** Shape only: what a valid platform and version are is `component.install`'s own contract
+ * schema's answer, reached through the dispatcher like every other transport's. */
+const componentInstallBodySchema = z
+  .object({
+    platform: z.string(),
+    version: z.string(),
+  })
+  .strict();
+
+/** A route's JSON body, validated against its schema; a body that fails is `400 BAD_REQUEST`. */
+function jsonBody<Schema extends z.ZodTypeAny>(schema: Schema) {
+  return zValidator("json", schema, (result, c) => {
+    if (!result.success) {
+      return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
+    }
+  });
+}
+
 function nullToUndefined<Value>(value: Value | null | undefined): Value | undefined {
   return value ?? undefined;
 }
@@ -201,27 +219,18 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json(result);
   });
 
-  app.post(
-    "/v1/lease-requests",
-    agentAuth,
-    zValidator("json", leaseRequestBodySchema, (result, c) => {
-      if (!result.success) {
-        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
-      }
-    }),
-    async (c) => {
-      const identity = c.get("identity");
-      const body = c.req.valid("json");
-      // Bounds and shape are `lease.request`'s own (`idempotencyKey`), checked by the dispatcher.
-      const idempotencyKey = c.req.header("Idempotency-Key");
-      const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
-      if (outcome.kind === "rejected") {
-        return errorResponse(c, outcome.error);
-      }
-      c.header("Location", `/v1/lease-requests/${outcome.view.id}`);
-      return c.json({ request: serializeRequest(outcome.view) }, 201);
-    },
-  );
+  app.post("/v1/lease-requests", agentAuth, jsonBody(leaseRequestBodySchema), async (c) => {
+    const identity = c.get("identity");
+    const body = c.req.valid("json");
+    // Bounds and shape are `lease.request`'s own (`idempotencyKey`), checked by the dispatcher.
+    const idempotencyKey = c.req.header("Idempotency-Key");
+    const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
+    if (outcome.kind === "rejected") {
+      return errorResponse(c, outcome.error);
+    }
+    c.header("Location", `/v1/lease-requests/${outcome.view.id}`);
+    return c.json({ request: serializeRequest(outcome.view) }, 201);
+  });
 
   app.get("/v1/lease-requests/:id", agentAuth, async (c) => {
     const id = c.req.param("id");
@@ -344,87 +353,137 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     });
   });
 
-  app.post(
-    "/v1/leases/:id/exec",
-    agentAuth,
-    zValidator("json", execBodySchema, (result, c) => {
-      if (!result.success) {
-        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
-      }
-    }),
-    async (c) => {
-      const identity = c.get("identity");
-      const leaseId = c.req.param("id");
-      const { requesterId, ...body } = c.req.valid("json");
-      // Requester identity is the token's over HTTP, never the body's -- except for an
-      // `operator` token, which is the proxying case `device.exec` reads it for. An agent
-      // token that supplies one at all is refused, but by `device.exec`'s own `authorize`
-      // hook (round 4, F4) rather than a route-level check: ADR 0003 §2 puts a contract
-      // operation's answer in the dispatcher, not a transport, so the same request over the
-      // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
-      // rather than defining.
+  app.post("/v1/leases/:id/exec", agentAuth, jsonBody(execBodySchema), async (c) => {
+    const identity = c.get("identity");
+    const leaseId = c.req.param("id");
+    const { requesterId, ...body } = c.req.valid("json");
+    // Requester identity is the token's over HTTP, never the body's -- except for an
+    // `operator` token, which is the proxying case `device.exec` reads it for. An agent
+    // token that supplies one at all is refused, but by `device.exec`'s own `authorize`
+    // hook (round 4, F4) rather than a route-level check: ADR 0003 §2 puts a contract
+    // operation's answer in the dispatcher, not a transport, so the same request over the
+    // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
+    // rather than defining.
 
-      // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
-      // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
-      // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
-      // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
-      // Where a chunk goes at each stage of this request's life, including after the client
-      // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
-      // and is tested.
-      const relay = new OutputRelay();
-      let onStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        onStarted = resolve;
-      });
+    // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
+    // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
+    // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
+    // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
+    // Where a chunk goes at each stage of this request's life, including after the client
+    // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
+    // and is tested.
+    const relay = new OutputRelay();
+    let onStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      onStarted = resolve;
+    });
 
-      const settled = deps
-        .dispatch(
-          "device.exec",
-          { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
-          buildHttpSession(identity, {
-            onStarted: () => onStarted(),
-            // The relay's answer is this chunk's SSE write, and returning it is what stops
-            // the command while a client is not reading (ADR 0005 §19e).
-            onOutput: (stream, chunk) => relay.push({ chunk, stream }),
-          }),
-        )
-        .then(
-          (result) => ({ exitCode: result.exitCode, kind: "exited" }) as const,
-          (error: unknown) => ({ error, kind: "failed" }) as const,
-        );
+    const settled = deps
+      .dispatch(
+        "device.exec",
+        { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
+        buildHttpSession(identity, {
+          onStarted: () => onStarted(),
+          // The relay's answer is this chunk's SSE write, and returning it is what stops
+          // the command while a client is not reading (ADR 0005 §19e).
+          onOutput: (stream, chunk) => relay.push({ chunk, stream }),
+        }),
+      )
+      .then(
+        (result) => ({ exitCode: result.exitCode, kind: "exited" }) as const,
+        (error: unknown) => ({ error, kind: "failed" }) as const,
+      );
 
-      // An SSE response cannot take back its status code, so the decision point is the moment
-      // the process exists: every failure that can precede one -- an unowned lease, an unknown
-      // one, a refused verb, an unknown tool, a daemon still starting -- lands before
-      // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
-      // the stream is committed, which is what gets a silent long-running command its `200`
-      // and its keepalives immediately, and what makes `EXEC_TIMEOUT` always arrive as the
-      // stream's terminal `error` event (ADR 0005 §19e).
-      const outcome = await Promise.race([settled, started.then(() => undefined)]);
-      if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
+    // An SSE response cannot take back its status code, so the decision point is the moment
+    // the process exists: every failure that can precede one -- an unowned lease, an unknown
+    // one, a refused verb, an unknown tool, a daemon still starting -- lands before
+    // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
+    // the stream is committed, which is what gets a silent long-running command its `200`
+    // and its keepalives immediately, and what makes `EXEC_TIMEOUT` always arrive as the
+    // stream's terminal `error` event (ADR 0005 §19e).
+    const outcome = await Promise.race([settled, started.then(() => undefined)]);
+    if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
 
-      return pipeSse(c, deps.clock, {
-        subscribe(send, end) {
-          relay.attach((chunk) => send({ data: chunk, event: "output" }));
-          void settled.then((result) => {
-            if (result.kind === "exited") {
-              send({ data: { exitCode: result.exitCode }, event: "exit" });
-            } else {
-              const mapped = mapError(result.error);
-              send({
-                data: { error: { code: mapped.code, message: mapped.message } },
-                event: "error",
-              });
-            }
-            end();
-          });
-          // The command keeps running after a client disconnects; what ends here is this
-          // route's interest in its output, terminally.
-          return () => relay.drop();
-        },
-      });
-    },
-  );
+    return pipeSse(c, deps.clock, {
+      subscribe(send, end) {
+        relay.attach((chunk) => send({ data: chunk, event: "output" }));
+        void settled.then((result) => {
+          if (result.kind === "exited") {
+            send({ data: { exitCode: result.exitCode }, event: "exit" });
+          } else {
+            const mapped = mapError(result.error);
+            send({
+              data: { error: { code: mapped.code, message: mapped.message } },
+              event: "error",
+            });
+          }
+          end();
+        });
+        // The command keeps running after a client disconnects; what ends here is this
+        // route's interest in its output, terminally.
+        return () => relay.drop();
+      },
+    });
+  });
+
+  app.post("/v1/components/install", agentAuth, jsonBody(componentInstallBodySchema), async (c) => {
+    const body = c.req.valid("json");
+    // Progress that arrives before the stream opens is held in order and flushed when it
+    // does. After the client is gone, a write is a no-op (`pipeSse`); the install itself
+    // carries on, and a repeat of this request joins it (ADR 0010 §6).
+    const early: ComponentProgress[] = [];
+    let deliver: ((progress: ComponentProgress) => void) | undefined;
+    let onAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      onAdmitted = resolve;
+    });
+
+    const settled = deps
+      .dispatch(
+        "component.install",
+        body,
+        buildHttpSession(c.get("identity"), {
+          onStarted: () => onAdmitted(),
+          onComponentProgress: (progress) => {
+            if (deliver === undefined) early.push(progress);
+            else deliver(progress);
+          },
+        }),
+      )
+      .then(
+        (result) => ({ kind: "done", result }) as const,
+        (error: unknown) => ({ error, kind: "failed" }) as const,
+      );
+
+    // The same decision point as the exec route: every refusal that comes before an install
+    // (the token's role, the input, `downloads.policy`, a platform with no driver) is an
+    // ordinary JSON error with its own status. Once the installer has taken the call, the
+    // response is committed to a stream, which is what gives a call waiting behind another
+    // download its `200` and its keepalives at once. Bounded by the install's own budget,
+    // `downloads.timeoutMs`, which ends the call with `DOWNLOAD_TIMEOUT`.
+    const outcome = await Promise.race([settled, admitted.then(() => undefined)]);
+    if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
+
+    return pipeSse(c, deps.clock, {
+      subscribe(send, end) {
+        deliver = (progress) => void send({ data: progress, event: "progress" });
+        for (const progress of early.splice(0)) deliver(progress);
+        void settled.then((result) => {
+          if (result.kind === "done") {
+            send({ data: result.result, event: "result" });
+          } else {
+            const mapped = mapError(result.error);
+            send({
+              data: { error: { code: mapped.code, message: mapped.message } },
+              event: "error",
+            });
+          }
+          end();
+        });
+        return () => undefined;
+      },
+    });
+  });
 
   app.get("/v1/leases/:id/events", agentAuth, async (c) => {
     const identity = c.get("identity");

@@ -21,6 +21,7 @@ import {
   describeSchemaIssues,
   OPERATIONS,
   type AuthorizeContext,
+  type ComponentProgress,
   type Effect,
   type OperationDefinition,
   type OperationName,
@@ -100,8 +101,17 @@ export interface DispatchSession {
    * command that prints nothing for nine minutes still gets its `200` and its keepalives, and
    * an `EXEC_TIMEOUT` always arrives as that stream's terminal event rather than as a status
    * code the client cannot receive any more (ADR 0005 §19e).
+   *
+   * For a `component.install` call it is the same decision point: the moment the installer
+   * admitted the call, after every refusal that comes before an install (the policy, a platform
+   * with no driver, a daemon still starting or stopping), so a call that waits behind another
+   * download gets its stream at once (ADR 0010 §6).
    */
   readonly onStarted?: () => void;
+  /** Called for each progress update while this `component.install` call is open: `waiting`
+   * behind another install on its platform, then `downloading`. Ignored by every other
+   * operation, and left unset by a transport with nowhere to put one. */
+  readonly onComponentProgress?: (progress: ComponentProgress) => void;
   /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
    * transport), so the dispatcher's handler for them does nothing but call this: `true` to
    * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */

@@ -115,7 +115,9 @@ Routes, status codes, and every other field are unchanged.
 
 Gateway/worker fleet mode is purely additive on top of
 that: the same routes answer identically whether the daemon behind them is a
-worker or a **gateway** fronting a fleet of workers, and what it adds are new
+worker or a **gateway** fronting a fleet of workers (except
+`POST /v1/components/install`, which only a worker serves; a gateway answers
+`501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
 routes (`/v1/uplink`, `/v1/workers*`, `POST /v1/leases/{id}/exec`), new
 fields (`mode` on status, `workers[]`, `workerId`, `worker` on the lease),
 and new error codes. Nothing existing changes shape, and a client that
@@ -628,6 +630,67 @@ Paths in `args` resolve on the daemon's filesystem
 that path to exist *there*). Getting a file onto that machine is not part of
 this API in this version — see [Not implemented](#not-implemented).
 
+### `POST /v1/components/install`
+
+Role: `operator`. Installs one iOS simulator runtime or Android system image
+on this machine, without leasing a device — the same operation as
+`simlock component install`.
+
+```json
+{ "platform": "android", "version": "35" }
+```
+
+`version` is the string `GET /v1/catalog` lists under `runtimes` once the
+component is installed (`26.4` for an iOS runtime, `35` for an Android API
+level): 1 to 64 characters, none of them whitespace or a control character, and
+not starting with `-`.
+The request is the consent to download, so it needs no `allowDownload`; under
+`downloads.policy: "never"` it is refused (see
+[CONFIGURATION.md](CONFIGURATION.md#downloads)).
+
+A failure that lands **before the install takes the request** is answered as
+an ordinary JSON error with its own status:
+
+- `403 FORBIDDEN` — an `agent` token.
+- `403 DOWNLOADS_DISABLED` — `downloads.policy` is `"never"`; nothing is
+  downloaded.
+- `400 BAD_REQUEST` — a malformed body or version.
+- `422 NO_DRIVER` — no driver for that platform on this machine.
+- `501 UNSUPPORTED_IN_GATEWAY_MODE` — the daemon is a gateway, which owns no
+  components; ask the worker.
+
+Once the install has taken the request the response is `200`,
+`Content-Type: text/event-stream`, the same SSE shape the exec route uses:
+`progress` events while it runs, then exactly one terminal `result` or
+`error` event.
+
+```
+event: progress
+data: {"stage":"waiting"}
+
+event: progress
+data: {"stage":"downloading","fraction":0.41}
+
+event: result
+data: {"platform":"android","component":"35","outcome":"installed","version":"35"}
+```
+
+`waiting` means another download on the same platform runs first; a
+platform downloads one component at a time. `fraction`, from 0 to 1, is
+present when the platform's installer reports one. `outcome` is `installed`,
+or `already-installed` when the component was already there (repeating the
+request changes nothing); `version` is the exact version installed. A failure
+after that point is the terminal `error` event, in the exec route's shape —
+`INSUFFICIENT_DISK_SPACE` (checked before the download starts),
+`LICENSE_NOT_ACCEPTED`, or `DOWNLOAD_TIMEOUT` when `downloads.timeoutMs`,
+counted from the request and waiting included, runs out. A `: keepalive`
+comment every ~15s keeps idle tunnels open.
+
+Disconnecting does **not** stop the install. Repeating the request while it
+runs joins it and gets its result; repeating it after it finished answers
+`already-installed`. A lease request for the same component joins the same
+download too.
+
 ### `DELETE /v1/leases/{id}`
 
 Role: `agent` (own lease); `operator` may release any lease.
@@ -852,13 +915,13 @@ Every failure is the same shape the daemon protocol uses:
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
+| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine's devices, asked of a gateway) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
-| 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a lease request's runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
+| 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
 Three notes on these codes.
 
@@ -870,14 +933,15 @@ behind this is not reachable right now" is the same answer in all four cases,
 and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
-`UNSUPPORTED_IN_GATEWAY_MODE` has no route that can produce it *in this
-version* — `nuke`, `cleanup`, and `doctor` are absent from the HTTP surface
-(see [Not implemented](#not-implemented)) — but the status is fixed now so
-adding `POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than
-a fresh decision. `501` is also the honest status for it: this is not a
-temporary condition to retry past, it is an operation this daemon will never
-perform, and `nuke`/`cleanup`/`doctor`/`driver.passthrough` stay per-worker
-permanently rather than pending some later fan-out.
+`UNSUPPORTED_IN_GATEWAY_MODE` comes from one route in this version,
+`POST /v1/components/install` asked of a gateway — `nuke`, `cleanup`, and
+`doctor` are absent from the HTTP surface (see
+[Not implemented](#not-implemented)), and the status is fixed so adding
+`POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than a fresh
+decision. `501` is the honest status for it: this is not a temporary
+condition to retry past, it is an operation this daemon will never perform,
+and `nuke`/`cleanup`/`doctor`/`driver.passthrough`/component installs stay
+per-worker permanently rather than pending some later fan-out.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

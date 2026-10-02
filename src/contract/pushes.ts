@@ -2,8 +2,8 @@
  * Server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `started`, `output`): carries the originating request's
- *   frame id.
+ * - Request-scoped (`progress`, `started`, `output`, `component-progress`): carries the
+ *   originating request's frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
  *   these; they are facts about the device, not a liveness channel).
@@ -71,6 +71,23 @@ const startedPushSchema = z.object({
   requestId: requestIdSchema,
 });
 
+/**
+ * ADR 0010 §6: what a running `component.install` call hears, keyed by the originating
+ * request's frame id exactly as `progress` is. `waiting` while another install on the platform
+ * runs ahead of it; `downloading` once its own install runs, with `fraction` from 0 to 1 when
+ * the platform's installer printed one.
+ */
+const componentProgressPushSchema = z.object({
+  requestId: requestIdSchema,
+  progress: z.discriminatedUnion("stage", [
+    z.object({ stage: z.literal("waiting") }),
+    z.object({ stage: z.literal("downloading"), fraction: z.number().min(0).max(1).optional() }),
+  ]),
+});
+
+/** One `component-progress` push's `progress`, as a `component.install` caller sees it. */
+export type ComponentProgress = z.infer<typeof componentProgressPushSchema>["progress"];
+
 const leaseLostPushSchema = z.object({
   leaseId: z.string(),
   deviceId: z.string(),
@@ -98,6 +115,7 @@ export const PUSH_SCHEMAS = {
   progress: progressPushSchema,
   output: outputPushSchema,
   started: startedPushSchema,
+  "component-progress": componentProgressPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

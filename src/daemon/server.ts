@@ -34,6 +34,7 @@ import {
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
   PUSH_SCHEMAS,
+  type ComponentProgress,
   type OperationName,
   type OPERATIONS,
   type ProtocolRange,
@@ -137,8 +138,10 @@ interface Connection {
 export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
-  /** `status.get`'s installs in progress; see `DispatcherOptions.components`. */
-  readonly components?: Pick<ComponentInstaller, "inProgress">;
+  /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
+   * `component.install` and `status.get`'s installs; the same instance the lease engine
+   * downloads through. */
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
@@ -285,7 +288,7 @@ function buildDispatcher(
     capacity: options.capacity,
     catalog: options.catalog,
     clock: options.clock,
-    ...(options.components === undefined ? {} : { components: options.components }),
+    components: options.components,
     config: options.config,
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
     // The `operation` log line's error code: the same classifier this server answers with.
@@ -1129,6 +1132,8 @@ export class DaemonServer {
         );
       case "worker.remove":
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
+      case "component.install":
+        return this.#installComponent(connection, frame.id, frame.payload);
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`
@@ -1269,6 +1274,44 @@ export class DaemonServer {
       connection.progressDisposers.delete(disposeOutput);
       disposeOutput();
     }
+  }
+
+  /**
+   * ADR 0010 §6: the counterpart of `#requestLease` for an install. Each progress update becomes
+   * a `component-progress` push carrying this call's frame id. A closed connection only
+   * silences the pushes (`writeFrame` writes nothing to a closed socket, and a write that fails
+   * is dropped): the install carries on for every call joined to it, and a client that
+   * reconnects repeats the request to join it again.
+   */
+  #installComponent(
+    connection: Connection,
+    requestId: RequestId,
+    value: unknown,
+  ): Promise<unknown> {
+    return this.#dispatcher.dispatch("component.install", value ?? {}, {
+      ...this.#session(connection),
+      onComponentProgress: (progress) => {
+        void this.#pushComponentProgress(connection.socket, requestId, progress).catch(
+          () => undefined,
+        );
+      },
+    });
+  }
+
+  /** ADR 0010 §6: `component-progress` carries the originating request's frame id. */
+  async #pushComponentProgress(
+    socket: IpcConnection,
+    requestId: RequestId,
+    progress: ComponentProgress,
+  ): Promise<void> {
+    return writeFrame(socket, {
+      push: "component-progress",
+      payload: this.#parseOutput(
+        PUSH_SCHEMAS["component-progress"],
+        { progress, requestId },
+        "push:component-progress",
+      ),
+    });
   }
 
   /**

@@ -67,6 +67,11 @@ export interface ErrorDetailsMap {
     readonly component: string;
     readonly timeoutMs: number;
   };
+  /**
+   * ADR 0010 §4: an explicit component install under `downloads.policy: "never"`. No role and
+   * no operation overrides that policy, so the install never starts.
+   */
+  DOWNLOADS_DISABLED: { readonly policy: "never" };
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** A `simlock <tool>` verb the owning driver will not proxy (ADR 0001, decision 7). Carries
    * the tool so a caller can say which wrapper refused without re-parsing the message. */
@@ -167,6 +172,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   INSUFFICIENT_DISK_SPACE: true,
   LICENSE_NOT_ACCEPTED: true,
   DOWNLOAD_TIMEOUT: true,
+  DOWNLOADS_DISABLED: true,
   UNKNOWN_LEASE: true,
   PASSTHROUGH_REFUSED: true,
   UNKNOWN_PASSTHROUGH_TOOL: true,
@@ -288,6 +294,14 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "domain",
     cliExitCode: 10,
     httpStatus: 504,
+  },
+  // Configuration, not the caller, refuses the download: 403, and 12 with the other "this
+  // machine cannot provide that component" outcomes (`RUNTIME_MISSING`, `INSUFFICIENT_DISK_SPACE`).
+  DOWNLOADS_DISABLED: {
+    code: "DOWNLOADS_DISABLED",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 403,
   },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",

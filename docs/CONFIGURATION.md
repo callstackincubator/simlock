@@ -39,6 +39,8 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker's view is kept before the gateway forgets it. The clock only applies once every lease on that view has passed its deadline.                                                  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** Backstop on a proxied `device.exec`, deliberately longer than the worker's own `exec.timeoutMs`, which is the authoritative one.                                                                            | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** Backstop on a forwarded `lease.request` -- expiry answers `WORKER_UNREACHABLE`, freeing the request for the queue's own deadline/cancel handling again.                                                    | `5 minutes`                                                      |
+| `downloads.policy`                | Who may start a download of a missing simulator runtime / system image: `never`, `on-request` or `always`. Downloads are multi-GB and never implicit. See [Downloads](#downloads). | `on-request` |
+| `downloads.acceptAndroidLicenses` | Accept the Android SDK licenses an Android system image install asks for. A separate switch from `downloads.policy`: allowing a download does not accept a license. | `false` |
 | `downloads.timeoutMs`             | How long one request for a missing runtime / system image may take, counted from the moment it arrives. Waiting behind another download on the same platform counts too, and the clock never restarts; a request that runs out fails with `DOWNLOAD_TIMEOUT`. A running download is stopped when the oldest request sharing it runs out, and every request sharing it fails then. On a busy machine, raise it. | `20 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
@@ -276,6 +278,29 @@ because only one of them owns anything:
   configure. Two *workers* on one machine would additionally need distinct
   `drivers.android.adbServerPort` values (see below), but a gateway plus a
   worker is one driver set, so there is nothing to split.
+
+## Downloads
+
+A missing iOS simulator runtime or Android system image is downloaded only
+with explicit consent. There are two ways to ask: a lease request with
+`--allow-download`, and `simlock component install`, which an operator runs
+to prepare a machine and which is itself the consent. `downloads.policy`
+decides which of them may start a download:
+
+| `downloads.policy` | Lease without `--allow-download` | Lease with `--allow-download` | `simlock component install` |
+|---|---|---|---|
+| `never` | refused | refused | refused (`DOWNLOADS_DISABLED`) |
+| `on-request` | refused | allowed | allowed |
+| `always` | allowed | allowed | allowed |
+
+`never` is absolute: no role and no command overrides it. A machine that
+should never download anything sets it, and its operator installs components
+with the platform's own tools. Warm-pool provisioning and startup never
+download under any policy.
+
+A platform downloads one component at a time, whichever way it was asked
+for; a request for the component already downloading joins that download.
+Every request has `downloads.timeoutMs` to finish, waiting included.
 
 ## Device roots
 

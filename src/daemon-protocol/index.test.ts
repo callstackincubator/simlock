@@ -15,8 +15,10 @@ describe("daemon protocol", () => {
     // ADR 0004's removals took it to 4, so under ADR 0003 §6's honesty rule the range does not
     // widen to keep speaking 4. ADR 0008 then makes the catalog's `modelRuntimes` required,
     // taking it to 6, and ADR 0007 makes a device's mode a required `mode`, taking it to 7, then
-    // lets a lease request choose it, taking it to 8, each the same way.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(8);
+    // lets a lease request choose it, taking it to 8, each the same way. ADR 0010 adds
+    // `component.install` and its `component-progress` push, which a gateway relays to its
+    // workers, taking it to 9.
+    expect(DAEMON_PROTOCOL_VERSION).toBe(9);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

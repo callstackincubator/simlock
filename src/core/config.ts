@@ -373,11 +373,12 @@ export async function loadConfig({
 }
 
 /**
- * Reduces `downloads.policy` and a request's own `--allow-download` / `allow_download` flag
- * to the single permission a driver's `resolveSpec` actually sees. `never` overrides an
- * explicit `true` on the request -- the whole point of the policy is that it cannot be
- * opted back into per request -- and `always` grants permission the request never had to ask
- * for. Only `on-request` defers to what the caller asked for, which is today's behavior.
+ * The one consent function (ADR 0010 §4): reduces `downloads.policy` and what the caller asked
+ * for to whether a download may start. A lease request passes its own `--allow-download` /
+ * `allowDownload` flag; `component.install` passes `true`, because the command itself is the
+ * consent. `never` overrides an explicit `true` -- the whole point of the policy is that no
+ * request and no operation can opt back into it -- and `always` grants permission the request
+ * never had to ask for. Only `on-request` defers to what the caller asked for.
  */
 export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolean): boolean {
   if (policy === "always") return true;

@@ -64,6 +64,8 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
+  // ADR 0010 §6: an operator's consent to a download.
+  { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -127,6 +129,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
@@ -154,6 +157,29 @@ describe("operation effects", () => {
 
   it.each(EFFECT_MATRIX)("$name with $input is a $effect", ({ name, input, effect }) => {
     expect(resolvedEffect(name, input)).toBe(effect);
+  });
+});
+
+describe("component.install input", () => {
+  const parse = (version: string) =>
+    OPERATIONS["component.install"].input.safeParse({ platform: "android", version }).success;
+
+  it("accepts a version as the catalog lists it, up to 64 characters", () => {
+    expect(parse("35")).toBe(true);
+    expect(parse("26.4")).toBe(true);
+    expect(parse("x".repeat(64))).toBe(true);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["longer than 64 characters", "x".repeat(65)],
+    ["a space", "26 4"],
+    ["a tab", "26\t4"],
+    ["a newline", "35\n"],
+    ["a control character", "35\u0000"],
+    ["starting with '-', like an option", "-35"],
+  ])("refuses a version that is %s", (_label, version) => {
+    expect(parse(version)).toBe(false);
   });
 });
 

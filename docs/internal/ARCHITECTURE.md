@@ -176,9 +176,10 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   `eventLog.*` and `gateway.*` (worker-only keys warn and are ignored). It always listens
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
-  silently overridden. `nuke.run`, `cleanup.run`, `doctor.run` and
-  `driver.passthrough` answer `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they
-  act on one machine's devices, and stay per-worker. The lease lifecycle
+  silently overridden. `nuke.run`, `cleanup.run`, `doctor.run`,
+  `driver.passthrough` and `component.install` answer
+  `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they act on one machine's devices
+  or components, and stay per-worker. The lease lifecycle
   (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`
   are forwarded through the fleet's own queue and routing policy (§10-§19,
   `FleetLeaseCoordinator`) rather than answering `UNSUPPORTED_IN_GATEWAY_MODE`;
@@ -226,15 +227,19 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-Four changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+Five changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
 path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
 and `modelAliases` required, taking it to 6; ADR 0007 makes every device report its device mode
 as a required `mode`, taking it to 7, then lets a lease request choose that
-mode with `mode` in place of `full`, taking it to 8. So the range both sides
-advertise is `{min: 8, max: 8}`, an older client and a current daemon simply
+mode with `mode` in place of `full`, taking it to 8. ADR 0010 adds
+`component.install` and its `component-progress` push, taking it to 9: a
+gateway's `worker.install-component` (ADR 0010 §7, not yet implemented)
+relays that operation to workers, so a worker without it must be
+`incompatible` rather than fail in the middle of a relay. So the range both
+sides advertise is `{min: 9, max: 9}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -782,8 +787,9 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   than by accident. ADR 0008 moves it again, to `{min: 6, max: 6}`, because
   the catalog's `modelRuntimes` and `modelAliases` are required, and ADR 0007 to
   `{min: 7, max: 7}`, because a device's `mode` is required, then to
-  `{min: 8, max: 8}`, because a lease request chooses it; a worker on an
-  older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
+  `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
+  `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers; a
+  worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
   hidden either — that is the machine an operator has to go and upgrade, and
@@ -1384,8 +1390,11 @@ Android. One function per driver builds it.
 `ComponentInstaller` (`src/core/component-installer.ts`) is the only caller of
 `installComponent`. `src/daemon/main.ts` builds one with the drivers, a
 `DiskSpaceGuard`, the registry, the bus, the shared `SerializedDecision` and
-`downloads.timeoutMs`, hands it to the lease engine, and closes it on dispose
-before the drivers are disposed. It keeps one queue per platform, first come
+`downloads.timeoutMs`, hands it to the lease engine and to the `Dispatcher`
+(through `DaemonServer`), and closes it on dispose before the drivers are
+disposed. A call for a platform with no driver, or after `close()`, is refused
+at the door; any other call is admitted synchronously (`onAdmitted`) before it
+is queued or joins an install. It keeps one queue per platform, first come
 first served; iOS and Android install at the same time. A call naming a
 component that is already waiting or running joins that install and gets its
 outcome or its error. When a call reaches the front, the installer runs the
@@ -1413,6 +1422,26 @@ missing, downloadable, and the request may download, calls the installer with
 `stillNeeded` = "`resolveSpec` still throws `RuntimeMissingError`" and resolves
 once more. Without `allowDownload` the first error stands. Warm-pool
 re-readiness and startup convergence never reach the installer (safety rule 4).
+
+The operator path is `component.install` (ADR 0010 §6), an admin operation
+with input `{ platform, version }`; `version` is bounded by the contract
+schema (1 to 64 characters, no whitespace or control character, no leading
+`-`) before it
+reaches a driver, which builds an installer argument from it (safety rule 10).
+The `Dispatcher` handler asks `effectiveAllowDownload(policy, true)` — the
+command is the consent, so only `downloads.policy: "never"` refuses it, with
+`DOWNLOADS_DISABLED` and before the installer is reached — then calls the
+installer with the session's principal as `requesterId`. The installer's
+progress becomes the request-scoped `component-progress` push (`waiting`, or
+`downloading` with the driver's percentage as a `fraction`); the socket
+transport writes it as frames keyed by the request id, and
+`POST /v1/components/install` as SSE `progress` events. That route commits
+to its stream at the installer's `onAdmitted` (the session's `onStarted`),
+the same decision point the exec route takes at a spawn, so a refusal before
+it is a JSON error with its status and everything after is a terminal SSE
+event. Neither transport stops the install when its client goes away; a
+repeat joins it. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`; relaying to
+workers is a separate gateway operation.
 
 ## External APIs behind interfaces (ports)
 

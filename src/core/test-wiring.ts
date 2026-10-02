@@ -12,15 +12,17 @@ import { SerializedDecision } from "./serialized-decision.js";
  * installer's registry writes are serialized with every other one. Unlimited free disk. A test
  * that passes its own `components` gets the gate alone.
  */
-export function testComponentWiring(options: {
+export function testComponentWiring<
+  Components extends Pick<ComponentInstaller, "install"> = ComponentInstaller,
+>(options: {
   readonly clock: Clock;
   readonly drivers: readonly Driver[];
   readonly eventBus: Pick<EventBus, "emit">;
   readonly registry: Pick<Registry, "recordComponent">;
   /** Stands in for the installer, when a test needs to see whether it was reached at all. */
-  readonly components?: Pick<ComponentInstaller, "install"> | undefined;
+  readonly components?: Components | undefined;
 }): {
-  readonly components: Pick<ComponentInstaller, "install">;
+  readonly components: Components | ComponentInstaller;
   readonly decisions: SerializedDecision;
 } {
   const decisions = new SerializedDecision();

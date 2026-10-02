@@ -25,18 +25,19 @@ import {
   type Role,
 } from "../contract/index.js";
 import type { IpcConnection, IpcConnector } from "../ports/index.js";
-import { SimlockWire, WireCallError, type LeaseScopedPush } from "./wire.js";
+import { SimlockWire, WireCallError, type CallHooks, type LeaseScopedPush } from "./wire.js";
 import type {
   CatalogGetInput,
   CatalogGetOutput,
   CleanupRunInput,
   CleanupRunOutput,
+  ComponentInstallInput,
+  ComponentInstallOutput,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
-  DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
@@ -44,13 +45,13 @@ import type {
   ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
+  InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
   PassthroughCommand,
   LeaseGrant,
   LeaseListOutput,
   LeaseLostPush,
-  LeaseProgress,
   LeaseReleaseAllOutput,
   LeaseReleaseInput,
   LeaseReleaseOutput,
@@ -81,6 +82,9 @@ export type {
   CatalogGetOutput,
   CleanupRunInput,
   CleanupRunOutput,
+  ComponentInstallInput,
+  ComponentInstallOutput,
+  ComponentInstallProgress,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
@@ -96,6 +100,7 @@ export type {
   EventsReplayOutput,
   EventsSubscribeOutput,
   EventsUnsubscribeOutput,
+  InstallComponentOptions,
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,
@@ -222,6 +227,17 @@ export interface SimlockAdminClient extends SimlockClient {
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
+
+  /**
+   * ADR 0010 §6: installs one iOS simulator runtime or Android system image, with no lease.
+   * Resolves once it is installed or found already there; `options.onProgress` hears `waiting`
+   * while another install on the platform runs ahead, then `downloading`. Refused with
+   * `DOWNLOADS_DISABLED` under `downloads.policy: "never"`.
+   */
+  installComponent(
+    input: ComponentInstallInput,
+    options?: InstallComponentOptions,
+  ): Promise<ComponentInstallOutput>;
 }
 
 /** Internal: builds either client. `admin` toggles only which methods the returned object
@@ -348,6 +364,7 @@ function buildDegradedClient(
     drainWorker: () => rejected(),
     undrainWorker: () => rejected(),
     removeWorker: () => rejected(),
+    installComponent: () => rejected(),
   };
   return client;
 }
@@ -415,7 +432,7 @@ class SimlockClientImpl {
 
     if (signal?.aborted === true) throw cancelledError();
 
-    const requestPromise = this.#callRaw("lease.request", parsed, onProgress).then(
+    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then(
       (grant) => grant as LeaseGrant,
     );
 
@@ -451,13 +468,10 @@ class SimlockClientImpl {
   }
 
   async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
-    const payload = await this.#callRaw(
-      "device.exec",
-      this.#parseInput("device.exec", input),
-      undefined,
-      options.onOutput,
-      options.onStarted,
-    );
+    const payload = await this.#callRaw("device.exec", this.#parseInput("device.exec", input), {
+      onOutput: options.onOutput,
+      onStarted: options.onStarted,
+    });
     return this.#parseOutput("device.exec", payload);
   }
 
@@ -549,6 +563,18 @@ class SimlockClientImpl {
 
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
     return this.#call("worker.undrain", input);
+  }
+
+  async installComponent(
+    input: ComponentInstallInput,
+    options: InstallComponentOptions = {},
+  ): Promise<ComponentInstallOutput> {
+    const payload = await this.#callRaw(
+      "component.install",
+      this.#parseInput("component.install", input),
+      { onComponentProgress: options.onProgress },
+    );
+    return this.#parseOutput("component.install", payload);
   }
 
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput> {
@@ -725,19 +751,11 @@ class SimlockClientImpl {
     return this.#parseOutput(name, payload);
   }
 
-  #callRaw(
-    name: OperationName,
-    input: unknown,
-    onProgress?: (progress: LeaseProgress) => void,
-    onOutput?: (chunk: DeviceOutputChunk) => void,
-    onStarted?: () => void,
-  ): Promise<unknown> {
+  #callRaw(name: OperationName, input: unknown, hooks: CallHooks = {}): Promise<unknown> {
     const parsed = this.#parseInput(name, input);
-    return this.#wire
-      .call(name, parsed, onProgress, onOutput, onStarted)
-      .catch((error: unknown) => {
-        throw toSimlockError(error);
-      });
+    return this.#wire.call(name, parsed, hooks).catch((error: unknown) => {
+      throw toSimlockError(error);
+    });
   }
 }
 
