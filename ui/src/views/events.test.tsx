@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type ApiPath, type ApiResponse } from "../api";
+import { Loaded } from "../live/route-state";
 import { connect, settle } from "../live/test-support";
 import { EventFeed } from "./event-feed";
 import { EventList } from "./events";
@@ -63,6 +64,15 @@ function openView(first: Replay = []) {
       return (feed.snapshot().data ?? []).map((event) => `${event.seq}@${event.timestamp}`);
     },
   };
+}
+
+/** What the view's page shows for the feed now, as `EventsView` renders it, as markup. */
+function screen(feed: EventFeed): string {
+  return renderToStaticMarkup(
+    <Loaded state={feed.snapshot()}>
+      {(events) => <EventList events={events} workers={undefined} />}
+    </Loaded>,
+  );
 }
 
 /** A worker the daemon lists, with a label or without one. */
@@ -325,7 +335,7 @@ describe("the events view", () => {
     await settle();
     view.daemon.openStream()?.send(frame(envelope(2, T0)));
     await settle();
-    expect(view.feed.snapshot()).toEqual({});
+    expect(text(screen(view.feed))).toBe("Loading…");
 
     answer({ events: [envelope(1, T0 - 1_000)] });
     await settle();
@@ -348,6 +358,11 @@ describe("the events view", () => {
 
     expect(view.feed.snapshot().error).toBe(refusal);
     expect(view.shown()).toEqual([`1@${T0}`]);
+    const shown = screen(view.feed);
+    expect(shown).toContain(
+      '<p class="refusal" role="alert">Internal error</p><ol class="events">',
+    );
+    expect(text(shown)).toMatch(/^Internal error \d\d:\d\d:\d\d lease\.granted$/);
 
     // The next load that answers clears it.
     view.replayWith([envelope(2, T0 + 1_000)]);
