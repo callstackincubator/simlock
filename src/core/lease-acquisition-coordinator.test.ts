@@ -14,8 +14,9 @@ import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
+import { ComponentInstaller } from "./component-installer.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import { type Driver, DriverCrashError, readyTransitionUpdate } from "./driver.js";
+import { DiskSpaceGuard, type Driver, DriverCrashError, readyTransitionUpdate } from "./driver.js";
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
@@ -35,7 +36,7 @@ const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
-function config(maxDevices = 1): Config {
+function config(maxDevices = 1, maxRunning = 1): Config {
   return {
     mode: "worker",
     exec: { timeoutMs: 600_000 },
@@ -73,9 +74,9 @@ function config(maxDevices = 1): Config {
       strategy: "resource",
       config: {
         limits: {
-          android: { maxDevices, maxRunning: 1 },
-          ios: { maxDevices, maxRunning: 1 },
-          maxRunning: 1,
+          android: { maxDevices, maxRunning },
+          ios: { maxDevices, maxRunning },
+          maxRunning,
         },
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
@@ -95,10 +96,15 @@ function config(maxDevices = 1): Config {
 
 async function createHarness(
   options: {
+    /** Stands in for the installer, when a test needs to see whether it was reached at all. */
+    readonly components?: Pick<ComponentInstaller, "install">;
     readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
     readonly drivers?: readonly Driver[];
+    /** Free disk the installer sees; unlimited unless a test says otherwise. */
+    readonly freeDiskBytes?: number;
     readonly logger?: Logger;
     readonly maxDevices?: number;
+    readonly maxRunning?: number;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -121,7 +127,7 @@ async function createHarness(
   const catalog = new DriverCatalog(drivers);
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(
-      config(options.maxDevices).capacity,
+      config(options.maxDevices, options.maxRunning).capacity,
       new FakeSystemStats({
         cpuCount: 8,
         freeRamBytes: 32 * gibibyte,
@@ -148,8 +154,21 @@ async function createHarness(
       coordinator?.kick();
     },
   });
+  const components =
+    options.components ??
+    new ComponentInstaller({
+      clock,
+      decisions,
+      diskSpace: new DiskSpaceGuard(),
+      drivers: catalog,
+      eventBus: bus,
+      filesystem: new MemoryFilesystem(options.freeDiskBytes),
+      registry,
+      timeoutMs: 1_200_000,
+    });
   coordinator = new LeaseAcquisitionCoordinator({
     claims,
+    components,
     decisions,
     defaultModes: options.defaultModes ?? {},
     drivers: catalog,
@@ -171,7 +190,7 @@ async function createHarness(
       store: registry,
     }),
   });
-  return { bus, clock, coordinator, driver, filesystem, queue, registry };
+  return { bus, clock, components, coordinator, driver, filesystem, queue, registry };
 }
 
 async function seedReady(
@@ -226,6 +245,127 @@ async function seedShutdown(
     payload: { deviceId: ready.id, initiator: "test" },
   });
 }
+
+describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
+  function installs(driver: FakeDriver): readonly unknown[] {
+    return driver.calls
+      .filter((call) => call.operation === "installComponent")
+      .map((call) => call.arguments[0]);
+  }
+
+  it("installs once for two lease requests for the same missing runtime, and grants both", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+
+    const first = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    const second = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "b",
+      requesterId: "b",
+    });
+    await flush();
+    driver.releaseInstalls();
+
+    const grants = await Promise.all([first, second]);
+    expect(grants.map((grant) => grant.device.spec.osVersion)).toEqual(["26.5", "26.5"]);
+    expect(installs(driver)).toEqual(["26.5"]);
+  });
+
+  it("starts the install for a second missing runtime on the same platform only after the first one has ended", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+
+    const first = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    const second = harness.coordinator.request(
+      { ...request, osVersion: "27.0" },
+      { allowDownload: true, ownerId: "b", requesterId: "b" },
+    );
+    await flush();
+    expect(installs(driver)).toEqual(["26.5"]);
+
+    driver.releaseInstalls();
+    await first;
+    await settle();
+    expect(installs(driver)).toEqual(["26.5", "27.0"]);
+    // The second request planned while the first device was provisioning, when that device and
+    // its capacity reservation both counted, so it queued; nothing wakes the queue when the first
+    // is granted (true before this change too). A kick stands in for the next release.
+    harness.coordinator.kick();
+    await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
+  });
+
+  it("starts no install for a request that waited behind an install which made its runtime available, and grants it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+
+    const byVersion = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    // No version: the fake names its word for newest, a different component that waits its turn.
+    const newest = harness.coordinator.request(
+      { model: "iPhone 16", platform: "ios" },
+      { allowDownload: true, ownerId: "b", requesterId: "b" },
+    );
+    await flush();
+    driver.releaseInstalls();
+
+    await expect(byVersion).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
+    await expect(newest).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
+    expect(installs(driver)).toEqual(["26.5"]);
+  });
+
+  it("fails a request without allowDownload for a missing runtime with RuntimeMissingError, and never calls the installer", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const asked: unknown[] = [];
+    const harness = await createHarness({
+      components: {
+        install: async (call) => {
+          asked.push(call);
+          return { outcome: "installed", version: "26.5" };
+        },
+      },
+      drivers: [driver],
+    });
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "a", requesterId: "a" }),
+    ).rejects.toMatchObject({ component: "26.5", name: "RuntimeMissingError" });
+    expect(asked).toEqual([]);
+  });
+
+  it("fails the request with InsufficientDiskSpaceError when the install does not fit, and never calls installComponent", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      componentFootprint: { bytes: 8 * gibibyte, path: "/" },
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver], freeDiskBytes: gibibyte });
+
+    await expect(
+      harness.coordinator.request(request, { allowDownload: true, ownerId: "a", requesterId: "a" }),
+    ).rejects.toMatchObject({ name: "InsufficientDiskSpaceError" });
+    expect(installs(driver)).toEqual([]);
+  });
+});
 
 describe("LeaseAcquisitionCoordinator", () => {
   it("admits one requester and rejects an active or pending duplicate", async () => {

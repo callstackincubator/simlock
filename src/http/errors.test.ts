@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 
 import {
+  ComponentInstallTimeoutError,
   InsufficientDiskSpaceError,
   LicenseNotAcceptedError,
   NoCapacityError,
@@ -86,6 +87,7 @@ describe("mapError", () => {
         new LicenseNotAcceptedError("android", "system-images;android-35;google_apis"),
         "LICENSE_NOT_ACCEPTED",
       ],
+      [new ComponentInstallTimeoutError("android", "35", 1_200_000), "DOWNLOAD_TIMEOUT"],
       [new StartupFailedError(), "DAEMON_STARTUP_FAILED"],
       [new DoctorUnavailableError(), "DOCTOR_UNAVAILABLE"],
       [new NukeUnavailableError(), "NUKE_UNAVAILABLE"],

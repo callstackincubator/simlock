@@ -1,0 +1,533 @@
+import { describe, expect, it } from "vitest";
+
+import { EventBus } from "../bus/index.js";
+import { FakeClock, MemoryFilesystem, type TimerHandle } from "../ports/index.js";
+import {
+  ComponentInstaller,
+  ComponentInstallerClosedError,
+  type ComponentInstallerProgress,
+  type ComponentInstallRequest,
+} from "./component-installer.js";
+import {
+  ComponentInstallTimeoutError,
+  DiskSpaceGuard,
+  DriverCrashError,
+  InsufficientDiskSpaceError,
+} from "./driver.js";
+import { DriverCatalog } from "./driver-catalog.js";
+import { FakeDriver } from "./fake-driver.js";
+import { Registry } from "./registry.js";
+import { SerializedDecision } from "./serialized-decision.js";
+
+const gibibyte = 1024 ** 3;
+const statePath = "/home/agent/.simlock/state.json";
+const timeoutMs = 60_000;
+
+/** A clock whose timers fire only when a test fires them, one at a time, by creation order. */
+class ManualClock extends FakeClock {
+  readonly #timers: { callback: () => void; cancelled: boolean }[] = [];
+
+  override setTimer(_delayMs: number, callback: () => void): TimerHandle {
+    const timer = { callback, cancelled: false };
+    this.#timers.push(timer);
+    return timer as unknown as TimerHandle;
+  }
+
+  override cancel(handle: TimerHandle): void {
+    (handle as unknown as { cancelled: boolean }).cancelled = true;
+  }
+
+  fire(index: number): void {
+    const timer = this.#timers[index];
+    if (timer === undefined || timer.cancelled) throw new Error(`No live timer ${String(index)}`);
+    timer.cancelled = true;
+    timer.callback();
+  }
+}
+
+async function createHarness(
+  options: {
+    readonly clock?: FakeClock;
+    readonly drivers?: (clock: FakeClock) => readonly FakeDriver[];
+    readonly freeDiskBytes?: number;
+  } = {},
+) {
+  const clock = options.clock ?? new FakeClock(1_000);
+  const bus = new EventBus(clock);
+  const events: { readonly event: string; readonly payload: unknown }[] = [];
+  bus.subscribeAll((envelope) => {
+    if (envelope.event.startsWith("component.")) {
+      events.push({ event: envelope.event, payload: envelope.payload });
+    }
+  });
+  const drivers = options.drivers?.(clock) ?? [
+    new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+  ];
+  const stateFilesystem = new MemoryFilesystem();
+  const registry = await Registry.load({
+    clock,
+    eventBus: bus,
+    filesystem: stateFilesystem,
+    idGenerator: { generate: () => "id" },
+    statePath,
+  });
+  const installer = new ComponentInstaller({
+    clock,
+    decisions: new SerializedDecision(),
+    diskSpace: new DiskSpaceGuard(),
+    drivers: new DriverCatalog(drivers),
+    eventBus: bus,
+    filesystem: new MemoryFilesystem(options.freeDiskBytes),
+    registry,
+    timeoutMs,
+  });
+  const ios = drivers.find((driver) => driver.platform === "ios") as FakeDriver;
+  return { bus, clock, drivers, events, installer, ios, registry, stateFilesystem };
+}
+
+function installs(driver: FakeDriver): readonly unknown[] {
+  return driver.calls
+    .filter((call) => call.operation === "installComponent")
+    .map((call) => call.arguments[0]);
+}
+
+/** Lets every settled promise and queued continuation run. */
+async function flush(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) {
+    await Promise.resolve();
+  }
+}
+
+/** A promise's outcome without awaiting it, so a test can look while it is still open. */
+function track<T>(promise: Promise<T>): {
+  readonly settled: () => boolean;
+  readonly result: () => T | undefined;
+  readonly error: () => unknown;
+} {
+  let state: { kind: "open" } | { kind: "ok"; value: T } | { kind: "error"; error: unknown } = {
+    kind: "open",
+  };
+  promise.then(
+    (value) => {
+      state = { kind: "ok", value };
+    },
+    (error: unknown) => {
+      state = { error, kind: "error" };
+    },
+  );
+  return {
+    error: () => (state.kind === "error" ? state.error : undefined),
+    result: () => (state.kind === "ok" ? state.value : undefined),
+    settled: () => state.kind !== "open",
+  };
+}
+
+function ios(component: string, extra: Partial<ComponentInstallRequest> = {}) {
+  return { component, platform: "ios" as const, ...extra };
+}
+
+describe("ComponentInstaller", () => {
+  it("runs one install for calls that name the same component, and every call gets its outcome", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    const calls = [1, 2, 3].map(() => track(harness.installer.install(ios("27.0"))));
+    await flush();
+    harness.ios.releaseInstalls();
+    await flush();
+
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+    for (const call of calls) {
+      expect(call.result()).toEqual({ outcome: "installed", version: "27.0" });
+    }
+  });
+
+  it("emits component.install-started and component.installed once each for an install three calls joined", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    for (const requesterId of ["a", "b", "c"]) {
+      void harness.installer.install(ios("27.0", { requesterId }));
+    }
+    await flush();
+    harness.clock.advance(5_000);
+    harness.ios.releaseInstalls();
+    await flush();
+
+    expect(harness.events).toEqual([
+      {
+        event: "component.install-started",
+        payload: { componentId: "27.0", platform: "ios", requesterId: "a" },
+      },
+      {
+        event: "component.installed",
+        payload: {
+          alreadyPresent: false,
+          componentId: "27.0",
+          durationMs: 5_000,
+          platform: "ios",
+          requesterId: "a",
+          version: "27.0",
+        },
+      },
+    ]);
+  });
+
+  it("starts a second component's install on the same platform only after the first one has ended", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    const first = track(harness.installer.install(ios("27.0")));
+    const second = track(harness.installer.install(ios("28.0")));
+    await flush();
+
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+    harness.ios.releaseInstalls();
+    harness.ios.holdInstalls();
+    await flush();
+
+    expect(first.settled()).toBe(true);
+    expect(installs(harness.ios)).toEqual(["27.0", "28.0"]);
+    expect(second.settled()).toBe(false);
+    harness.ios.releaseInstalls();
+    await flush();
+    expect(second.result()).toEqual({ outcome: "installed", version: "28.0" });
+  });
+
+  it("tells a call that is behind another install that it is waiting, and fans the driver's progress out to every joined call", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({ availableOsVersions: [], clock, installProgress: [40], platform: "ios" }),
+      ],
+    });
+    harness.ios.holdInstalls();
+    const firstA: ComponentInstallerProgress[] = [];
+    const firstB: ComponentInstallerProgress[] = [];
+    const behind: ComponentInstallerProgress[] = [];
+
+    void harness.installer.install(ios("27.0", { onProgress: (report) => firstA.push(report) }));
+    void harness.installer.install(ios("27.0", { onProgress: (report) => firstB.push(report) }));
+    void harness.installer.install(ios("28.0", { onProgress: (report) => behind.push(report) }));
+    await flush();
+
+    expect(firstA).toEqual([{ percent: 40, stage: "downloading" }]);
+    expect(firstB).toEqual([{ percent: 40, stage: "downloading" }]);
+    expect(behind).toEqual([{ stage: "waiting" }]);
+  });
+
+  it("runs an iOS install and an Android install at the same time", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({ availableOsVersions: [], clock, platform: "ios" }),
+        new FakeDriver({ availableOsVersions: [], clock, platform: "android" }),
+      ],
+    });
+    for (const driver of harness.drivers) driver.holdInstalls();
+
+    void harness.installer.install(ios("27.0"));
+    void harness.installer.install({ component: "35", platform: "android" });
+    await flush();
+
+    expect(harness.drivers.map((driver) => installs(driver))).toEqual([["27.0"], ["35"]]);
+  });
+
+  it("rejects every call joined to a failed install with that failure, and the next call starts a new install", async () => {
+    const harness = await createHarness();
+    const failure = new DriverCrashError("xcodebuild failed");
+    harness.ios.failOn("installComponent", 1, failure);
+
+    const joined = await Promise.allSettled([
+      harness.installer.install(ios("27.0")),
+      harness.installer.install(ios("27.0")),
+    ]);
+    const next = await harness.installer.install(ios("27.0"));
+
+    expect(joined).toEqual([
+      { reason: failure, status: "rejected" },
+      { reason: failure, status: "rejected" },
+    ]);
+    expect(next).toEqual({ outcome: "installed", version: "27.0" });
+    expect(installs(harness.ios)).toEqual(["27.0", "27.0"]);
+    expect(harness.events.map((event) => event.event)).toEqual([
+      "component.install-started",
+      "component.install-failed",
+      "component.install-started",
+      "component.installed",
+    ]);
+  });
+
+  it("ends a call whose stillNeeded answers false as not-needed, with no install and no event", async () => {
+    const harness = await createHarness();
+
+    await expect(
+      harness.installer.install(ios("27.0", { stillNeeded: async () => false })),
+    ).resolves.toEqual({ outcome: "not-needed" });
+    expect(harness.ios.calls.map((call) => call.operation)).toEqual([]);
+    expect(harness.events).toEqual([]);
+  });
+
+  it("runs a waiting call's stillNeeded when it reaches the front, after the install ahead of it ended", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [new FakeDriver({ availableOsVersions: [], clock, platform: "ios" })],
+    });
+    harness.ios.holdInstalls();
+    let asked = 0;
+
+    void harness.installer.install(ios("27.0"));
+    const waiting = track(
+      harness.installer.install(
+        ios("latest", {
+          stillNeeded: async () => {
+            asked += 1;
+            return (await harness.ios.findComponent("27.0")) === undefined;
+          },
+        }),
+      ),
+    );
+    await flush();
+    expect(asked).toBe(0);
+    harness.ios.releaseInstalls();
+    await flush();
+
+    expect(asked).toBe(1);
+    expect(waiting.result()).toEqual({ outcome: "not-needed" });
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+  });
+
+  it("answers already-installed for an installed component with no reservation, no event and no install, even on a full disk", async () => {
+    const harness = await createHarness({ freeDiskBytes: 0 });
+
+    await expect(harness.installer.install(ios("26.5"))).resolves.toEqual({
+      outcome: "already-installed",
+      version: "26.5",
+    });
+    expect(installs(harness.ios)).toEqual([]);
+    expect(harness.events).toEqual([]);
+    expect(harness.registry.snapshot.components).toEqual([]);
+  });
+
+  it("fails with InsufficientDiskSpaceError and never calls installComponent when the footprint does not fit", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          componentFootprint: { bytes: 8 * gibibyte, path: "/volume" },
+          platform: "ios",
+        }),
+      ],
+      freeDiskBytes: 4 * gibibyte,
+    });
+
+    await expect(harness.installer.install(ios("27.0"))).rejects.toBeInstanceOf(
+      InsufficientDiskSpaceError,
+    );
+    expect(installs(harness.ios)).toEqual([]);
+    expect(harness.events).toEqual([]);
+  });
+
+  it("refuses the second of two installs on different platforms that fit one at a time but not together, before its driver is called", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          componentFootprint: { bytes: 6 * gibibyte, path: "/volume" },
+          platform: "ios",
+        }),
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          componentFootprint: { bytes: 6 * gibibyte, path: "/volume" },
+          platform: "android",
+        }),
+      ],
+      freeDiskBytes: 10 * gibibyte,
+    });
+    const [iosDriver, androidDriver] = harness.drivers as [FakeDriver, FakeDriver];
+    iosDriver.holdInstalls();
+
+    const first = track(harness.installer.install(ios("27.0")));
+    await flush();
+    await expect(
+      harness.installer.install({ component: "35", platform: "android" }),
+    ).rejects.toBeInstanceOf(InsufficientDiskSpaceError);
+
+    expect(installs(androidDriver)).toEqual([]);
+    expect(installs(iosDriver)).toEqual(["27.0"]);
+    iosDriver.releaseInstalls();
+    await flush();
+    expect(first.result()).toEqual({ outcome: "installed", version: "27.0" });
+  });
+
+  it("records an install in the registry with platform, version and the driver's receipt, and the record survives a reload", async () => {
+    const harness = await createHarness();
+    harness.clock.advance(2_000);
+
+    await harness.installer.install(ios("27.0"));
+    const reloaded = await Registry.load({
+      clock: harness.clock,
+      eventBus: harness.bus,
+      filesystem: harness.stateFilesystem,
+      idGenerator: { generate: () => "id" },
+      statePath,
+    });
+
+    const expected = [
+      {
+        installedAt: 3_000,
+        platform: "ios",
+        receipt: { install: "1", version: "27.0" },
+        version: "27.0",
+      },
+    ];
+    expect(harness.registry.snapshot.components).toEqual(expected);
+    expect(reloaded.snapshot.components).toEqual(expected);
+  });
+
+  it("stores no record and emits component.installed with alreadyPresent when an install of newest finds the newest runtime already there", async () => {
+    const harness = await createHarness();
+
+    await expect(harness.installer.install(ios("latest"))).resolves.toEqual({
+      outcome: "already-installed",
+      version: "26.5",
+    });
+    expect(installs(harness.ios)).toEqual(["latest"]);
+    expect(harness.registry.snapshot.components).toEqual([]);
+    expect(harness.events.at(-1)).toEqual({
+      event: "component.installed",
+      payload: {
+        alreadyPresent: true,
+        componentId: "latest",
+        durationMs: 0,
+        platform: "ios",
+        version: "26.5",
+      },
+    });
+  });
+
+  it("fails a call still waiting when downloads.timeoutMs has passed since it arrived, without calling its driver", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    void harness.installer.install(ios("27.0")).catch(() => undefined);
+    const waiting = track(harness.installer.install(ios("28.0")));
+    await flush();
+    harness.clock.advance(timeoutMs);
+    await flush();
+
+    expect(waiting.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
+    expect(harness.ios.calls.map((call) => call.arguments[0])).not.toContain("28.0");
+  });
+
+  it("aborts the install of a call that waited for half its budget when the other half has passed, not a full budget later", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    void harness.installer.install(ios("27.0"));
+    await flush();
+    harness.clock.advance(1);
+    const behind = track(harness.installer.install(ios("28.0")));
+    await flush();
+    // Half its budget spent waiting; then the install ahead ends and its own starts.
+    harness.clock.advance(timeoutMs / 2);
+    harness.ios.releaseInstalls();
+    harness.ios.holdInstalls();
+    await flush();
+    expect(installs(harness.ios)).toEqual(["27.0", "28.0"]);
+
+    harness.clock.advance(timeoutMs / 2 - 1);
+    await flush();
+    expect(behind.settled()).toBe(false);
+    harness.clock.advance(1);
+    await flush();
+    expect(behind.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
+    expect(harness.events.map((event) => event.event)).toEqual([
+      "component.install-started",
+      "component.installed",
+      "component.install-started",
+      "component.install-failed",
+    ]);
+  });
+
+  it("aborts a running install at the deadline of the oldest call joined to it, and fails a call that joined later at that moment", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    const oldest = track(harness.installer.install(ios("27.0")));
+    await flush();
+    harness.clock.advance(10_000);
+    const later = track(harness.installer.install(ios("27.0")));
+    await flush();
+    harness.clock.advance(timeoutMs - 10_000);
+    await flush();
+
+    const timedOut = new ComponentInstallTimeoutError("ios", "27.0", timeoutMs);
+    expect(oldest.error()).toEqual(timedOut);
+    expect(later.error()).toEqual(timedOut);
+    expect(harness.events.map((event) => event.event)).toEqual([
+      "component.install-started",
+      "component.install-failed",
+    ]);
+  });
+
+  // Every call has the same budget, so a waiting call's deadline never falls before that of the
+  // oldest call on the install running ahead of it. Firing only the waiting call's timer is what
+  // shows its expiry touches nothing but its own call and its own install.
+  it("leaves the install running ahead of a waiting call alone when that call times out", async () => {
+    const harness = await createHarness({ clock: new ManualClock() });
+    harness.ios.holdInstalls();
+
+    const ahead = track(harness.installer.install(ios("27.0")));
+    const waiting = track(harness.installer.install(ios("28.0")));
+    await flush();
+    (harness.clock as ManualClock).fire(1);
+    await flush();
+    expect(waiting.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
+    harness.ios.releaseInstalls();
+    await flush();
+
+    expect(ahead.result()).toEqual({ outcome: "installed", version: "27.0" });
+    expect(harness.events.map((event) => event.event)).toEqual([
+      "component.install-started",
+      "component.installed",
+    ]);
+  });
+
+  it("drops a waiting install from the queue when its last call times out", async () => {
+    const harness = await createHarness({ clock: new ManualClock() });
+    harness.ios.holdInstalls();
+
+    void harness.installer.install(ios("27.0"));
+    void harness.installer.install(ios("28.0")).catch(() => undefined);
+    await flush();
+    (harness.clock as ManualClock).fire(1);
+    await flush();
+    harness.ios.releaseInstalls();
+    await flush();
+
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+  });
+
+  it("aborts the running install and rejects the waiting calls on close", async () => {
+    const harness = await createHarness();
+    harness.ios.holdInstalls();
+
+    const running = track(harness.installer.install(ios("27.0")));
+    const waiting = track(harness.installer.install(ios("28.0")));
+    await flush();
+    await harness.installer.close();
+    await flush();
+
+    expect(running.error()).toBeInstanceOf(ComponentInstallerClosedError);
+    expect(waiting.error()).toBeInstanceOf(ComponentInstallerClosedError);
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+    expect(harness.events.map((event) => event.event)).toEqual([
+      "component.install-started",
+      "component.install-failed",
+    ]);
+    await expect(harness.installer.install(ios("29.0"))).rejects.toBeInstanceOf(
+      ComponentInstallerClosedError,
+    );
+  });
+});

@@ -27,7 +27,7 @@ describe("Registry", () => {
       statePath,
     });
 
-    expect(registry.snapshot).toEqual({ devices: [], leases: [] });
+    expect(registry.snapshot).toEqual({ components: [], devices: [], leases: [] });
   });
 
   it("atomically persists a registered device before emitting device.provisioned", async () => {

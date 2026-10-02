@@ -199,19 +199,36 @@ export interface Driver {
    * will actually slim; for any other request, and for a slim one it cannot slim, it returns a
    * full spec (ADR 0007 §4). A driver that does not slim at all never sets the spec's mode.
    */
-  resolveSpec(
-    request: DeviceRequest,
+  /*
+   * Never downloads (ADR 0010 §2). When a download could satisfy the request it throws
+   * `RuntimeMissingError` with `downloadable: true` and `component`, the string to hand to
+   * `installComponent` -- the core never decides whether to download from inside a driver.
+   */
+  resolveSpec(request: DeviceRequest): Promise<DeviceSpec>;
+  /**
+   * A read: the installed component that satisfies `component`, with its exact version and its
+   * receipt, or `undefined`. Never downloads. A string that is not a version, such as the
+   * driver's word for "newest", answers `undefined`: only an installer run can tell.
+   */
+  findComponent(component: string): Promise<InstalledComponent | undefined>;
+  /**
+   * Runs the platform installer for `component` and verifies the result against a fresh read.
+   * `installed` when the receipt it ends with was not there before the run, `already-installed`
+   * when it was. Ends the installer when `signal` fires. Joins no callers, checks no disk, emits
+   * no events and reads no policy: `ComponentInstaller` is its only caller and does all four.
+   */
+  installComponent(
+    component: string,
     options: {
-      readonly allowDownload: boolean;
-      /**
-       * The requester on whose behalf this resolution runs, when known. Optional: a caller that
-       * resolves outside of a lease request (e.g. a driver revalidating its own cached spec) has
-       * no requester to attribute. Threaded through to a driver's component-install diagnostics
-       * so the resulting `component.install-*` events carry it -- see `docs/internal/EVENTS.md`.
-       */
-      readonly requesterId?: string;
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
     },
-  ): Promise<DeviceSpec>;
+  ): Promise<ComponentInstallResult>;
+  /**
+   * The disk one install needs, as a fixed estimate, and the path it lands on. Neither platform
+   * installer reports a size before it downloads, so this is what `ComponentInstaller` reserves.
+   */
+  readonly componentFootprint: { readonly path: string; readonly bytes: number };
   provision(spec: DeviceSpec): Promise<DriverDevice>;
   /**
    * Boots the device and returns it with a freshly read `address`. Never trust the address a
@@ -424,25 +441,90 @@ export type DriverRejection =
   | DriverRefusal<"driver.root-rejected">
   | DriverRefusal<"driver.adb-server-rejected">;
 
+/**
+ * What names an installed component itself, opaque to the core: it compares receipts for
+ * equality and reads nothing in them (ADR 0010 §5). It differs for every install, so a component
+ * the user deleted and installed again does not match a record of Simlock's earlier install.
+ */
+export type ComponentReceipt = Readonly<Record<string, string>>;
+
+/** Whether two receipts name the same installed thing: the same keys with the same values. */
+export function sameReceipt(left: ComponentReceipt, right: ComponentReceipt): boolean {
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((key) => Object.hasOwn(right, key) && left[key] === right[key])
+  );
+}
+
+/** An installed component: the exact version the catalog lists, and its receipt. */
+export interface InstalledComponent {
+  readonly version: string;
+  readonly receipt: ComponentReceipt;
+}
+
+/**
+ * What one `installComponent` run ended with. `installed` when the receipt was not there before
+ * the run; `already-installed` when it was, so Simlock never records a component it did not put
+ * there.
+ */
+export interface ComponentInstallResult extends InstalledComponent {
+  readonly outcome: "installed" | "already-installed";
+}
+
+/** A driver's progress report while it installs: the percentage its installer printed. */
+export interface ComponentInstallProgress {
+  readonly stage: "downloading";
+  readonly percent: number;
+}
+
+/**
+ * A component install call ran out of its one budget, `downloads.timeoutMs`, measured from the
+ * moment the call arrived (ADR 0010 §3). Waiting for the platform's turn spends it too.
+ */
+export class ComponentInstallTimeoutError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly component: string,
+    readonly timeoutMs: number,
+  ) {
+    super(
+      `Installing ${platform} ${component} did not finish within downloads.timeoutMs ` +
+        `(${String(timeoutMs)}ms), counting the time spent waiting for another download`,
+    );
+    this.name = "ComponentInstallTimeoutError";
+  }
+}
+
 export class RuntimeMissingError extends Error {
   /**
-   * Whether a download could plausibly fix this. `true` by default -- a plain "runtime not
-   * installed" is exactly what `--allow-download` exists for. A subclass reporting a request
-   * no download can ever satisfy (out of the model's pairing range, an installed runtime that
-   * does not pair with the model, a version older than Xcode's automatic-download floor) sets
-   * this `false` so callers (see the daemon's download-policy suffix) don't point someone at a
-   * flag that cannot help.
+   * Whether a download could plausibly fix this: `true` exactly when the thrower names the
+   * `component` to install -- a plain "runtime not installed" is what `--allow-download` exists
+   * for. Without one (out of the model's pairing range, an installed runtime that does not pair
+   * with the model, a version below a download floor) it is `false`, so callers (see the
+   * daemon's download-policy suffix) don't point someone at a flag that cannot help.
    */
   readonly downloadable: boolean;
+  /**
+   * The string to hand to `Driver.installComponent` (ADR 0010 §2), set whenever `downloadable`
+   * is. It may be broader than a version -- the driver's word for "newest" -- and the core hands
+   * it back unread.
+   */
+  readonly component?: string;
 
   constructor(
     readonly platform: Platform,
     readonly osVersion: string,
-    options?: { readonly downloadable?: boolean },
+    options?: { readonly downloadable?: false } | { readonly component: string },
   ) {
     super(`Runtime missing for ${platform} ${osVersion}`);
     this.name = "RuntimeMissingError";
-    this.downloadable = options?.downloadable ?? true;
+    if (options !== undefined && "component" in options) {
+      this.downloadable = true;
+      this.component = options.component;
+    } else {
+      this.downloadable = false;
+    }
   }
 }
 
@@ -511,7 +593,7 @@ export class LicenseNotAcceptedError extends Error {
  * installs racing the same preflight (an iOS runtime download and an Android system-image
  * install, or two of either) can each observe enough free space and both proceed, jointly
  * overfilling the volume neither alone would have. A single shared `DiskSpaceGuard` instance,
- * injected into every driver that installs components (wired once in `src/daemon/main.ts`),
+ * held by `ComponentInstaller` (wired once in `src/daemon/main.ts`; drivers never see it),
  * fixes that by tracking bytes reserved but not yet released, keyed per path, and checking free
  * space *minus* those outstanding reservations rather than free space alone.
  *

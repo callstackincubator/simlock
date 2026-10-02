@@ -5,7 +5,6 @@ import {
   type Driver,
   FakeDriver,
   FakeDriverUnknownDeviceError,
-  RuntimeMissingError,
   type DriverDevice,
   UnknownModelError,
 } from "./index.js";
@@ -168,7 +167,7 @@ describe("FakeDriver", () => {
     expect(ready).toBe(true);
   });
 
-  it("records calls and enforces resolve policy and known-device destruction", async () => {
+  it("records calls, refuses a missing runtime until it is installed, and enforces known-device destruction", async () => {
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock: new FakeClock(),
@@ -177,22 +176,19 @@ describe("FakeDriver", () => {
     });
 
     await expect(
-      driver.resolveSpec(
-        { model: "Unknown", osVersion: "26.5", platform: "ios" },
-        { allowDownload: false },
-      ),
+      driver.resolveSpec({ model: "Unknown", osVersion: "26.5", platform: "ios" }),
     ).rejects.toBeInstanceOf(UnknownModelError);
     await expect(
-      driver.resolveSpec(
-        { model: "iPhone 16", osVersion: "27", platform: "ios" },
-        { allowDownload: false },
-      ),
-    ).rejects.toBeInstanceOf(RuntimeMissingError);
+      driver.resolveSpec({ model: "iPhone 16", osVersion: "27", platform: "ios" }),
+    ).rejects.toMatchObject({ component: "27", downloadable: true, name: "RuntimeMissingError" });
     await expect(
-      driver.resolveSpec(
-        { model: "iPhone 16", osVersion: "27", platform: "ios" },
-        { allowDownload: true },
-      ),
+      driver.installComponent("27", {
+        onProgress: () => undefined,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ outcome: "installed", version: "27" });
+    await expect(
+      driver.resolveSpec({ model: "iPhone 16", osVersion: "27", platform: "ios" }),
     ).resolves.toEqual({ model: "iPhone 16", osVersion: "27", platform: "ios" });
 
     const device = await driver.provision({
@@ -206,6 +202,7 @@ describe("FakeDriver", () => {
     expect(driver.calls.map((call) => call.operation)).toEqual([
       "resolveSpec",
       "resolveSpec",
+      "installComponent",
       "resolveSpec",
       "provision",
       "destroy",

@@ -58,13 +58,15 @@ putting in front of every event-bus consumer.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name), requester id (when the triggering resolution knew one) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
-| `component.installed` | platform, component id, duration, requester id | the install succeeded **and** a post-install re-scan confirmed the component the request actually needed is present (paired with the requested device type, for iOS) — never fired on a bare exit-0 | driver-diagnostics | implemented |
-| `component.install-failed` | platform, component id, duration, stable error summary, requester id | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry), **or** the installer exited 0 but the post-install re-scan could not confirm the component | driver-diagnostics | implemented |
+| `component.install-started` | platform, component id (the string the install was asked for: an iOS runtime version, `latest`, or a bare major; an Android API level), requester id (of the request that started the install, when known) | once per install, after the free-disk check passed and disk was set aside, just before `xcodebuild -downloadPlatform` / `sdkmanager --install` runs | component-installer | implemented |
+| `component.installed` | platform, component id, version (the exact version now installed), already present (`true` when the installer ran and found the component already there), duration, requester id | once per install, when the installer finished **and** a fresh read confirmed the component — never on a bare exit 0 | component-installer | implemented |
+| `component.install-failed` | platform, component id, duration, stable error summary, requester id | once per install, when it failed: the installer failed (a license retry included), it ran out of `downloads.timeoutMs`, the daemon stopped, or the installer exited 0 but a fresh read could not confirm the component | component-installer | implemented |
 
-A disk-preflight failure happens before any diagnostic fires: no install was
-attempted, so nothing is reported as started or failed. The requester's own
-progress stream does not yet reflect an in-flight download.
+These fire once per install, however many requests joined it. A request that
+needs no install emits none: one whose component turned out to be installed
+already, one another install made unnecessary while it waited, or one refused
+for lack of disk before anything started. The requester's own progress stream
+does not yet reflect an in-flight download.
 
 ## System
 

@@ -58,6 +58,15 @@ export interface ErrorDetailsMap {
     readonly availableBytes: number;
   };
   LICENSE_NOT_ACCEPTED: { readonly platform: Platform; readonly componentName: string };
+  /**
+   * A component install ran out of `downloads.timeoutMs`, counted from the moment the call
+   * arrived: time spent waiting behind another download on the same platform counts too.
+   */
+  DOWNLOAD_TIMEOUT: {
+    readonly platform: Platform;
+    readonly component: string;
+    readonly timeoutMs: number;
+  };
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** A `simlock <tool>` verb the owning driver will not proxy (ADR 0001, decision 7). Carries
    * the tool so a caller can say which wrapper refused without re-parsing the message. */
@@ -157,6 +166,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNKNOWN_MODEL: true,
   INSUFFICIENT_DISK_SPACE: true,
   LICENSE_NOT_ACCEPTED: true,
+  DOWNLOAD_TIMEOUT: true,
   UNKNOWN_LEASE: true,
   PASSTHROUGH_REFUSED: true,
   UNKNOWN_PASSTHROUGH_TOOL: true,
@@ -272,6 +282,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // out of time" outcome (`QUEUE_TIMEOUT`) already uses -- so a script branching on "timed
   // out" does not need a second number for the second kind of wait.
   EXEC_TIMEOUT: { code: "EXEC_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 504 },
+  // A download that outran its budget: 504 and 10 for the same reason as `EXEC_TIMEOUT`.
+  DOWNLOAD_TIMEOUT: {
+    code: "DOWNLOAD_TIMEOUT",
+    kind: "domain",
+    cliExitCode: 10,
+    httpStatus: 504,
+  },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",
     kind: "domain",

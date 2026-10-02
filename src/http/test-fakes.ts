@@ -282,8 +282,9 @@ export class FakeRegistry {
   get snapshot(): {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
+    readonly components: readonly [];
   } {
-    return { devices: this.devices, leases: this.leases };
+    return { components: [], devices: this.devices, leases: this.leases };
   }
 }
 

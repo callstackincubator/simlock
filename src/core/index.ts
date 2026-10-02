@@ -23,6 +23,10 @@ export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
 export {
   BootTimeoutError,
+  type ComponentInstallProgress,
+  type ComponentInstallResult,
+  ComponentInstallTimeoutError,
+  type ComponentReceipt,
   type DeviceRequest,
   DiskSpaceGuard,
   type Driver,
@@ -35,6 +39,7 @@ export {
   type DriverRejection,
   type DriverToolVersion,
   InsufficientDiskSpaceError,
+  type InstalledComponent,
   type LegacyDevice,
   LicenseNotAcceptedError,
   type ObservedDevice,
@@ -42,9 +47,10 @@ export {
   type PassthroughCommand,
   PassthroughRefusedError,
   RuntimeMissingError,
+  sameReceipt,
   UnknownModelError,
 } from "./driver.js";
-export { UnknownPassthroughToolError } from "./driver-catalog.js";
+export { DriverCatalog, UnknownPassthroughToolError } from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";
@@ -75,3 +81,6 @@ export {
 export { Nuke } from "./nuke.js";
 export { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
+export { ComponentInstaller } from "./component-installer.js";
+export { SerializedDecision } from "./serialized-decision.js";
+export { testComponentWiring } from "./test-wiring.js";

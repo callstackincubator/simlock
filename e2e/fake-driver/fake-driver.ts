@@ -1,9 +1,13 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 
 import {
   BootTimeoutError,
+  type ComponentInstallProgress,
+  type ComponentInstallResult,
   DriverCrashError,
+  type InstalledComponent,
   RuntimeMissingError,
   UnknownModelError,
   type DeviceRequest,
@@ -186,7 +190,11 @@ export class OutOfProcessFakeDriver implements Driver {
   /** Synthetic: this driver owns no real devices, and nothing validates or creates it. */
   readonly deviceRoot: string;
   readonly passthroughTool: string;
+  readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly #clock: FakeDriverClock;
+  /** Versions `installComponent` put in place, with each one's receipt. */
+  readonly #installed = new Map<string, Readonly<Record<string, string>>>();
+  #installCount = 0;
   readonly #logPath: string | undefined;
   readonly #scriptPath: string | undefined;
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
@@ -198,6 +206,8 @@ export class OutOfProcessFakeDriver implements Driver {
     this.platform = options.platform;
     this.deviceRoot = `/fake/${options.platform}`;
     this.passthroughTool = PASSTHROUGH_TOOLS[options.platform];
+    // A real directory: the installer measures its free space before every install.
+    this.componentFootprint = { bytes: 0, path: tmpdir() };
     this.#clock = options.clock;
     this.#logPath = options.logPath;
     this.#scriptPath = options.scriptPath;
@@ -212,13 +222,10 @@ export class OutOfProcessFakeDriver implements Driver {
     await this.#beforeCall("revalidateRoot", []);
   }
 
-  async resolveSpec(
-    request: DeviceRequest,
-    options: { readonly allowDownload: boolean; readonly requesterId?: string },
-  ): Promise<DeviceSpec> {
-    const script = await this.#beforeCall("resolveSpec", [request, options]);
+  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+    const script = await this.#beforeCall("resolveSpec", [request]);
     this.#assertKnownModel(request.model, script);
-    const osVersion = this.#resolveOsVersion(request.osVersion, script, options.allowDownload);
+    const osVersion = this.#resolveOsVersion(request.osVersion, script);
     const slim = request.mode === "slim" && script.slimmableOsVersions?.includes(osVersion);
     return {
       model: request.model,
@@ -234,31 +241,64 @@ export class OutOfProcessFakeDriver implements Driver {
     }
   }
 
-  /** Defaults to the newest scripted runtime; a missing/undownloadable one fails loudly. */
-  #resolveOsVersion(
-    requested: string | undefined,
-    script: FakeDriverPlatformScript,
-    allowDownload: boolean,
-  ): string {
-    const available = script.availableOsVersions ?? DEFAULT_SCRIPT.availableOsVersions ?? [];
+  /** Defaults to the newest available runtime; a missing one fails, naming it as the component. */
+  #resolveOsVersion(requested: string | undefined, script: FakeDriverPlatformScript): string {
+    const available = this.#available(script);
     const osVersion = requested ?? newestVersion(available);
     if (osVersion === undefined) {
       throw new RuntimeMissingError(this.platform, "default");
     }
-    this.#assertOsVersionAvailable(osVersion, available, allowDownload);
+    if (!available.includes(osVersion)) {
+      throw new RuntimeMissingError(this.platform, osVersion, { component: osVersion });
+    }
     return osVersion;
   }
 
-  #assertOsVersionAvailable(
-    osVersion: string,
-    available: readonly string[],
-    allowDownload: boolean,
-  ): void {
-    if (!available.includes(osVersion) && !allowDownload) {
-      throw new RuntimeMissingError(this.platform, osVersion);
-    }
+  /** The scripted versions plus every one an install put in place. */
+  #available(script: FakeDriverPlatformScript): string[] {
+    return [
+      ...new Set([
+        ...(script.availableOsVersions ?? DEFAULT_SCRIPT.availableOsVersions ?? []),
+        ...this.#installed.keys(),
+      ]),
+    ];
   }
 
+  async findComponent(component: string): Promise<InstalledComponent | undefined> {
+    const script = await this.#beforeCall("findComponent", [component]);
+    return this.#find(component, script);
+  }
+
+  /** Logged, then scripted by `installProgress`, `latencyMs` and `failures` like any call. */
+  async installComponent(
+    component: string,
+    options: {
+      readonly onProgress: (progress: ComponentInstallProgress) => void;
+      readonly signal: AbortSignal;
+    },
+  ): Promise<ComponentInstallResult> {
+    const script = await this.#beforeCall("installComponent", [component]);
+    for (const percent of script.installProgress ?? []) {
+      options.onProgress({ percent, stage: "downloading" });
+    }
+    if (options.signal.aborted) throw new DriverCrashError("Fake install aborted");
+    const existing = this.#find(component, script);
+    if (existing !== undefined) return { ...existing, outcome: "already-installed" };
+    this.#installCount += 1;
+    const receipt = { install: String(this.#installCount) };
+    this.#installed.set(component, receipt);
+    return { outcome: "installed", receipt, version: component };
+  }
+
+  #find(component: string, script: FakeDriverPlatformScript): InstalledComponent | undefined {
+    if (!this.#available(script).includes(component)) return undefined;
+    return {
+      receipt: this.#installed.get(component) ?? { preinstalled: component },
+      version: component,
+    };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- called by the daemon through the Driver interface; this module is loaded via SIMLOCK_DRIVERS_MODULE.
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", [spec]);
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;
@@ -343,15 +383,14 @@ export class OutOfProcessFakeDriver implements Driver {
 
   /** Read straight from the script, not through `#beforeCall`: the daemon asks for these on
    * its own schedule, and a test's call log should hold only what the test caused. */
+  // fallow-ignore-next-line unused-class-member -- called by the daemon through the Driver interface; this module is loaded via SIMLOCK_DRIVERS_MODULE.
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     return (await this.#readScript()).toolVersions ?? [];
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
     const script = await this.#beforeCall("listCatalog", []);
-    const runtimes = [
-      ...(script.availableOsVersions ?? DEFAULT_SCRIPT.availableOsVersions ?? []),
-    ].sort(compareVersions);
+    const runtimes = this.#available(script).sort(compareVersions);
     const models = script.knownModels === undefined ? [] : [...script.knownModels];
     return {
       defaultRuntime: newestVersion(runtimes),
@@ -372,6 +411,7 @@ export class OutOfProcessFakeDriver implements Driver {
   }
 
   /** Synchronous like `estimate`, and cached the same way: the last script read wins. */
+  // fallow-ignore-next-line unused-class-member -- called by the daemon through the Driver interface; this module is loaded via SIMLOCK_DRIVERS_MODULE.
   leaseEnvironment(): Readonly<Record<string, string>> {
     // Defaults to the recognisable fakes rather than `{}`: a grant that carried nothing would
     // make "the environment reached the CLI" and "there was never anything to carry" look

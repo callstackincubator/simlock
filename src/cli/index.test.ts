@@ -7,7 +7,14 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus, EventHistory } from "../bus/index.js";
-import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import {
+  CleanupReaper,
+  type Config,
+  FakeDriver,
+  LeaseEngine,
+  Registry,
+  testComponentWiring,
+} from "../core/index.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -152,6 +159,7 @@ describe("readLogFile", () => {
 describe("CLI: exit codes", () => {
   it.each([
     ["QUEUE_TIMEOUT", 10],
+    ["DOWNLOAD_TIMEOUT", 10],
     ["NO_CAPACITY", 11],
     ["RUNTIME_MISSING", 12],
     ["UNKNOWN_MODEL", 12],
@@ -3813,6 +3821,12 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config,
     drivers: [driver],
@@ -3919,6 +3933,12 @@ async function startInMemoryDaemon(options: {
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config,
     drivers: [driver],

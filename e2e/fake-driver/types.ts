@@ -9,6 +9,8 @@ export type FakeDriverPlatform = "ios" | "android";
 
 export type FakeDriverOperation =
   | "resolveSpec"
+  | "findComponent"
+  | "installComponent"
   | "provision"
   | "makeReady"
   | "reclaim"
@@ -86,6 +88,13 @@ export interface FakeDriverPlatformScript {
     readonly version: string;
     readonly build?: string;
   }[];
+  /**
+   * The percentages each `installComponent` reports through `onProgress`, in order. An install
+   * makes its version available for the rest of the daemon's life, on top of
+   * `availableOsVersions`; `latencyMs.installComponent` makes it wait and
+   * `failures.installComponent` makes it fail.
+   */
+  readonly installProgress?: readonly number[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

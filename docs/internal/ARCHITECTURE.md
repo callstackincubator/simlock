@@ -1347,49 +1347,69 @@ emitters. See [EVENTS.md](EVENTS.md) and
 Drivers must never depend on the event bus (architecture rule 5 — a driver is
 not an observer of its own facts). Where a driver needs to report something
 the daemon should turn into a bus event, it reports it through its own
-`onDiagnostic` callback option instead — the Android driver already did this
-for `snapshot-cold-boot` and unreadable device-profile sources; the iOS
-driver gained the same option for component installs. `src/daemon/main.ts`
-wires each driver's `onDiagnostic` at construction time
-(`discoverDrivers`), bridging the diagnostic to `component.install-started` /
-`component.installed` / `component.install-failed` — see
-[EVENTS.md](EVENTS.md#components). This is also why those events are
-attributed to the `driver-diagnostics` emitter rather than to `IosSimctlDriver`
-or `AndroidDriver` directly: the driver only observed the fact, the daemon
-layer is what committed it to the bus. Both drivers also thread the
-requesting lease's `requesterId` (when `resolveSpec`'s caller knew one — see
-`LeaseAcquisitionCoordinator#resolveAndDrive`) through the diagnostic into
-the bridged event's payload, so a component install is attributable to the
-request that caused it.
+callback option instead — the iOS driver's `onSlimmed` for `device.slimmed`,
+the Android driver's `onDiagnostic` for `snapshot-cold-boot` and unreadable
+device-profile sources. `src/daemon/main.ts` wires these at construction time
+(`discoverDrivers`).
 
-`component.installed` is a verified fact, not "the installer exited 0":
-`xcodebuild`/`sdkmanager` reporting success only means the tool claims to
-have finished, not that the thing the request actually needed — a runtime at
-the requested version, paired with the requested device type for iOS; the
-requested system image for Android — is now present. Both drivers re-scan
-their own catalog (`simctl list` / the SDK's `system-images` tree) after the
-installer returns and only report `component.installed` once that re-scan
-confirms it; a re-scan that comes up empty reports `component.install-failed`
-with that reason instead, and the caller still sees the same typed error it
-always did (`DriverCrashError` for iOS's "still not installed" case,
-`IosRuntimeUnpairedError` for a downloaded-but-unpaired runtime). Exactly one
-terminal fact fires per install attempt, matching the pre-existing
-`component.install-started` timing.
+### Components: one installer in the core (ADR 0010)
 
-Before starting either install, the driver reserves free disk space against a
-conservative per-component estimate (~8 GiB for an iOS runtime, ~2 GiB for an
-Android system image) through a `DiskSpaceGuard` shared across every driver
-(`src/daemon/main.ts` constructs one instance and passes it to each driver's
-options) rather than a bare instantaneous `Filesystem#diskFree` reading: two
-concurrent installs — an iOS runtime download racing an Android system-image
-install, or two of either — could otherwise each observe enough free space
-individually and jointly overfill the volume neither alone would have. The
-guard tracks bytes reserved but not yet released, keyed per path, and checks
-free space *minus* those outstanding reservations; the reservation is
-released once the install settles either way. A reservation that doesn't fit
-still fails fast with the same typed `InsufficientDiskSpaceError` naming
-required vs. available bytes, and no `component.install-*` diagnostic fires
-for a preflight failure, since no install was actually attempted.
+A component is an iOS simulator runtime or an Android system image. Drivers
+install components; they do not decide when. `resolveSpec` never downloads:
+when a download could satisfy a request it throws `RuntimeMissingError` with
+`downloadable: true` and `component`, the string to install — a version, or a
+driver's word for "newest" (`latest` on iOS; the bare major of a model's upper
+bound when the model has one). A driver offers two verbs and an estimate:
+
+- `findComponent(component)` — a read: the installed version and its receipt,
+  or nothing. A string that is not a version answers nothing.
+- `installComponent(component, { onProgress, signal })` — runs the platform
+  installer (`xcodebuild -downloadPlatform`, `sdkmanager --install` with its
+  license retry) with no timeout of its own, ends it when `signal` fires,
+  verifies the result against a fresh read, and answers `installed` or
+  `already-installed` by whether the receipt it ends with existed before the
+  run. Progress is the percentage the installer prints
+  (`src/drivers/installer-process.ts`, shared by both drivers).
+- `componentFootprint` — the fixed disk estimate (~8 GiB on the CoreSimulator
+  volume for iOS, ~2 GiB on the SDK root for Android) and the path it lands on.
+
+A receipt names the installed thing itself and is opaque to the core: the
+runtime image identifier and build on iOS, the package, revision and a stamp of
+the image's `source.properties` (file identity and modification time) on
+Android. One function per driver builds it.
+
+`ComponentInstaller` (`src/core/component-installer.ts`) is the only caller of
+`installComponent`. `src/daemon/main.ts` builds one with the drivers, a
+`DiskSpaceGuard`, the registry, the bus, the shared `SerializedDecision` and
+`downloads.timeoutMs`, hands it to the lease engine, and closes it on dispose
+before the drivers are disposed. It keeps one queue per platform, first come
+first served; iOS and Android install at the same time. A call naming a
+component that is already waiting or running joins that install and gets its
+outcome or its error. When a call reaches the front, the installer runs the
+call's `stillNeeded` check, then asks `findComponent` (found: `already-installed`,
+no reservation, no event), then reserves the footprint with the
+`DiskSpaceGuard` — reservations of running installs on both platforms are
+counted together, and one that does not fit is refused with
+`InsufficientDiskSpaceError` before the driver is called — and only then emits
+`component.install-started` and calls the driver. On `installed` it stores a
+`ComponentRecord` (platform, version, time, receipt) in the registry inside the
+decision gate, then emits `component.installed`. Progress fans out to every
+joined call; a call behind another install hears `waiting`.
+
+Every call has one budget, `downloads.timeoutMs`, measured on the `Clock` from
+the moment it arrives; waiting spends it and nothing restarts it (architecture
+rule 11). A waiting call that runs out leaves alone with
+`ComponentInstallTimeoutError` (`DOWNLOAD_TIMEOUT`), and its install leaves the
+queue when it was the last call on it. A running install is aborted at the
+deadline of the oldest call joined to it, and every joined call fails then.
+The platform's next install waits until the aborted driver run returns.
+
+The lease path reaches the installer directly (architecture rule 5):
+`LeaseAcquisitionCoordinator` resolves the spec, and when the runtime is
+missing, downloadable, and the request may download, calls the installer with
+`stillNeeded` = "`resolveSpec` still throws `RuntimeMissingError`" and resolves
+once more. Without `allowDownload` the first error stands. Warm-pool
+re-readiness and startup convergence never reach the installer (safety rule 4).
 
 ## External APIs behind interfaces (ports)
 
@@ -1576,8 +1596,9 @@ forbids installs outright, even over an explicit `--allow-download` /
 `allowDownload`; `"always"` grants it to every explicit lease request
 without the caller having to ask; `"on-request"` (the default) defers to
 the request's own flag, which is today's behavior byte-for-byte. Only an
-explicit lease request (`LeaseEngine#request`) can carry download
-permission to a driver's `resolveSpec` — warm-pool provisioning and startup
-convergence reuse specs already committed to the registry and never call
-`resolveSpec` themselves, so neither can trigger a download regardless of
-policy.
+explicit lease request (`LeaseEngine#request`) carries download permission,
+and the acquisition coordinator, not a driver, acts on it by calling the
+component installer (see "Components: one installer in the core"); no
+`resolveSpec` downloads anything. Warm-pool provisioning and startup
+convergence reuse specs already committed to the registry and never reach
+the installer, so neither can trigger a download regardless of policy.

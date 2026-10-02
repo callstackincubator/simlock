@@ -10,13 +10,14 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import {
-  type CleanupRule,
-  type Config,
   automaticCleanupRules,
   CleanupReaper,
+  type CleanupRule,
+  type Config,
   FakeDriver,
   LeaseEngine,
   Registry,
+  testComponentWiring,
 } from "./index.js";
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -137,6 +138,12 @@ async function createHarness(
   });
   const cleanupConfig = options.cleanupConfig ?? config();
   const engine = new LeaseEngine({
+    ...testComponentWiring({
+      clock: clock,
+      drivers: [driver],
+      eventBus: eventBus,
+      registry: registry,
+    }),
     clock,
     config: cleanupConfig,
     drivers: [driver],

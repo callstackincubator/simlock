@@ -340,9 +340,9 @@ export class Dispatcher {
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });
     } catch (error: unknown) {
-      // The driver only ever sees the clamped-to-false permission, so it cannot itself tell
-      // the caller that config, not missing consent, is what stood between this request and
-      // success. Recover that distinction here, the one place that saw both sides. Moved
+      // The lease path only ever sees the clamped-to-false permission, so it cannot itself
+      // tell the caller that config, not missing consent, is what stood between this request
+      // and success. Recover that distinction here, the one place that saw both sides. Moved
       // verbatim from `DaemonServer`'s former `#requestLease`.
       if (
         downloadsPolicy === "never" &&

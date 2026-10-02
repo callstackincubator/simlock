@@ -27,10 +27,8 @@ import {
   type IdGenerator,
 } from "../ports/index.js";
 import {
-  bridgeAndroidDriverDiagnostic,
   deviceModeWiring,
   discoverDrivers,
-  emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
   processRunnerFor,
   startDaemon,
@@ -859,17 +857,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       join(SIMLOCK_HOME, "adb-server.json"),
       JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
     );
-    // The profile list answers; the install that follows is refused once its argv is recorded.
-    const processRunner = new ScriptedProcessRunner([
-      {
-        match: { args: ["list", "device"], command: /avdmanager$/ },
-        result: {
-          code: 0,
-          stderr: "",
-          stdout: 'Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n',
-        },
-      },
-    ]);
+    // Nothing is scripted: the install is refused once its argv is recorded.
+    const processRunner = new ScriptedProcessRunner([]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
       hostArch: "x64",
@@ -877,10 +866,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     });
     await drivers
       .find((driver) => driver.platform === "android")
-      ?.resolveSpec(
-        { model: "Pixel 8", osVersion: "35", platform: "android" },
-        { allowDownload: true },
-      )
+      ?.installComponent("35", {
+        onProgress: () => undefined,
+        signal: new AbortController().signal,
+      })
       .catch(() => undefined);
 
     expect(processRunner.calls.flatMap((call) => call.args)).toContain(
@@ -1013,99 +1002,6 @@ describe("deviceModeWiring", () => {
       });
     },
   );
-});
-
-describe("component install diagnostic bridging", () => {
-  it("emits component.install-started/-installed/-failed for the bridged platform", () => {
-    const clock = new FakeClock(1_000);
-    const eventBus = new EventBus(clock);
-    const seen: unknown[] = [];
-    eventBus.subscribeAll((envelope) => seen.push(envelope));
-    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
-
-    bridge({ componentId: "18.6", kind: "component-install-started" });
-    bridge({ componentId: "18.6", durationMs: 42_000, kind: "component-installed" });
-    bridge({
-      componentId: "18.6",
-      durationMs: 5_000,
-      error: "DriverCrashError: xcodebuild failed",
-      kind: "component-install-failed",
-    });
-
-    expect(seen).toEqual([
-      expect.objectContaining({
-        event: "component.install-started",
-        module: "driver-diagnostics",
-        payload: { componentId: "18.6", platform: "ios" },
-      }),
-      expect.objectContaining({
-        event: "component.installed",
-        module: "driver-diagnostics",
-        payload: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
-      }),
-      expect.objectContaining({
-        event: "component.install-failed",
-        module: "driver-diagnostics",
-        payload: {
-          componentId: "18.6",
-          durationMs: 5_000,
-          error: "DriverCrashError: xcodebuild failed",
-          platform: "ios",
-        },
-      }),
-    ]);
-  });
-
-  it("carries requesterId onto the bridged event when the diagnostic knows one, and omits it when it doesn't", () => {
-    const clock = new FakeClock(1_000);
-    const eventBus = new EventBus(clock);
-    const seen: unknown[] = [];
-    eventBus.subscribeAll((envelope) => seen.push(envelope));
-    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
-
-    bridge({ componentId: "18.6", kind: "component-install-started", requesterId: "agent-1" });
-    bridge({ componentId: "18.6", kind: "component-install-started" });
-
-    expect(seen).toEqual([
-      expect.objectContaining({
-        event: "component.install-started",
-        payload: { componentId: "18.6", platform: "ios", requesterId: "agent-1" },
-      }),
-      expect.objectContaining({
-        event: "component.install-started",
-        payload: { componentId: "18.6", platform: "ios" },
-      }),
-    ]);
-  });
-
-  it("forwards only component-install-* diagnostics from the Android driver's broader onDiagnostic surface", () => {
-    const clock = new FakeClock(1_000);
-    const eventBus = new EventBus(clock);
-    const seen: unknown[] = [];
-    eventBus.subscribeAll((envelope) => seen.push(envelope));
-    const bridge = bridgeAndroidDriverDiagnostic(eventBus);
-
-    bridge({ avdName: "simlock_1", kind: "snapshot-cold-boot", readyAfterMs: 15_000 });
-    bridge({
-      kind: "device-profile-source-unreadable",
-      path: "/x/.android/devices.xml",
-      reason: "parse-error",
-    });
-    bridge({
-      componentId: "system-images;android-35;google_apis;arm64-v8a",
-      kind: "component-install-started",
-    });
-
-    expect(seen).toEqual([
-      expect.objectContaining({
-        event: "component.install-started",
-        payload: {
-          componentId: "system-images;android-35;google_apis;arm64-v8a",
-          platform: "android",
-        },
-      }),
-    ]);
-  });
 });
 
 describe("slim diagnostic bridging", () => {

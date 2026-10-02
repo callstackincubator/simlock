@@ -4,6 +4,7 @@ import type { CapacityDevice, RamBudget, RunningCapacity } from "./capacity/inde
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
+import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -31,7 +32,7 @@ import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { NukeService } from "./nuke-service.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
+import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WaitQueue } from "./wait-queue.js";
 import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
@@ -40,7 +41,18 @@ export type { LeaseProgress } from "./wait-queue.js";
 
 export interface LeaseEngineOptions {
   readonly clock: Clock;
+  /**
+   * The daemon's one `ComponentInstaller`, built and closed by the composition root. Only the
+   * lease path reaches it: warm-pool provisioning and startup convergence never do (safety
+   * rule 4).
+   */
+  readonly components: Pick<ComponentInstaller, "install">;
   readonly config: Config;
+  /**
+   * The one decision gate every registry write runs inside. Passed in rather than built here
+   * because `components` writes the registry too and must share it.
+   */
+  readonly decisions: SerializedDecision;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
@@ -104,11 +116,12 @@ export class LeaseEngine {
   readonly #releaseCoordinator: LeaseReleaseCoordinator;
   /** Every lease request, stored in the registry; read by the HTTP request resource too. */
   readonly requests: LeaseRequestBook<StoredLeaseGrant>;
-  readonly #decisions = new SerializedDecision();
+  readonly #decisions: SerializedDecision;
   readonly #startup: StartupConverger;
   readonly #warmPool: WarmPoolCoordinator;
 
   constructor(private readonly options: LeaseEngineOptions) {
+    this.#decisions = options.decisions;
     this.#capacity = new CapacityCoordinator(
       createCapacityStrategy(options.config.capacity, options.systemStats),
     );
@@ -163,6 +176,7 @@ export class LeaseEngine {
     });
     this.#acquisition = new LeaseAcquisitionCoordinator({
       claims: this.#claims,
+      components: options.components,
       decisions: this.#decisions,
       defaultModes: options.defaultModes ?? {},
       drivers: this.#drivers,

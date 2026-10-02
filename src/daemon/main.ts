@@ -11,7 +11,9 @@ import {
   type Driver,
   type DriverRejection,
   CleanupReaper,
+  ComponentInstaller,
   DiskSpaceGuard,
+  DriverCatalog,
   Doctor,
   HostFactsReader,
   LeaseEngine,
@@ -20,6 +22,7 @@ import {
   OwnedRootError,
   Registry,
   Nuke,
+  SerializedDecision,
 } from "../core/index.js";
 import {
   AdbServerUnavailableError,
@@ -27,10 +30,8 @@ import {
   ANDROID_PASSTHROUGH_TOOL,
   hostAbiFor,
   SdkMissingError,
-  type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
 } from "../drivers/android/index.js";
-import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
 import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
@@ -191,16 +192,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
-  // One instance shared across every driver discovered below, so a disk-space reservation one
-  // driver makes is visible to the other's own preflight -- see `DiskSpaceGuard`.
-  const diskSpaceGuard = new DiskSpaceGuard();
   const { drivers, rejections } =
     options.drivers === undefined
       ? await discoverDrivers({
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
-          diskSpaceGuard,
-          downloadTimeoutMs: config.downloads.timeoutMs,
           driversConfig: config.drivers,
           eventBus,
           filesystem,
@@ -227,9 +223,25 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
+  // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
+  // one, so an iOS and an Android install see each other's reservations.
+  // One gate for every registry write: the lease engine's and the installer's records.
+  const decisions = new SerializedDecision();
+  const components = new ComponentInstaller({
+    clock,
+    decisions,
+    diskSpace: new DiskSpaceGuard(),
+    drivers: new DriverCatalog(drivers),
+    eventBus,
+    filesystem,
+    registry,
+    timeoutMs: config.downloads.timeoutMs,
+  });
   const leaseEngine = new LeaseEngine({
     clock,
+    components,
     config,
+    decisions,
     defaultModes: deviceModeWiring(config).defaultModes,
     describeFailure: describeLeaseRequestFailure,
     drivers,
@@ -392,6 +404,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // the next daemon needs.
     dispose: async () => {
       leaseEngine.dispose();
+      // Before the drivers: a running install is ended through its signal while its driver
+      // can still stop the installer process.
+      await components.close();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
         if (disposal.status === "rejected") {
@@ -776,20 +791,7 @@ export interface DriverDiscoveryContext {
   readonly clock: Clock;
   /** Whole `drivers` config section: each driver is handed its own block, unread. */
   readonly driversConfig: Config["drivers"];
-  /**
-   * Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout and the Android
-   * driver's `sdkmanager --install` / `--licenses` timeout; defaults to each driver's own
-   * default (mirroring `downloads.timeoutMs`'s config default) when omitted.
-   */
-  readonly downloadTimeoutMs?: number;
-  /**
-   * Shared across every driver constructed from this context, so concurrent installs on
-   * different drivers see each other's outstanding reservations -- see `DiskSpaceGuard`.
-   * Defaults to a private instance (no sharing) when omitted, which only matters for a caller
-   * that constructs its own drivers directly rather than through `discoverDrivers`.
-   */
-  readonly diskSpaceGuard?: DiskSpaceGuard;
-  /** Bridges each driver's `component.install-*` diagnostic onto the bus -- see `emitComponentInstallDiagnostic`. */
+  /** Bridges the iOS driver's `device.slimmed` fact onto the bus -- see `emitSlimDiagnostic`. */
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
   /**
@@ -844,17 +846,14 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     return { drivers: await loadDriversModule(driversModule, options, logger), rejections: [] };
   }
 
-  // One instance shared across both drivers, so a disk-space reservation one makes is visible
-  // to the other's own preflight -- see `DiskSpaceGuard`.
-  const diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
   const drivers: Driver[] = [];
   const rejections: DriverRejection[] = [];
   if (options.hostPlatform === "darwin") {
-    const ios = await discoverIosDriver(options, diskSpaceGuard, logger);
+    const ios = await discoverIosDriver(options, logger);
     if (ios.driver !== undefined) drivers.push(ios.driver);
     if (ios.rejection !== undefined) rejections.push(ios.rejection);
   }
-  const android = await discoverAndroidDriver(options, diskSpaceGuard, logger);
+  const android = await discoverAndroidDriver(options, logger);
   if (android.driver !== undefined) drivers.push(android.driver);
   if (android.rejection !== undefined) rejections.push(android.rejection);
   return { drivers, rejections };
@@ -868,22 +867,16 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
  */
 async function discoverIosDriver(
   options: DriverDiscoveryContext,
-  diskSpaceGuard: DiskSpaceGuard,
   logger: Logger,
 ): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
   try {
     const driver = await IosSimctlDriver.create({
       clock: options.clock,
       coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
-      diskSpaceGuard,
-      ...(options.downloadTimeoutMs === undefined
-        ? {}
-        : { downloadTimeoutMs: options.downloadTimeoutMs }),
       driverConfig: options.driversConfig["ios"] ?? {},
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
-      onDiagnostic: emitComponentInstallDiagnostic(options.eventBus, "ios"),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       onSlimSkipped: (fact) => {
         logger.warn("Skipped iOS device slim", {
@@ -924,17 +917,12 @@ async function discoverIosDriver(
  */
 async function discoverAndroidDriver(
   options: DriverDiscoveryContext,
-  diskSpaceGuard: DiskSpaceGuard,
   logger: Logger,
 ): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
   try {
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
-      diskSpaceGuard,
-      ...(options.downloadTimeoutMs === undefined
-        ? {}
-        : { downloadTimeoutMs: options.downloadTimeoutMs }),
       driverConfig: options.driversConfig["android"] ?? {},
       emulator: options.androidEmulator,
       env: process.env,
@@ -943,7 +931,6 @@ async function discoverAndroidDriver(
       hostAbi: hostAbiFor(options.hostArch),
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
-      onDiagnostic: bridgeAndroidDriverDiagnostic(options.eventBus),
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
       simlockHome: options.simlockHome,
@@ -1045,65 +1032,6 @@ async function loadDriversModule(
 }
 
 /**
- * Turns a driver's `component-install-*` diagnostic into the matching `component.install-*`
- * bus event. Drivers never depend on the event bus directly (architecture rule 5 -- loose
- * coupling via the bus is for observers only) -- this is the one place, at driver construction,
- * that bridges the driver's diagnostic callback to a post-commit fact for observers (`simlock
- * events`, and the event file behind it).
- */
-export function emitComponentInstallDiagnostic(
-  eventBus: Pick<EventBus, "emit">,
-  platform: "android" | "ios",
-): (diagnostic: ComponentInstallDiagnostic) => void {
-  return (diagnostic) => {
-    switch (diagnostic.kind) {
-      case "component-install-started":
-        eventBus.emit(
-          "component.install-started",
-          {
-            componentId: diagnostic.componentId,
-            platform,
-            ...(diagnostic.requesterId === undefined
-              ? {}
-              : { requesterId: diagnostic.requesterId }),
-          },
-          "driver-diagnostics",
-        );
-        return;
-      case "component-installed":
-        eventBus.emit(
-          "component.installed",
-          {
-            componentId: diagnostic.componentId,
-            durationMs: diagnostic.durationMs,
-            platform,
-            ...(diagnostic.requesterId === undefined
-              ? {}
-              : { requesterId: diagnostic.requesterId }),
-          },
-          "driver-diagnostics",
-        );
-        return;
-      case "component-install-failed":
-        eventBus.emit(
-          "component.install-failed",
-          {
-            componentId: diagnostic.componentId,
-            durationMs: diagnostic.durationMs,
-            error: diagnostic.error,
-            platform,
-            ...(diagnostic.requesterId === undefined
-              ? {}
-              : { requesterId: diagnostic.requesterId }),
-          },
-          "driver-diagnostics",
-        );
-        return;
-    }
-  };
-}
-
-/**
  * What the config says about device modes, in the two shapes the composition root hands out
  * (ADR 0007 §2, §14): the worker's default mode per platform for the lease engine, and whether
  * the iOS default is slim for the iOS driver's advisory. Android has no key until Android slim
@@ -1120,9 +1048,8 @@ export function deviceModeWiring(config: Pick<Config, "ios">): {
 }
 
 /**
- * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. Mirrors
- * `emitComponentInstallDiagnostic`: the driver never depends on the event bus directly
- * (architecture rule 5) -- this is the one place, at driver construction, that bridges the
+ * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. The driver
+ * never depends on the event bus directly (architecture rule 5) -- this is the one place, at driver construction, that bridges the
  * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
  * event file behind it). A *skipped* slim is deliberately not bridged here
  * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/internal/EVENTS.md`).
@@ -1143,33 +1070,6 @@ export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: Sli
       },
       "driver-diagnostics",
     );
-  };
-}
-
-function isComponentInstallDiagnostic(diagnostic: {
-  readonly kind: string;
-}): diagnostic is ComponentInstallDiagnostic {
-  return (
-    diagnostic.kind === "component-install-started" ||
-    diagnostic.kind === "component-installed" ||
-    diagnostic.kind === "component-install-failed"
-  );
-}
-
-/**
- * The Android driver's `onDiagnostic` also carries `snapshot-cold-boot` and
- * `device-profile-source-unreadable` facts, neither wired to the bus (unchanged from before
- * this change -- discovery never passed `onDiagnostic` to the Android driver at all, so every
- * diagnostic it ever reported was already dropped). Only `component-install-*` is bridged here.
- */
-export function bridgeAndroidDriverDiagnostic(
-  eventBus: Pick<EventBus, "emit">,
-): (diagnostic: AndroidDriverDiagnostic) => void {
-  const installBridge = emitComponentInstallDiagnostic(eventBus, "android");
-  return (diagnostic) => {
-    if (isComponentInstallDiagnostic(diagnostic)) {
-      installBridge(diagnostic);
-    }
   };
 }
 
