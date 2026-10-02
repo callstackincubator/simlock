@@ -57,6 +57,8 @@ Commands:
   daemon, config, token
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway
+  component install <ios|android> <version>
+                              Install a simulator runtime or system image
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
@@ -596,6 +598,8 @@ export async function runCli(
         return await runToken(rest.slice(1), environment, token);
       case "worker":
         return await runWorker(rest.slice(1), environment, token);
+      case "component":
+        return await runComponent(rest.slice(1), environment, token);
       case "simctl":
       case "adb":
         // Named here rather than discovered from the drivers on purpose: these are
@@ -1832,6 +1836,62 @@ async function runWorkerAction(
         : await client.removeWorker({ workerId });
   writeResult(environment, result);
   return 0;
+}
+
+const COMPONENT_USAGE = "Usage: simlock component install <ios|android> <version>\n";
+
+/**
+ * ADR 0010 §6: installs one component through the daemon's `component.install`. Argument
+ * parsing and rendering only (architecture rule 8): whether the install may run, joins another
+ * or is already done is the daemon's answer. The result is one JSON line on stdout; progress
+ * is JSON lines on stderr, the same split every other command makes.
+ */
+async function runComponent(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const command = argv[0];
+  if (command === undefined || isHelp(command)) {
+    environment.stdout.write(COMPONENT_USAGE);
+    return 0;
+  }
+  if (command !== "install") {
+    throw new UsageError(withHelpHint(`Unknown component command: ${command}`));
+  }
+  const input = parseComponentInstallArgs(argv.slice(1));
+  if (input === "help") {
+    environment.stdout.write(COMPONENT_USAGE);
+    return 0;
+  }
+  const client = await connectDaemonClient(environment, token);
+  try {
+    const result = await client.installComponent(input, {
+      onProgress: (progress) => {
+        environment.stderr.write(`${JSON.stringify(progress)}\n`);
+      },
+    });
+    writeResult(environment, result);
+    return 0;
+  } finally {
+    await client.close();
+  }
+}
+
+/** `component install`'s arguments: exactly a platform and a version, or `--help`. */
+function parseComponentInstallArgs(
+  argv: readonly string[],
+): { readonly platform: "ios" | "android"; readonly version: string } | "help" {
+  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+  if (values.help) return "help";
+  const [platform, version, ...extra] = values.positionals;
+  if (platform === undefined || version === undefined || extra.length > 0) {
+    throw new UsageError(withHelpHint("Expected <ios|android> <version>"));
+  }
+  if (platform !== "ios" && platform !== "android") {
+    throw new UsageError("component install <platform> must be ios or android");
+  }
+  return { platform, version };
 }
 
 /**

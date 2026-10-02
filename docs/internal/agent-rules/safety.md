@@ -40,14 +40,17 @@ never enforce them only inside an individual rule or driver.
 3. **Cleanup rules propose, the reaper disposes.** Rules are pure functions
    over a read-only registry view returning proposed actions. A rule that
    executes side effects directly is a bug regardless of what it does.
-4. **No implicit multi-GB downloads.** Missing runtimes / system images fail
-   the request unless `--allow-download` (or MCP's `allowDownload`) was
-   explicitly passed, or `downloads.policy: "always"` is set in config --
-   both count as the required explicit consent, and `downloads.policy:
-   "never"` overrides either one back to forbidden. Warm-pool provisioning
-   and startup convergence never trigger a download under any policy: they
-   only ever reuse specs already committed to the registry, never resolve a
-   new one.
+4. **No implicit multi-GB downloads.** A download starts only with explicit
+   consent, and one function, `effectiveAllowDownload(policy, requested)`,
+   decides whether it has it. A lease request for a missing runtime / system
+   image passes its own `--allow-download` (or MCP's `allowDownload`); an
+   admin's `component install` passes `true`, because the command itself is
+   the consent. Under `downloads.policy: "on-request"` that is all it takes;
+   `"always"` consents for every lease request too; `"never"` refuses every
+   download, the explicit install included -- no role and no operation
+   overrides it. Warm-pool provisioning and startup convergence never
+   trigger a download under any policy: they only ever reuse specs already
+   committed to the registry, never resolve a new one.
 5. **Destructive CLI commands confirm or require `--yes`**
    (`release --all`, `nuke`). `cleanup` must always support `--dry-run`.
 6. **Every destructive action is attributable.** Log/emit which rule or

@@ -17,6 +17,7 @@ import {
   PassthroughRefusedError,
   Registry,
   SerializedDecision,
+  RuntimeMissingError,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
@@ -35,6 +36,7 @@ import {
 import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
+import { classifyError } from "./error-code.js";
 
 const gibibyte = 1024 ** 3;
 const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
@@ -71,6 +73,35 @@ function resolveEventHistoryOverride(
     override ??
     new EventHistory({ bus: eventBus, filesystem, logger: new NoopLogger(), path: "/events.jsonl" })
   );
+}
+
+/** The fake driver's `simlock <tool>` wrapper, when a test asks for one; nothing otherwise. Pulled
+ * out of `buildDispatcher` for the same reason as `resolvePassthroughOverride`. */
+function fakePassthroughOptions(
+  tool: string | undefined,
+  contextSink: unknown[] | undefined,
+): Partial<FakeDriverOptions> {
+  if (tool === undefined) return {};
+  return {
+    passthrough: (args: readonly string[], context?: unknown) => {
+      contextSink?.push(context);
+      // The refusal half of a real driver's passthrough, in the smallest form that
+      // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
+      // this same function, so a verb refused for one is refused for the other.
+      if (args.includes("delete")) {
+        throw new PassthroughRefusedError(
+          tool,
+          "Refusing `simlock simctl delete`: use `simlock release` instead.",
+        );
+      }
+      return {
+        args: ["--set", "/root", ...args],
+        command: tool,
+        env: { SIMLOCK_SCOPED: "1" },
+      };
+    },
+    passthroughTool: tool,
+  };
 }
 
 async function buildDispatcher(
@@ -116,8 +147,9 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
     readonly capacity?: Config["capacity"];
-    /** The installer `status.get` lists installs from; none by default. */
-    readonly components?: Pick<ComponentInstaller, "inProgress">;
+    /** Stands in for the component installer: a test that needs to see whether it was reached,
+     * or one that reads `status.get`'s installs from an installer of its own. */
+    readonly components?: Pick<ComponentInstaller, "install" | "inProgress">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -135,28 +167,7 @@ async function buildDispatcher(
     clock,
     platform: "ios",
     ...overrides.driverOptions,
-    ...(overrides.passthroughTool === undefined
-      ? {}
-      : {
-          passthrough: (args: readonly string[], context?: unknown) => {
-            overrides.passthroughContextSink?.push(context);
-            // The refusal half of a real driver's passthrough, in the smallest form that
-            // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
-            // this same function, so a verb refused for one is refused for the other.
-            if (args.includes("delete")) {
-              throw new PassthroughRefusedError(
-                overrides.passthroughTool as string,
-                "Refusing `simlock simctl delete`: use `simlock release` instead.",
-              );
-            }
-            return {
-              args: ["--set", "/root", ...args],
-              command: overrides.passthroughTool as string,
-              env: { SIMLOCK_SCOPED: "1" },
-            };
-          },
-          passthroughTool: overrides.passthroughTool,
-        }),
+    ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
   const config = testConfig(
     overrides.downloadsPolicy,
@@ -164,13 +175,15 @@ async function buildDispatcher(
     overrides.exec ?? {},
     overrides.capacity,
   );
+  const wiring = testComponentWiring({
+    clock: clock,
+    components: overrides.components,
+    drivers: [driver],
+    eventBus: eventBus,
+    registry: registry,
+  });
   const engine = new LeaseEngine({
-    ...testComponentWiring({
-      clock: clock,
-      drivers: [driver],
-      eventBus: eventBus,
-      registry: registry,
-    }),
+    ...wiring,
     clock,
     config,
     drivers: [driver],
@@ -213,7 +226,7 @@ async function buildDispatcher(
     capacity: engine,
     catalog: overrides.catalog ?? engine,
     clock,
-    ...(overrides.components === undefined ? {} : { components: overrides.components }),
+    components: wiring.components,
     config,
     doctor,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
@@ -229,7 +242,17 @@ async function buildDispatcher(
     registry,
     tokens,
   });
-  return { clock, dispatcher, doctor, driver, engine, eventBus, registry, tokens };
+  return {
+    clock,
+    components: wiring.components,
+    dispatcher,
+    doctor,
+    driver,
+    engine,
+    eventBus,
+    registry,
+    tokens,
+  };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -1073,6 +1096,274 @@ describe("Dispatcher: status.get installs in progress", () => {
 async function flushPromises(): Promise<void> {
   for (let count = 0; count < 100; count += 1) await Promise.resolve();
 }
+
+describe("Dispatcher: component.install", () => {
+  const admin = (overrides: Partial<DispatchSession> = {}) =>
+    session({ principal: "tok_operator", role: "admin", ...overrides });
+
+  /** An installer stand-in that records every call and installs nothing. */
+  function spyInstaller() {
+    const install = vi.fn(() =>
+      Promise.resolve({ outcome: "installed" as const, version: "unreachable" }),
+    );
+    return { inProgress: () => [], install };
+  }
+
+  function installCalls(driver: FakeDriver): unknown[] {
+    return driver.calls
+      .filter((call) => call.operation === "installComponent")
+      .map((call) => call.arguments);
+  }
+
+  /** Lets the installer and the fake driver run their awaits until `predicate` holds. */
+  async function until(predicate: () => boolean, label: string): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error(`never happened: ${label}`);
+  }
+
+  it("calls the installer for a missing component and answers installed with the version", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+
+    const result = await dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+
+    expect(result).toEqual({
+      component: "27.0",
+      outcome: "installed",
+      platform: "ios",
+      version: "27.0",
+    });
+    expect(installCalls(driver)).toEqual([["27.0"]]);
+  });
+
+  it("answers already-installed for an installed component and starts no install", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+
+    const result = await dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "26.5" },
+      admin(),
+    );
+
+    expect(result).toEqual({
+      component: "26.5",
+      outcome: "already-installed",
+      platform: "ios",
+      version: "26.5",
+    });
+    expect(installCalls(driver)).toEqual([]);
+  });
+
+  it("refuses an agent session with FORBIDDEN and never calls the installer", async () => {
+    const components = spyInstaller();
+    const { dispatcher } = await buildDispatcher({ components });
+
+    await expect(
+      dispatcher.dispatch("component.install", { platform: "ios", version: "27.0" }, session()),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(components.install).not.toHaveBeenCalled();
+  });
+
+  it("fails with DOWNLOADS_DISABLED under downloads.policy 'never' and never calls the installer", async () => {
+    const components = spyInstaller();
+    const { dispatcher } = await buildDispatcher({ components, downloadsPolicy: "never" });
+
+    const error = await dispatcher
+      .dispatch("component.install", { platform: "ios", version: "27.0" }, admin())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DispatchError);
+    expect(error).toMatchObject({ code: "DOWNLOADS_DISABLED", details: { policy: "never" } });
+    expect(components.install).not.toHaveBeenCalled();
+  });
+
+  it("installs under downloads.policy 'on-request' with no flag of its own", async () => {
+    const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "on-request" });
+
+    await expect(
+      dispatcher.dispatch("component.install", { platform: "ios", version: "27.0" }, admin()),
+    ).resolves.toMatchObject({ outcome: "installed" });
+    expect(installCalls(driver)).toEqual([["27.0"]]);
+  });
+
+  it("joins a lease request's download of the same component: one install, and both succeed", async () => {
+    const { components, dispatcher, driver } = await buildDispatcher({
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+    });
+    // The engine and the dispatcher hold this same installer, so the spy sees both callers.
+    const installerCalls = vi.spyOn(components, "install");
+    driver.holdInstalls();
+
+    const install = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    await until(() => installCalls(driver).length === 1, "the install started");
+    const lease = dispatcher.dispatch(
+      "lease.request",
+      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+      session(),
+    );
+    // The lease reaches the installer while the install is still held, so it can only join.
+    await until(() => installerCalls.mock.calls.length === 2, "the lease reached the installer");
+    expect(installerCalls.mock.calls.map(([request]) => request.component)).toEqual([
+      "27.0",
+      "27.0",
+    ]);
+    driver.releaseInstalls();
+
+    await expect(install).resolves.toMatchObject({ outcome: "installed", version: "27.0" });
+    await expect(lease).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
+    expect(installCalls(driver)).toEqual([["27.0"]]);
+  });
+
+  it("runs one install for two calls naming the same component, and gives both its outcome", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    driver.holdInstalls();
+
+    const first = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    await until(() => installCalls(driver).length === 1, "the first install started");
+    const second = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin({ principal: "tok_second" }),
+    );
+    driver.releaseInstalls();
+
+    const expected = { component: "27.0", outcome: "installed", platform: "ios", version: "27.0" };
+    await expect(first).resolves.toEqual(expected);
+    await expect(second).resolves.toEqual(expected);
+    expect(installCalls(driver)).toEqual([["27.0"]]);
+  });
+
+  it("refuses a version containing whitespace with BAD_REQUEST before any driver call", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch("component.install", { platform: "ios", version: "27 .0" }, admin()),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      dispatcher.dispatch("component.install", { platform: "ios", version: "27.0\n" }, admin()),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(driver.calls).toEqual([]);
+  });
+
+  it("answers NO_DRIVER for a platform with no driver, and admits nothing", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const onStarted = vi.fn();
+
+    const error = await dispatcher
+      .dispatch("component.install", { platform: "android", version: "35" }, admin({ onStarted }))
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("NO_DRIVER");
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
+  it("tells the session the call was admitted before it settles", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    driver.holdInstalls();
+    const onStarted = vi.fn();
+
+    const install = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin({ onStarted }),
+    );
+    await until(() => installCalls(driver).length === 1, "the install started");
+
+    expect(onStarted).toHaveBeenCalledOnce();
+    driver.releaseInstalls();
+    await install;
+  });
+
+  it("answers RUNTIME_MISSING when the driver says the component cannot be installed", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    driver.failOn(
+      "installComponent",
+      1,
+      new RuntimeMissingError("ios", "12.0", { downloadable: false }),
+    );
+
+    const error = await dispatcher
+      .dispatch("component.install", { platform: "ios", version: "12.0" }, admin())
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("RUNTIME_MISSING");
+  });
+
+  it("names the session's principal as the requester of the install it starts", async () => {
+    const { dispatcher, eventBus } = await buildDispatcher();
+    const started: unknown[] = [];
+    eventBus.subscribeAll((envelope) => {
+      if (envelope.event === "component.install-started") started.push(envelope.payload);
+    });
+
+    await dispatcher.dispatch("component.install", { platform: "ios", version: "27.0" }, admin());
+
+    expect(started).toEqual([
+      { componentId: "27.0", platform: "ios", requesterId: "tok_operator" },
+    ]);
+  });
+
+  it("reports a driver's percentage as a fraction clamped to 0..1, and leaves out one that is not a number", async () => {
+    const { dispatcher } = await buildDispatcher({
+      driverOptions: { installProgress: [Number.NaN, -5, 50, 150] },
+    });
+    const progress: unknown[] = [];
+
+    await dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin({ onComponentProgress: (update) => progress.push(update) }),
+    );
+
+    expect(progress).toEqual([
+      { stage: "downloading" },
+      { fraction: 0, stage: "downloading" },
+      { fraction: 0.5, stage: "downloading" },
+      { fraction: 1, stage: "downloading" },
+    ]);
+  });
+
+  it("tells a caller behind another install on the platform that it waits, then that it downloads", async () => {
+    const { dispatcher, driver } = await buildDispatcher({
+      driverOptions: { installProgress: [41] },
+    });
+    driver.holdInstalls();
+    const first = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    await until(() => installCalls(driver).length === 1, "the first install started");
+
+    const progress: unknown[] = [];
+    const second = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "28.0" },
+      admin({ onComponentProgress: (update) => progress.push(update) }),
+    );
+    await until(() => progress.length === 1, "the second call heard it waits");
+    expect(progress).toEqual([{ stage: "waiting" }]);
+    driver.releaseInstalls();
+
+    await first;
+    await expect(second).resolves.toMatchObject({ outcome: "installed", version: "28.0" });
+    expect(progress).toEqual([{ stage: "waiting" }, { fraction: 0.41, stage: "downloading" }]);
+  });
+});
 
 describe("Dispatcher: status.get host facts", () => {
   it("reports operating system, version, architecture, and every driver's tool versions", async () => {

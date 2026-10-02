@@ -4,6 +4,7 @@ import type { EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
   type ComponentInstaller,
+  type ComponentInstallerProgress,
   type Config,
   type DeviceRecord,
   type DeviceRequest,
@@ -33,6 +34,7 @@ import type {
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
   OPERATIONS,
+  type ComponentProgress,
   type GatewayOnlyOperationName,
   type OperationName,
 } from "../contract/index.js";
@@ -83,10 +85,10 @@ export interface DispatcherOptions {
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
-   * `status.get`'s installs in progress (ADR 0010 §3), read from the installer's own queues.
-   * Optional so tests that never install need not build one; without it the list is empty.
+   * The one installer (ADR 0010 §3), shared with the lease path so `component.install` and a
+   * lease request's download join one install, and read for `status.get`'s installs in progress.
    */
-  readonly components?: Pick<ComponentInstaller, "inProgress">;
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress">;
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
@@ -217,6 +219,7 @@ export class Dispatcher {
       "token.create": this.#tokenCreate,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
+      "component.install": this.#componentInstall,
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
@@ -295,7 +298,7 @@ export class Dispatcher {
       // #117 is what makes `gateway` mean something beyond this field.
       daemon: { health: this.options.health(), mode: this.options.config.mode },
       host: this.options.hostFacts(),
-      installs: [...(this.options.components?.inProgress() ?? [])],
+      installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
     };
@@ -595,6 +598,45 @@ export class Dispatcher {
   #configGet: Handler<"config.get"> = () => this.options.config;
 
   /**
+   * ADR 0010 §4 and §6: an operator's explicit install. The command itself is the consent, so the
+   * one consent function is asked with `true`; only `downloads.policy: "never"` refuses it, and it
+   * does so before the installer is reached. Everything else -- joining an install already
+   * running, waiting a platform's turn, the disk reservation, the budget, the events -- is the
+   * installer's, exactly as for a lease request's download.
+   */
+  #componentInstall: Handler<"component.install"> = async (input, session) => {
+    if (!effectiveAllowDownload(this.options.config.downloads.policy, true)) {
+      throw new DispatchError(
+        "DOWNLOADS_DISABLED",
+        'Downloads are disabled by configuration: downloads.policy is "never"',
+        { policy: "never" },
+      );
+    }
+    const onComponentProgress = session.onComponentProgress;
+    const onStarted = session.onStarted;
+    const result = await this.options.components.install({
+      component: input.version,
+      platform: input.platform,
+      requesterId: session.principal,
+      ...(onComponentProgress === undefined
+        ? {}
+        : { onProgress: (progress) => onComponentProgress(toWireProgress(progress)) }),
+      ...(onStarted === undefined ? {} : { onAdmitted: onStarted }),
+    });
+    // No `stillNeeded` is passed, so `not-needed` cannot come back; a version is always present
+    // for the two outcomes that can.
+    if (result.outcome === "not-needed" || result.version === undefined) {
+      throw new Error(`Internal: component install ended as ${result.outcome} with no version`);
+    }
+    return {
+      component: input.version,
+      outcome: result.outcome,
+      platform: input.platform,
+      version: result.version,
+    };
+  };
+
+  /**
    * ADR §11: the daemon is the only owner of `tokens.json` -- `TokenStore.create` never
    * persists the plaintext `secret`, only its hash, exactly as it did when the CLI called it
    * directly.
@@ -623,6 +665,16 @@ export class Dispatcher {
     if (enteredAt === undefined) return device;
     return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
   }
+}
+
+/**
+ * The installer's progress in the contract's words: a driver's percentage becomes a fraction
+ * from 0 to 1, and one that is not a finite number is left out rather than guessed.
+ */
+function toWireProgress(progress: ComponentInstallerProgress): ComponentProgress {
+  if (progress.stage === "waiting") return { stage: "waiting" };
+  if (!Number.isFinite(progress.percent)) return { stage: "downloading" };
+  return { fraction: Math.min(1, Math.max(0, progress.percent / 100)), stage: "downloading" };
 }
 
 /** A child that exited between the timer firing and the signal landing is not an error worth

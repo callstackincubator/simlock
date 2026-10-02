@@ -88,6 +88,8 @@ describe("contract surface", () => {
     // The sweep talks to the daemon directly, so nothing here would start one implicitly the
     // way `env.cli` does.
     expect((await env.startDaemon()).code).toBe(0);
+    // ADR 0010 §6's operation is part of the sweep, not left to the registry walk alone.
+    expect(probedOperations()).toContain("component.install");
 
     // Asserted as one object rather than per operation so a failure names every unreachable
     // operation at once, instead of stopping at the first. The gateway-only operations

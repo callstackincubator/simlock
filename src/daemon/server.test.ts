@@ -69,7 +69,8 @@ interface ServerFrame {
     | "lease.heartbeat"
     | "output"
     | "progress"
-    | "started";
+    | "started"
+    | "component-progress";
 }
 
 const runningDaemons: DaemonServer[] = [];
@@ -586,6 +587,40 @@ describe("DaemonServer", () => {
     // title outrunning its body; `client.test.ts`'s wire test pins it where it is observable.
     expect(client.frames().filter((frame) => frame.push === "started")).toEqual([
       { payload: { requestId: "exec-frame" }, push: "started" },
+    ]);
+  });
+
+  /**
+   * ADR 0010 §6 over the socket: an install's progress reaches the wire as `component-progress`
+   * pushes keyed by the request's frame id, ahead of the reply that carries the outcome.
+   */
+  it("pushes component.install progress frames keyed by the request id, then replies with the outcome", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      installProgress: [50],
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      "install-frame",
+    );
+
+    expect(response).toMatchObject({
+      ok: true,
+      payload: { component: "27.0", outcome: "installed", platform: "ios", version: "27.0" },
+    });
+    expect(client.frames().filter((frame) => frame.push === "component-progress")).toEqual([
+      {
+        payload: { progress: { fraction: 0.5, stage: "downloading" }, requestId: "install-frame" },
+        push: "component-progress",
+      },
     ]);
   });
 
@@ -2821,13 +2856,14 @@ async function createHarness(
         : { slimmableOsVersions: options.slimmableOsVersions }),
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
+  const wiring = testComponentWiring({
+    clock: clock,
+    drivers: [driver],
+    eventBus: eventBus,
+    registry: registry,
+  });
   const engine = new LeaseEngine({
-    ...testComponentWiring({
-      clock: clock,
-      drivers: [driver],
-      eventBus: eventBus,
-      registry: registry,
-    }),
+    ...wiring,
     clock,
     config,
     describeFailure: describeLeaseRequestFailure,
@@ -2854,6 +2890,7 @@ async function createHarness(
     capacity: engine,
     catalog: engine,
     clock,
+    components: wiring.components,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
     ...(options.driverRejections === undefined

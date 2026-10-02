@@ -1793,6 +1793,122 @@ describe("CLI: catalog", () => {
   });
 });
 
+describe("CLI: component install (ADR 0010 §6)", () => {
+  it("prints each progress update on stderr and one result line on stdout, and exits 0", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      installComponent: async (input, options) => {
+        asked.push(input);
+        options?.onProgress?.({ stage: "waiting" });
+        options?.onProgress?.({ fraction: 0.41, stage: "downloading" });
+        return { component: "35", outcome: "installed", platform: "android", version: "35" };
+      },
+    });
+
+    await expect(
+      runCli(
+        ["component", "install", "android", "35"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ platform: "android", version: "35" }]);
+    // The fake connection resolves no credential, so the agent-fallback notice comes first.
+    const stderrLines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    expect(stderrLines.filter((line) => !Object.hasOwn(line as object, "notice"))).toEqual([
+      { stage: "waiting" },
+      { fraction: 0.41, stage: "downloading" },
+    ]);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stdout)).toEqual({
+      component: "35",
+      outcome: "installed",
+      platform: "android",
+      version: "35",
+    });
+  });
+
+  it("exits 12 when the daemon refuses with DOWNLOADS_DISABLED", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      installComponent: () =>
+        Promise.reject(
+          new SimlockError("DOWNLOADS_DISABLED", "domain", "downloads.policy is never", {
+            policy: "never",
+          }),
+        ),
+    });
+
+    await expect(
+      runCli(
+        ["component", "install", "ios", "26.4"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      ),
+    ).resolves.toBe(12);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: { code: "DOWNLOADS_DISABLED", message: expect.any(String) },
+    });
+  });
+
+  it.each([
+    ["a missing version", ["component", "install", "ios"]],
+    ["an extra argument", ["component", "install", "ios", "26.4", "26.5"]],
+    ["an unknown platform", ["component", "install", "tvos", "26.4"]],
+    ["--json", ["component", "install", "ios", "26.4", "--json"]],
+    ["an unknown subcommand", ["component", "remove", "ios", "26.4"]],
+  ])("exits 2 with USAGE for %s, without asking the daemon", async (_label, argv) => {
+    const output = outputCapture();
+    let installs = 0;
+    const client = fakeClient({
+      installComponent: (input) => {
+        installs += 1;
+        return Promise.resolve({ ...input, component: input.version, outcome: "installed" });
+      },
+    });
+
+    await expect(
+      runCli(argv, output.environmentWith({ connectAdmin: async () => client })),
+    ).resolves.toBe(2);
+    expect(installs).toBe(0);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+      error: { code: "USAGE" },
+    });
+  });
+
+  it.each([[["component"]], [["component", "--help"]], [["component", "install", "--help"]]])(
+    "prints the command's usage for %j without connecting to the daemon",
+    async (argv) => {
+      const output = outputCapture();
+      let connected = false;
+
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(output.stdout).toBe("Usage: simlock component install <ios|android> <version>\n");
+      expect(connected).toBe(false);
+    },
+  );
+
+  it("lists the command in the usage banner", async () => {
+    const output = outputCapture();
+    await runCli(["--help"], output.environmentWith({}));
+    expect(output.stdout).toContain("component install <ios|android> <version>");
+  });
+});
+
 describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   const connectedWorker = {
     capacity: {
@@ -3858,6 +3974,13 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     undrainWorker: (input) =>
       Promise.resolve({ drained: false as const, workerId: input.workerId }),
     removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
+    installComponent: (input) =>
+      Promise.resolve({
+        component: input.version,
+        outcome: "installed" as const,
+        platform: input.platform,
+        version: input.version,
+      }),
     ...overrides,
   };
   return base;
@@ -3949,13 +4072,14 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();
+  const wiring = testComponentWiring({
+    clock: clock,
+    drivers: [driver],
+    eventBus: eventBus,
+    registry: registry,
+  });
   const engine = new LeaseEngine({
-    ...testComponentWiring({
-      clock: clock,
-      drivers: [driver],
-      eventBus: eventBus,
-      registry: registry,
-    }),
+    ...wiring,
     clock,
     config,
     drivers: [driver],
@@ -3987,6 +4111,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     capacity: engine,
     catalog: engine,
     clock,
+    components: wiring.components,
     config,
     defaultRequesterId: "test-process",
     eventBus,
@@ -4061,13 +4186,14 @@ async function startInMemoryDaemon(options: {
   });
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   const config = testConfig();
+  const wiring = testComponentWiring({
+    clock: clock,
+    drivers: [driver],
+    eventBus: eventBus,
+    registry: registry,
+  });
   const engine = new LeaseEngine({
-    ...testComponentWiring({
-      clock: clock,
-      drivers: [driver],
-      eventBus: eventBus,
-      registry: registry,
-    }),
+    ...wiring,
     clock,
     config,
     drivers: [driver],
@@ -4109,6 +4235,7 @@ async function startInMemoryDaemon(options: {
     capacity: engine,
     catalog: engine,
     clock,
+    components: wiring.components,
     config,
     defaultRequesterId: "test-process",
     eventBus,

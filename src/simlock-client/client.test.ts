@@ -322,6 +322,46 @@ describe("pushes", () => {
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
+  it("routes component-progress pushes to that installComponent call's onProgress, and stops at its reply", async () => {
+    // ADR 0010 §6: `component-progress` is request-scoped like `progress`.
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const onProgress = vi.fn();
+    const installPromise = client.installComponent(
+      { platform: "android", version: "35" },
+      { onProgress },
+    );
+    await flushMicrotasks();
+    const installCall = connection.lastSentOf("component.install")!;
+    expect(installCall.payload).toEqual({ platform: "android", version: "35" });
+
+    connection.push("component-progress", {
+      progress: { stage: "waiting" },
+      requestId: installCall.id,
+    });
+    connection.push("component-progress", {
+      progress: { fraction: 0.41, stage: "downloading" },
+      requestId: installCall.id,
+    });
+    const result = { component: "35", outcome: "installed", platform: "android", version: "35" };
+    connection.reply(installCall.id, result);
+
+    await expect(installPromise).resolves.toEqual(result);
+    expect(onProgress.mock.calls.map(([progress]) => progress)).toEqual([
+      { stage: "waiting" },
+      { fraction: 0.41, stage: "downloading" },
+    ]);
+    connection.push("component-progress", {
+      progress: { stage: "downloading" },
+      requestId: installCall.id,
+    });
+    expect(onProgress).toHaveBeenCalledTimes(2);
+  });
+
   it("routes device.exec output chunks to that call's onOutput, in order, and stops at its reply", async () => {
     // ADR 0005 §19a: `output` is request-scoped like `progress`, so it reaches the call that is
     // still waiting on its frame id and nothing else.

@@ -16,7 +16,7 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
 `getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents`,
-`createToken`/`listTokens`/`revokeToken`). The split exists so
+`createToken`/`listTokens`/`revokeToken`, `installComponent`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from
 calling one — this is a discoverability choice, not the
@@ -223,6 +223,41 @@ worker's own. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.
 `allowDownload` has no effect through a gateway: only installed runtimes
 count.
+
+## Installing a runtime: `installComponent`
+
+`installComponent({ platform, version }, { onProgress? })` on the admin
+client installs one iOS simulator runtime or Android system image, with no
+lease — the call behind `simlock component install`:
+
+```ts
+const result = await admin.installComponent(
+  { platform: "android", version: "35" },
+  { onProgress: (progress) => console.error(progress) },
+);
+// onProgress: { stage: "waiting" }, then { stage: "downloading", fraction: 0.41 }
+// result: { platform: "android", component: "35", outcome: "installed", version: "35" }
+```
+
+- `version` is the string `getCatalog` lists under `runtimes` once the
+  component is installed: 1 to 64 characters, no whitespace or control
+  character and no leading `-`, or the call rejects with `BAD_REQUEST`
+  before anything is sent.
+- `outcome` is `installed`, or `already-installed` when it was already
+  there. `component` echoes the version asked for; `version` is the one
+  installed. The catalog lists it at once.
+- `onProgress` hears `waiting` while another download on the platform runs
+  first, then `downloading`, with `fraction` from 0 to 1 when the platform's
+  installer reports one.
+- The call is the consent to download. Under `downloads.policy: "never"` it
+  rejects with `DOWNLOADS_DISABLED`. Other rejections: `FORBIDDEN` for an
+  agent session, `NO_DRIVER`, `INSUFFICIENT_DISK_SPACE`,
+  `LICENSE_NOT_ACCEPTED`, `DOWNLOAD_TIMEOUT` once `downloads.timeoutMs`,
+  waiting included, runs out, and `UNSUPPORTED_IN_GATEWAY_MODE` from a
+  gateway.
+- Concurrent calls, and lease requests with `allowDownload`, for the same
+  component share one download, and each gets its result. A dropped
+  connection does not stop the download; calling again joins it.
 
 ## What machine answered: `getStatus().host`
 

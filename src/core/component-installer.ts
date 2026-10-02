@@ -28,6 +28,12 @@ export interface ComponentInstallRequest {
    */
   readonly stillNeeded?: () => Promise<boolean>;
   readonly onProgress?: (progress: ComponentInstallerProgress) => void;
+  /**
+   * Called once, synchronously, when the call is queued or has joined an install: after every
+   * refusal `install` makes at the door (no driver for the platform, the installer closed), and
+   * before any progress. A transport commits to a streamed response here.
+   */
+  readonly onAdmitted?: () => void;
 }
 
 export interface ComponentInstallOutcome {
@@ -131,6 +137,12 @@ export class ComponentInstaller {
 
   install(request: ComponentInstallRequest): Promise<ComponentInstallOutcome> {
     if (this.#closed) return Promise.reject(new ComponentInstallerClosedError());
+    try {
+      // A platform with no driver is refused at the door, before the call is admitted.
+      this.options.drivers.get(request.platform);
+    } catch (error: unknown) {
+      return Promise.reject(error);
+    }
     return new Promise<ComponentInstallOutcome>((resolve, reject) => {
       const queue = this.#queue(request.platform);
       const install = this.#joinable(queue, request.component) ?? this.#enqueue(queue, request);
@@ -148,6 +160,11 @@ export class ComponentInstaller {
       call.timer = this.options.clock.setTimer(this.options.timeoutMs, () => {
         this.#expire(call);
       });
+      try {
+        request.onAdmitted?.();
+      } catch {
+        // An observer, like `onProgress`: a throw there must not reach the install.
+      }
       if (queue[0] !== install) notify(call, { stage: "waiting" });
       this.#pump(request.platform);
     });

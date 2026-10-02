@@ -13,7 +13,8 @@
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
  *    through `FleetLeaseCoordinator`.
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
- *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole.
+ *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
+ *    and `component.install` (ADR 0010 §7), which installs on one machine.
  * 3. *(Formerly "refused until #118" -- the fleet queue, routing, and lease/exec forwarding this
  *    module now implements. Nothing is left in this population; the type below still enforces
  *    that every operation but `daemon.stop` is accounted for.)*
@@ -163,6 +164,11 @@ export class GatewayDispatcher {
       "cleanup.run": unsupportedByDesign("cleanup.run"),
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
+      // ADR 0010 §7: a gateway owns no components and has no download policy of its own.
+      "component.install": unsupportedByDesign(
+        "component.install",
+        "component.install installs on one machine; run it against a worker",
+      ),
 
       "lease.request": this.#leaseRequest,
       "lease.renew": this.#leaseRenew,
@@ -451,12 +457,11 @@ export class GatewayDispatcher {
 }
 
 /** ADR 0005 §34: stays per-worker, permanently. */
-function unsupportedByDesign(operation: OperationName): ErasedHandler {
+function unsupportedByDesign(
+  operation: OperationName,
+  message = `${operation} acts on one machine's devices; run it against a worker`,
+): ErasedHandler {
   return () => {
-    throw new DispatchError(
-      "UNSUPPORTED_IN_GATEWAY_MODE",
-      `${operation} acts on one machine's devices; run it against a worker`,
-      { operation },
-    );
+    throw new DispatchError("UNSUPPORTED_IN_GATEWAY_MODE", message, { operation });
   };
 }

@@ -20,6 +20,7 @@
  * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
  */
 import {
+  ComponentInstallerClosedError,
   ComponentInstallTimeoutError,
   IdempotencyConflictError,
   InsufficientDiskSpaceError,
@@ -129,6 +130,11 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof ComponentInstallTimeoutError) {
     return "DOWNLOAD_TIMEOUT";
+  }
+  // A component install still open when the daemon stopped (ADR 0010 §6): running it again,
+  // against the restarted daemon, is the recovery.
+  if (error instanceof ComponentInstallerClosedError) {
+    return "DAEMON_STOPPING";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

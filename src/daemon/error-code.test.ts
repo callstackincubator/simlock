@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { NoCapacityError, ReplayedLeaseRequestError } from "../core/index.js";
+import {
+  ComponentInstallerClosedError,
+  NoCapacityError,
+  ReplayedLeaseRequestError,
+} from "../core/index.js";
 import { classifyError, describeLeaseRequestFailure } from "./error-code.js";
 
 describe("describeLeaseRequestFailure", () => {
@@ -28,5 +32,11 @@ describe("classifyError on a replayed lease request", () => {
     expect(classifyError(new ReplayedLeaseRequestError("NOT_A_CODE", "edited by hand"))).toBe(
       "INTERNAL",
     );
+  });
+});
+
+describe("classifyError on a component install", () => {
+  it("answers DAEMON_STOPPING for an install the daemon's stop ended", () => {
+    expect(classifyError(new ComponentInstallerClosedError())).toBe("DAEMON_STOPPING");
   });
 });
