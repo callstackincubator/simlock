@@ -2,6 +2,7 @@ import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/in
 import type { LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest, PassthroughCommand, PassthroughContext } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
+import type { WaitingRequest } from "./lease-request-book.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
 /** Client-requestable subset only -- deliberately excludes the internally-originated
@@ -28,6 +29,8 @@ export interface QueueControl {
    * `lease.cancel`'s `authorize` hook so a proxy connection (one principal, many
    * `requesterId`s) can cancel what it created, per ADR §4/§9. */
   pendingRequestOwner(requesterId: string): string | undefined;
+  /** Every request still waiting for a device, oldest first (`LeaseRequestBook#waiting`). */
+  waitingRequests(): readonly WaitingRequest[];
 }
 
 /** Read-only capacity view used by daemon status. */

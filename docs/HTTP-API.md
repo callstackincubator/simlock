@@ -67,7 +67,7 @@ Three roles:
 | Role | Can |
 |---|---|
 | `agent` | catalog, status, installed components, its own lease requests and leases, `exec` on its own lease |
-| `operator` | everything `agent` can, plus every other requester's leases/devices, the worker routes, event replay/stream, and releasing any lease |
+| `operator` | everything `agent` can, plus every other requester's leases/devices, every waiting request, the worker routes, event replay/stream, and releasing any lease |
 | `worker` | open an uplink at [`/v1/uplink`](#get-v1uplink-websocket-upgrade), and nothing else |
 
 A valid token with the wrong role for a route is `403 FORBIDDEN`, not `401` —
@@ -205,12 +205,18 @@ An install leaves the list as soon as it ends, whether it succeeded, failed
 or timed out. A worker always sends the field, empty when nothing is
 installing; an older daemon leaves it out.
 
+**`waiting`** lists the requests waiting in this daemon's own queue for a
+device, oldest first, in the shape
+[`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
+sends it, empty when nothing waits; an older daemon leaves it out.
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of
 them is, absent when none does), every gateway-issued and local lease, every device, the
 connected workers' installs (the 16 oldest across the fleet), the gateway
-queue's depth — every lease, device and install carries the **`workerId`** it lives
-on, and an additive **`workers`** array carries one
+queue's depth and the requests waiting in it — every lease, device and install
+carries the **`workerId`** it lives on, and an additive **`workers`** array
+carries one
 [worker view](#worker-routes) per worker:
 
 ```json
@@ -1035,6 +1041,12 @@ install queued behind another may appear only then. A worker that does not
 send one shows an empty list; a disconnected or incompatible worker shows
 none.
 
+`waiting` is the worker's own `waiting` list from its
+[`GET /v1/status`](#get-v1status): the requests waiting in that worker's
+queue. It is re-read on every lease event on that worker. A worker that does
+not send one shows an empty list; a disconnected or incompatible worker shows
+none.
+
 `catalog` is what that worker can lease, each model with the runtimes it
 pairs with, and lists a newly installed component as soon as its install
 ends. Its `customModels` are that worker's own, so this is where you see
@@ -1094,7 +1106,7 @@ take the host out of rotation or forget it.
 
 ### Operator routes
 
-Role: `operator` for all four.
+Role: `operator` for all five.
 
 `DELETE /v1/leases/{id}` with an `operator` token already releases any single
 lease, on a gateway as anywhere else. The fleet-wide form of that — the CLI's
@@ -1108,6 +1120,8 @@ could reach are still released — a partial result, said plainly, rather than
 an all-or-nothing that leaves the operator guessing.
 
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
+- `GET /v1/lease-requests` — every request waiting for a device
+  (`simlock list --requests`); see below.
 - `GET /v1/devices` — every managed device, with state and
   `transitionAgeMs` (`simlock list --devices`).
 - `GET /v1/events?since=<duration>` — replay business events newer than
@@ -1119,12 +1133,49 @@ an all-or-nothing that leaves the operator guessing.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
 
-On a **gateway** all four are fleet-wide, which is what makes a single
+On a **gateway** all five are fleet-wide, which is what makes a single
 console possible: `/v1/leases` and `/v1/devices` return every connected
-worker's, each record carrying the `workerId` it lives on, and the two event
-routes carry the workers' republished events (also `workerId`-tagged)
-interleaved with the gateway's own `worker.*` and `request.dispatched`
-facts.
+worker's, each record carrying the `workerId` it lives on,
+`/v1/lease-requests` returns the gateway's queue and every connected
+worker's, and the two event routes carry the workers' republished events
+(also `workerId`-tagged) interleaved with the gateway's own `worker.*` and
+`request.dispatched` facts.
+
+#### `GET /v1/lease-requests`
+
+Every request still waiting for a device, oldest first, whoever sent it. An
+`agent` token gets `403 FORBIDDEN`: an agent reads back only its own request,
+with [`GET /v1/lease-requests/{id}`](#get-v1lease-requestsid).
+
+```json
+{ "requests": [
+  { "id": "req_7", "requesterId": "agent-b",
+    "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4", "mode": "slim" },
+    "createdAt": 1790864071200, "stage": "queued", "queuePosition": 1 },
+  { "id": "req_9", "requesterId": "local-agent",
+    "spec": { "platform": "android", "model": "Pixel 8" },
+    "createdAt": 1790864075000, "stage": "starting", "workerId": "3f81a2c4" }
+] }
+```
+
+- `spec` is the device as the request named it: `platform` and `model`, and
+  `osVersion`, `mode` and `imageTag` only when the request named them.
+- `createdAt` is when the daemon holding the request received it, in
+  milliseconds since the epoch.
+- `stage` is `queued` while the request holds a place in the queue, and
+  `starting` while a device is being found, created, booted or downloaded for
+  it.
+- `queuePosition` is set only while `queued`: its place in the queue counting
+  from 1, the requests ahead of it that are already starting included. It is
+  the request's place now, not the one its `queued` progress first reported.
+- A request leaves the list as soon as it is granted, fails or is cancelled.
+  The request's idempotency key and owner are never listed.
+
+On a **gateway** the list is the gateway's own queue first, without
+`workerId`, then the requests waiting in each connected worker's own queue,
+from that worker's local agents, each with the **`workerId`** whose queue it
+is in. A request the gateway has sent to a worker is listed once, as the
+gateway's own. A worker's `createdAt` comes from that worker's clock.
 
 ## Errors
 

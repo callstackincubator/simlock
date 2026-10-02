@@ -352,6 +352,7 @@ export class Dispatcher {
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
+      waiting: [...this.options.queue.waitingRequests()],
     };
   };
 
@@ -611,6 +612,8 @@ export class Dispatcher {
         return [...snapshot.leases];
       case "rules":
         return this.options.reaper.rules;
+      case "requests":
+        return [...this.options.queue.waitingRequests()];
       case "devices":
       case undefined:
         return snapshot.devices.map((device) => this.#decorateDevice(device));

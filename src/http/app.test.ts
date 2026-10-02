@@ -8,6 +8,7 @@ import {
   RequesterAlreadyLeasedError,
   UnknownLeaseError,
 } from "../core/index.js";
+import { runDispatch } from "../daemon/dispatch.js";
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure, StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
@@ -1663,6 +1664,36 @@ describe("operator-only listing routes", () => {
     const asOperator = await app.request("/v1/leases", { headers: operatorAuth });
     const operatorBody = (await asOperator.json()) as { leases: Array<{ id: string }> };
     expect(operatorBody.leases.map((lease) => lease.id).sort()).toEqual(["lse_1", "lse_2"]);
+  });
+
+  it("GET /v1/lease-requests answers 403 for an agent token", async () => {
+    const { app, dispatcher } = buildHarness();
+    const waiting = {
+      createdAt: 900,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent-b",
+      spec: { model: "iPhone 16", platform: "ios" },
+      stage: "queued",
+    };
+    // `list.get`'s own role check, through the contract's real pipeline: the route adds none.
+    dispatcher.handlers["list.get"] = (input, session) =>
+      runDispatch("list.get", input, session, {
+        handlers: {
+          "list.get": (listInput) => {
+            expect(listInput).toEqual({ kind: "requests" });
+            return [waiting];
+          },
+        },
+      });
+
+    const asAgent = await app.request("/v1/lease-requests", { headers: agentAuth });
+    const asOperator = await app.request("/v1/lease-requests", { headers: operatorAuth });
+
+    expect(asAgent.status).toBe(403);
+    expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(asOperator.status).toBe(200);
+    expect(await asOperator.json()).toEqual({ requests: [waiting] });
   });
 
   it("GET /v1/devices dispatches list.get(kind: devices)", async () => {

@@ -34,6 +34,7 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  waitingRequestSchema,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -124,6 +125,13 @@ export const statusGet = defineOperation({
      * installs, each with its `workerId`. Optional because an older daemon sends none.
      */
     installs: statusInstallsSchema.optional(),
+    /**
+     * The requests waiting for a device in this daemon's own queue, oldest first: a worker's
+     * local queue, a gateway's fleet queue. A gateway lists its workers' own queues on each
+     * worker view and in `list.get`'s `requests`, not here. Optional because an older daemon
+     * sends none.
+     */
+    waiting: z.array(waitingRequestSchema).optional(),
     /**
      * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
      * from a worker's answer -- a worker has no fleet, and an empty array would read as "a
@@ -498,19 +506,22 @@ export const leaseReleaseAll = defineOperation({
  *
  * Arm order is load-bearing: a full record matches the first arm, so a worker's answer is
  * unchanged. `rules` is per-machine cleanup configuration, so a gateway answers it with an
- * empty list rather than inventing a fleet-wide rule set.
+ * empty list rather than inventing a fleet-wide rule set. `requests` lists the requests waiting
+ * for a device: a worker's own, or on a gateway the fleet queue's and then each worker's, each
+ * of those with its `workerId`.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const listGet = defineOperation({
   name: "list.get",
   role: "admin",
   effect: "read",
-  input: z.object({ kind: z.enum(["devices", "leases", "rules"]).optional() }),
+  input: z.object({ kind: z.enum(["devices", "leases", "rules", "requests"]).optional() }),
   output: z.union([
     z.array(deviceRecordSchema),
     z.array(statusDeviceSchema),
     z.array(statusLeaseSchema),
     z.array(cleanupRuleSummarySchema),
+    z.array(waitingRequestSchema),
   ]),
 });
 

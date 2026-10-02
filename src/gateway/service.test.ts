@@ -183,6 +183,14 @@ describe("GatewayService", () => {
       ...statusFixture().capacity,
       global: { maxRunning: 4, overLimit: false, reserved: 1, running: 2, warm: 1 },
     };
+    const waiting = {
+      createdAt: 600,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "local-agent",
+      spec: { model: "iPhone 17", platform: "ios" as const },
+      stage: "queued" as const,
+    };
     worker.status = statusFixture({
       capacity,
       daemon: { health: "starting", mode: "worker" },
@@ -190,6 +198,7 @@ describe("GatewayService", () => {
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
       queueDepth: 3,
+      waiting: [waiting],
     });
     worker.devices = [
       { ...deviceFixture("dev_1", "leased"), createdAt: 1, driverData: { private: true } },
@@ -222,6 +231,7 @@ describe("GatewayService", () => {
       leases: [leaseFixture("lease_1", "dev_1")],
       queueDepth: 3,
       version: "9.8.7",
+      waiting: [waiting],
     });
 
     await harness.service.stop();
@@ -505,6 +515,37 @@ describe("GatewayService", () => {
     );
 
     await harness.service.stop();
+  });
+
+  describe("waiting requests on the view", () => {
+    it("a worker's lease.queued event refreshes its view's waiting list on the gateway", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = fleet();
+      await harness.service.start();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.downloads).toBeDefined(),
+      );
+      expect(harness.service.workers.view("wrk_1")?.waiting).toEqual([]);
+
+      const queued = {
+        createdAt: 500,
+        id: "req_1",
+        queuePosition: 1,
+        requesterId: "local-agent",
+        spec: { model: "iPhone 17", platform: "ios" as const },
+        stage: "queued" as const,
+      };
+      worker.status = statusFixture({ queueDepth: 1, waiting: [queued] });
+      worker.pushEvent({ event: "lease.queued" });
+
+      // Well inside the periodic refresh, which this test never lets come round.
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.waiting).toEqual([queued]),
+      );
+      await harness.service.stop();
+    });
   });
 
   describe("installs in progress on the view (ADR 0010 §7)", () => {

@@ -34,6 +34,8 @@ const HEALTH: Tones = { running: "ok", starting: "warn", failed: "error" };
 
 const INSTALL_STATES: Tones = { downloading: "ok", waiting: "idle" };
 
+const WAITING_STAGES: Tones = { queued: "idle", starting: "ok" };
+
 /**
  * Each status the daemon sends, as a word and a tone. Wire input is a claim: a word this
  * console does not know, from a newer daemon, still shows as itself, in the neutral tone.
@@ -46,3 +48,4 @@ export const deviceStateStatus = (state: string) => statusOf(DEVICE_STATES, stat
 export const connectionStatus = (connection: string) => statusOf(CONNECTIONS, connection);
 export const healthStatus = (health: string) => statusOf(HEALTH, health);
 export const installStatus = (state: string) => statusOf(INSTALL_STATES, state);
+export const waitingStageStatus = (stage: string) => statusOf(WAITING_STAGES, stage);

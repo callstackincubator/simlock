@@ -27,7 +27,7 @@ import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
-import { LeaseRequestBook } from "./lease-request-book.js";
+import { LeaseRequestBook, type WaitingRequest } from "./lease-request-book.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { NukeService } from "./nuke-service.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
@@ -377,6 +377,12 @@ export class LeaseEngine {
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
+  }
+
+  /** Every request waiting for a device on this host, for `list.get` and `status.get`. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher (same as the sibling queueDepth).
+  waitingRequests(): readonly WaitingRequest[] {
+    return this.requests.waiting(this.#queue.places());
   }
 
   /** Cancels a single pending request by requester id, for the HTTP lease-request delete route. */

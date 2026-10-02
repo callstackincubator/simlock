@@ -1079,3 +1079,115 @@ describe("GatewayDispatcher", () => {
     }
   });
 });
+
+describe("GatewayDispatcher: waiting requests", () => {
+  const SPEC = { model: "iPhone 17", platform: "ios" as const };
+
+  /** A request a worker lists in its own `status.get`'s `waiting`. */
+  function onWorker(id: string, requesterId: string, queuePosition?: number) {
+    return {
+      createdAt: 500,
+      id,
+      requesterId,
+      spec: SPEC,
+      ...(queuePosition === undefined
+        ? { stage: "starting" as const }
+        : { queuePosition, stage: "queued" as const }),
+    };
+  }
+
+  /** Lets the coordinator's admission and dispatch pass run. */
+  async function settle(): Promise<void> {
+    for (let count = 0; count < 20; count += 1) await Promise.resolve();
+  }
+
+  const listRequests = (dispatcher: GatewayDispatcher) =>
+    dispatcher.dispatch("list.get", { kind: "requests" }, session());
+
+  it("list.get requests on a gateway returns the fleet queue and each worker's waiting requests with their workerId", async () => {
+    const { coordinator, dispatcher, workers } = harness();
+    // No worker is connected, so the fleet request waits in the gateway's own queue.
+    void dispatcher.dispatch(
+      "lease.request",
+      { ...SPEC, idempotencyKey: "key-1", requesterId: "fleet-agent" },
+      session({ principal: "fleet-owner", role: "agent" }),
+    );
+    await settle();
+    expect(coordinator.queueDepth).toBe(1);
+    // Two workers whose own queues hold their local agents' requests. Neither lists a model,
+    // so neither takes the fleet request.
+    for (const [workerId, requestId] of [
+      ["wrk_1", "req_w1"],
+      ["wrk_2", "req_w2"],
+    ] as const) {
+      workers.connected(workerId, undefined, "0.3.0");
+      workers.refresh(workerId, { waiting: [onWorker(requestId, `local-${workerId}`, 1)] });
+    }
+    await settle();
+
+    const listed = await listRequests(dispatcher);
+
+    expect(listed).toEqual([
+      {
+        createdAt: 1_000,
+        id: expect.any(String),
+        queuePosition: 1,
+        requesterId: "fleet-agent",
+        spec: SPEC,
+        stage: "queued",
+      },
+      { ...onWorker("req_w1", "local-wrk_1", 1), workerId: "wrk_1" },
+      { ...onWorker("req_w2", "local-wrk_2", 1), workerId: "wrk_2" },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain("key-1");
+    expect(JSON.stringify(listed)).not.toContain("fleet-owner");
+    // `status.get` carries the fleet queue only; each worker's own is on its view.
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    expect(status.waiting).toEqual([listed[0]]);
+  });
+
+  it("a fleet request dispatched to a worker is listed once, by the gateway", async () => {
+    const { dispatcher, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_1", client);
+    // The worker takes the request and never answers, so it stays mid-dispatch.
+    client.requestLeaseQueue.push({ kind: "hang" });
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: {
+        ...statusFixture().capacity,
+        ios: { ...statusFixture().capacity.ios, limit: 4, maxRunning: 4 },
+      },
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+    });
+    void dispatcher.dispatch(
+      "lease.request",
+      { ...SPEC, requesterId: "fleet-agent" },
+      session({ principal: "fleet-owner", role: "agent" }),
+    );
+    await settle();
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    // The worker lists the request it was sent under the gateway's requester id, beside a
+    // local agent's own.
+    workers.refresh("wrk_1", {
+      waiting: [
+        onWorker("req_from_gateway", `${GATEWAY_REQUESTER_PREFIX}fleet-agent`),
+        onWorker("req_local", "local-agent", 1),
+      ],
+    });
+
+    const listed = await listRequests(dispatcher);
+
+    expect(listed).toEqual([
+      {
+        createdAt: 1_000,
+        id: expect.any(String),
+        requesterId: "fleet-agent",
+        spec: SPEC,
+        stage: "starting",
+      },
+      { ...onWorker("req_local", "local-agent", 1), workerId: "wrk_1" },
+    ]);
+  });
+});

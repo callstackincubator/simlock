@@ -57,6 +57,7 @@ import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
   type LeaseRequestLimits,
+  type WaitingRequest,
 } from "../core/lease-request-book.js";
 import { SerializedDecision } from "../core/serialized-decision.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -180,6 +181,13 @@ export class FleetLeaseCoordinator {
 
   get queueDepth(): number {
     return this.#queue.depth;
+  }
+
+  /** Every request waiting in the fleet queue, or being dispatched, oldest first. Read by the
+   * same function a worker lists its own with (`LeaseRequestBook#waiting`). */
+  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option.
+  waitingRequests(): readonly WaitingRequest[] {
+    return this.requests.waiting(this.#queue.places());
   }
 
   // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`authorizeLookups.ownerId`); the audit cannot follow a call through a structural type.
