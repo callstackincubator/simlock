@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, type Logger } from "../ports/index.js";
 import { PassthroughRefusedError } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog, NoDriverError, UnknownPassthroughToolError } from "./driver-catalog.js";
@@ -103,6 +103,44 @@ describe("DriverCatalog", () => {
         runtimes: ["26.5"],
       },
     ]);
+  });
+
+  it("logs a warning naming the platform whose catalog it left out", async () => {
+    const warnings: { readonly message: string; readonly fields: unknown }[] = [];
+    const logger: Logger = {
+      child: () => logger,
+      debug: () => {},
+      error: () => {},
+      info: () => {},
+      warn: (message, fields) => {
+        warnings.push({ fields, message });
+      },
+    };
+    const clock = new FakeClock();
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
+    android.failOn("listCatalog", 1, new Error("~/.android is not readable"));
+    const catalog = new DriverCatalog([ios, android], { logger });
+
+    await catalog.listCatalog();
+
+    expect(warnings).toEqual([
+      {
+        fields: { error: "Error: ~/.android is not readable", platform: "android" },
+        message: "A driver could not read its catalog",
+      },
+    ]);
+  });
+
+  it("fails with the driver's error when the named platform's catalog rejects", async () => {
+    const clock = new FakeClock();
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
+    const failure = new Error("~/.android is not readable");
+    android.failOn("listCatalog", 1, failure);
+    const catalog = new DriverCatalog([ios, android]);
+
+    await expect(catalog.listCatalog("android")).rejects.toBe(failure);
   });
 
   it("omits a platform with no registered driver instead of erroring", async () => {

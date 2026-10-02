@@ -128,7 +128,7 @@ export class LeaseEngine {
     );
     this.claimReader = this.#claims;
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
-    this.#drivers = new DriverCatalog(options.drivers);
+    this.#drivers = new DriverCatalog(options.drivers, { logger: options.logger });
     this.#deviceLifecycle = new ManagedDeviceLifecycle(
       this.#drivers,
       options.registry,

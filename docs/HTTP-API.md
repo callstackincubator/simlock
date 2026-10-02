@@ -220,7 +220,8 @@ download, and lists only what is installed, whatever the download policy. On
 a **gateway** it is the union of the connected workers' catalogs, each model
 and runtime annotated with the workers that have it — so a model the catalog
 lists is leasable *somewhere* in the fleet, not necessarily on every machine
-in it.
+in it. On a daemon, a platform whose tools cannot be read is left out, unless
+`platform` names it: then the call fails with that error.
 
 Each platform entry carries `modelRuntimes`: for every name in `models`, the
 installed runtimes that model pairs with. A pair listed there can be leased;

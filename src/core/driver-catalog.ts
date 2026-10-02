@@ -1,3 +1,4 @@
+import { type Logger, NoopLogger } from "../ports/index.js";
 import type { DeviceSpec, Platform } from "./domain.js";
 import type {
   DeviceRequest,
@@ -6,6 +7,7 @@ import type {
   PassthroughCommand,
   PassthroughContext,
 } from "./driver.js";
+import { stableError } from "./stable-error.js";
 
 /** Thrown when no installed driver can serve the requested platform. */
 export class NoDriverError extends Error {
@@ -31,9 +33,11 @@ export interface PlatformCatalog extends DriverCatalogEntry {
 /** Immutable platform-to-driver lookup used by the lease path. */
 export class DriverCatalog {
   readonly #drivers: ReadonlyMap<Platform, Driver>;
+  readonly #logger: Logger;
 
-  constructor(drivers: readonly Driver[]) {
+  constructor(drivers: readonly Driver[], options: { readonly logger?: Logger | undefined } = {}) {
     this.#drivers = new Map(drivers.map((driver) => [driver.platform, driver]));
+    this.#logger = options.logger ?? new NoopLogger();
   }
 
   get(platform: Platform): Driver {
@@ -75,14 +79,26 @@ export class DriverCatalog {
    * Aggregates catalogs across every registered driver, or just the given
    * platform. A platform with no registered driver (its SDK is missing) is
    * omitted rather than raising `NoDriverError` — mirrors `discoverDrivers`.
+   * Across platforms, a driver whose catalog rejects is left out and logged and
+   * the others are still listed; with one platform named, its rejection is the
+   * answer.
    */
   async listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]> {
-    return Promise.all(
-      this.select(platform).map(async (driver) => ({
-        platform: driver.platform,
-        ...(await driver.listCatalog()),
-      })),
+    const listed = await Promise.all(
+      this.select(platform).map(async (driver): Promise<PlatformCatalog | undefined> => {
+        try {
+          return { platform: driver.platform, ...(await driver.listCatalog()) };
+        } catch (error: unknown) {
+          if (platform !== undefined) throw error;
+          this.#logger.warn("A driver could not read its catalog", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+          return undefined;
+        }
+      }),
     );
+    return listed.filter((entry) => entry !== undefined);
   }
 
   /**
