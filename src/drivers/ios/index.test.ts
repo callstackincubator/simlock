@@ -1642,13 +1642,27 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("refuses to delete a runtime it cannot download back", async () => {
+  it("refuses to delete a runtime shared with Xcode and other tools", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
     expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(
       PassthroughRefusedError,
     );
     expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(/through Xcode/);
+  });
+
+  it("does not say in the runtime delete refusal that iOS runtimes cannot be downloaded", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    let message = "";
+    try {
+      driver.passthrough(["runtime", "delete", "26.5"]);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toMatch(/shared with Xcode/);
+    expect(message).not.toMatch(/allow-download|cannot install|download one back/);
   });
 
   it("still proxies the runtime operations that only read", async () => {

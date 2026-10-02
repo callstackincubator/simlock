@@ -152,9 +152,7 @@ granted.
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
-  iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
-  them; install the runtime through Xcode first. Through a gateway the flag
-  has no effect.
+  Through a gateway the flag has no effect.
 - `--ttl <duration>` — the lease's initial TTL, replacing
   `lease.defaultTtlMs` (15m) for this lease. Asking for more than
   `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
@@ -444,8 +442,8 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
 - `shutdown all` — it stops every device in the set, for every agent, and each
   interrupted lease spends its recovery budget rebooting; one that runs out
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
-- `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
-  not download one back. It does not free the disk the runtime's download
+- `runtime delete` — it deletes a runtime shared with Xcode and other tools,
+  not just Simlock. It does not free the disk the runtime's download
   takes either (see `doctor`'s `runtime-cache-unreclaimable` finding). Delete
   it through Xcode if that is what you mean.
 - `--set` and `--profiles`, wherever they appear *before* the subcommand and
