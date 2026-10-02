@@ -54,13 +54,16 @@ describe("the Waiting view", () => {
     ).toBe("Android Pixel 8, runtime 35, mode slim, image tag google_apis");
   });
 
-  it("names the worker a request waits on: by its workerId, or on a single host the worker whose view lists it", () => {
+  it("names the worker a request waits on: by its workerId, or on a single host the worker whose view lists the same request", () => {
     const onGateway = request({ id: "req_w", workerId: "wrk_2" });
     const onHost = request({ id: "req_h" });
     const inFleetQueue = request({ id: "req_f", requesterId: "fleet-agent" });
+    // The copy a gateway sent worker-b, under the gateway's requester id: never the same request,
+    // even under the same id.
+    const sentOn = request({ id: "req_f", requesterId: "gw:gateway-1:fleet-agent" });
     const workers = [
       worker({ id: "wrk_1", label: "host", waiting: [onHost] }),
-      worker({ id: "wrk_2", label: "worker-b" }),
+      worker({ id: "wrk_2", label: "worker-b", waiting: [sentOn] }),
     ];
 
     const html = renderToStaticMarkup(

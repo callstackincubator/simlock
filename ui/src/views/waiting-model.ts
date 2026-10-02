@@ -31,8 +31,12 @@ export function requestedDevice(spec: WaitingRequest["spec"]): string {
 
 /**
  * The worker whose own queue a request waits in: the one it names, or on a single host the one
- * worker whose view lists it. `undefined` for a request in a gateway's queue, which no worker
- * holds yet, and for a worker the console has no view of.
+ * worker, the host itself, whose view lists the same request. `undefined` for a request in a
+ * gateway's queue, which no worker holds yet, and for a worker the console has no view of.
+ *
+ * A single host names no worker on its requests, so the request is found in the host's view by
+ * its id and requester. A gateway's own request never matches a worker's: its id comes from the
+ * gateway, and a worker lists the copy the gateway sent it under the gateway's requester id.
  */
 export function waitingOn(
   request: WaitingRequest,
@@ -41,5 +45,9 @@ export function waitingOn(
   if (request.workerId !== undefined) {
     return workers.find((worker) => worker.id === request.workerId);
   }
-  return workers.find((worker) => worker.waiting?.some((entry) => entry.id === request.id));
+  return workers.find((worker) =>
+    worker.waiting?.some(
+      (entry) => entry.id === request.id && entry.requesterId === request.requesterId,
+    ),
+  );
 }

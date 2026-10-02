@@ -117,31 +117,24 @@ test.describe("the Waiting view", () => {
         },
         driverScript: { ios: IOS },
       });
-      // A local agent on the worker takes its one device, and a second one waits in the
-      // worker's own queue. A fleet request for a model no worker lists waits in the gateway's.
+      // A local agent on the worker takes the fleet's one device, and a second one waits in the
+      // worker's own queue. A further lease through the gateway then waits in the gateway's.
       await holdTheDevice(worker, "local-a");
       worker.cliBackground([...LEASE, "--agent-id", "local-b"]);
-      gateway.cliBackground([
-        "lease",
-        "--platform",
-        "ios",
-        "--device",
-        "iPhone 99",
-        "--agent-id",
-        "fleet-c",
-      ]);
-      await untilTheDaemonSays(
-        gateway,
-        (requests) =>
-          requests.some((request) => request.requesterId === "fleet-c") &&
-          requests.some((request) => request.requesterId === "local-b"),
+      await untilTheDaemonSays(gateway, (requests) =>
+        requests.some((request) => request.requesterId === "local-b"),
+      );
+      gateway.cliBackground([...LEASE, "--agent-id", "fleet-c"]);
+      await untilTheDaemonSays(gateway, (requests) =>
+        requests.some((request) => request.requesterId === "fleet-c"),
       );
 
       await openWaiting(page, gateway);
 
       await expect(cell(row(page, "local-b"), "Worker")).toHaveText("worker-a");
       await expect(cell(row(page, "local-b"), "Place in queue")).toHaveText("1");
-      await expect(cell(row(page, "fleet-c"), "Device")).toHaveText("iOS iPhone 99");
+      await expect(cell(row(page, "fleet-c"), "Device")).toHaveText("iOS iPhone 16, runtime 18.4");
+      await expect(cell(row(page, "fleet-c"), "Stage")).toHaveText("queued");
       await expect(cell(row(page, "fleet-c"), "Place in queue")).toHaveText("1");
       await expect(cell(row(page, "fleet-c"), "Worker")).toHaveText("—");
     } finally {

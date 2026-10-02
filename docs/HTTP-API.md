@@ -67,7 +67,7 @@ Three roles:
 | Role | Can |
 |---|---|
 | `agent` | catalog, status, installed components, its own lease requests and leases, `exec` on its own lease |
-| `operator` | everything `agent` can, plus every other requester's leases/devices, every waiting request, the worker routes, event replay/stream, and releasing any lease |
+| `operator` | everything `agent` can, plus every other requester's leases/devices, the worker routes, event replay/stream, and releasing any lease |
 | `worker` | open an uplink at [`/v1/uplink`](#get-v1uplink-websocket-upgrade), and nothing else |
 
 A valid token with the wrong role for a route is `403 FORBIDDEN`, not `401` —
@@ -1144,8 +1144,7 @@ worker's, and the two event routes carry the workers' republished events
 #### `GET /v1/lease-requests`
 
 Every request still waiting for a device, oldest first, whoever sent it. An
-`agent` token gets `403 FORBIDDEN`: an agent reads back only its own request,
-with [`GET /v1/lease-requests/{id}`](#get-v1lease-requestsid).
+`agent` token gets `403 FORBIDDEN`.
 
 ```json
 { "requests": [
