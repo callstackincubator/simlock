@@ -66,7 +66,7 @@ The events view fills like this:
 
 1. Open the stream and hold what it sends.
 2. Load the recent events with `GET /v1/events`.
-3. Show both, oldest first, with each event once.
+3. Show both in time order, with each event once.
 
 An event is the same event when its `seq` and `timestamp` both match. `seq`
 alone is not enough: it starts again when the daemon restarts.
