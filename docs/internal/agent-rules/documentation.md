@@ -19,7 +19,7 @@ grounds for rejecting a change even if the prose reads well.
    sentence — never leave a dangling reference to an internal doc standing in
    for an explanation. This applies to `docs/ABOUT.md`, `docs/CLI.md`,
    `docs/CLIENT.md`, `docs/CONFIGURATION.md`, `docs/HTTP-API.md`,
-   `docs/EVENTS.md`, and `README.md`.
+   `docs/CONSOLE.md`, `docs/EVENTS.md`, and `README.md`.
 3. **Nothing the running tool prints or returns ever names a file path in
    this repository.** `--help` text, usage banners, error messages, and HTTP
    error bodies must not tell a user to go read a specific markdown file —

@@ -9,8 +9,10 @@ function useSignIn(fetch: Fetch) {
   const session = useSession();
   const [checking, setChecking] = useState(false);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  // No guard against a second submit while checking: the disabled button blocks it, the Enter
+  // key included, since a form with a disabled submit button does not submit implicitly.
   const submit = async (token: string) => {
-    if (token === "" || checking) return;
+    if (token === "") return;
     setChecking(true);
     setRefusal(undefined);
     const outcome = await checkToken(token, fetch);

@@ -92,6 +92,28 @@ describe("withConsole", () => {
     expect(await response.text()).not.toContain(PAGE);
   });
 
+  it("a path under /assets/ with no file extension answers 404, never the page", async () => {
+    const { get } = harness(await builtConsole());
+
+    for (const path of ["/assets/chunk", "/assets/"]) {
+      const response = await get(path);
+      expect(response.status, path).toBe(404);
+      expect(response.headers.get("cache-control"), path).toBe("no-cache");
+      expect(await response.text(), path).not.toContain(PAGE);
+    }
+  });
+
+  it("GET /v1 itself goes to the API, not the page", async () => {
+    const { app, get } = harness(await builtConsole());
+
+    const response = await get("/v1");
+    const direct = await app.request("/v1");
+
+    expect(response.status).toBe(direct.status);
+    expect(await response.text()).toBe(await direct.text());
+    expect(response.headers.get("content-security-policy")).toBeNull();
+  });
+
   it("GET /v1/unknown answers the API's 404, not the page", async () => {
     const { app, get } = harness(await builtConsole());
 
@@ -184,11 +206,16 @@ describe("withConsole", () => {
     expect(logged).toEqual(["/v1/status"]);
   });
 
-  it("answers 404 on every console path when the console is not built", async () => {
-    const { get } = harness(await emptyRoot());
+  it("answers 404 on the page and on files when the console is not built", async () => {
+    const root = await emptyRoot();
+    // A stray file in an unbuilt root is still not served: without index.html there is no console.
+    await writeFile(join(root, "favicon.svg"), "<svg/>");
+    const { get } = harness(root);
 
     expect((await get("/")).status).toBe(404);
     expect((await get("/workers")).status).toBe(404);
+    expect((await get("/favicon.svg")).status).toBe(404);
+    expect((await get("/assets/index-3f2a9c.js")).status).toBe(404);
     expect((await get("/v1/healthz")).status).toBe(200);
   });
 });

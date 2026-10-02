@@ -68,8 +68,8 @@ export interface FetchApp {
  * other path is the console's:
  *
  * - a `GET`/`HEAD` for a file in `root` serves that file;
- * - a `GET`/`HEAD` for a path with no file extension serves `index.html`, so a page URL
- *   survives a reload;
+ * - a `GET`/`HEAD` for a path with no file extension, outside `/assets/`, serves
+ *   `index.html`, so a page URL survives a reload;
  * - anything else is `404`, so a missing asset is never answered with the page.
  *
  * Console files need no token -- they hold no data -- and never reach the app, so they are
@@ -82,7 +82,7 @@ export function withConsole(app: FetchApp, options: { root: string; logger: Logg
   if (existsSync(join(options.root, "index.html"))) {
     const page = serveStatic({ root: options.root, path: "index.html" });
     files.on(["GET", "HEAD"], "*", serveStatic({ root: options.root }), (c, next) =>
-      hasFileExtension(c.req.path) ? next() : page(c, next),
+      isPagePath(c.req.path) ? page(c, next) : next(),
     );
   } else {
     options.logger.warn("The web console is not built; console paths answer 404", {
@@ -100,9 +100,14 @@ export function withConsole(app: FetchApp, options: { root: string; logger: Logg
   };
 }
 
-/** Whether the path's last segment names a file (`/assets/index-3f2a.js`), not a page (`/workers`). */
-function hasFileExtension(path: string): boolean {
-  return path.slice(path.lastIndexOf("/") + 1).includes(".");
+/**
+ * Whether a path names a page (`/workers`) rather than a file (`/favicon.svg`). Nothing under
+ * `/assets/` is a page: that directory holds only built files, which are cached for good, so
+ * the page must never be answered there.
+ */
+function isPagePath(path: string): boolean {
+  if (path.startsWith("/assets/")) return false;
+  return !path.slice(path.lastIndexOf("/") + 1).includes(".");
 }
 
 /**

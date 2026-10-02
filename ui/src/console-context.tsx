@@ -22,7 +22,6 @@ function useServices(): ConsoleServices {
 }
 
 /** The daemon's API for the signed-in operator. Every view reads its data through this. */
-// fallow-ignore-next-line unused-export -- the read path every data view uses; the shell itself shows none yet.
 export function useApi(): ApiClient {
   return useServices().api;
 }

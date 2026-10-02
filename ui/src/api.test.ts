@@ -71,6 +71,8 @@ describe("createApiClient", () => {
     expect(calls[0]?.input).toBe("/v1/workers");
     expect(calls[0]?.init.headers).toEqual({ Authorization: "Bearer slk_op" });
     expect(calls[0]?.init.credentials).toBe("omit");
+    // Never answered from the browser's cache: what the daemon holds now is the answer.
+    expect(calls[0]?.init.cache).toBe("no-store");
     await expect(api.getJson("//elsewhere.example/v1/workers" as ApiPath)).rejects.toThrow(
       "Not an API path",
     );

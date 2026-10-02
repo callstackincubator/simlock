@@ -16,6 +16,43 @@ test.describe("sign-in", () => {
     await expect(page.getByLabel("Operator token")).toHaveCount(0);
   });
 
+  test("the navigation marks the current page, and the tab's title names it", async ({
+    daemon,
+    page,
+  }) => {
+    await page.goto("/");
+    await signIn(page, daemon.tokens.operator);
+    const nav = page.getByRole("navigation", { name: "Console" });
+
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Workers");
+    await expect(page).toHaveTitle("Workers · Simlock");
+    await nav.getByRole("link", { name: "Events" }).click();
+
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Events");
+    await expect(page).toHaveTitle("Events · Simlock");
+  });
+
+  test("a token pasted with spaces around it signs in", async ({ daemon, page }) => {
+    await page.goto("/");
+    await signIn(page, `  ${daemon.tokens.operator}\n`);
+
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  });
+
+  test("a revoked token is signed out on the next reload", async ({ daemon, page }) => {
+    const minted = await daemon.cli(["token", "create", "--role", "operator"]);
+    const { secret, token } = minted.json as { secret: string; token: { id: string } };
+    await page.goto("/");
+    await signIn(page, secret);
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+
+    expect((await daemon.cli(["token", "revoke", token.id])).code).toBe(0);
+    await page.reload();
+
+    await expect(page.getByLabel("Operator token")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+  });
+
   test("an agent token is refused with a message that the console needs an operator token", async ({
     daemon,
     page,

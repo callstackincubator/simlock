@@ -9,6 +9,7 @@
  */
 import { z } from "zod";
 
+import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   cleanupRuleSummarySchema,
@@ -108,7 +109,8 @@ export const statusGet = defineOperation({
     daemon: z.object({
       health: daemonHealthSchema,
       mode: daemonModeSchema,
-      consoleUrl: z.string().optional(),
+      // Bounded: a gateway parses every worker's answer (safety rule 10).
+      consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
     }),
     /**
      * ADR 0008 §5: the machine, beside `daemon`, the process. Served from memory, so reading it

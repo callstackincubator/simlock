@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { test as base, expect, type Page } from "@playwright/test";
 
-import { cli } from "../helpers/cli.js";
+import { cli, type CliResult } from "../helpers/cli.js";
 import { freeLoopbackPort } from "../helpers/port.js";
 import { REPO_ROOT } from "../helpers/repo-root.js";
 import { waitFor } from "../helpers/wait.js";
@@ -19,6 +19,8 @@ import { waitFor } from "../helpers/wait.js";
 export interface ConsoleDaemon {
   /** The console's address, exactly as `simlock status --json` reports it. */
   readonly url: string;
+  /** Runs `simlock` against this daemon, for a test that changes its state (a revoked token). */
+  readonly cli: (args: readonly string[]) => Promise<CliResult>;
   readonly tokens: {
     readonly operator: string;
     readonly agent: string;
@@ -81,7 +83,7 @@ async function startDaemon(mode: "worker" | "gateway"): Promise<{
       },
       { label: "HTTP listener accepting connections" },
     );
-    return { daemon: { tokens, url: url ?? "" }, stop };
+    return { daemon: { cli: (args) => cli(args, env), tokens, url: url ?? "" }, stop };
   } catch (error: unknown) {
     await stop();
     throw error;

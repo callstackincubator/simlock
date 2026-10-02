@@ -83,7 +83,7 @@ The console keeps the token in this browser tab only.
 - **Close the tab** and you are signed out.
 - **Sign out** forgets the token at once.
 - If the token is **revoked**, the console signs you out the next time it asks
-  the daemon for anything.
+  the daemon for anything, and at the latest when you reload.
 
 Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
 tab may still be signed in.

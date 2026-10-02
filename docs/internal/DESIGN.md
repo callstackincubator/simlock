@@ -88,7 +88,7 @@ A 4px grid: `--space-1` 4px, `--space-2` 8px, `--space-3` 12px, `--space-4`
 16px, `--space-6` 24px, `--space-8` 32px, `--space-12` 48px. Pick from the
 scale; never a value between.
 
-- Controls are at least 40px tall, so they are easy to hit on a phone.
+- Buttons and inputs are at least 40px tall, so they are easy to hit on a phone.
 - A page has 16px side padding on a phone and 32px from 768px up.
 
 ## Layout

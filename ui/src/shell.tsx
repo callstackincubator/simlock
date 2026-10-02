@@ -1,20 +1,26 @@
 import { useEffect } from "react";
 
-import { useSession } from "./console-context";
+import { useApi, useSession } from "./console-context";
 import { Link, navigate, usePath } from "./router";
 import { VIEWS, viewFor } from "./views/index";
 import { NotFound } from "./views/not-found";
 
 /** The signed-in console: the header, the navigation from `VIEWS`, and the current view. */
 export function Shell() {
+  const api = useApi();
   const session = useSession();
   const path = usePath();
   const view = viewFor(path);
-  const home = VIEWS[0];
+
+  // ADR 0011 §6: a 401 at any time signs the operator out. A tab reloaded with a token that has
+  // since been revoked finds out here, before any view asks for data.
+  useEffect(() => {
+    api.getJson("/v1/workers").catch(() => undefined);
+  }, [api]);
 
   useEffect(() => {
-    if (path === "/" && home !== undefined) navigate(home.path, { replace: true });
-  }, [path, home]);
+    if (path === "/" && view !== undefined) navigate(view.path, { replace: true });
+  }, [path, view]);
 
   useEffect(() => {
     document.title = view === undefined ? "Simlock" : `${view.label} · Simlock`;
@@ -46,7 +52,7 @@ export function Shell() {
         </ul>
       </nav>
       <main id="main" className="main" tabIndex={-1}>
-        {view === undefined ? path === "/" ? null : <NotFound /> : <view.Component />}
+        {view === undefined ? <NotFound /> : <view.Component />}
       </main>
     </div>
   );

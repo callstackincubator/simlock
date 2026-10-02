@@ -33,8 +33,10 @@ interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"
 
 const MODIFIER_KEYS = ["altKey", "ctrlKey", "metaKey", "shiftKey"] as const;
 
+type ClickKeys = Pick<MouseEvent, "button" | (typeof MODIFIER_KEYS)[number]>;
+
 /** A primary click with no modifier key: the browser would open the link in this tab. */
-function opensInThisTab(event: MouseEvent<HTMLAnchorElement>): boolean {
+export function opensInThisTab(event: ClickKeys): boolean {
   return event.button === 0 && !MODIFIER_KEYS.some((key) => event[key]);
 }
 

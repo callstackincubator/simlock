@@ -67,6 +67,18 @@ describe("checkToken", () => {
     expect(refusalMessage({ kind: "unreachable" })).toBe("The daemon cannot be reached.");
   });
 
+  it("says the daemon cannot be reached when something else answers /v1/healthz", async () => {
+    // A daemon always answers its liveness route with 200; a proxy with no daemon behind it
+    // answers 502.
+    expect(await checkToken("slk_op", daemon(502, 200))).toEqual({ kind: "unreachable" });
+  });
+
+  it("says the daemon cannot be reached when /v1/workers fails at the network level", async () => {
+    expect(await checkToken("slk_op", daemon(200, "network-error"))).toEqual({
+      kind: "unreachable",
+    });
+  });
+
   it("reports any other answer from /v1/workers with its status", async () => {
     const outcome = await checkToken("slk_op", daemon(200, 500));
 

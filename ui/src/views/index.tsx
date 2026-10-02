@@ -21,7 +21,11 @@ export const VIEWS: readonly View[] = [
   { path: "/events", label: "Events", Component: () => <ComingSoon title="Events" /> },
 ];
 
-/** The view a path shows, or `undefined` for a path the console has no view for. */
+/**
+ * The view a path shows, or `undefined` for a path the console has no view for. `/` shows the
+ * first view; the shell then rewrites the address to that view's own path.
+ */
 export function viewFor(path: string): View | undefined {
+  if (path === "/") return VIEWS[0];
   return VIEWS.find((view) => path === view.path || path.startsWith(`${view.path}/`));
 }
