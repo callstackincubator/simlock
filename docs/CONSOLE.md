@@ -117,7 +117,8 @@ Select a worker to open its page. It adds:
   reports no time for them.
 - **Host**: the operating system, the CPU architecture, and the version of
   each platform tool, such as Xcode or the Android emulator.
-- **Catalog**: the models and runtimes the worker can lease.
+- **Catalog**: the models and runtimes the worker can lease. It is read again
+  straight after a component is installed, and otherwise every 30 seconds.
 - **Installs in progress**: each runtime or system image being downloaded or
   waiting to, how long it has been going, and how many requests wait on it.
 
