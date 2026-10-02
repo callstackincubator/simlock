@@ -10,6 +10,7 @@ import {
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
+  type DriverComponent,
   type DriverDevice,
   DriverCrashError,
   type DriverEstimate,
@@ -473,9 +474,10 @@ export class AndroidDriver implements Driver {
     // System images land under the SDK root, so that is the volume an install is reserved on.
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
-    // had configured then, or the SDK's own default. Read only by `findLegacy` /
+    // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
-    // because a stranded device cannot be found anywhere else (ADR 0001, Migration).
+    // because a stranded device cannot be found anywhere else (ADR 0001, Migration) -- and
+    // read by `listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
@@ -1205,6 +1207,75 @@ export class AndroidDriver implements Driver {
     const installed = await this.#installedComponent(image);
     const wasThere = before.some((receipt) => sameReceipt(receipt, installed.receipt));
     return { ...installed, outcome: wasThere ? "already-installed" : "installed" };
+  }
+
+  /**
+   * One entry per installed system image: its API level, its tag and ABI as the variant, the
+   * receipt `findComponent` and `installComponent` build for it, and the size of its directory,
+   * left out when that cannot be read. `foreignDevices` counts the AVDs in the user's own AVD
+   * home whose `config.ini` names the image's directory; that home is only read.
+   */
+  async listComponents(): Promise<readonly DriverComponent[]> {
+    const [images, foreignAvds] = await Promise.all([
+      this.#installedImages(),
+      this.#foreignAvdImageDirectories(),
+    ]);
+    return Promise.all(
+      images.map(async (image): Promise<DriverComponent> => {
+        const sizeBytes = await this.#filesystem.directorySize(image.path).catch(() => undefined);
+        const directories = [image.path, relativeImageDirectory(image)];
+        return {
+          ...(await this.#installedComponent(image)),
+          foreignDevices: foreignAvds.filter((named) =>
+            named.some((directory) => directories.includes(directory)),
+          ).length,
+          variant: `${image.tag}/${image.abi}`,
+          ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        };
+      }),
+    );
+  }
+
+  /**
+   * For every AVD in the user's own AVD home, the image directories its `config.ini` names
+   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home or a
+   * `config.ini` that does not exist names no image. Any other read failure rejects: a count that
+   * silently left an AVD out would read as "nothing of the user's uses this image". A home that is
+   * this driver's own root -- the daemon started from a lease's environment -- holds Simlock's
+   * AVDs, which the registry counts, and none of the user's.
+   */
+  async #foreignAvdImageDirectories(): Promise<readonly (readonly string[])[]> {
+    const home = this.#legacyAvdHome;
+    if (home === this.#deviceRoot) return [];
+    let entries: string[];
+    try {
+      entries = await this.#filesystem.readdir(home);
+    } catch (error: unknown) {
+      if (isMissingPathError(error)) return [];
+      throw error;
+    }
+    const avds = entries
+      .filter((entry) => entry.endsWith(".ini"))
+      .map(async (entry) => {
+        const pointer = await this.#filesystem.readFile(join(home, entry));
+        // `path=` names the AVD's directory; avdmanager puts it beside the pointer by default.
+        const avdPath =
+          iniValues(pointer, /^path$/)[0] ?? join(home, `${entry.slice(0, -".ini".length)}.avd`);
+        const config = await this.#readIfPresent(join(avdPath, "config.ini"));
+        if (config === undefined) return [];
+        return iniValues(config, /^image\.sysdir\.\d+$/).map((value) => value.replace(/\/+$/, ""));
+      });
+    return Promise.all(avds);
+  }
+
+  /** A file's contents, or `undefined` when it does not exist; any other failure rejects. */
+  async #readIfPresent(path: string): Promise<string | undefined> {
+    try {
+      return await this.#filesystem.readFile(path);
+    } catch (error: unknown) {
+      if (isMissingPathError(error)) return undefined;
+      throw error;
+    }
   }
 
   async #installedComponent(image: SystemImage): Promise<InstalledComponent> {
@@ -2015,6 +2086,21 @@ async function packageRevision(
   } catch {
     return undefined;
   }
+}
+
+/** The values of every `key=value` line in an ini file whose key matches, trimmed. */
+function iniValues(contents: string, key: RegExp): string[] {
+  return contents.split(/\r?\n/).flatMap((line) => {
+    const separator = line.indexOf("=");
+    if (separator === -1 || !key.test(line.slice(0, separator).trim())) return [];
+    const value = line.slice(separator + 1).trim();
+    return value === "" ? [] : [value];
+  });
+}
+
+/** An image's directory relative to the SDK root, as an AVD's `image.sysdir.N` names it. */
+function relativeImageDirectory(image: SystemImage): string {
+  return `system-images/android-${image.apiLevel}/${image.tag}/${image.abi}`;
 }
 
 function serialFor(port: number): string {

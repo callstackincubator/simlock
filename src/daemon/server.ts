@@ -139,9 +139,9 @@ export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
-   * `component.install` and `status.get`'s installs; the same instance the lease engine
+   * `component.install`, `component.list` and `status.get`'s installs; the same instance the lease engine
    * downloads through. */
-  readonly components: Pick<ComponentInstaller, "install" | "inProgress">;
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
@@ -1134,6 +1134,12 @@ export class DaemonServer {
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
       case "component.install":
         return this.#installComponent(connection, frame.id, frame.payload);
+      case "component.list":
+        return this.#dispatcher.dispatch(
+          "component.list",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`

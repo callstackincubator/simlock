@@ -219,6 +219,19 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json(result);
   });
 
+  app.get("/v1/components", agentAuth, async (c) => {
+    const platform = c.req.query("platform");
+    if (platform !== undefined && platform !== "ios" && platform !== "android") {
+      throw badRequest("platform must be ios or android");
+    }
+    const result = await deps.dispatch(
+      "component.list",
+      platform === undefined ? {} : { platform },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json(result);
+  });
+
   app.post("/v1/lease-requests", agentAuth, jsonBody(leaseRequestBodySchema), async (c) => {
     const identity = c.get("identity");
     const body = c.req.valid("json");

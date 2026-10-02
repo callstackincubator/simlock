@@ -229,6 +229,13 @@ export interface Driver {
    * installer reports a size before it downloads, so this is what `ComponentInstaller` reserves.
    */
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
+  /**
+   * Every component installed on the machine now, one entry each (ADR 0010 §8). Read-only, never
+   * downloads, and every process it starts is bounded: the same contract as `listCatalog`.
+   * Counting `foreignDevices` is the only place a driver looks at devices outside its own root;
+   * it reads them and never writes there (safety rule 1).
+   */
+  listComponents(): Promise<readonly DriverComponent[]>;
   provision(spec: DeviceSpec): Promise<DriverDevice>;
   /**
    * Boots the device and returns it with a freshly read `address`. Never trust the address a
@@ -461,6 +468,19 @@ export function sameReceipt(left: ComponentReceipt, right: ComponentReceipt): bo
 export interface InstalledComponent {
   readonly version: string;
   readonly receipt: ComponentReceipt;
+}
+
+/**
+ * One component `listComponents` found installed. `receipt` is built by the same function
+ * `findComponent` and `installComponent` use, so a listed component and the record of its install
+ * compare equal with `sameReceipt`. `variant` is the driver's own words for what tells two
+ * components of one version apart, carried unread. `sizeBytes` is absent when the driver could
+ * not read it. `foreignDevices` counts the devices outside Simlock's root that use it.
+ */
+export interface DriverComponent extends InstalledComponent {
+  readonly variant?: string;
+  readonly sizeBytes?: number;
+  readonly foreignDevices: number;
 }
 
 /**

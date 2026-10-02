@@ -263,6 +263,60 @@ describe("GET /v1/status, /v1/catalog", () => {
   });
 });
 
+describe("GET /v1/components", () => {
+  const listing = {
+    components: [
+      {
+        devices: 1,
+        foreignDevices: 0,
+        installedAt: 1_790_864_071_200,
+        installedBySimlock: true,
+        platform: "android",
+        sizeBytes: 4_200_000_000,
+        variant: "google_apis/arm64-v8a",
+        version: "35",
+      },
+    ],
+  };
+
+  it("answers an agent token with component.list, passing the platform query through", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.list"] = (input) => {
+      expect(input).toEqual({ platform: "android" });
+      return listing;
+    };
+
+    const response = await app.request("/v1/components?platform=android", { headers: agentAuth });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(listing);
+  });
+
+  it("lists every platform when no platform is asked for", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.list"] = (input) => {
+      expect(input).toEqual({});
+      return listing;
+    };
+
+    const response = await app.request("/v1/components", { headers: agentAuth });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("400s an invalid platform query, before ever dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.list"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request("/v1/components?platform=windows", { headers: agentAuth });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+});
+
 describe("POST /v1/lease-requests", () => {
   it("creates a request resource, 201 with a Location header", async () => {
     const { app, dispatcher } = buildHarness();

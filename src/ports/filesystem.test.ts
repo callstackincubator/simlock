@@ -158,6 +158,27 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
       code: "ENOTDIR",
     });
   });
+
+  it("sizes a directory as the bytes of the files under it, subdirectories included, without following a symlink", async () => {
+    const filesystem = create();
+    const root = `${temporaryDirectory}/image`;
+    await filesystem.mkdirp(`${root}/data`);
+    await filesystem.mkdirp(`${temporaryDirectory}/outside`);
+    await filesystem.writeFileAtomic(`${root}/system.img`, "abcd");
+    await filesystem.writeFileAtomic(`${root}/data/userdata.img`, "0123456789");
+    await filesystem.writeFileAtomic(`${temporaryDirectory}/outside/big.img`, "x".repeat(100));
+    await link(filesystem, `${root}/linked`, `${temporaryDirectory}/outside`);
+
+    await expect(filesystem.directorySize(root)).resolves.toBe(14);
+  });
+
+  it("refuses to size a directory that is not there", async () => {
+    const filesystem = create();
+
+    await expect(filesystem.directorySize(`${temporaryDirectory}/missing`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 describe.each(implementations)("Filesystem ownership contract: $name", ({ create }) => {
@@ -250,6 +271,15 @@ describe("MemoryFilesystem", () => {
       mode: 0o755,
       uid: 4242,
     });
+  });
+
+  it("refuses to size a directory when a path under it was declared broken", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/image/data");
+    await filesystem.writeFileAtomic("/image/data/userdata.img", "0123456789");
+    filesystem.defineFailure("/image/data/userdata.img", "EACCES");
+
+    await expect(filesystem.directorySize("/image")).rejects.toMatchObject({ code: "EACCES" });
   });
 
   it("fails at a path a test declared broken, with the errno it declared", async () => {

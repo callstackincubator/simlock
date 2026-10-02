@@ -18,7 +18,7 @@ export function testComponentWiring<
   readonly clock: Clock;
   readonly drivers: readonly Driver[];
   readonly eventBus: Pick<EventBus, "emit">;
-  readonly registry: Pick<Registry, "recordComponent">;
+  readonly registry: Pick<Registry, "recordComponent" | "snapshot">;
   /** Stands in for the installer, when a test needs to see whether it was reached at all. */
   readonly components?: Components | undefined;
 }): {

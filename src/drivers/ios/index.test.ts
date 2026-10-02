@@ -139,8 +139,9 @@ const legacyUdid = "00000000-0000-0000-0000-0000000000ff";
 /**
  * The complete argv of every call the pre-root path is allowed to make without `--set`,
  * spelled out rather than pattern-matched: `findLegacy` / `destroyLegacy` deliberately
- * address the machine's default set (ADR 0001, Migration), and every *other* call must
- * still fail the invariant below if its scoping ever goes missing.
+ * address the machine's default set (ADR 0001, Migration), and `listComponents` reads it with
+ * the same `list` to count foreign devices (ADR 0010 §8). Every *other* call must still fail
+ * the invariant below if its scoping ever goes missing.
  */
 const UNSCOPED_LEGACY_CALLS = new Set(
   [
@@ -3115,6 +3116,264 @@ describe("IosSimctlDriver", () => {
         expect(advisories[0]?.message).not.toContain("19.9");
       });
     });
+  });
+});
+
+describe("IosSimctlDriver listComponents()", () => {
+  const runtimeListInvocation = simctl("runtime", "list", "-j");
+  /** The unscoped read of the machine's default device set: no `--set`. */
+  const defaultSetInvocation = { args: ["simctl", "list", "-j", "devices"], command: "xcrun" };
+
+  interface Image {
+    readonly id: string;
+    readonly runtime: string;
+    readonly build: string;
+    readonly version: string;
+    readonly sizeBytes?: number;
+    readonly platform?: string;
+  }
+
+  function image(version: string, build: string, extra: Partial<Image> = {}): Image {
+    return {
+      build,
+      id: `IMG-${version}-${build}`,
+      runtime: `com.apple.CoreSimulator.SimRuntime.iOS-${version.replace(".", "-")}`,
+      version,
+      ...extra,
+    };
+  }
+
+  function imagesListed(images: readonly Image[]) {
+    const stdout = JSON.stringify(
+      Object.fromEntries(
+        images.map((entry) => [
+          entry.id,
+          {
+            build: entry.build,
+            identifier: entry.id,
+            platformIdentifier: entry.platform ?? "com.apple.platform.iphonesimulator",
+            runtimeIdentifier: entry.runtime,
+            sizeBytes: entry.sizeBytes ?? 1_000,
+            state: "Ready",
+            version: entry.version,
+          },
+        ]),
+      ),
+    );
+    return { match: runtimeListInvocation, result: { code: 0, stderr: "", stdout } };
+  }
+
+  function defaultSetListed(devices: Readonly<Record<string, number>>) {
+    const stdout = JSON.stringify({
+      devices: Object.fromEntries(
+        Object.entries(devices).map(([runtime, count]) => [
+          runtime,
+          Array.from({ length: count }, (_, index) => ({
+            name: `user-${String(index)}`,
+            state: "Shutdown",
+            udid: `USER-${runtime}-${String(index)}`,
+          })),
+        ]),
+      ),
+    });
+    return { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout } };
+  }
+
+  it("lists one entry per iOS runtime image with its version, size and build, and no entry for another platform's runtime", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([
+        image("18.4", "22E238", { sizeBytes: 8_963_458_461 }),
+        image("26.0", "23A343", { sizeBytes: 9_100_000_000 }),
+        image("11.4", "22T250", {
+          platform: "com.apple.platform.watchsimulator",
+          runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-11-4",
+        }),
+      ]),
+      defaultSetListed({}),
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.listComponents()).resolves.toEqual([
+      {
+        foreignDevices: 0,
+        receipt: { build: "22E238", image: "IMG-18.4-22E238" },
+        sizeBytes: 8_963_458_461,
+        variant: "22E238",
+        version: "18.4",
+      },
+      {
+        foreignDevices: 0,
+        receipt: { build: "23A343", image: "IMG-26.0-23A343" },
+        sizeBytes: 9_100_000_000,
+        variant: "23A343",
+        version: "26.0",
+      },
+    ]);
+  });
+
+  it("counts a device in the default device set that uses an image's runtime as foreign, and reads no device in Simlock's own set for it", async () => {
+    const used = image("18.4", "22E238");
+    const unused = image("26.0", "23A343");
+    // The scripted runner refuses any call it was not given, so a `simctl --set <root> list`
+    // would fail this test: only the default set is read.
+    const runner = new ScriptedProcessRunner([
+      imagesListed([used, unused]),
+      defaultSetListed({ [used.runtime]: 2, "com.apple.CoreSimulator.SimRuntime.iOS-17-5": 1 }),
+    ]);
+    const driver = await createDriver(runner);
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices, version }) => ({ foreignDevices, version }))).toEqual([
+      { foreignDevices: 2, version: "18.4" },
+      { foreignDevices: 0, version: "26.0" },
+    ]);
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      runtimeListInvocation.args,
+      defaultSetInvocation.args,
+    ]);
+  });
+
+  it("lists a runtime with the receipt installComponent returned for it, and runs no installer to list", async () => {
+    const before = [
+      { build: "22E238", id: "IMG-184", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" },
+    ];
+    const after = [
+      ...before,
+      { build: "22G86", id: "IMG-186", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-6" },
+    ];
+    const asImages = (entries: typeof after): Image[] =>
+      entries.map((entry) => ({
+        ...entry,
+        version: entry.runtime.endsWith("18-6") ? "18.6" : "18.4",
+      }));
+    const listed = (stdout: string) => ({
+      match: listInvocation,
+      result: { code: 0, stderr: "", stdout },
+    });
+    const runner = new ScriptedProcessRunner([
+      listed(listFixture),
+      imagesListed(asImages(before)),
+      {
+        match: {
+          args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          command: "xcodebuild",
+        },
+      },
+      listed(listFixtureAfterDownload),
+      imagesListed(asImages(after)),
+      imagesListed(asImages(after)),
+      defaultSetListed({}),
+    ]);
+    const driver = await createDriver(runner);
+    const installed = await driver.installComponent("18.6", {
+      onProgress: () => undefined,
+      signal: new AbortController().signal,
+    });
+    const callsBeforeListing = runner.calls.length;
+
+    const components = await driver.listComponents();
+
+    expect(components.find((component) => component.version === "18.6")?.receipt).toEqual(
+      installed.receipt,
+    );
+    expect(runner.calls.slice(callsBeforeListing).map((call) => call.command)).toEqual([
+      "xcrun",
+      "xcrun",
+    ]);
+  });
+
+  it("leaves out an image with no version or no platform, leaves out a size that is not a byte count, and counts no device under a runtime that lists none", async () => {
+    const ios = "com.apple.platform.iphonesimulator";
+    const runtimeList = {
+      "IMG-A": {
+        build: "22E238",
+        identifier: "IMG-A",
+        platformIdentifier: ios,
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+        sizeBytes: -1,
+        version: "18.4",
+      },
+      "IMG-B": {
+        build: "23A343",
+        identifier: "IMG-B",
+        platformIdentifier: ios,
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+        sizeBytes: 1.5,
+      },
+      "IMG-C": {
+        build: "23A344",
+        identifier: "IMG-C",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-1",
+        sizeBytes: 10,
+        version: "26.1",
+      },
+    };
+    const runner = new ScriptedProcessRunner([
+      {
+        match: runtimeListInvocation,
+        result: { code: 0, stderr: "", stdout: JSON.stringify(runtimeList) },
+      },
+      {
+        match: defaultSetInvocation,
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: { "com.apple.CoreSimulator.SimRuntime.iOS-18-4": "not a list" },
+          }),
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.listComponents()).resolves.toEqual([
+      {
+        foreignDevices: 0,
+        receipt: { build: "22E238", image: "IMG-A" },
+        variant: "22E238",
+        version: "18.4",
+      },
+    ]);
+  });
+
+  it("rejects with DriverCrashError when the default device set answers with something that is not JSON", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([image("18.4", "22E238")]),
+      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "not json" } },
+    ]);
+    const driver = await createDriver(runner);
+
+    const error = await driver.listComponents().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toContain("Could not parse simctl device list");
+  });
+
+  it("rejects with DriverCrashError when the default device set answers JSON with no devices map", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([image("18.4", "22E238")]),
+      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "{}" } },
+    ]);
+    const driver = await createDriver(runner);
+
+    const error = await driver.listComponents().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toBe("Invalid simctl device list JSON");
+  });
+
+  it("rejects when the default device set cannot be read, rather than report no foreign devices", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([image("18.4", "22E238")]),
+      {
+        match: defaultSetInvocation,
+        result: { code: 1, stderr: "CoreSimulator is down", stdout: "" },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.listComponents()).rejects.toBeInstanceOf(DriverCrashError);
   });
 });
 

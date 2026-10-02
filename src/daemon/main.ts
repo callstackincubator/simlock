@@ -234,6 +234,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     drivers: new DriverCatalog(drivers),
     eventBus,
     filesystem,
+    logger: logger.child("components"),
     registry,
     timeoutMs: config.downloads.timeoutMs,
   });

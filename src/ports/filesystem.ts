@@ -82,6 +82,12 @@ export interface Filesystem {
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
   diskFree(path: string): Promise<number>;
+  /**
+   * The bytes the files under a directory hold, its subdirectories included. Symlinks are not
+   * followed, so nothing outside the directory is counted. Rejects when the directory, or
+   * anything under it, cannot be read.
+   */
+  directorySize(path: string): Promise<number>;
 }
 
 export class NodeFilesystem implements Filesystem {
@@ -199,6 +205,16 @@ export class NodeFilesystem implements Filesystem {
   async diskFree(path: string): Promise<number> {
     const details = await statfs(path);
     return details.bavail * details.bsize;
+  }
+
+  async directorySize(path: string): Promise<number> {
+    let total = 0;
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) total += await this.directorySize(child);
+      else if (entry.isFile()) total += (await lstat(child)).size;
+    }
+    return total;
   }
 }
 
@@ -451,6 +467,18 @@ export class MemoryFilesystem implements Filesystem {
 
   async diskFree(_path: string): Promise<number> {
     return this.freeDiskBytes;
+  }
+
+  async directorySize(path: string): Promise<number> {
+    let total = 0;
+    for (const name of await this.readdir(path)) {
+      const child = joinMemoryPath(path, name);
+      this.#failIfDefined(child);
+      const entry = this.#rawEntryAt(child);
+      if (entry.kind === "directory") total += await this.directorySize(child);
+      else if (entry.kind === "file") total += Buffer.byteLength(entry.contents);
+    }
+    return total;
   }
 
   /**

@@ -594,6 +594,18 @@ describe("GatewayDispatcher", () => {
         message: "component.install installs on one machine; run it against a worker",
       });
     });
+
+    it("component.list answers UNSUPPORTED_IN_GATEWAY_MODE to an agent session, saying it lists one machine's components (ADR 0010 §8)", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch("component.list", {}, session({ role: "agent" })),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_IN_GATEWAY_MODE",
+        details: { operation: "component.list" },
+        message: "component.list lists one machine's components; run it against a worker",
+      });
+    });
   });
 
   describe("lease lifecycle and device.exec (#118)", () => {

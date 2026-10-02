@@ -77,8 +77,8 @@ implement them:
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
-  `nuke`, `cleanup`, `doctor`, `driver.passthrough` and `component install`
-  stay per-worker operations rather than waiting on some later fleet-wide
+  `nuke`, `cleanup`, `doctor`, `driver.passthrough`, `component install` and
+  `component list` stay per-worker operations rather than waiting on some later fleet-wide
   version.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
@@ -1168,6 +1168,70 @@ appears in `simlock catalog` at once.
 The command takes no `--json`: its output is already JSON, so the flag is a
 usage error (exit 2), as is a missing or extra argument or a platform other
 than `ios` or `android`.
+
+## `simlock component list [--platform <ios|android>]`
+
+Lists every iOS simulator runtime and Android system image installed on the
+machine, whoever installed it. Read it before you remove anything. Any
+session may run it, an agent session included. It changes nothing.
+
+```sh
+simlock component list
+simlock component list --platform android
+```
+
+The output is one JSON object on stdout:
+
+```json
+{
+  "components": [
+    {
+      "platform": "android",
+      "version": "35",
+      "variant": "google_apis/arm64-v8a",
+      "sizeBytes": 4201234567,
+      "installedBySimlock": true,
+      "installedAt": 1790864071200,
+      "devices": 2,
+      "foreignDevices": 0
+    },
+    {
+      "platform": "ios",
+      "version": "26.4",
+      "variant": "23E244",
+      "sizeBytes": 9103456789,
+      "installedBySimlock": false,
+      "devices": 1,
+      "foreignDevices": 3
+    }
+  ]
+}
+```
+
+Entries are ordered by platform, then version, then variant.
+
+- `version` is the string `simlock catalog` lists under `runtimes`.
+- `variant` tells two components of one version apart: the build of an iOS
+  runtime, or the tag and ABI of an Android image.
+- `sizeBytes` is the disk the component takes. It is left out when it cannot
+  be read.
+- `installedBySimlock` is `true` only for a component installed through
+  Simlock (`component install`, or a lease with `--allow-download`) that is
+  still the same one on disk. A component that was there before, or that was
+  deleted and installed again some other way, is `false`. `installedAt` is
+  when Simlock installed it.
+- `devices` counts Simlock's own devices of this platform and version that
+  have not been deleted. Simlock does not track which variant a device uses,
+  so two variants of one version show the same count.
+- `foreignDevices` counts the devices outside Simlock that use the
+  component: simulators in Xcode's default device set, or AVDs in your own
+  AVD home (`ANDROID_AVD_HOME`, or `~/.android/avd`). Simlock only reads
+  them.
+
+A platform whose tools cannot answer is left out, and the other platform is
+still listed. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`; run the
+command against the worker. A platform other than `ios` or `android`, or a
+positional argument, is a usage error (exit 2).
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`
 

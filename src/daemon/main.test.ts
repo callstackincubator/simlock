@@ -321,6 +321,29 @@ describe("startDaemon", () => {
     expect(reads).toBe(1);
   });
 
+  it("logs a driver whose component listing fails under daemon.components, and still answers component.list", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    ios.failOn("listComponents", 1, new Error("simctl runtime list failed"));
+    const { daemon, sink } = await start({ drivers: [ios] });
+
+    const listed = await daemon.dispatch(
+      "component.list",
+      {},
+      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+    );
+
+    expect(listed).toEqual({ components: [] });
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        fields: { error: "Error: simctl runtime list failed", platform: "ios" },
+        level: "warn",
+        message: "A driver could not list its installed components",
+        module: "daemon.components",
+      }),
+    );
+  });
+
   it("scopes child loggers under daemon.<module> so records are attributable", async () => {
     const { sink } = await start();
 

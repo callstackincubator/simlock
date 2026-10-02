@@ -15,6 +15,8 @@ export type {
   AnySimlockError,
   CatalogGetInput,
   CatalogGetOutput,
+  ComponentListInput,
+  ComponentListOutput,
   CleanupRunInput,
   CleanupRunOutput,
   ComponentInstallInput,

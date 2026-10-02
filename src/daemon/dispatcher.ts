@@ -86,9 +86,10 @@ export interface DispatcherOptions {
   readonly clock: Clock;
   /**
    * The one installer (ADR 0010 §3), shared with the lease path so `component.install` and a
-   * lease request's download join one install, and read for `status.get`'s installs in progress.
+   * lease request's download join one install, and read for `status.get`'s installs in progress
+   * and for `component.list`.
    */
-  readonly components: Pick<ComponentInstaller, "install" | "inProgress">;
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
@@ -220,6 +221,7 @@ export class Dispatcher {
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "component.install": this.#componentInstall,
+      "component.list": this.#componentList,
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
@@ -635,6 +637,11 @@ export class Dispatcher {
       version: result.version,
     };
   };
+
+  /** ADR 0010 §8: a read for any session; the installer merges the drivers and the registry. */
+  #componentList: Handler<"component.list"> = async (input) => ({
+    components: await this.options.components.list(input.platform),
+  });
 
   /**
    * ADR §11: the daemon is the only owner of `tokens.json` -- `TokenStore.create` never

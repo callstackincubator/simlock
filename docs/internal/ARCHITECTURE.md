@@ -177,7 +177,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run`,
-  `driver.passthrough` and `component.install` answer
+  `driver.passthrough`, `component.install` and `component.list` answer
   `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they act on one machine's devices
   or components, and stay per-worker. The lease lifecycle
   (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`
@@ -1442,6 +1442,35 @@ it is a JSON error with its status and everything after is a terminal SSE
 event. Neither transport stops the install when its client goes away; a
 repeat joins it. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`; relaying to
 workers is a separate gateway operation.
+
+The listing is `component.list` (ADR 0010 §8), an agent read with input
+`{ platform? }`, behind `simlock component list`, `listComponents` on the
+client and `GET /v1/components`. Each driver answers
+`listComponents()`: one entry per installed component with its version, its
+`variant` (the driver's own words, carried unread: the build on iOS, tag and
+ABI on Android), its size when readable, its receipt from the same function
+`findComponent` and `installComponent` use, and `foreignDevices`. It is
+read-only, never downloads, and every process it starts is bounded, like
+`listCatalog`. iOS reads `simctl runtime list -j` (iOS images only) and
+counts devices per runtime in the default device set with an unscoped
+`simctl list -j devices`, the one unscoped call besides the pre-root path's.
+Android reads the installed images, sizes each directory with
+`Filesystem.directorySize`, and counts AVDs in the user's own AVD home whose
+`config.ini` names the image's directory. On both platforms a foreign-device
+read that fails rejects the listing rather than undercount. Counting foreign devices is the
+only place a driver looks at devices outside its root; it reads them and
+never writes there (safety rule 1).
+
+`ComponentInstaller.list(platform?)` merges each driver's listing with the
+registry: `installedBySimlock` is true when a `ComponentRecord` of that
+platform has a receipt equal (`sameReceipt`) to the entry's, and
+`installedAt` is that record's time — the record is the only proof (ADR 0010
+§5, safety rule 8). `devices` counts registry devices of that platform and
+version in any state but `deleted`; the core cannot tell variants apart, so
+two variants of one version show the same count. A driver whose listing
+rejects is left out and logged, and the other platform is still listed.
+Entries are ordered by platform, then version, then variant. A gateway
+answers `UNSUPPORTED_IN_GATEWAY_MODE`.
 
 ## External APIs behind interfaces (ports)
 

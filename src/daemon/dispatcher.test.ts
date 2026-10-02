@@ -149,7 +149,7 @@ async function buildDispatcher(
     readonly capacity?: Config["capacity"];
     /** Stands in for the component installer: a test that needs to see whether it was reached,
      * or one that reads `status.get`'s installs from an installer of its own. */
-    readonly components?: Pick<ComponentInstaller, "install" | "inProgress">;
+    readonly components?: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -1011,7 +1011,10 @@ describe("Dispatcher: status.get installs in progress", () => {
       drivers: new DriverCatalog([driver]),
       eventBus: new EventBus(clock),
       filesystem: new MemoryFilesystem(),
-      registry: { recordComponent: () => Promise.resolve() },
+      registry: {
+        recordComponent: () => Promise.resolve(),
+        snapshot: { components: [], devices: [], leases: [] },
+      },
       timeoutMs: installTimeoutMs,
     });
     const { dispatcher } = await buildDispatcher({ clock, components: installer });
@@ -1106,7 +1109,7 @@ describe("Dispatcher: component.install", () => {
     const install = vi.fn(() =>
       Promise.resolve({ outcome: "installed" as const, version: "unreachable" }),
     );
-    return { inProgress: () => [], install };
+    return { inProgress: () => [], install, list: () => Promise.resolve([]) };
   }
 
   function installCalls(driver: FakeDriver): unknown[] {
@@ -1362,6 +1365,47 @@ describe("Dispatcher: component.install", () => {
     await first;
     await expect(second).resolves.toMatchObject({ outcome: "installed", version: "28.0" });
     expect(progress).toEqual([{ stage: "waiting" }, { fraction: 0.41, stage: "downloading" }]);
+  });
+});
+
+describe("Dispatcher: component.list", () => {
+  it("lets an agent session list the installed components, the one Simlock installed marked as its", async () => {
+    const { clock, dispatcher } = await buildDispatcher();
+    await dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      session({ principal: "tok_operator", role: "admin" }),
+    );
+
+    const result = await dispatcher.dispatch("component.list", {}, session());
+
+    expect(result).toEqual({
+      components: [
+        {
+          devices: 0,
+          foreignDevices: 0,
+          installedBySimlock: false,
+          platform: "ios",
+          version: "26.5",
+        },
+        {
+          devices: 0,
+          foreignDevices: 0,
+          installedAt: clock.now(),
+          installedBySimlock: true,
+          platform: "ios",
+          version: "27.0",
+        },
+      ],
+    });
+  });
+
+  it("lists only the platform asked for", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch("component.list", { platform: "android" }, session()),
+    ).resolves.toEqual({ components: [] });
   });
 });
 

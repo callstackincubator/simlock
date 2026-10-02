@@ -169,6 +169,10 @@ export class GatewayDispatcher {
         "component.install",
         "component.install installs on one machine; run it against a worker",
       ),
+      "component.list": unsupportedByDesign(
+        "component.list",
+        "component.list lists one machine's components; run it against a worker",
+      ),
 
       "lease.request": this.#leaseRequest,
       "lease.renew": this.#leaseRenew,

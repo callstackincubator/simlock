@@ -711,6 +711,39 @@ export const componentInstall = defineOperation({
   }),
 });
 
+// ---- component.list (ADR 0010 §8) -----------------------------------------------------------
+
+/**
+ * Every installed iOS simulator runtime and Android system image on this machine, ordered by
+ * platform, then version, then variant. A read for any session. `installedBySimlock` is true only
+ * when Simlock's record of an install names this exact component; `installedAt` is that
+ * record's time. `devices` counts Simlock's own devices of this platform and version in any
+ * state but deleted, so two variants of one version show the same count; `foreignDevices`
+ * counts the devices outside Simlock that use it. `variant` tells two components of one
+ * version apart, in the platform's own words; `sizeBytes` is absent when it could not be read.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const componentList = defineOperation({
+  name: "component.list",
+  role: "agent",
+  effect: "read",
+  input: z.object({ platform: platformSchema.optional() }),
+  output: z.object({
+    components: z.array(
+      z.object({
+        platform: platformSchema,
+        version: z.string(),
+        variant: z.string().optional(),
+        sizeBytes: z.number().int().nonnegative().optional(),
+        installedBySimlock: z.boolean(),
+        installedAt: z.number().int().optional(),
+        devices: z.number().int().nonnegative(),
+        foreignDevices: z.number().int().nonnegative(),
+      }),
+    ),
+  }),
+});
+
 // ---- the full registry ----------------------------------------------------------------------
 
 export const OPERATIONS = {
@@ -741,6 +774,7 @@ export const OPERATIONS = {
   "worker.undrain": workerUndrain,
   "worker.remove": workerRemove,
   "component.install": componentInstall,
+  "component.list": componentList,
 } as const;
 
 /**

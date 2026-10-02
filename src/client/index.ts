@@ -19,6 +19,8 @@ export type {
   AnySimlockError,
   CatalogGetInput,
   CatalogGetOutput,
+  ComponentListInput,
+  ComponentListOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
   ExecInput,
