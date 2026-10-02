@@ -248,7 +248,9 @@ export interface Config {
     /** A join token minted on the gateway with `simlock token create --role worker`.
      * Worker-side. It is a secret, and it sits in the daemon's config file like any other
      * value there: `config.get` is admin-role and returns the config as written, so this key
-     * is exactly as sensitive as `config.json`'s file permissions make it. Everywhere else the
+     * is exactly as sensitive as `config.json`'s file permissions make it. `simlock config
+     * set` writes that file owner-only (0600) every time; a file written by hand, or before
+     * that, keeps whatever mode it has until the next `config set`. Everywhere else the
      * config is written out -- the startup log line, `daemon.started` -- goes through
      * `redactConfig`. See docs/CONFIGURATION.md. */
     readonly token?: string;

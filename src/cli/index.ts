@@ -440,7 +440,11 @@ export function buildCliEnvironment(
     readStdin: ports.readStdin ?? readPipedStdin,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
-      await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
+      // Owner-only on every write: the file can hold `gateway.token`, and the atomic rename
+      // replaces the old file, so a mode the user set by hand would not survive otherwise.
+      await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`, {
+        mode: 0o600,
+      });
     },
     // ADR §11 part D: "validates the merged file through the config loader before writing."
     // B9: two things the pre-fix version got wrong --

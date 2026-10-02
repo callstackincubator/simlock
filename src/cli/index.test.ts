@@ -1708,6 +1708,66 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 });
 
+describe("CLI: config set and the file mode of config.json (#252)", () => {
+  it("writes the config.json holding gateway.token owner-only, whether it creates the file or replaces an owner-only one", async () => {
+    // Two homes, one per way `config set` comes to write the join token. `MemoryFilesystem`
+    // gives a file written without a `mode` Node's default (0644), so the assertion pins what
+    // the CLI asks for, independent of the umask of whoever runs the suite.
+    const fresh = new MemoryFilesystem();
+    const freshExit = await runCli(
+      ["config", "set", "gateway", '{"url":"wss://gw.example:4700","token":"slk_fresh"}'],
+      outputCapture(realCliEnvironmentPorts(fresh)).environmentWith(),
+    );
+
+    const tightened = new MemoryFilesystem();
+    await tightened.mkdirp("/simlock");
+    await tightened.writeFileAtomic(
+      "/simlock/config.json",
+      `${JSON.stringify({ gateway: { url: "wss://gw.example:4700" } })}\n`,
+      { mode: 0o600 },
+    );
+    const tightenedExit = await runCli(
+      ["config", "set", "gateway.token", "slk_replaced"],
+      outputCapture(realCliEnvironmentPorts(tightened)).environmentWith(),
+    );
+
+    expect([freshExit, tightenedExit]).toEqual([0, 0]);
+    expect([
+      JSON.parse(await fresh.readFile("/simlock/config.json")).gateway.token,
+      JSON.parse(await tightened.readFile("/simlock/config.json")).gateway.token,
+    ]).toEqual(["slk_fresh", "slk_replaced"]);
+    expect({
+      created: (await fresh.stat("/simlock/config.json")).mode?.toString(8),
+      replaced: (await tightened.stat("/simlock/config.json")).mode?.toString(8),
+    }).toEqual({ created: "600", replaced: "600" });
+  });
+
+  it("makes a config.json that others could read owner-only on the next config set", async () => {
+    // A file written by hand or by an older simlock: readable by group and others. `config set`
+    // must not carry that mode over to the file it writes in its place.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(
+      "/simlock/config.json",
+      `${JSON.stringify({ gateway: { url: "wss://gw.example:4700", token: "slk_old" } })}\n`,
+      { mode: 0o644 },
+    );
+
+    const exit = await runCli(
+      ["config", "set", "gateway.label", "build-mac"],
+      outputCapture(realCliEnvironmentPorts(filesystem)).environmentWith(),
+    );
+
+    expect(exit).toBe(0);
+    expect(JSON.parse(await filesystem.readFile("/simlock/config.json")).gateway).toEqual({
+      url: "wss://gw.example:4700",
+      token: "slk_old",
+      label: "build-mac",
+    });
+    expect((await filesystem.stat("/simlock/config.json")).mode?.toString(8)).toBe("600");
+  });
+});
+
 describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
   it("status --json has no snake_case renderings", async () => {
     const output = outputCapture();
