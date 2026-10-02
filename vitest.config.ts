@@ -25,7 +25,9 @@ export default defineConfig({
           // per-test timeout -- a hang in the fast fake-driver lane should fail in
           // ~2 minutes, not stall CI for ten.
           testTimeout: 120_000,
-          hookTimeout: 60_000,
+          // Teardown is a hook: stopping the daemon and waiting its process out can take ~35s,
+          // and a real-SDK flow's teardown then empties its iOS device set (up to 45s more).
+          hookTimeout: 120_000,
         },
       },
     ],

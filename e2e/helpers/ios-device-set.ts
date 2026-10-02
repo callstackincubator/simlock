@@ -33,9 +33,9 @@ export async function simctlInSet(
 }
 
 /**
- * Per call while emptying a set. Teardown runs inside a 60s hook that already spends up to
- * ~25s stopping the daemon, so a hung simctl must give up rather than eat the rest of it --
- * the home's removal comes after.
+ * Per call while emptying a set. Teardown runs inside the e2e `hookTimeout` and stops the
+ * daemon first, so a hung simctl must give up rather than eat the rest of the hook -- the
+ * home's removal comes after.
  */
 const EMPTY_SET_CALL_TIMEOUT_MS = 15_000;
 
@@ -61,7 +61,8 @@ export async function setDevices(
  * while it does (`ENOTEMPTY`).
  *
  * Devices are handled in parallel and every call is bounded, so emptying a set of any size
- * takes at most two `EMPTY_SET_CALL_TIMEOUT_MS`.
+ * takes at most three `EMPTY_SET_CALL_TIMEOUT_MS`: the list, then each device's shutdown and
+ * delete.
  */
 export async function emptyDeviceSet(deviceSet: string): Promise<void> {
   const bounded = { timeoutMs: EMPTY_SET_CALL_TIMEOUT_MS };
