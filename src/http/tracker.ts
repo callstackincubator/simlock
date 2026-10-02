@@ -43,6 +43,11 @@ export interface LeasePayload {
   readonly mode: "slim" | "full";
   /** The image tag the device was created from, on a device whose request named one. */
   readonly imageTag?: string;
+  /** The worker a gateway-issued lease lives on, as its lease record names it. Absent from a
+   * worker's own lease. */
+  readonly worker?: { readonly id: string; readonly label?: string | undefined };
+  /** `worker.id`, flat, for the aggregate lists: present exactly when `worker` is. */
+  readonly workerId?: string;
 }
 
 /**
@@ -76,6 +81,10 @@ export function buildLeasePayload(
     dataPlane: null,
     mode: device.mode,
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
+    // A gateway's lease record names its worker and a worker's own never does. `workerId` is
+    // derived from `worker` rather than read off the record: a grant's record has no
+    // `workerId` field (only `lease.list`'s does), and the two must never disagree.
+    ...(lease.worker === undefined ? {} : { worker: lease.worker, workerId: lease.worker.id }),
   };
 }
 
@@ -366,7 +375,7 @@ type HttpLeaseProgress =
  * contract-shaped data, which need not match core's own types field for field, and this module
  * never imports core domain types at all -- everything it needs from a grant is these few fields.
  */
-interface HttpLeaseDevice {
+export interface HttpLeaseDevice {
   readonly id: string;
   readonly driverDeviceId: string;
   readonly spec: {
@@ -383,6 +392,8 @@ interface HttpLeaseRecord {
   readonly grantedAt: number;
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  /** ADR 0005 §18: set on a lease a gateway issued, naming the worker it lives on. */
+  readonly worker?: { readonly id: string; readonly label?: string | undefined } | undefined;
 }
 
 type StoredRequest = z.infer<typeof leaseRequestRecordSchema>;

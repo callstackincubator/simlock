@@ -759,10 +759,15 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
       ownerRoutedFacts: daemon.ownerRoutedFacts,
-      // A gateway owns no devices, so there is no registry to read one from. The routes that
-      // decorate a response with a device record are lease routes, which answer
-      // `UNSUPPORTED_IN_GATEWAY_MODE` here anyway; the fleet's devices come from `status.get`.
-      registry: { snapshot: { devices: [] } },
+      // A gateway owns no devices, so it has no registry. `GET /v1/leases/{id}` builds its lease
+      // payload from the devices each worker view's refresh read in the grant shape, matched on
+      // the lease's own worker. They carry no state, so `DELETE /v1/leases/{id}` reports its
+      // `reclaiming` default.
+      registry: {
+        get snapshot() {
+          return { devices: gatewayService.workers.grantedDevices() };
+        },
+      },
       tokens,
     });
     const gateway = new HttpGateway(app, {
