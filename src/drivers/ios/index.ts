@@ -648,7 +648,16 @@ export class IosSimctlDriver implements Driver {
             {
               foreignDevices: foreign.get(image.runtimeIdentifier)?.used ?? 0,
               image,
-              unusedDevices: foreign.get(image.runtimeIdentifier)?.unused ?? 0,
+              // Another image of the same runtime keeps its simulators available after this
+              // one goes, so only the runtime's last image has unused devices to report.
+              unusedDevices: images.some(
+                (other) =>
+                  other !== image &&
+                  isIosImage(other) &&
+                  other.runtimeIdentifier === image.runtimeIdentifier,
+              )
+                ? 0
+                : (foreign.get(image.runtimeIdentifier)?.unused ?? 0),
               receipt: imageReceipt(image),
               version: image.version,
               ...(image.build === undefined ? {} : { variant: image.build }),

@@ -400,7 +400,8 @@ that have been used at least once, AVDs in the user's own AVD home.
   once in the removal's checks and once more in the driver, just before the
   platform's own removal. A simulator or AVD the user creates between that
   count and the end of `simctl runtime delete` / `sdkmanager --uninstall` is
-  not seen. A new *Simlock* device cannot slip in the same way: the removal
+  not seen, and neither is a never-used simulator the user boots for the
+  first time in that window. A new *Simlock* device cannot slip in the same way: the removal
   marks the component inside the decision gate, and `DeviceProvisioner`
   refuses every device on a marked component until the removal settles.
 

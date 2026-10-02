@@ -3603,10 +3603,28 @@ describe("IosSimctlDriver listComponents()", () => {
 
       const removal = await driver.removeComponent(receipt, { signal: signal() });
 
-      expect(removal.residue).toContain("2 never-used simulators");
-      expect(removal.residue).toContain("`xcrun simctl delete unavailable`");
-      expect(removal.residue).toContain("The download of iOS 26.4 (23E244)");
-      expect(removal.residue).toContain("Xcode's Settings -> Platforms");
+      // Two sentences, the devices first, joined as prose.
+      expect(removal.residue).toMatch(
+        /^2 never-used simulators .*`xcrun simctl delete unavailable` clears them\. The download of iOS 26\.4 \(23E244\) .*Xcode's Settings -> Platforms to get the space back$/,
+      );
+    });
+
+    it("reports no unavailable simulators when another installed build of the same runtime stays behind (#241)", async () => {
+      // Two builds of iOS 26.4 share one runtime identifier, so its simulators keep working
+      // on the build that stays.
+      const sibling = image("26.4", "23E200", { id: "IMG-26.4-23E200" });
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target, sibling]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+        deleted,
+        imagesListed([sibling]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal).toEqual({ sizeBytes: 7_000_000_000 });
     });
 
     it("runs no simctl command that writes to the default device set: its only unscoped call is the device list (#241)", async () => {
