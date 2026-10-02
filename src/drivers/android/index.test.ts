@@ -2760,15 +2760,22 @@ describe("AndroidDriver readiness on a taken console port", () => {
     // whatever freed the port for it (#52, a second Simlock instance, the user's own
     // emulator). Its AVD is named like Simlock's but lives in the user's AVD home: a name
     // proves nothing, root membership does (safety rule 8).
-    const other = machine.takePortOnNextBoot(`${home}/.android/avd/simlock_one.avd`);
+    const otherPath = `${home}/.android/avd/simlock_one.avd`;
+    const other = machine.takePortOnNextBoot(otherPath);
 
     const readied = await driver.makeReady(stopped).then(
       (ready) => machine.avdPathAnswering(ready.address),
-      (error: unknown) => refusedUnlessTheFakeObjected(error),
+      (error: unknown) => driverCrashMessage(error),
     );
 
+    // A DriverCrashError naming both directories: the one that answered, and the device's own.
+    const ownPath = `${avdDirectory}/simlock_one.avd`;
     expect({ readied, other: other.observed() }).toEqual({
-      readied: "refused",
+      readied: {
+        refused: expect.stringMatching(
+          new RegExp(`"${escapeRegExp(otherPath)}".* ${escapeRegExp(ownPath)}(\\s|$)`),
+        ),
+      },
       other: { running: true, sentByDriver: [] },
     });
   });
@@ -2816,12 +2823,11 @@ describe("AndroidDriver readiness on a taken console port", () => {
 
       const readied = await driver.makeReady(await driver.provision(spec)).then(
         () => "readied",
-        (error: unknown) =>
-          error instanceof Error && error.name === "DriverCrashError" ? "refused" : error,
+        (error: unknown) => driverCrashMessage(error),
       );
 
       expect({ readied, running: host.avdAnswering("emulator-5586") }).toEqual({
-        readied: "refused",
+        readied: { refused: expect.any(String) },
         running: undefined,
       });
     },
@@ -4130,10 +4136,17 @@ function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessR
 /** Commands that only read an emulator's state. */
 const QUERIES = /^(shell getprop \S+|emu avd (name|path|id|status|discoverypath))$/;
 
-/** "refused" for a driver's refusal; the fake's own complaint about an unscripted call is rethrown. */
-function refusedUnlessTheFakeObjected(error: unknown): "refused" {
-  if (error instanceof Error && /^Unexpected (process invocation|spawn)/.test(error.message)) {
-    throw error;
+/**
+ * The message of the driver's `DriverCrashError`; anything else -- a boot timeout, the fake's
+ * own complaint about an unscripted call -- is rethrown, so it fails the test as itself.
+ */
+function driverCrashMessage(error: unknown): { readonly refused: string } {
+  if (error instanceof Error && error.name === "DriverCrashError") {
+    return { refused: error.message };
   }
-  return "refused";
+  throw error;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
