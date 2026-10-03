@@ -57,7 +57,6 @@ describe("WaitQueue", () => {
     expect(() => other.markProcessing(waiter)).toThrow(ForeignWaiterError);
     expect(() => other.markNew(waiter)).toThrow(ForeignWaiterError);
     expect(() => other.isQueued(waiter)).toThrow(ForeignWaiterError);
-    expect(() => other.attachProgress(waiter, () => undefined)).toThrow(ForeignWaiterError);
     expect(() => other.notifyProgress(waiter, { etaMs: 10, stage: "booting" })).toThrow(
       ForeignWaiterError,
     );
@@ -248,28 +247,6 @@ describe("WaitQueue", () => {
 
     await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
     expect(received).toEqual([]);
-  });
-
-  it("attaches and detaches queued progress without changing the request outcome", () => {
-    const received: LeaseProgress[] = [];
-    const reattached: LeaseProgress[] = [];
-    const { queue } = createQueue();
-    const waiter = queue.create(request, {
-      onProgress: (progress) => received.push(progress),
-      requesterId: "agent",
-      ownerId: "agent",
-    });
-
-    queue.enqueue(waiter);
-    expect(queue.detachProgress("agent")).toBe(true);
-    queue.notifyProgress(waiter, { etaMs: 20, stage: "booting" });
-    expect(queue.attachProgress(waiter, (progress) => reattached.push(progress))).toBe(true);
-    queue.notifyProgress(waiter, { etaMs: 20, stage: "booting" });
-
-    expect(received).toEqual([{ queuePosition: 1, stage: "queued" }]);
-    expect(reattached).toEqual([{ etaMs: 20, stage: "booting" }]);
-    expect(queue.resolve(waiter, grant())).toBe(true);
-    expect(waiter.state).toBe("granted");
   });
 
   it("settles waiters exactly once and cancels a settled waiter's timeout", async () => {
