@@ -139,12 +139,37 @@ scale; never a value between.
 - **Table.** Fills its panel edge to edge. Headers are labels in
   `--text-muted`. Rows are roomy, 16px above and below, with a 1px line
   between them. Numbers, durations included, are mono and right-aligned.
+  Every table of a view's items is the one table component
+  (`ui/src/table.tsx`), so every such table pages the same way. A chart's
+  "Minute by minute" table is not one: it always has its 60 rows.
+- **Pager.** Under a table, edge to edge in its panel, with a 1px `--border`
+  line above it like a row's: the rows shown of how many in mono (`26–50 of
+  1,240`), **Per page** as a select, then **Previous**, the page number in
+  mono `--text-muted` (`Page 2 of 50`), and **Next**, as secondary buttons.
+  It wraps on a phone. Under a grid of cards it is a bar of its own, a
+  `--surface` card with a `--border` edge. It is hidden when every row fits
+  on one page. At either end, the button that would leave the list keeps its
+  place and its focus, says so with `aria-disabled`, and goes quiet: its text
+  `--text-muted`, its edge `--border`.
+- **Scroll box.** A long feed, such as the events, scrolls inside a box of
+  fixed height, `min(40rem, 70vh)`, edge to edge in its panel with a 1px
+  `--border` line above it; the page does not scroll with it. The box takes
+  focus, with its focus ring inside its edge, so the keyboard can scroll it.
+  Only the rows in view are drawn. A count of what arrived while the reader
+  was scrolled down ("3 new events") is a secondary button on `--bg`,
+  centred over the top of the box. It is outlined, not orange: orange never
+  says "new".
 - **Long ids** (a lease's, a worker's, a device's) stay on one line, cut with
   an ellipsis. The whole id is in the element's `title`, in the text a copy or
   a screen reader reads, and on the details page.
 - **Buttons.** Primary: filled `--accent` with `--on-accent` text. Secondary:
   outlined in `--border-strong`, `--text`. Quiet: text only. All are labels.
-- **Inputs.** A `--field` fill and a 1px `--border-strong` border.
+- **Inputs.** A `--field` fill and a 1px `--border-strong` border. A select is
+  the same, 40px tall, in mono, with the browser's own arrow turned off
+  (`appearance: none`): it draws a small chevron in `--text`, two CSS
+  gradients 12px in from its right edge, and 32px of right padding keep its
+  value clear of it. It looks the same in every browser and both themes, and
+  needs no image, which the CSP would refuse.
 - **Charts.** Drawn with Recharts, bundled like the rest. A line or columns in
   `--accent`, an area with a faint fill of it (8%), horizontal grid lines in
   `--border`, axis labels in Geist Mono `--text-muted`. Every colour comes from
@@ -168,7 +193,8 @@ scale; never a value between.
 - From 768px a chart and the panel beside it share a row, two thirds and one
   third; two panels of the same weight share it half and half.
 - A list of things that each carry several facts, such as workers, is a grid
-  of cards, each a title and its facts as label and value pairs.
+  of cards, each a title and its facts as label and value pairs. It pages at
+  24, 48 or 96 cards, whole rows of the grid at two, three or four columns.
 
 ## Focus and keyboard
 

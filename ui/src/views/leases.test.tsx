@@ -72,7 +72,14 @@ function text(html: string): string {
 
 function table(leases: readonly LeaseRecord[], tokens: readonly TokenRecord[]): string {
   return renderToStaticMarkup(
-    <LeaseTable leases={leases} tokens={tokens} workers={[HOST]} now={NOW} showWorker />,
+    <LeaseTable
+      leases={leases}
+      tokens={tokens}
+      workers={[HOST]}
+      now={NOW}
+      showWorker
+      label="All leases"
+    />,
   );
 }
 
@@ -110,6 +117,21 @@ describe("the leases views", () => {
 
   it("no leases shows as one line saying so", () => {
     expect(text(table([], [token()]))).toBe("No leases.");
+  });
+
+  it("the table lists leases oldest granted first, whatever order the daemon sends", () => {
+    const sent = [
+      lease({ grantedAt: NOW - 1_000, id: "lse_newest", workerId: "wrk_a" }),
+      lease({ grantedAt: NOW - 9_000, id: "lse_b", workerId: "wrk_b" }),
+      lease({ grantedAt: NOW - 9_000, id: "lse_a", workerId: "wrk_b" }),
+      lease({ grantedAt: NOW - 9_000, id: "lse_z", workerId: "wrk_a" }),
+    ];
+
+    const shown = cells(table(sent, [token()]), "Lease");
+
+    // Granted in the same millisecond: by worker, then by the lease's own id.
+    expect(shown).toEqual(["lse_z", "lse_a", "lse_b", "lse_newest"]);
+    expect(cells(table(sent.toReversed(), [token()]), "Lease")).toEqual(shown);
   });
 
   it("a worker's leases are the ones that name it, or every one on a single host", () => {

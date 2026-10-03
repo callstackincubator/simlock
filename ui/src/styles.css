@@ -222,6 +222,16 @@ a:hover {
   color: var(--text);
 }
 
+/* A button that does nothing here, such as Next on the last page. It keeps its place and its
+ * focus; its text and edge go quiet. */
+.button[aria-disabled="true"],
+.button[aria-disabled="true"]:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
 /* Inputs: a grey fill and a 1px border. */
 
 label {
@@ -239,6 +249,31 @@ input {
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+/* A select draws its own chevron, the same in every browser and theme: two gradients that meet
+ * in a V, in the text's colour, 12px in from the right edge. Gradients are CSS, not images, so
+ * the CSP's `img-src 'self'` has nothing to refuse. The right padding keeps the value clear of
+ * it. */
+select {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 calc(var(--space-3) + 20px) 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background-color: var(--field);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position:
+    right calc(var(--space-3) + 5px) center,
+    right var(--space-3) center;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  cursor: pointer;
 }
 
 input[aria-invalid="true"] {
@@ -646,39 +681,75 @@ input[aria-invalid="true"] {
   gap: var(--space-1) var(--space-4);
 }
 
-/* The attention list: one line per item, its status first. */
+/* The attention table: one row per item, its status first in a column wide enough for the
+ * longest word, "over RAM budget". */
 
-.panel-body > .attention-list {
-  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-6));
+.attention-table th:first-child {
+  width: 14rem;
 }
 
-.attention-list {
-  padding: 0;
-  list-style: none;
-}
+/* The pager under a long list: which rows show of how many, the page size, and previous and
+ * next with the page number between them. Under a table it runs edge to edge, with a line above
+ * it like a row's. */
 
-.attention-list li {
+.pager {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-4);
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border);
-  overflow-wrap: anywhere;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
 }
 
-.attention-list li:last-child {
-  border-bottom: 0;
+.pager-range {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.attention-list .status {
-  flex: none;
-  min-width: 10rem;
+.pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
-.attention-list .status + span {
-  flex: 1 1 16rem;
+.pager-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
+.pager-page {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-body > .pager,
+.panel-body > .panel-footer {
+  margin: var(--space-4) calc(-1 * var(--space-6)) calc(-1 * var(--space-4));
+  padding: var(--space-3) var(--space-6);
+  border-top: 1px solid var(--border);
+}
+
+.panel-footer {
+  font-size: var(--text-sm);
+}
+
+/* A grid of cards and the pager under them. The pager is a bar of the cards' own colour. */
+.card-list {
+  display: grid;
+  gap: var(--space-4);
   min-width: 0;
+}
+
+.card-list > .pager {
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 /* Events: a filter by subject, then one block per event, newest first. */
@@ -720,21 +791,56 @@ input[aria-invalid="true"] {
   accent-color: var(--accent-text);
 }
 
-.events {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+/* The feed: a box of fixed height that scrolls, edge to edge in its panel. Only the rows in view
+ * are in the page, each placed by its offset; the list is as tall as every row together. The
+ * browser's own scroll anchoring is off: the feed keeps the reader's row in place itself. */
+
+.feed {
+  position: relative;
+}
+
+.panel-body > .feed {
+  margin: 0 calc(-1 * var(--space-6)) calc(-1 * var(--space-4));
+}
+
+.feed-box {
+  height: min(40rem, 70vh);
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
   border-top: 1px solid var(--border);
 }
 
-.event {
-  min-width: 0;
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border);
+.feed-box:focus-visible {
+  outline-offset: -2px;
 }
 
-.event:last-child {
-  border-bottom: 0;
+/* "N new events": over the top of the box, while the operator reads further down. */
+.feed-new {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 1;
+  min-height: 32px;
+  background: var(--bg);
+  transform: translateX(-50%);
+}
+
+.events {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--border);
 }
 
 .event-head {

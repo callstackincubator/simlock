@@ -21,6 +21,27 @@ export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname);
 }
 
+/**
+ * The page URL's query, such as `?page=3&size=50`, re-rendering when it changes. Empty where
+ * there is no page URL, as when a test renders a view to a string.
+ */
+export function useSearch(): string {
+  return useSyncExternalStore(
+    subscribe,
+    () => window.location.search,
+    () => "",
+  );
+}
+
+/**
+ * Sets the current page's query to `search`, keeping its path. `replace` overwrites the
+ * history entry instead of adding one, for a correction the operator did not ask for.
+ */
+export function setSearch(search: string, options: { readonly replace?: boolean } = {}): void {
+  const { hash, pathname } = window.location;
+  navigate(`${pathname}${search}${hash}`, options);
+}
+
 export function navigate(to: string, options: { readonly replace?: boolean } = {}): void {
   if (options.replace === true) window.history.replaceState(null, "", to);
   else window.history.pushState(null, "", to);

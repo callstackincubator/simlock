@@ -76,6 +76,25 @@ export function leasesOnWorker(
   return leases.filter((lease) => workerOfLease(lease, workers)?.id === workerId);
 }
 
+/**
+ * The leases oldest granted first, by the worker's id and the lease's own id where two were
+ * granted in the same millisecond. `GET /v1/leases` promises no order, so the console sets its
+ * own from facts a lease keeps for life, and a refresh moves no lease to another page.
+ */
+export function inGrantOrder(leases: readonly LeaseRecord[]): readonly LeaseRecord[] {
+  return [...leases].sort(
+    (a, b) =>
+      a.grantedAt - b.grantedAt ||
+      compare(a.workerId ?? "", b.workerId ?? "") ||
+      compare(a.id, b.id),
+  );
+}
+
+function compare(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 /** The device a lease holds, as its worker reports it. A device id is matched on its own worker. */
 export function deviceOfLease(
   lease: LeaseRecord,

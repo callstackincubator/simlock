@@ -33,6 +33,8 @@ export interface ConsoleDaemon {
 /** A daemon a test drives itself: its CLI, and stopping and starting it in place. */
 export interface RunningDaemon extends ConsoleDaemon {
   readonly port: number;
+  /** The daemon's unix socket, for a test that drives it with the programmatic client. */
+  readonly socketPath: string;
   cliBackground(args: readonly string[]): CliBackgroundHandle;
   /** Replaces the fake driver's script. A daemon reads its host facts and catalog at start. */
   writeDriverScript(script: FakeDriverScript): Promise<void>;
@@ -146,6 +148,7 @@ export async function startDaemon(
       },
       dispose,
       port,
+      socketPath,
       start,
       stop,
       tokens,

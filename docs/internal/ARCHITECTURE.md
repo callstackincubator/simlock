@@ -72,7 +72,12 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   (`ui/src/views/event-feed.ts`, behind `useRecentEvents()`) takes each
   event off the stream through the live layer and loads `GET /v1/events`
   itself, for the last hour and for each gap the stream left. The events view
-  lists it, and the workers view's lease chart counts back through it. See
+  lists it, and the workers view's lease chart counts back through it.
+  Every route still answers whole lists; the console pages them in the
+  browser. Every table of a view's items is `DataTable` (`ui/src/table.tsx`, on
+  `@tanstack/react-table`), which keeps its page in the URL's query through
+  `usePaging` (`ui/src/pager.tsx`); the events feed draws only the rows in
+  view, with `@tanstack/react-virtual`. See
   [CONSOLE.md](../CONSOLE.md) for the user's side and
   [DESIGN.md](DESIGN.md) for the style.
 - **CLI**: by default it acquires a lease, prints one JSON result line on

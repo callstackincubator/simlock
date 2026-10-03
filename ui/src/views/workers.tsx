@@ -2,7 +2,10 @@ import { MinuteChart, MinuteTable } from "../charts";
 import { Id, PageHeader, Panel, StatCards } from "../layout";
 import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
+import { Pager, usePaging } from "../pager";
+import { CARD_SIZES, formatCount } from "../paging";
 import { Link, usePath } from "../router";
+import { type Column, DataTable } from "../table";
 import { useRecentEvents } from "./events";
 import { extremes, leaseHistory, type MinuteCount } from "./history-model";
 import { WorkerDetail } from "./worker-detail";
@@ -103,35 +106,36 @@ function LeaseSummary({ minutes }: { readonly minutes: readonly MinuteCount[] })
   );
 }
 
-/** Every worker, ranked by how many leases it holds now. Its card below links to its page. */
+/** How many workers Busiest workers ranks. The cards below have every one. */
+const BUSIEST = 5;
+
+const BUSIEST_COLUMNS: readonly Column<WorkerView>[] = [
+  {
+    cell: (worker) => (worker.label === undefined ? <Id>{worker.id}</Id> : worker.label),
+    header: "Worker",
+  },
+  { cell: (worker) => worker.leases.length, header: "Leases", numeric: true },
+];
+
+/**
+ * The five workers holding the most leases now, most first, and a link to the cards below for
+ * the rest. Each card links to its worker's page.
+ */
 function BusiestWorkers({ workers }: { readonly workers: readonly WorkerView[] }) {
   return (
     <Panel title="Busiest workers" description="By leases held now, most first.">
-      {workers.length === 0 ? (
-        <p className="muted">No workers have connected.</p>
-      ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th scope="col">Worker</th>
-              <th scope="col" className="num">
-                Leases
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {busiestWorkers(workers).map((worker) => (
-              <tr key={worker.id}>
-                <td data-label="Worker">
-                  {worker.label === undefined ? <Id>{worker.id}</Id> : worker.label}
-                </td>
-                <td data-label="Leases" className="num">
-                  {worker.leases.length}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <DataTable
+        label="Busiest workers"
+        name="busiest"
+        rows={busiestWorkers(workers).slice(0, BUSIEST)}
+        columns={BUSIEST_COLUMNS}
+        rowId={(worker) => worker.id}
+        empty="No workers have connected."
+      />
+      {workers.length <= BUSIEST ? null : (
+        <p className="panel-footer">
+          <a href={`#${ALL_WORKERS}`}>All {formatCount(workers.length)} workers</a>
+        </p>
       )}
     </Panel>
   );
@@ -148,23 +152,32 @@ function WorkerLink({ worker }: { readonly worker: WorkerView }) {
   );
 }
 
+/** The id of the worker cards, where Busiest workers links for the rest. */
+const ALL_WORKERS = "all-workers";
+
+/** A card per worker, in the daemon's order, 24 to a page. */
 function WorkerCards({ workers }: { readonly workers: readonly WorkerView[] }) {
+  const paging = usePaging({ sizes: CARD_SIZES, total: workers.length });
   if (workers.length === 0) return <p className="muted">No workers have connected.</p>;
+  const { page, size } = paging.at;
   return (
-    <ul className="cards">
-      {workers.map((worker) => (
-        <li key={worker.id} className="card">
-          <h2 className="card-title">
-            <WorkerLink worker={worker} />
-          </h2>
-          {worker.label === undefined ? null : (
-            <p className="muted">
-              <Id>{worker.id}</Id>
-            </p>
-          )}
-          <WorkerFacts worker={worker} />
-        </li>
-      ))}
-    </ul>
+    <section id={ALL_WORKERS} className="card-list" aria-label="All workers">
+      <ul className="cards">
+        {workers.slice((page - 1) * size, page * size).map((worker) => (
+          <li key={worker.id} className="card">
+            <h2 className="card-title">
+              <WorkerLink worker={worker} />
+            </h2>
+            {worker.label === undefined ? null : (
+              <p className="muted">
+                <Id>{worker.id}</Id>
+              </p>
+            )}
+            <WorkerFacts worker={worker} />
+          </li>
+        ))}
+      </ul>
+      <Pager label="All workers" paging={paging} />
+    </section>
   );
 }

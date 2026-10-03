@@ -17,6 +17,26 @@ the leases held and how many expire within 15 minutes. A long id, such as a
 lease's, is cut to fit its column; point at it to see it whole, or open its
 page.
 
+## Long lists
+
+Every table of workers, devices, leases, requests or attention items shows 25
+rows at a time. Under it, the pager says which rows you
+see, such as `26–50 of 1,240`, and has **Previous**, **Next**, the page
+number, and **Per page**: 25, 50 or 100. When everything fits on one page,
+there is no pager. (The **Minute by minute** table under a chart always lists
+its 60 minutes.) The worker cards on **Workers** page the same way, 24 at a
+time, or 48 or 96.
+
+The page you are on is in the address, such as `/leases?page=3&size=50`, so
+a reload or a link you share opens the same page. A page with two tables,
+such as a worker's, keeps each one's page under its own name:
+`?devices-page=2&leases-page=3`.
+
+Rows keep their order as the page refreshes itself, so a row stays on its
+page unless the list changes. When the list shrinks below the page you are
+on, you see its last page instead. Leases are listed oldest first, by when
+they were granted.
+
 ## Turn it on
 
 The console comes with the HTTP API. It is on whenever `http.enabled` is
@@ -118,8 +138,9 @@ the end of each minute. It starts from the leases held now and counts back
 through the lease events of the last hour, the same events the Events page
 shows, so it can only go back as far as those. A lease that ends with no
 event, such as one on a worker removed from a gateway, is not counted back. **Minute by minute** under the
-chart lists each minute's number. **Busiest workers** ranks the workers by
-the leases each holds now.
+chart lists each minute's number. **Busiest workers** ranks the five workers
+holding the most leases now. With more than five workers, a link under it,
+such as **All 12 workers**, takes you to the cards for the rest.
 
 Select a worker to open its page. It adds:
 
@@ -256,7 +277,14 @@ whole payload.
 devices, workers or components. **Other** lists the rest, such as
 `daemon.started`.
 
-The page keeps the newest 1000 events. Older ones drop off the end.
+The events sit in a box of their own that scrolls; the page around it stays
+put. Click in the box, or Tab to it, to scroll it with the keyboard. While
+you are at the top of the box, new events push the list down, so the newest
+is always in view. Once you scroll down to read, what you are reading stays
+where it is, and a button at the top counts the events that came in since,
+such as **3 new events**. Select it to go back to the top.
+
+The page keeps the newest 10,000 events. Older ones drop off the end.
 
 **Events per minute** charts how many of the events the page holds happened in
 each minute of the last hour, whatever **Show** picks. **Minute by minute**

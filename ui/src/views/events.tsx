@@ -1,4 +1,5 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { MinuteChart, MinuteTable } from "../charts";
 import { useApi } from "../console-context";
@@ -7,10 +8,12 @@ import { browserClock } from "../live/browser";
 import type { ResourceState } from "../live/connection";
 import { useLiveEvents, useLiveResource, useNow, useStreamOpened } from "../live/live-context";
 import { Loaded } from "../live/route-state";
+import { formatCount } from "../paging";
 import { EventFeed } from "./event-feed";
 import {
   type ConsoleEvent,
   eventsStats,
+  keyOf,
   MAX_EVENTS,
   payloadPairs,
   type Subject,
@@ -69,7 +72,7 @@ export function EventsView() {
               <EventsPerMinute minutes={eventsPerMinute(events, now.server)} />
               <Panel
                 title="Recent events"
-                description={`Newest first, each with its payload. The newest ${MAX_EVENTS} are kept.`}
+                description={`Newest first, each with its payload. The newest ${formatCount(MAX_EVENTS)} are kept.`}
               >
                 <fieldset className="filter">
                   <legend>Show</legend>
@@ -128,7 +131,10 @@ function EventsPerMinute({ minutes }: { readonly minutes: readonly MinuteCount[]
   );
 }
 
-/** The events, newest first. Each one's payload is a list of its keys and values. */
+/**
+ * The events, newest first, in a scrolling box of fixed height. Each one's payload is a list of
+ * its keys and values. A filter starts the box again at the top.
+ */
 export function EventList(props: {
   readonly events: readonly ConsoleEvent[];
   /** The workers the daemon lists, to name an event's worker; `undefined` until read. */
@@ -140,36 +146,129 @@ export function EventList(props: {
   if (props.events.length === 0) return <p className="muted">No events in the last hour.</p>;
   const events = shownEvents(props.events, filter);
   if (events.length === 0) return <p className="muted">No events of this kind.</p>;
+  return <Feed key={filter} events={events} workers={workers} />;
+}
+
+/** The box's height and a row's before either is measured: what a first draw lays out. */
+const FEED_HEIGHT_PX = 640;
+const ROW_ESTIMATE_PX = 120;
+
+/** Rows drawn past each edge of the box, so a short scroll shows rows already there. */
+const OVERSCAN = 5;
+
+/**
+ * The feed's scrolling box. Only the rows in view, and {@link OVERSCAN} past each edge, are in
+ * the page; each is measured as it is drawn, since a payload that wraps makes its row taller.
+ *
+ * New events come in at the top. While the box is at the top, they push the rows down, so the
+ * newest is always in view. Once the operator scrolls down, the row they are reading stays where
+ * it is (`anchorTo: "end"` keeps the row at the top of the box in place when rows are added
+ * above it), and a button counts the events that came in since; it scrolls back to the top.
+ */
+function Feed(props: {
+  readonly events: readonly ConsoleEvent[];
+  readonly workers: readonly WorkerView[] | undefined;
+}) {
+  const { events, workers } = props;
+  const box = useRef<HTMLDivElement>(null);
+  const [atTop, setAtTop] = useState(true);
+  const newest = events[0] === undefined ? undefined : keyOf(events[0]);
+  // The newest event the operator saw at the top of the box: every event above it is new to them.
+  const [seen, setSeen] = useState(newest);
+  useEffect(() => {
+    if (atTop) setSeen(newest);
+  }, [atTop, newest]);
+  const virtualizer = useVirtualizer({
+    anchorTo: atTop ? "start" : "end",
+    count: events.length,
+    estimateSize: () => ROW_ESTIMATE_PX,
+    getItemKey: (index) => {
+      const event = events[index];
+      return event === undefined ? index : keyOf(event);
+    },
+    getScrollElement: () => box.current,
+    initialRect: { height: FEED_HEIGHT_PX, width: 0 },
+    overscan: OVERSCAN,
+  });
+  const unseen = atTop
+    ? 0
+    : Math.max(
+        0,
+        events.findIndex((event) => keyOf(event) === seen),
+      );
+  const toTop = () => {
+    virtualizer.scrollToOffset(0);
+    box.current?.focus();
+  };
   return (
-    <ol className="events">
-      {events.map((event) => {
-        const workerId = workerIdOf(event);
-        const pairs = payloadPairs(event.payload);
-        return (
-          <li key={`${event.seq}:${event.timestamp}`} className="event">
-            <p className="event-head">
-              <time className="mono" dateTime={new Date(event.timestamp).toISOString()}>
-                {timeOfDay(event.timestamp)}
-              </time>
-              <span className="event-name mono">{event.event}</span>
-              {workerId === undefined ? null : (
-                <span className="event-worker">{eventWorkerName(workerId, workers)}</span>
-              )}
-            </p>
-            {pairs.length === 0 ? null : (
-              <dl className="event-payload">
-                {pairs.map((pair) => (
-                  <div key={pair.key}>
-                    <dt className="mono">{pair.key}</dt>
-                    <dd className="mono">{pair.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            )}
-          </li>
-        );
-      })}
-    </ol>
+    <div className="feed">
+      {unseen === 0 ? null : (
+        <button className="button button-secondary feed-new" type="button" onClick={toTop}>
+          {unseen === 1 ? "1 new event" : `${formatCount(unseen)} new events`}
+        </button>
+      )}
+      <div
+        ref={box}
+        className="feed-box"
+        role="region"
+        aria-label="Event feed"
+        tabIndex={0}
+        onScroll={(event) => setAtTop(event.currentTarget.scrollTop < 1)}
+      >
+        <ol className="events" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const event = events[item.index];
+            if (event === undefined) return null;
+            return (
+              <li
+                key={item.key.toString()}
+                ref={virtualizer.measureElement}
+                data-index={item.index}
+                className="event"
+                aria-setsize={events.length}
+                aria-posinset={item.index + 1}
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <EventRow event={event} workers={workers} />
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+/** One event: its time, its name, its worker on a gateway, and its payload. */
+function EventRow(props: {
+  readonly event: ConsoleEvent;
+  readonly workers: readonly WorkerView[] | undefined;
+}) {
+  const { event, workers } = props;
+  const workerId = workerIdOf(event);
+  const pairs = payloadPairs(event.payload);
+  return (
+    <>
+      <p className="event-head">
+        <time className="mono" dateTime={new Date(event.timestamp).toISOString()}>
+          {timeOfDay(event.timestamp)}
+        </time>
+        <span className="event-name mono">{event.event}</span>
+        {workerId === undefined ? null : (
+          <span className="event-worker">{eventWorkerName(workerId, workers)}</span>
+        )}
+      </p>
+      {pairs.length === 0 ? null : (
+        <dl className="event-payload">
+          {pairs.map((pair) => (
+            <div key={pair.key}>
+              <dt className="mono">{pair.key}</dt>
+              <dd className="mono">{pair.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </>
   );
 }
 

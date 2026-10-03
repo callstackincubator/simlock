@@ -48,9 +48,10 @@ function summary(workers: readonly WorkerView[]): string[] {
   );
 }
 
-/** The text a screen shows, without markup. */
+/** The text a screen shows, without markup: the items, without the table's column headers. */
 function text(html: string): string {
   return html
+    .replace(/<thead>.*?<\/thead>/s, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -68,20 +68,37 @@ function row(page: Page, name: string, value: string): Locator {
     .filter({ has: page.locator("dd", { hasText: new RegExp(`^${value}$`) }) });
 }
 
-/** Each event the view shows, as its time, name and payload, in the order shown. */
+/**
+ * Each event the view shows, as its time, name and payload, in the order shown. The feed draws
+ * only the rows in its box, so this scrolls it from the top to the bottom, reading each row as
+ * it is drawn, and back to the top.
+ */
 async function shownEvents(page: Page): Promise<string[]> {
-  return rows(page).evaluateAll((items) =>
-    items.map((item) =>
-      [
-        item.querySelector("time")?.getAttribute("datetime") ?? "",
-        item.querySelector(".event-name")?.textContent ?? "",
-        ...[...item.querySelectorAll(".event-payload > div")].map(
-          (pair) =>
-            `${pair.querySelector("dt")?.textContent ?? ""}=${pair.querySelector("dd")?.textContent ?? ""}`,
-        ),
-      ].join(" "),
-    ),
-  );
+  return page.getByRole("region", { name: "Event feed" }).evaluate(async (box) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const seen = new Map<number, string>();
+    box.scrollTop = 0;
+    for (let step = 0; step < 1_000; step += 1) {
+      await frame();
+      for (const item of box.querySelectorAll("li.event")) {
+        seen.set(
+          Number(item.getAttribute("aria-posinset")),
+          [
+            item.querySelector("time")?.getAttribute("datetime") ?? "",
+            item.querySelector(".event-name")?.textContent ?? "",
+            ...[...item.querySelectorAll(".event-payload > div")].map(
+              (pair) =>
+                `${pair.querySelector("dt")?.textContent ?? ""}=${pair.querySelector("dd")?.textContent ?? ""}`,
+            ),
+          ].join(" "),
+        );
+      }
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) break;
+      box.scrollTop += box.clientHeight;
+    }
+    box.scrollTop = 0;
+    return [...seen.entries()].sort(([a], [b]) => a - b).map(([, shown]) => shown);
+  });
 }
 
 /** An event from the CLI, written as {@link shownEvents} reads the view: strings as themselves. */
@@ -182,6 +199,8 @@ test.describe("the events view", () => {
         const started = await cliEvents(daemon);
         await expect.poll(async () => (await shownEvents(page)).length, name).toBe(started.length);
 
+        // Every event, drawn as the feed scrolls past it, and the page as it stands.
+        expect((await shownEvents(page)).join("\n"), name).not.toContain(joinToken);
         expect(await page.content(), name).not.toContain(joinToken);
         expect(await page.locator("body").innerText(), name).not.toContain(joinToken);
 

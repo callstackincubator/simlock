@@ -6,6 +6,7 @@ import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { Status, type Tone } from "../status";
+import { type Column, DataTable } from "../table";
 import { type AttentionItem, attentionItems, attentionStats } from "./attention-model";
 import {
   stateEnteredAt,
@@ -58,24 +59,39 @@ export function useAttentionCount(): number | undefined {
   return data === undefined ? undefined : attentionItems(data.workers).length;
 }
 
+/**
+ * One row per item, a page at a time, its condition first: the workers in the daemon's order,
+ * each worker's own items before its devices'.
+ */
 export function AttentionList(props: {
   readonly items: readonly AttentionItem[];
   /** The daemon's time now, for how long a device has been stalled. */
   readonly now: number;
 }) {
   const { items, now } = props;
-  if (items.length === 0) return <p className="muted">Nothing needs attention.</p>;
+  const columns: Column<AttentionItem>[] = [
+    {
+      cell: (item) => <Status tone={TONES[item.condition]}>{item.condition}</Status>,
+      header: "Condition",
+    },
+    {
+      cell: (item) => (
+        <span>
+          <Subject item={item} />: {describe(item, now)}
+        </span>
+      ),
+      header: "Item",
+    },
+  ];
   return (
-    <ul className="attention-list">
-      {items.map((item) => (
-        <li key={item.key}>
-          <Status tone={TONES[item.condition]}>{item.condition}</Status>
-          <span>
-            <Subject item={item} />: {describe(item, now)}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <DataTable
+      label="Needs attention"
+      className="attention-table"
+      rows={items}
+      columns={columns}
+      rowId={(item) => item.key}
+      empty="Nothing needs attention."
+    />
   );
 }
 

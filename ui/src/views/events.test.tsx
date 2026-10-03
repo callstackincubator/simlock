@@ -231,7 +231,8 @@ describe("the events view", () => {
     expect(view.shown()).toEqual([`1@${T0}`]);
   });
 
-  it("the view keeps the newest 1000 events", async () => {
+  it("the view keeps the newest 10,000 events", async () => {
+    expect(MAX_EVENTS).toBe(10_000);
     const view = openView();
     view.replayWith(
       Array.from({ length: MAX_EVENTS }, (_, index) => envelope(index + 1, T0 + index * 1_000)),
@@ -422,9 +423,7 @@ describe("the events view", () => {
     expect(view.feed.snapshot().error).toBe(refusal);
     expect(view.shown()).toEqual([`1@${T0}`]);
     const shown = screen(view.feed);
-    expect(shown).toContain(
-      '<p class="refusal" role="alert">Internal error</p><ol class="events">',
-    );
+    expect(shown).toContain('<p class="refusal" role="alert">Internal error</p><div class="feed">');
     expect(text(shown)).toMatch(/^Internal error \d\d:\d\d:\d\d lease\.granted$/);
 
     // The next load that answers clears it.
