@@ -649,9 +649,7 @@ The v1 policy (`warm-then-free`) is four stages:
 The same matcher gives the name the gateway forwards: the worker is sent its
 own name for the model, so it resolves exactly what routing matched, and
 `allowDownload` is always forwarded as `false`. `lease.requested` keeps the
-name the client sent. The `eligible` stage that predates this split stays in
-the code only so the conformance tests can run the three stages that
-reproduce the policy before ADR 0009.
+name the client sent.
 
 There is no other placement rule in v1: no requester affinity, no label
 selectors, no per-worker platform exclusions. Each of those is a future

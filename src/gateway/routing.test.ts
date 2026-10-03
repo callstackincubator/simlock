@@ -5,7 +5,6 @@ import { catalogFixture, deviceFixture, statusFixture } from "./test-support.js"
 import type { WorkerView } from "./worker-registry.js";
 
 const REQUEST = {
-  allowDownload: false,
   model: "iPhone 17",
   osVersion: "26.0",
   platform: "ios" as const,

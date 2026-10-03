@@ -18,7 +18,6 @@ describe("warm-hit", () => {
       leases: [],
     });
     const request = {
-      allowDownload: false,
       model: "iPhone 17",
       osVersion: "26.0",
       platform: "ios" as const,
@@ -42,7 +41,7 @@ describe("warm-hit", () => {
       lastSeenAt: 1,
       leases: [],
     });
-    const request = { allowDownload: false, model: "iPhone 17", platform: "ios" as const };
+    const request = { model: "iPhone 17", platform: "ios" as const };
 
     expect(warmHit.score(view({ platform: "android" }), request)).toBe(0);
     expect(warmHit.score(view({ osVersion: "18.0" }), { ...request, osVersion: "26.0" })).toBe(0);
@@ -68,7 +67,7 @@ describe("warm-hit", () => {
       lastSeenAt: 1,
       leases: [],
     };
-    const request = { allowDownload: false, osVersion: "26.0", platform: "ios" as const };
+    const request = { osVersion: "26.0", platform: "ios" as const };
 
     expect(warmHit.score(view, { ...request, model: "IPHONE-17" })).toBe(1);
     expect(warmHit.score(view, { ...request, model: "iphone 17" })).toBe(1);
@@ -99,7 +98,6 @@ describe("warm-hit", () => {
       leases: [],
     });
     const request = {
-      allowDownload: false,
       model: "iPhone 17",
       osVersion: "26.0",
       platform: "ios" as const,

@@ -1150,6 +1150,5 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     model: waiter.request.model,
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
-    allowDownload: false,
   };
 }

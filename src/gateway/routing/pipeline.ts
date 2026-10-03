@@ -13,12 +13,6 @@ export interface RoutableRequest {
   readonly osVersion?: string;
   /** The image tag the request names, matched against the catalog's `images`; absent for none. */
   readonly imageTag?: string;
-  /**
-   * Read only by the legacy `eligible` stage, which the conformance tests run. The gateway always
-   * routes with `false`: only installed runtimes count, and a client's `allowDownload` has no
-   * effect through a gateway (ADR 0009 §3).
-   */
-  readonly allowDownload: boolean;
 }
 
 /** Drops every worker `keeps` answers `false` for. Never decides a pick on its own. */

@@ -30,8 +30,6 @@ export { FleetLeaseIndex } from "./lease-index.js";
 // fallow-ignore-next-line unused-type -- public record shape for FleetLeaseIndex's own consumers; no current caller outside src/gateway needs the type by name.
 export type { FleetLeaseEntry } from "./lease-index.js";
 export { createRoutingPolicy, isRoutingPolicyName } from "./routing.js";
-// fallow-ignore-next-line unused-export -- public registry surface (mirrors capacityStrategyNames); routing.test.ts imports it directly from routing.js, not through this barrel.
-export { DEFAULT_ROUTING_POLICY, routingPolicyNames } from "./routing.js";
 // fallow-ignore-next-line unused-type -- public shape for a caller implementing its own routing policy; no current one exists outside routing.ts.
 export type { RoutingPolicy, RoutingPolicyName } from "./routing.js";
 export { GatewayOwnerRoutedFacts } from "./owner-routed-facts.js";

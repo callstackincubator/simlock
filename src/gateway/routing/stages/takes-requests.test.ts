@@ -19,7 +19,7 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
   };
 }
 
-const REQUEST = { allowDownload: false, model: "iPhone 17", platform: "ios" as const };
+const REQUEST = { model: "iPhone 17", platform: "ios" as const };
 
 describe("takes-requests in the registered policy", () => {
   const policy = createRoutingPolicy("warm-then-free");
