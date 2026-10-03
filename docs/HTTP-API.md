@@ -210,6 +210,18 @@ device, oldest first, in the shape
 [`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
 sends it, empty when nothing waits; an older daemon leaves it out.
 
+A device in `devices` that is `provisioning` or `reclaiming` carries
+`transitionAgeMs`, how long it has been in that state. One that has been there
+past its threshold with nothing working on it also carries
+**`stalled: true`**: the same devices `simlock doctor` reports as stalled (see
+`stalledTransition.*` in [CONFIGURATION.md](CONFIGURATION.md)). Every other
+device has no `stalled` field, and an older daemon sends none.
+
+```json
+{ "id": "dev_7", "state": "provisioning", "mode": "full", "transitionAgeMs": 412000, "stalled": true,
+  "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" } }
+```
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of
 them is, absent when none does), every gateway-issued and local lease, every device, the
@@ -1054,6 +1066,11 @@ which worker has a custom Android profile. `host` is the worker's machine, the s
 `GET /v1/status` reports, as of the gateway's last refresh: a tool installed
 or upgraded on the worker shows here without a restart of either side.
 
+`devices` are the worker's devices as its own
+[`GET /v1/status`](#get-v1status) reports them, `stalled` included. A device
+stalls with no event to report it, so the gateway shows a new stall after its
+next periodic refresh of that worker.
+
 `protocol` appears only on an `incompatible` worker: it names both ranges,
 the worker's and the gateway's, so you can see which side to upgrade. A worker
 too old to overlap is the ordinary upgrade path, not a fault, and its view
@@ -1122,8 +1139,9 @@ an all-or-nothing that leaves the operator guessing.
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
 - `GET /v1/lease-requests` — every request waiting for a device
   (`simlock list --requests`); see below.
-- `GET /v1/devices` — every managed device, with state and
-  `transitionAgeMs` (`simlock list --devices`).
+- `GET /v1/devices` — every managed device, with state,
+  `transitionAgeMs` and `stalled` as [`GET /v1/status`](#get-v1status)
+  describes them (`simlock list --devices`).
 - `GET /v1/events?since=<duration>` — replay business events newer than
   `since` (`simlock events --since`). They come from the daemon's event file,
   so they include events from before a daemon restart and beyond the 1000

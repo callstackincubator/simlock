@@ -2952,6 +2952,37 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     ).toContain("RAM budget: 13.00 GiB/12.00 GiB used (over limit)\n");
     expect(await print(statusWith())).not.toContain("RAM");
   });
+
+  it("simlock status marks a stalled device", async () => {
+    const device = (id: string, extra: object) => ({
+      id,
+      mode: "full" as const,
+      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" as const },
+      state: "provisioning" as const,
+      ...extra,
+    });
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      devices: [
+        device("dev_stuck", { stalled: true, transitionAgeMs: 120_000 }),
+        device("dev_fresh", { transitionAgeMs: 2_000 }),
+      ],
+    };
+    const output = outputCapture();
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    expect(output.stdout).toContain(
+      "Device dev_stuck: provisioning, mode full (mid-transition 120000ms, stalled)\n",
+    );
+    expect(output.stdout).toContain(
+      "Device dev_fresh: provisioning, mode full (mid-transition 2000ms)\n",
+    );
+  });
 });
 
 describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {

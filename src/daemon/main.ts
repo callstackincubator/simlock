@@ -392,6 +392,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     reaper,
     nuke,
     registry,
+    // `status.get` and `list.get` flag a stalled device by the rule `doctor` reports, so they
+    // need what `doctor` has: the drivers, and the claims that keep a live reclaim from reading
+    // as a stall.
+    stalls: { claims: leaseEngine.claimReader, drivers },
     resolveRole,
     adminSecret,
     tokens,

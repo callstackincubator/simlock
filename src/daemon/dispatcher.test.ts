@@ -69,6 +69,23 @@ function resolvePassthroughOverride(
   return override ?? engine;
 }
 
+/** What the stall test reads: a test's own claims or the engine's, and this driver after any
+ * other platforms' a test lists. Pulled out of `buildDispatcher` for the same reason as
+ * `resolvePassthroughOverride`. */
+function stallOptions(
+  engine: LeaseEngine,
+  driver: FakeDriver,
+  overrides: {
+    readonly claims?: { isClaimed(deviceId: string): boolean };
+    readonly otherStallDrivers?: readonly FakeDriver[];
+  },
+) {
+  return {
+    claims: overrides.claims ?? engine.claimReader,
+    drivers: [...(overrides.otherStallDrivers ?? []), driver],
+  };
+}
+
 function resolveEventHistoryOverride(
   eventBus: EventBus,
   filesystem: MemoryFilesystem,
@@ -185,6 +202,10 @@ async function buildDispatcher(
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
     readonly http?: Config["http"];
+    /** Stands in for the engine's operation claims in the stall test, so a test can hold one. */
+    readonly claims?: { isClaimed(deviceId: string): boolean };
+    /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
+    readonly otherStallDrivers?: readonly FakeDriver[];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -283,6 +304,7 @@ async function buildDispatcher(
     queue: engine,
     reaper,
     registry,
+    stalls: stallOptions(engine, driver, overrides),
     tokens,
     version: "1.2.3",
   });
@@ -1133,6 +1155,89 @@ describe("Dispatcher: device mode on every surface", () => {
     expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
       expected,
     );
+  });
+
+  it("status marks a stalled device with stalled: true and leaves others without it", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher();
+    const leased = await dispatcher.dispatch("lease.request", request, session());
+    const register = (driverDeviceId: string) =>
+      registry.registerDevice({
+        driverData: {},
+        driverDeviceId,
+        provisionDuration: 0,
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      });
+    const stuck = await register("driver-stuck");
+    // The fake driver estimates 0, so the threshold is the 60 s floor. The stuck device is past
+    // it; the fresh one, provisioning too, is not.
+    clock.advance(60_001);
+    const fresh = await register("driver-fresh");
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const list = (await dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
+    )) as { id: string; stalled?: boolean }[];
+    const { workers } = await dispatcher.dispatch(
+      "worker.list",
+      {},
+      session({ principal: "operator", role: "admin" }),
+    );
+
+    for (const devices of [status.devices, list, workers[0]?.devices ?? []]) {
+      const byId = new Map(devices.map((device) => [device.id, device]));
+      expect(byId.get(stuck.id)?.stalled).toBe(true);
+      expect(byId.get(fresh.id)).toBeDefined();
+      expect(byId.get(fresh.id)).not.toHaveProperty("stalled");
+      expect(byId.get(leased.device.id)).toBeDefined();
+      expect(byId.get(leased.device.id)).not.toHaveProperty("stalled");
+    }
+  });
+
+  it("status leaves stalled off a device past its threshold that a live operation holds", async () => {
+    // The same rule as `doctor`: a claim says work is in progress, however long it takes.
+    const claimed = new Set<string>();
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-booting",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+    clock.advance(60_001);
+    const stalled = async () =>
+      (await dispatcher.dispatch("status.get", {}, session())).devices.find(
+        (entry) => entry.id === device.id,
+      )?.stalled;
+
+    claimed.add(device.id);
+    expect(await stalled()).toBeUndefined();
+    claimed.delete(device.id);
+    expect(await stalled()).toBe(true);
+  });
+
+  it("status measures a stall against the driver for the device's own platform", async () => {
+    // Android's estimate puts its threshold at 30 min; the iOS fake's 0 leaves the 60 s floor.
+    const android = new FakeDriver({
+      clock: new FakeClock(1_000),
+      estimateMs: { boot: 300_000, provision: 300_000 },
+      platform: "android",
+    });
+    const { clock, dispatcher, registry } = await buildDispatcher({ otherStallDrivers: [android] });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-ios-stuck",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+    clock.advance(60_001);
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.devices.find((entry) => entry.id === device.id)?.stalled).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {

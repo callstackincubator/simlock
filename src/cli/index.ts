@@ -2325,6 +2325,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
       device.transitionAgeMs === undefined
         ? undefined
         : `mid-transition ${device.transitionAgeMs}ms`,
+      device.stalled === true ? "stalled" : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
