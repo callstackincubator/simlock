@@ -4,6 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
@@ -403,9 +404,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // w2's own eventual attempt, once it gets its turn.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    const w1 = coordinator
-      .request(REQUEST, requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }))
-      .catch((error: unknown) => error);
+    const w1Request = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
+    );
+    const w1State = promiseState(w1Request);
+    const w1 = w1Request.catch((error: unknown) => error);
     const w2 = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
@@ -422,6 +426,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // `#staleView`'s own refresh-triggered self-heal never runs for it, and this test never
     // triggers any worker-view change of its own either.
     clock.advance(5_000);
+    await tick();
+    expect(w1State.state).toBe("rejected");
     const w1Error = await w1;
     expect(w1Error).toBeInstanceOf(DispatchError);
     expect((w1Error as DispatchError).code).toBe("WORKER_UNREACHABLE");
@@ -714,9 +720,9 @@ describe("FleetLeaseCoordinator dispatch", () => {
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ kind: "hang" });
 
-    const rejection = coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
+    const request = coordinator.request(REQUEST, requestOptions());
+    const requestState = promiseState(request);
+    const rejection = request.catch((error: unknown) => error);
     await tick();
     // Not stuck forever, and not answerable by a stale-view refresh either -- the waiter must
     // come back to a state the queue's own machinery can act on.
@@ -724,6 +730,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(directory.refreshCalls).toEqual([]);
 
     clock.advance(5_000);
+    await tick();
+    expect(requestState.state).toBe("rejected");
     const error = await rejection;
 
     expect(error).toBeInstanceOf(DispatchError);
@@ -750,12 +758,14 @@ describe("FleetLeaseCoordinator dispatch", () => {
     eventBus.subscribe("request.dispatched", () => events.push("request.dispatched"));
     eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
 
-    const rejection = coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
+    const request = coordinator.request(REQUEST, requestOptions());
+    const requestState = promiseState(request);
+    const rejection = request.catch((error: unknown) => error);
     await tick();
 
     clock.advance(5_000);
+    await tick();
+    expect(requestState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
     expect(events).toEqual([]);
@@ -1395,15 +1405,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const grant = await coordinator.request(REQUEST, requestOptions());
     client.execQueue.push({ kind: "hang" });
 
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
-      )
-      .catch((error: unknown) => error);
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
-
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect(error).toBeInstanceOf(DispatchError);
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
@@ -1432,21 +1443,23 @@ describe("FleetLeaseCoordinator dispatch", () => {
     client.execQueue.push({ kind: "hang" });
 
     const relayed: Array<{ stream: string; chunk: string }> = [];
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        {
-          manageEventSubscription: () => undefined,
-          onOutput: (stream, chunk) => {
-            relayed.push({ chunk, stream });
-          },
-          principal: "agent-1",
-          role: "agent",
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onOutput: (stream, chunk) => {
+          relayed.push({ chunk, stream });
         },
-      )
-      .catch((error: unknown) => error);
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 
@@ -1474,21 +1487,23 @@ describe("FleetLeaseCoordinator dispatch", () => {
     client.execQueue.push({ kind: "hang" });
 
     let startedCount = 0;
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        {
-          manageEventSubscription: () => undefined,
-          onStarted: () => {
-            startedCount += 1;
-          },
-          principal: "agent-1",
-          role: "agent",
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onStarted: () => {
+          startedCount += 1;
         },
-      )
-      .catch((error: unknown) => error);
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 
