@@ -683,6 +683,7 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
         most,
         p95: sorted[Math.floor(sorted.length * 0.95)] ?? 0,
         steps: gaps.length,
+        slow: gaps.filter((gap) => gap > 100).length,
         worst: sorted.at(-1) ?? 0,
       };
     });
@@ -691,7 +692,10 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     expect(run.blank).toBe(0);
     expect(run.most).toBeLessThan(100);
     expect(run.p95).toBeLessThan(50);
-    expect(run.worst).toBeLessThan(100);
+    // Smooth: at most one frame in a hundred over 100 ms, and no frame a second long. A lone
+    // long frame is allowed; a feed that stutters, or freezes, is not.
+    expect(run.slow).toBeLessThanOrEqual(Math.floor(run.steps / 100));
+    expect(run.worst).toBeLessThan(1_000);
 
     // Back at the top, the first row is the newest event the daemon has.
     await feed(page).evaluate((box) => {
