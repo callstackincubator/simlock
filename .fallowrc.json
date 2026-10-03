@@ -22,7 +22,10 @@
     "react",
     "react-dom",
     "@fontsource-variable/geist",
-    "@fontsource-variable/geist-mono"
+    "@fontsource-variable/geist-mono",
+    "recharts",
+    // Recharts' peer dependency: installed for it, never imported by the console itself.
+    "react-is"
   ],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.

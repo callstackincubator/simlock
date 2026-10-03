@@ -1,17 +1,20 @@
 import { useEffect } from "react";
 
 import { useApi, useSession } from "./console-context";
+import { Brand } from "./layout";
 import { ConnectionBanner } from "./live/connection-banner";
 import { Link, navigate, usePath } from "./router";
-import { VIEWS, viewFor } from "./views/index";
+import { useAttentionCount } from "./views/attention";
+import { VIEWS, type View, viewFor } from "./views/index";
 import { NotFound } from "./views/not-found";
 
-/** The signed-in console: the header, the navigation from `VIEWS`, and the current view. */
+/** The signed-in console: the header, the tab bar from `VIEWS`, and the current view. */
 export function Shell() {
   const api = useApi();
   const session = useSession();
   const path = usePath();
   const view = viewFor(path);
+  const attention = useAttentionCount();
 
   // ADR 0011 §6: a 401 at any time signs the operator out. A tab reloaded with a token that has
   // since been revoked finds out here, before any view asks for data.
@@ -33,35 +36,60 @@ export function Shell() {
         Skip to content
       </a>
       <header className="topbar">
-        <span className="brand">
-          <span className="brand-mark" aria-hidden="true" />
-          Simlock
-        </span>
-        <button className="button button-quiet" type="button" onClick={() => session.signOut()}>
-          Sign out
-        </button>
+        <Brand />
+        <div className="topbar-end">
+          <ConnectionBanner />
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => session.signOut()}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
-      <ConnectionBanner />
-      <nav className="nav" aria-label="Console">
-        <ul>
-          {VIEWS.map((entry) => (
-            <li key={entry.path}>
-              <Link to={entry.path} aria-current={entry === view ? "page" : undefined}>
-                {entry.label}
-                {entry.Badge === undefined ? null : (
-                  <>
-                    {" "}
-                    <entry.Badge />
-                  </>
-                )}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <TabBar views={VIEWS} current={view} counts={{ "/attention": attention }} />
       <main id="main" className="main" tabIndex={-1}>
         {view === undefined ? <NotFound /> : <view.Component />}
       </main>
     </div>
+  );
+}
+
+/**
+ * One tab per view, in the order of `views`. The current one is marked for the eye with an
+ * underline and for a screen reader with `aria-current`. A view with a count above zero in
+ * `counts` shows it on its tab; at zero, or with none, the tab shows no number.
+ */
+export function TabBar(props: {
+  readonly views: readonly View[];
+  readonly current: View | undefined;
+  readonly counts: Readonly<Partial<Record<View["path"], number | undefined>>>;
+}) {
+  const { counts, current, views } = props;
+  return (
+    <nav className="tabs" aria-label="Console">
+      <ul>
+        {views.map((entry) => {
+          const count = counts[entry.path];
+          return (
+            <li key={entry.path}>
+              <Link to={entry.path} aria-current={entry === current ? "page" : undefined}>
+                {entry.label}
+                {count === undefined || count === 0 ? null : (
+                  <>
+                    {" "}
+                    <span className="nav-count">
+                      {count}
+                      <span className="visually-hidden">{count === 1 ? " item" : " items"}</span>
+                    </span>
+                  </>
+                )}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }

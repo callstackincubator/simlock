@@ -4,6 +4,7 @@
  * envelope is read field by field, and an event name or payload this console has never heard
  * of is shown as it came.
  */
+import type { Stat } from "../layout";
 
 /** One business event, as the daemon sent it. */
 export interface ConsoleEvent {
@@ -133,6 +134,30 @@ export function payloadPairs(
 function valueText(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value) ?? String(value);
+}
+
+/**
+ * The Events view's stat cards: how many events the list shows, of how many it holds when a
+ * filter hides some, and the time of the newest one shown. `shown` is newest first.
+ */
+export function eventsStats(
+  shown: readonly ConsoleEvent[],
+  held: number,
+  unfiltered: boolean,
+): readonly Stat[] {
+  const newest = shown[0];
+  return [
+    {
+      caption: unfiltered ? "in the list" : `of ${held} in the list`,
+      label: "Events shown",
+      value: String(shown.length),
+    },
+    {
+      caption: newest === undefined ? "no event to show" : newest.event,
+      label: "Newest",
+      value: newest === undefined ? "—" : timeOfDay(newest.timestamp),
+    },
+  ];
 }
 
 /** An event's time of day, `HH:MM:SS` on the browser's clock face. */

@@ -139,11 +139,9 @@ function fact(page: Page, label: string): Locator {
     .locator("xpath=following-sibling::dd[1]");
 }
 
-/** The table under a heading on a worker's page. */
+/** What the panel titled `heading` on a worker's page holds, under its header. */
 function tableUnder(page: Page, heading: string): Locator {
-  return page
-    .getByRole("heading", { level: 2, name: heading })
-    .locator("xpath=following-sibling::*[1]");
+  return page.getByRole("region", { name: heading, exact: true }).locator(".panel-body");
 }
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {

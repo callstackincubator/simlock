@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
 import { Loaded } from "../live/route-state";
 import { DeviceTable } from "./worker-detail";
-import type { WorkerView } from "./workers-model";
+import { busiestWorkers, type WorkerView } from "./workers-model";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -133,5 +133,35 @@ describe("the workers views", () => {
 
     expect(render("connected")).toContain("dev_new provisioning 14 s");
     expect(render("disconnected")).toContain("dev_new provisioning —");
+  });
+});
+
+describe("the busiest workers", () => {
+  it("ranks the workers by the leases each holds now, most first, ties in the daemon's order", () => {
+    const lease = (id: string) => ({
+      deviceId: `dev_${id}`,
+      grantedAt: NOW,
+      id,
+      lastRenewedAt: NOW,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: NOW + 60_000,
+      ttlMs: 60_000,
+    });
+    const fleet = [
+      worker({ id: "wrk_one", leases: [lease("l1")] }),
+      worker({ id: "wrk_none" }),
+      worker({ id: "wrk_three", leases: [lease("l2"), lease("l3"), lease("l4")] }),
+      worker({ id: "wrk_also_one", leases: [lease("l5")] }),
+    ];
+
+    expect(busiestWorkers(fleet).map((entry) => entry.id)).toEqual([
+      "wrk_three",
+      "wrk_one",
+      "wrk_also_one",
+      "wrk_none",
+    ]);
+    // The daemon's list is left as it came.
+    expect(fleet.map((entry) => entry.id)[0]).toBe("wrk_one");
   });
 });

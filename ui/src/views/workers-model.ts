@@ -7,6 +7,7 @@
 import type { z } from "zod";
 
 import type { workerViewSchema } from "../../../src/contract/schemas";
+import type { Stat } from "../layout";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
 export type WorkerDevice = WorkerView["devices"][number];
@@ -67,6 +68,34 @@ export function capacityByPlatform(
     { limit: capacity.ios.limit, platform: "ios", running: capacity.ios.running },
     { limit: capacity.android.limit, platform: "android", running: capacity.android.running },
   ];
+}
+
+/** How many leases the workers hold between them now: where the lease chart starts from. */
+export function leasesHeld(workers: readonly WorkerView[]): number {
+  return workers.reduce((sum, worker) => sum + worker.leases.length, 0);
+}
+
+/**
+ * The Workers view's stat cards: workers connected of all, devices running of all, leases held
+ * and requests waiting in the workers' own queues. A worker whose capacity was never read counts
+ * no devices running, as its card says "Not reported".
+ */
+export function workersStats(workers: readonly WorkerView[]): readonly Stat[] {
+  const connected = workers.filter((worker) => worker.connection === "connected").length;
+  const devices = workers.reduce((sum, worker) => sum + worker.devices.length, 0);
+  const running = workers.reduce((sum, worker) => sum + (deviceCounts(worker)?.running ?? 0), 0);
+  const waiting = workers.reduce((sum, worker) => sum + (worker.waiting?.length ?? 0), 0);
+  return [
+    { caption: `connected of ${workers.length}`, label: "Workers", value: String(connected) },
+    { caption: `running of ${devices}`, label: "Devices", value: String(running) },
+    { caption: "held now", label: "Leases", value: String(leasesHeld(workers)) },
+    { caption: "requests in the workers' queues", label: "Waiting", value: String(waiting) },
+  ];
+}
+
+/** The workers ranked by how many leases each holds now, most first; ties keep the daemon's order. */
+export function busiestWorkers(workers: readonly WorkerView[]): readonly WorkerView[] {
+  return [...workers].sort((a, b) => b.leases.length - a.leases.length);
 }
 
 /**

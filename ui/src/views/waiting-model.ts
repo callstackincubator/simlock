@@ -6,6 +6,8 @@
 import type { z } from "zod";
 
 import type { waitingRequestSchema } from "../../../src/contract/schemas";
+import type { Stat } from "../layout";
+import { formatDuration } from "../live/time";
 import { platformName, type WorkerView } from "./workers-model";
 
 export type WaitingRequest = z.infer<typeof waitingRequestSchema>;
@@ -50,4 +52,20 @@ export function waitingOn(
       (entry) => entry.id === request.id && entry.requesterId === request.requesterId,
     ),
   );
+}
+
+/**
+ * The Waiting view's stat cards: how many requests are waiting, and how long the oldest has,
+ * measured against the daemon's `now`.
+ */
+export function waitingStats(requests: readonly WaitingRequest[], now: number): readonly Stat[] {
+  const oldest = Math.min(...requests.map((request) => request.createdAt));
+  return [
+    { caption: "for a device", label: "Requests waiting", value: String(requests.length) },
+    {
+      caption: requests.length === 0 ? "no request is waiting" : "the oldest request so far",
+      label: "Longest wait",
+      value: requests.length === 0 ? "—" : formatDuration(now - oldest),
+    },
+  ];
 }

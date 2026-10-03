@@ -1,3 +1,4 @@
+import { Id, PageHeader, Panel } from "../layout";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { deviceStateStatus, installStatus, Status } from "../status";
@@ -25,34 +26,61 @@ export function WorkerDetail(props: {
   const worker = workers.find((candidate) => candidate.id === id);
   return (
     <>
-      <p className="back">
-        <Link to="/workers">All workers</Link>
-      </p>
       {worker === undefined ? (
         <>
-          <h1>Worker not found</h1>
+          <PageHeader title="Worker not found" actions={<AllWorkers />} />
           <p className="muted">
             No worker has the id <code>{id}</code>. A gateway forgets a worker that is removed.
           </p>
         </>
       ) : (
         <>
-          <h1>{workerName(worker)}</h1>
-          {worker.label === undefined ? null : <p className="muted mono">{worker.id}</p>}
-          <WorkerFacts worker={worker} />
-          <h2>Devices</h2>
-          <DeviceTable worker={worker} now={now} />
-          <h2>Leases</h2>
-          <WorkerLeases worker={worker} workers={workers} now={now} />
-          <h2>Host</h2>
-          <HostFacts worker={worker} />
-          <h2>Catalog</h2>
-          <Catalog catalog={worker.catalog} />
-          <h2>Installs in progress</h2>
-          <Installs worker={worker} now={now} />
+          <PageHeader
+            title={workerName(worker)}
+            mono={worker.label === undefined}
+            subtitle={
+              worker.label === undefined ? (
+                "One worker: its devices, leases and host."
+              ) : (
+                <span className="mono">{worker.id}</span>
+              )
+            }
+            actions={<AllWorkers />}
+          />
+          <Panel title="Status" description="The worker's connection, health and capacity.">
+            <WorkerFacts worker={worker} />
+          </Panel>
+          <Panel title="Devices" description="Every device on this worker, and its state.">
+            <DeviceTable worker={worker} now={now} />
+          </Panel>
+          <Panel title="Leases" description="The leases on this worker's devices.">
+            <WorkerLeases worker={worker} workers={workers} now={now} />
+          </Panel>
+          <div className="panel-row panel-row-even">
+            <Panel title="Host" description="The machine the worker runs on.">
+              <HostFacts worker={worker} />
+            </Panel>
+            <Panel title="Catalog" description="The models and runtimes it can lease.">
+              <Catalog catalog={worker.catalog} />
+            </Panel>
+          </div>
+          <Panel
+            title="Installs in progress"
+            description="Runtimes and system images being downloaded, or waiting to be."
+          >
+            <Installs worker={worker} now={now} />
+          </Panel>
         </>
       )}
     </>
+  );
+}
+
+function AllWorkers() {
+  return (
+    <Link to="/workers" className="button button-secondary">
+      All workers
+    </Link>
   );
 }
 
@@ -66,12 +94,14 @@ export function DeviceTable({
 }) {
   if (worker.devices.length === 0) return <p className="muted">No devices.</p>;
   return (
-    <table className="table">
+    <table className="table table-wide">
       <thead>
         <tr>
           <th scope="col">Device</th>
           <th scope="col">State</th>
-          <th scope="col">In state for</th>
+          <th scope="col" className="num">
+            In state for
+          </th>
           <th scope="col">Platform</th>
           <th scope="col">Model</th>
           <th scope="col">Runtime</th>
@@ -85,13 +115,13 @@ export function DeviceTable({
           const since = stateEnteredAt(device, worker);
           return (
             <tr key={device.id}>
-              <td data-label="Device" className="mono">
-                {device.id}
+              <td data-label="Device">
+                <Id>{device.id}</Id>
               </td>
               <td data-label="State">
                 <Status tone={state.tone}>{state.word}</Status>
               </td>
-              <td data-label="In state for" className="mono">
+              <td data-label="In state for" className="num">
                 {since === undefined ? "—" : formatDuration(now - since)}
               </td>
               <td data-label="Platform">{platformName(device.spec.platform)}</td>

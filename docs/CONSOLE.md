@@ -8,8 +8,14 @@ internet.
 The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
-This version has sign-in and a page for each entry in the console's
-navigation: Workers, Leases, Waiting, Attention and Events.
+This version has sign-in and a page for each tab along the top of the
+console: Workers, Leases, Waiting, Attention and Events. On a narrow screen
+the row of tabs scrolls sideways.
+
+Each page starts with a row of cards that count what the page shows, such as
+the leases held and how many expire within 15 minutes. A long id, such as a
+lease's, is cut to fit its column; point at it to see it whole, or open its
+page.
 
 ## Turn it on
 
@@ -106,6 +112,14 @@ Each worker shows:
 
 A worker the gateway could not read from yet says "Not reported" where it
 has nothing to show.
+
+Above the workers, **Leases, last hour** charts how many leases were held at
+the end of each minute. It starts from the leases held now and counts back
+through the lease events of the last hour, the same events the Events page
+shows, so it can only go back as far as those. A lease that ends with no
+event, such as one on a worker removed from a gateway, is not counted back. **Minute by minute** under the
+chart lists each minute's number. **Busiest workers** ranks the workers by
+the leases each holds now.
 
 Select a worker to open its page. It adds:
 
@@ -212,8 +226,8 @@ The first three come from a gateway only: a single host has no gateway to lose
 or disagree with, and cannot be drained. The other three show on a single host
 too.
 
-The navigation shows how many items there are beside **Attention**, on every
-page. It shows no number while there are none.
+The **Attention** tab shows how many items there are, on every page. It shows
+no number while there are none.
 
 Each item shows within about a second of the daemon reporting it. A stalled
 device is the exception on a gateway: a device becomes stalled when its time
@@ -244,6 +258,10 @@ devices, workers or components. **Other** lists the rest, such as
 
 The page keeps the newest 1000 events. Older ones drop off the end.
 
+**Events per minute** charts how many of the events the page holds happened in
+each minute of the last hour, whatever **Show** picks. **Minute by minute**
+under it lists each minute's number.
+
 When the console loses the daemon, or the tab was hidden, it loads the events
 it missed as soon as it is back, so the list has no gap. An event the console
 already shows is never shown twice, also after the daemon restarts.
@@ -264,7 +282,8 @@ are off by as much.
 A hidden tab stops asking the daemon for anything. When you come back to it,
 it catches up at once.
 
-The line under the header says how the console's connection is:
+The box at the top right, beside **Sign out**, says how the console's
+connection is:
 
 | It says | What it means |
 | --- | --- |
@@ -274,7 +293,7 @@ The line under the header says how the console's connection is:
 
 While reconnecting, the console keeps the last data on screen and tries the
 daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
-daemon answers, the console refreshes the page and the line goes back to
+daemon answers, the console refreshes the page and the box goes back to
 Connected. You do not need to reload.
 
 ## What the page loads

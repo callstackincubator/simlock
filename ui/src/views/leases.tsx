@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { ApiError } from "../api";
+import { Id, PageHeader, Panel, StatCards } from "../layout";
 import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
@@ -15,9 +16,11 @@ import {
   leasePath,
   type LeaseRecord,
   leasesOnWorker,
+  leasesStats,
   type TokenList,
   type TokenRecord,
   workerNameOfLease,
+  workerOfLease,
 } from "./leases-model";
 import type { WorkerList, WorkerView } from "./workers-model";
 
@@ -41,16 +44,27 @@ function FleetLeases() {
   const now = useNow();
   return (
     <>
-      <h1>Leases</h1>
+      <PageHeader
+        title="Leases"
+        subtitle="Who holds which device, on which worker, and for how much longer."
+      />
       <Loaded state={leases}>
         {(list) => (
-          <LeaseTable
-            leases={list.leases}
-            tokens={tokens}
-            workers={workers}
-            now={now.server}
-            showWorker
-          />
+          <>
+            <StatCards stats={leasesStats(list.leases, now.server)} />
+            <Panel
+              title="All leases"
+              description="Every lease the daemon holds. Select one to see its details."
+            >
+              <LeaseTable
+                leases={list.leases}
+                tokens={tokens}
+                workers={workers}
+                now={now.server}
+                showWorker
+              />
+            </Panel>
+          </>
         )}
       </Loaded>
     </>
@@ -115,7 +129,7 @@ export function LeaseTable(props: {
   const { leases, now, showWorker, tokens, workers } = props;
   if (leases.length === 0) return <p className="muted">No leases.</p>;
   return (
-    <table className="table">
+    <table className="table table-wide">
       <thead>
         <tr>
           <th scope="col">Lease</th>
@@ -124,9 +138,15 @@ export function LeaseTable(props: {
           <th scope="col">Device</th>
           <th scope="col">Mode</th>
           <th scope="col">Image tag</th>
-          <th scope="col">Granted</th>
-          <th scope="col">Expires in</th>
-          <th scope="col">Last renewed</th>
+          <th scope="col" className="num">
+            Granted
+          </th>
+          <th scope="col" className="num">
+            Expires in
+          </th>
+          <th scope="col" className="num">
+            Last renewed
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -134,30 +154,40 @@ export function LeaseTable(props: {
           const device = deviceOfLease(lease, workers);
           return (
             <tr key={`${lease.workerId ?? ""} ${lease.id}`}>
-              <td data-label="Lease" className="mono">
-                <Link to={leasePath(lease.id)}>{lease.id}</Link>
+              <td data-label="Lease">
+                <Link to={leasePath(lease.id)} className="id" title={lease.id}>
+                  {lease.id}
+                </Link>
               </td>
               <td data-label="Holder">
-                <HolderName holder={holderOf(lease.requesterId, tokens)} />
+                <span>
+                  <HolderName holder={holderOf(lease.requesterId, tokens)} />
+                </span>
               </td>
               {showWorker ? (
-                <td data-label="Worker">{workerNameOfLease(lease, workers) ?? "—"}</td>
+                <td data-label="Worker">
+                  <LeaseWorker lease={lease} workers={workers} />
+                </td>
               ) : null}
               <td data-label="Device">
-                {device === undefined ? null : <>{device.spec.model} </>}
-                <span className="muted mono">{lease.deviceId}</span>
+                <span>
+                  {device === undefined ? null : <>{device.spec.model} </>}
+                  <span className="muted">
+                    <Id>{lease.deviceId}</Id>
+                  </span>
+                </span>
               </td>
               <td data-label="Mode">{device?.mode ?? "—"}</td>
               <td data-label="Image tag" className="mono">
                 {device?.spec.imageTag ?? "—"}
               </td>
-              <td data-label="Granted" className="mono">
+              <td data-label="Granted" className="num">
                 <Ago at={lease.grantedAt} now={now} />
               </td>
-              <td data-label="Expires in" className="mono">
+              <td data-label="Expires in" className="num">
                 <Until at={lease.ttlDeadline} now={now} />
               </td>
-              <td data-label="Last renewed" className="mono">
+              <td data-label="Last renewed" className="num">
                 <Ago at={lease.lastRenewedAt} now={now} />
               </td>
             </tr>
@@ -166,6 +196,17 @@ export function LeaseTable(props: {
       </tbody>
     </table>
   );
+}
+
+/** The worker a lease is on, by its label, or by its id on one line when it has none. */
+function LeaseWorker(props: {
+  readonly lease: LeaseRecord;
+  readonly workers: readonly WorkerView[];
+}) {
+  const name = workerNameOfLease(props.lease, props.workers);
+  if (name === undefined) return "—";
+  const labelled = workerOfLease(props.lease, props.workers)?.label !== undefined;
+  return labelled ? name : <Id>{name}</Id>;
 }
 
 /** How long ago `at` was, with the moment itself for a tooltip and a machine. */
@@ -194,33 +235,45 @@ function Lease({ id }: { readonly id: string }) {
   const gone = isUnknownLease(details.error);
   return (
     <>
-      <p className="back">
-        <Link to="/leases">All leases</Link>
-      </p>
       {gone ? (
         <>
-          <h1>Lease not found</h1>
+          <PageHeader title="Lease not found" actions={<AllLeases />} />
           <p className="muted">
             No lease has the id <code>{id}</code>. A lease that was released or expired is gone.
           </p>
         </>
       ) : (
         <>
-          <h1 className="mono">{id}</h1>
+          <PageHeader
+            title={id}
+            mono
+            subtitle="One lease: who holds it, its device, and when it expires."
+            actions={<AllLeases />}
+          />
           <Loaded state={details}>
             {({ lease }) => (
-              <LeaseFacts
-                lease={lease}
-                record={leases.data?.leases.find((candidate) => candidate.id === lease.id)}
-                tokens={tokens}
-                workers={workers}
-                now={now.server}
-              />
+              <Panel title="Details" description="As the daemon holds the lease now.">
+                <LeaseFacts
+                  lease={lease}
+                  record={leases.data?.leases.find((candidate) => candidate.id === lease.id)}
+                  tokens={tokens}
+                  workers={workers}
+                  now={now.server}
+                />
+              </Panel>
             )}
           </Loaded>
         </>
       )}
     </>
+  );
+}
+
+function AllLeases() {
+  return (
+    <Link to="/leases" className="button button-secondary">
+      All leases
+    </Link>
   );
 }
 
