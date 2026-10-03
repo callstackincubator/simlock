@@ -1,7 +1,71 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { FakeClock } from "../ports/index.js";
 import { type EventBusLogger, EventBus, type EventMap, type EventName } from "./index.js";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Every `EventName`, as a value the catalog test can compare: typed `Record<EventName, true>`, so
+ * `pnpm typecheck` rejects this list the moment it misses a name `EventMap` gained or keeps one it
+ * lost -- the list cannot drift from the type, and the test below holds the docs to the list.
+ */
+const EVENT_NAMES: Record<EventName, true> = {
+  "lease.requested": true,
+  "lease.queued": true,
+  "lease.granted": true,
+  "lease.renewed": true,
+  "lease.released": true,
+  "lease.expired": true,
+  "lease.rejected": true,
+  "device.provisioned": true,
+  "device.ready": true,
+  "device.reclaimed": true,
+  "device.purge-failed": true,
+  "device.crash-detected": true,
+  "device.recovered": true,
+  "device.recovery-failed": true,
+  "device.quarantined": true,
+  "device.quarantine-recovered": true,
+  "device.quarantine-abandoned": true,
+  "device.quarantine-stranded": true,
+  "device.shutdown": true,
+  "device.deleted": true,
+  "device.slimmed": true,
+  "component.install-started": true,
+  "component.installed": true,
+  "component.install-failed": true,
+  "component.removed": true,
+  "device.foreign-state-detected": true,
+  "device.foreign-provenance-detected": true,
+  "device.stalled-transition-detected": true,
+  "device.orphan-purged": true,
+  "daemon.started": true,
+  "daemon.stopping": true,
+  "disk.pressure-detected": true,
+  "cleanup.executed": true,
+  "doctor.reconciled": true,
+  "driver.root-rejected": true,
+  "driver.adb-server-rejected": true,
+  "worker.connected": true,
+  "worker.rejected": true,
+  "worker.disconnected": true,
+  "worker.removed": true,
+  "worker.drain-started": true,
+  "worker.drain-ended": true,
+  "request.dispatched": true,
+};
+
+/** The first-column `` `subject.fact` `` of every catalog table row in an EVENTS.md, sorted. */
+function documentedEventNames(markdown: string): string[] {
+  return [...markdown.matchAll(/^\| `([a-z-]+\.[a-z-]+)` \|/gm)]
+    .map((match) => match[1] ?? "")
+    .sort();
+}
 
 describe("EventBus", () => {
   it("delivers a populated envelope to event and global subscribers", () => {
@@ -115,52 +179,16 @@ describe("EventBus", () => {
     expect(bus.replay({ sinceTs: 110 }).map(({ seq }) => seq)).toEqual([3]);
   });
 
-  it("has event names matching the documented catalog exactly", () => {
-    expectTypeOf<EventName>().toEqualTypeOf<
-      | "lease.requested"
-      | "lease.queued"
-      | "lease.granted"
-      | "lease.renewed"
-      | "lease.released"
-      | "lease.expired"
-      | "lease.rejected"
-      | "device.provisioned"
-      | "device.ready"
-      | "device.reclaimed"
-      | "device.purge-failed"
-      | "device.crash-detected"
-      | "device.recovered"
-      | "device.recovery-failed"
-      | "device.quarantined"
-      | "device.quarantine-recovered"
-      | "device.quarantine-abandoned"
-      | "device.quarantine-stranded"
-      | "device.shutdown"
-      | "device.deleted"
-      | "device.slimmed"
-      | "component.install-started"
-      | "component.installed"
-      | "component.install-failed"
-      | "component.removed"
-      | "device.foreign-state-detected"
-      | "device.foreign-provenance-detected"
-      | "device.stalled-transition-detected"
-      | "device.orphan-purged"
-      | "daemon.started"
-      | "daemon.stopping"
-      | "disk.pressure-detected"
-      | "cleanup.executed"
-      | "doctor.reconciled"
-      | "driver.root-rejected"
-      | "driver.adb-server-rejected"
-      | "worker.connected"
-      | "worker.rejected"
-      | "worker.disconnected"
-      | "worker.removed"
-      | "worker.drain-started"
-      | "worker.drain-ended"
-      | "request.dispatched"
-    >();
+  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+    "has exactly the event names %s catalogs",
+    (doc) => {
+      expect(documentedEventNames(readFileSync(join(REPO_ROOT, doc), "utf8"))).toEqual(
+        Object.keys(EVENT_NAMES).sort(),
+      );
+    },
+  );
+
+  it("types every event's payload as an object", () => {
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();
   });
 });
