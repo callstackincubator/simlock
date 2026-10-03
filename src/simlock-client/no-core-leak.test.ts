@@ -44,7 +44,9 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
     // else in the extended `tsconfig.json` still resolves against this project's own
     // `node_modules` -- TS resolves package/type-root lookups relative to the config file's own
     // directory, not the directory of the config it extends.
-    tmpTsconfigPath = join(repoRoot, ".simlock-surface-tsconfig.json");
+    // Named per process, so two overlapping runs in one checkout never overwrite or delete
+    // each other's config mid-compile.
+    tmpTsconfigPath = join(repoRoot, `.simlock-surface-tsconfig.${process.pid}.json`);
     writeFileSync(
       tmpTsconfigPath,
       JSON.stringify({

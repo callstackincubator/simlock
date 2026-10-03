@@ -133,6 +133,19 @@ class ToolsFakeDriver extends FakeDriver {
   }
 }
 
+/**
+ * Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
+ * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
+ * -- and another run's daemon can even answer on it.
+ */
+async function freeLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (typeof address !== "object" || address === null) throw new Error("no port bound");
+  return address.port;
+}
 describe("startDaemon", () => {
   it("writes a structured start record with version, protocol version, socket path, and effective config", async () => {
     const { daemon, sink } = await start();
@@ -547,7 +560,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
         { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
       ]),
     );
-    const port = 47_011;
+    const port = await freeLoopbackPort();
 
     const startPromise = startDaemon({
       clock,
@@ -623,7 +636,7 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
     const sink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock, level: "debug", sink });
     const filesystem = new MemoryFilesystem();
-    const port = 47_013;
+    const port = await freeLoopbackPort();
     const socketPath = join(directory, "daemon.sock");
 
     const restoreListen = delayTcpListen(200);
@@ -732,10 +745,10 @@ describe("startDaemon socket race with HTTP enabled", () => {
         version: "1.2.3",
       }) as StartDaemonOptions;
 
-    const first = await startDaemon(options(47_013));
+    const first = await startDaemon(options(await freeLoopbackPort()));
     try {
       // A distinct port, so the only thing that can fail is the socket claim itself.
-      const second = startDaemon(options(47_014));
+      const second = startDaemon(options(await freeLoopbackPort()));
       const outcome = await Promise.race([
         second.then(
           () => "resolved" as const,
@@ -764,7 +777,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
     const sink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock, level: "debug", sink });
     const filesystem = new MemoryFilesystem();
-    const port = 47_012;
+    const port = await freeLoopbackPort();
 
     const occupier = createServer();
     await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
@@ -1595,7 +1608,13 @@ describe("startDaemon logger wiring", () => {
   });
 
   it("startDaemon hands the gateway dispatcher its error classifier: a typed refusal is logged with its code at info, not as INTERNAL at error", async () => {
-    const { daemon, sink } = await start({ configOverrides: { mode: "gateway" } });
+    // A gateway serves HTTP; on its default port two overlapping runs of this file collide.
+    const { daemon, sink } = await start({
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        mode: "gateway",
+      },
+    });
 
     await expect(
       daemon.dispatch(

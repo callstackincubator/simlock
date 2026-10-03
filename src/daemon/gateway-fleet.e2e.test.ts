@@ -22,6 +22,7 @@
  * file alone before treating a failure here as a real regression.
  */
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,14 +35,28 @@ import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
-const GATEWAY_PORT = 48173;
+/**
+ * Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
+ * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
+ * -- with an `EADDRINUSE` that has nothing to do with the code under test.
+ */
+async function freeLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (typeof address !== "object" || address === null) throw new Error("no port bound");
+  return address.port;
+}
+
 const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0" };
-const GATEWAY_URL = `ws://127.0.0.1:${GATEWAY_PORT}`;
-/** Distinct from `GATEWAY_PORT` above so this file's second `it` never races the first one's
- * own listener through TIME_WAIT on the same port (H3, round 1 review: both are `it`s in this
- * one `describe`, not two separate suites). */
-const RESTART_GATEWAY_PORT = 48174;
-const RESTART_GATEWAY_URL = `ws://127.0.0.1:${RESTART_GATEWAY_PORT}`;
+/** Picked by `startGateway`/`startRestartableGateway` just before each gateway listens, so the
+ * port is free for as short a time as possible; the restart test reuses its own port across
+ * the restart. */
+let gatewayPort = 0;
+let restartGatewayPort = 0;
+const gatewayUrl = (): string => `ws://127.0.0.1:${gatewayPort}`;
+const restartGatewayUrl = (): string => `ws://127.0.0.1:${restartGatewayPort}`;
 
 function adminSession(): DispatchSession {
   return { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" };
@@ -97,10 +112,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   async function startGateway(): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
+    gatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
         mode: "gateway",
-        http: { enabled: true, host: "127.0.0.1", port: GATEWAY_PORT },
+        http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
       },
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
@@ -129,10 +145,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-restart-"));
     directories.push(directory);
     const filesystem = new MemoryFilesystem();
+    restartGatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
         mode: "gateway",
-        http: { enabled: true, host: "127.0.0.1", port: RESTART_GATEWAY_PORT },
+        http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
       dataDirectory: directory,
       filesystem,
@@ -167,7 +184,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const daemon = await startDaemon({
       configOverrides: {
         gateway: {
-          url: options.gatewayUrl ?? GATEWAY_URL,
+          url: options.gatewayUrl ?? gatewayUrl(),
           token: options.token,
           label: options.label,
         },
@@ -299,14 +316,14 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       model: "Pixel-A",
       token: tokenA,
       stdout: "hello-from-a",
-      gatewayUrl: RESTART_GATEWAY_URL,
+      gatewayUrl: restartGatewayUrl(),
     });
     const workerB = await startWorker({
       label: "worker-b",
       model: "Pixel-B",
       token: tokenB,
       stdout: "hello-from-b",
-      gatewayUrl: RESTART_GATEWAY_URL,
+      gatewayUrl: restartGatewayUrl(),
     });
 
     // C3 (round 1 review, #119): gate on both views actually being usable, not merely
@@ -376,7 +393,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const restartedGateway = await startDaemon({
       configOverrides: {
         mode: "gateway",
-        http: { enabled: true, host: "127.0.0.1", port: RESTART_GATEWAY_PORT },
+        http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
       dataDirectory: directory,
       filesystem,
@@ -416,7 +433,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       model: "Pixel-B",
       token: tokenB,
       stdout: "hello-from-b",
-      gatewayUrl: RESTART_GATEWAY_URL,
+      gatewayUrl: restartGatewayUrl(),
       existing: { directory: workerB.directory, filesystem: workerB.filesystem },
     });
     await vi.waitFor(

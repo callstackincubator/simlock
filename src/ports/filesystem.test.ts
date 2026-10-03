@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./index.js";
 
-const temporaryDirectory = `${process.cwd()}/.simlock-ports-test`;
+// Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
+// one checkout, Stryker's runners in one sandbox) delete each other's files mid-test.
+const temporaryDirectory = `${process.cwd()}/.simlock-ports-test-${process.pid}`;
 
 const implementations: Array<{
   name: string;
