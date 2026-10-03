@@ -70,9 +70,12 @@ const DEFAULT_LEASE_REQUEST_TIMEOUT_MS = 5 * 60_000;
  * importing across its own boundary -- three places name `"warm-then-free"`, the same
  * redundancy `capacity.strategy`'s "fixed"/"resource" already carries between `core` and the
  * contract. Adding a second policy means adding it here, in the gateway's own registry, and in
- * the contract schema -- one line each, never a shared import.
+ * the contract schema -- one line each, never a shared import. `daemon/main.test.ts` checks that
+ * the gateway's registry knows every name listed here, since a gateway daemon refuses to start
+ * on one it does not.
  */
-const ROUTING_POLICIES = ["warm-then-free"] as const;
+// fallow-ignore-next-line unused-export -- read by daemon/main.test.ts, which checks the gateway registry knows every name.
+export const ROUTING_POLICIES = ["warm-then-free"] as const;
 const DEFAULT_ROUTING_POLICY = "warm-then-free";
 
 /** The literal union `ROUTING_POLICIES` names -- `Config["gateway"]["routing"]`'s type, so it

@@ -607,10 +607,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const gatewayRequesterPrefix = `gw:${instanceId}:`;
   const leaseIndex = new FleetLeaseIndex(gatewayRequesterPrefix, logger.child("lease-index"));
   if (!isRoutingPolicyName(config.gateway.routing)) {
-    // Unreachable in production: `loadConfig` already validates `gateway.routing` against this
-    // same registry's names before a daemon ever starts. Guards the cast below rather than
-    // trusting `Config`'s own `string` typing (ADR §33: `src/gateway` cannot see `core`'s
-    // `Config` type, so the contract this value already satisfies cannot be expressed there).
+    // Unreachable in production: `loadConfig` already validates `gateway.routing` against
+    // `core`'s own list of names, and `main.test.ts` checks this registry knows every one of
+    // them. Guards the call below rather than trusting `Config`'s typing (ADR §33: `src/gateway`
+    // cannot see `core`'s `Config` type, so the two lists stay separate declarations).
     throw new Error(`Unknown gateway.routing policy: ${config.gateway.routing}`);
   }
   const routing = createRoutingPolicy(config.gateway.routing);
