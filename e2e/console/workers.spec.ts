@@ -317,7 +317,10 @@ test.describe("the workers views", () => {
       await openConsole(page, host);
       await page.getByRole("link", { name: view?.id ?? "" }).click();
 
-      await expect(page.locator("tbody tr")).toHaveCount(devices.length);
+      const deviceTable = page
+        .getByRole("heading", { level: 2, name: "Devices" })
+        .locator("xpath=following-sibling::*[1]");
+      await expect(deviceTable.locator("tbody tr")).toHaveCount(devices.length);
       for (const device of devices) {
         const cells = deviceRow(page, device.id).getByRole("cell");
         await expect(cells.nth(1)).toHaveText(device.state);

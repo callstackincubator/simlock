@@ -599,6 +599,13 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity")))),
   );
 
+  // The token records, for a console to name a lease's holder by its token's label. `token.list`
+  // is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher, and
+  // its output schema has no secret and no hash, so neither can reach the body.
+  app.get("/v1/tokens", agentAuth, async (c) =>
+    c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity")))),
+  );
+
   app.get("/v1/devices", agentAuth, async (c) => {
     const devices = await deps.dispatch(
       "list.get",

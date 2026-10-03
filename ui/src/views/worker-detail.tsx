@@ -1,6 +1,7 @@
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { deviceStateStatus, installStatus, Status } from "../status";
+import { WorkerLeases } from "./leases";
 import { WorkerFacts } from "./worker-facts";
 import {
   platformName,
@@ -10,7 +11,10 @@ import {
   workerName,
 } from "./workers-model";
 
-/** One worker: its facts, its devices, its host, its catalog and its installs in progress. */
+/**
+ * One worker: its facts, its devices, its leases, its host, its catalog and its installs in
+ * progress.
+ */
 export function WorkerDetail(props: {
   readonly id: string;
   readonly workers: readonly WorkerView[];
@@ -38,6 +42,8 @@ export function WorkerDetail(props: {
           <WorkerFacts worker={worker} />
           <h2>Devices</h2>
           <DeviceTable worker={worker} now={now} />
+          <h2>Leases</h2>
+          <WorkerLeases worker={worker} workers={workers} now={now} />
           <h2>Host</h2>
           <HostFacts worker={worker} />
           <h2>Catalog</h2>

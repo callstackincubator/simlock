@@ -67,7 +67,7 @@ Three roles:
 | Role | Can |
 |---|---|
 | `agent` | catalog, status, installed components, its own lease requests and leases, `exec` on its own lease |
-| `operator` | everything `agent` can, plus every other requester's leases/devices, the worker routes, event replay/stream, and releasing any lease |
+| `operator` | everything `agent` can, plus every other requester's leases/devices, the token records, the worker routes, event replay/stream, and releasing any lease |
 | `worker` | open an uplink at [`/v1/uplink`](#get-v1uplink-websocket-upgrade), and nothing else |
 
 A valid token with the wrong role for a route is `403 FORBIDDEN`, not `401` —
@@ -1123,7 +1123,9 @@ take the host out of rotation or forget it.
 
 ### Operator routes
 
-Role: `operator` for all five.
+Role: `operator` for all six. `GET /v1/leases` also answers an `agent`
+token, with only its own leases. `GET /v1/lease-requests` and `GET /v1/tokens`
+answer it `403 FORBIDDEN`.
 
 `DELETE /v1/leases/{id}` with an `operator` token already releases any single
 lease, on a gateway as anywhere else. The fleet-wide form of that — the CLI's
@@ -1150,14 +1152,26 @@ an all-or-nothing that leaves the operator guessing.
   memory.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
+- `GET /v1/tokens` — every token this daemon knows (`simlock token list`):
 
-On a **gateway** all five are fleet-wide, which is what makes a single
+  ```json
+  { "tokens": [
+      { "id": "tok_9f2c", "role": "agent", "label": "ci-runner-3", "createdAt": 1735689600000 }
+  ] }
+  ```
+
+  A token's `id` is the `requesterId` on the leases it takes over HTTP, so a client can
+  show a lease's holder by the token's `label`. The answer never carries a
+  secret or a hash. `label` is absent from a token created without one.
+
+On a **gateway** the first five are fleet-wide, which is what makes a single
 console possible: `/v1/leases` and `/v1/devices` return every connected
 worker's, each record carrying the `workerId` it lives on,
 `/v1/lease-requests` returns the gateway's queue and every connected
 worker's, and the two event routes carry the workers' republished events
 (also `workerId`-tagged) interleaved with the gateway's own `worker.*` and
-`request.dispatched` facts.
+`request.dispatched` facts. `/v1/tokens` lists the daemon's own tokens: on a
+gateway, the gateway's, since tokens never cross machines.
 
 #### `GET /v1/lease-requests`
 
