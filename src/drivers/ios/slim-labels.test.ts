@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  labelsFor,
-  resolveSlimCategories,
-  SLIM_CATEGORIES,
-  SLIM_CATEGORY_NAMES,
-  slimSignature,
-} from "./slim-labels.js";
+import { labelsFor, resolveSlimCategories, SLIM_CATEGORIES, slimSignature } from "./slim-labels.js";
 
 describe("SLIM_CATEGORIES", () => {
   it("every category has at least one label", () => {
@@ -21,10 +15,6 @@ describe("SLIM_CATEGORIES", () => {
         expect(label.trim().length).toBeGreaterThan(0);
       }
     }
-  });
-
-  it("SLIM_CATEGORY_NAMES matches the category list", () => {
-    expect(SLIM_CATEGORY_NAMES).toEqual(SLIM_CATEGORIES.map((c) => c.name));
   });
 });
 

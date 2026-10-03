@@ -285,8 +285,6 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
   },
 ];
 
-export const SLIM_CATEGORY_NAMES: readonly string[] = SLIM_CATEGORIES.map((c) => c.name);
-
 /**
  * Resolves a set of requested category names to their {@link SlimCategory}
  * definitions. `undefined` (no filter given) resolves to every category.
