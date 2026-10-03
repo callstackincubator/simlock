@@ -4,6 +4,7 @@ import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { Status, waitingStageStatus } from "../status";
+import { type Column, DataTable } from "../table";
 import {
   requestedDevice,
   type WaitingList,
@@ -48,7 +49,11 @@ export function WaitingView() {
   );
 }
 
-/** One row per waiting request. On a phone each row stacks into a block of labelled lines. */
+/**
+ * One row per waiting request, a page at a time, in the order the daemon lists them: on a
+ * gateway its own queue, then each worker's. On a phone each row stacks into a block of
+ * labelled lines.
+ */
 export function WaitingTable(props: {
   readonly requests: readonly WaitingRequest[];
   readonly workers: readonly WorkerView[];
@@ -56,49 +61,36 @@ export function WaitingTable(props: {
   readonly now: number;
 }) {
   const { now, requests, workers } = props;
-  if (requests.length === 0) return <p className="muted">No requests are waiting.</p>;
+  const columns: Column<WaitingRequest>[] = [
+    { cell: (request) => request.requesterId, header: "Requester", mono: true },
+    { cell: (request) => requestedDevice(request.spec), header: "Device" },
+    {
+      cell: (request) => <WorkerCell request={request} workers={workers} />,
+      header: "Worker",
+    },
+    {
+      cell: (request) => {
+        const stage = waitingStageStatus(request.stage);
+        return <Status tone={stage.tone}>{stage.word}</Status>;
+      },
+      header: "Stage",
+    },
+    { cell: (request) => request.queuePosition ?? "—", header: "Place in queue", numeric: true },
+    {
+      cell: (request) => formatDuration(now - request.createdAt),
+      header: "Waiting for",
+      numeric: true,
+    },
+  ];
   return (
-    <table className="table table-wide">
-      <thead>
-        <tr>
-          <th scope="col">Requester</th>
-          <th scope="col">Device</th>
-          <th scope="col">Worker</th>
-          <th scope="col">Stage</th>
-          <th scope="col" className="num">
-            Place in queue
-          </th>
-          <th scope="col" className="num">
-            Waiting for
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {requests.map((request) => {
-          const stage = waitingStageStatus(request.stage);
-          return (
-            <tr key={`${request.workerId ?? ""}/${request.id}`}>
-              <td data-label="Requester" className="mono">
-                {request.requesterId}
-              </td>
-              <td data-label="Device">{requestedDevice(request.spec)}</td>
-              <td data-label="Worker">
-                <WorkerCell request={request} workers={workers} />
-              </td>
-              <td data-label="Stage">
-                <Status tone={stage.tone}>{stage.word}</Status>
-              </td>
-              <td data-label="Place in queue" className="num">
-                {request.queuePosition ?? "—"}
-              </td>
-              <td data-label="Waiting for" className="num">
-                {formatDuration(now - request.createdAt)}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <DataTable
+      label="Waiting requests"
+      rows={requests}
+      columns={columns}
+      rowId={(request) => `${request.workerId ?? ""}/${request.id}`}
+      empty="No requests are waiting."
+      wide
+    />
   );
 }
 

@@ -138,7 +138,7 @@ async function openAttention(page: Page, daemon: RunningDaemon): Promise<void> {
 /** The item for `condition` about the worker or device named `subject`. */
 function item(page: Page, condition: string, subject: string): Locator {
   return page
-    .locator(".attention-list li")
+    .locator(".attention-table tbody tr")
     .filter({ has: page.locator(".status", { hasText: new RegExp(`^${condition}$`) }) })
     .filter({ hasText: subject });
 }
@@ -173,7 +173,7 @@ test.describe("the attention view", () => {
         "href",
         `/workers/${encodeURIComponent(b?.id ?? "")}`,
       );
-      await expect(page.locator(".attention-list li")).toHaveCount(1);
+      await expect(page.locator(".attention-table tbody tr")).toHaveCount(1);
     } finally {
       await disposeFleet(fleet);
     }
@@ -320,7 +320,7 @@ test.describe("the attention view", () => {
       await expect(item(page, "quarantined", `Device ${quarantined?.id} on ${name}`)).toBeVisible();
       await expect(item(page, "stalled", `Device ${stalled?.id} on ${name}`)).toBeVisible();
       await expect(item(page, "over RAM budget", name)).toBeVisible();
-      await expect(page.locator(".attention-list li")).toHaveCount(3);
+      await expect(page.locator(".attention-table tbody tr")).toHaveCount(3);
     } finally {
       await host.dispose();
     }
@@ -375,7 +375,7 @@ test.describe("the attention view", () => {
 
       await openAttention(page, gateway);
 
-      await expect(page.locator(".attention-list li")).toHaveCount(1);
+      await expect(page.locator(".attention-table tbody tr")).toHaveCount(1);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       hangUp();

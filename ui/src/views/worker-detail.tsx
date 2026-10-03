@@ -2,12 +2,14 @@ import { Id, PageHeader, Panel } from "../layout";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { deviceStateStatus, installStatus, Status } from "../status";
+import { type Column, DataTable } from "../table";
 import { WorkerLeases } from "./leases";
 import { WorkerFacts } from "./worker-facts";
 import {
   platformName,
   stateEnteredAt,
   type WorkerCatalogEntry,
+  type WorkerDevice,
   type WorkerView,
   workerName,
 } from "./workers-model";
@@ -84,7 +86,10 @@ function AllWorkers() {
   );
 }
 
-/** Every device on the worker. On a phone each row stacks into a block of labelled lines. */
+/**
+ * Every device on the worker, a page at a time, in the order the worker lists them. On a phone
+ * each row stacks into a block of labelled lines.
+ */
 export function DeviceTable({
   now,
   worker,
@@ -92,52 +97,39 @@ export function DeviceTable({
   readonly worker: WorkerView;
   readonly now: number;
 }) {
-  if (worker.devices.length === 0) return <p className="muted">No devices.</p>;
+  const columns: Column<WorkerDevice>[] = [
+    { cell: (device) => <Id>{device.id}</Id>, header: "Device" },
+    {
+      cell: (device) => {
+        const state = deviceStateStatus(device.state);
+        return <Status tone={state.tone}>{state.word}</Status>;
+      },
+      header: "State",
+    },
+    {
+      cell: (device) => {
+        const since = stateEnteredAt(device, worker);
+        return since === undefined ? "—" : formatDuration(now - since);
+      },
+      header: "In state for",
+      numeric: true,
+    },
+    { cell: (device) => platformName(device.spec.platform), header: "Platform" },
+    { cell: (device) => device.spec.model, header: "Model" },
+    { cell: (device) => device.spec.osVersion, header: "Runtime", mono: true },
+    { cell: (device) => device.mode, header: "Mode" },
+    { cell: (device) => device.spec.imageTag ?? "—", header: "Image tag", mono: true },
+  ];
   return (
-    <table className="table table-wide">
-      <thead>
-        <tr>
-          <th scope="col">Device</th>
-          <th scope="col">State</th>
-          <th scope="col" className="num">
-            In state for
-          </th>
-          <th scope="col">Platform</th>
-          <th scope="col">Model</th>
-          <th scope="col">Runtime</th>
-          <th scope="col">Mode</th>
-          <th scope="col">Image tag</th>
-        </tr>
-      </thead>
-      <tbody>
-        {worker.devices.map((device) => {
-          const state = deviceStateStatus(device.state);
-          const since = stateEnteredAt(device, worker);
-          return (
-            <tr key={device.id}>
-              <td data-label="Device">
-                <Id>{device.id}</Id>
-              </td>
-              <td data-label="State">
-                <Status tone={state.tone}>{state.word}</Status>
-              </td>
-              <td data-label="In state for" className="num">
-                {since === undefined ? "—" : formatDuration(now - since)}
-              </td>
-              <td data-label="Platform">{platformName(device.spec.platform)}</td>
-              <td data-label="Model">{device.spec.model}</td>
-              <td data-label="Runtime" className="mono">
-                {device.spec.osVersion}
-              </td>
-              <td data-label="Mode">{device.mode}</td>
-              <td data-label="Image tag" className="mono">
-                {device.spec.imageTag ?? "—"}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <DataTable
+      label="Devices"
+      name="devices"
+      rows={worker.devices}
+      columns={columns}
+      rowId={(device) => device.id}
+      empty="No devices."
+      wide
+    />
   );
 }
 

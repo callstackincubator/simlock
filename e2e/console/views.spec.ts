@@ -335,11 +335,14 @@ test.describe("every view", () => {
           "Devices affected | 0 | quarantined or stalled",
         ]);
 
-      // Events: as many as the list shows, and the newest one's time and name.
+      // Events: as many as the list holds, and the newest one's time and name. The feed draws only
+      // the rows in view; each says how long the whole list is.
       await visit(page, host, "/events");
       const rows = page.locator("#main li.event");
       await expect(rows.first()).toBeVisible();
-      const shown = await rows.count();
+      const listed = async () => Number(await rows.first().getAttribute("aria-setsize"));
+      const shown = await listed();
+      expect(shown).toBeGreaterThanOrEqual(await rows.count());
       const time = await rows.first().locator("time").textContent();
       const name = await rows.first().locator(".event-name").textContent();
       await expect
@@ -353,7 +356,8 @@ test.describe("every view", () => {
       );
       // A filter narrows the count to what the list shows.
       await page.getByRole("radio", { name: "Leases" }).check();
-      const leasesShown = await rows.count();
+      await expect(rows.first().locator(".event-name")).toHaveText(/^lease\./);
+      const leasesShown = await listed();
       expect(leasesShown).toBeLessThan(shown);
       await expect
         .poll(cards)

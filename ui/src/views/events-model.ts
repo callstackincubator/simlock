@@ -16,7 +16,7 @@ export interface ConsoleEvent {
 }
 
 /** How many events the view keeps. Older ones drop off the end. */
-export const MAX_EVENTS = 1000;
+export const MAX_EVENTS = 10_000;
 
 /**
  * The window the view loads when it opens, the same as `simlock events --since 1h`, so the two
@@ -53,7 +53,7 @@ export function readReplay(body: unknown): readonly ConsoleEvent[] {
  * What makes two events the same: `seq` and `timestamp` both. `seq` alone starts again when the
  * daemon restarts (ADR 0013 §2).
  */
-function keyOf(event: ConsoleEvent): string {
+export function keyOf(event: ConsoleEvent): string {
   return `${event.seq}:${event.timestamp}`;
 }
 

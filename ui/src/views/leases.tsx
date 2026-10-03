@@ -6,10 +6,12 @@ import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
 import { Link, usePath } from "../router";
+import { type Column, DataTable } from "../table";
 import {
   deviceOfLease,
   type Holder,
   holderOf,
+  inGrantOrder,
   type LeaseDetails,
   leaseIdFrom,
   type LeaseList,
@@ -62,6 +64,7 @@ function FleetLeases() {
                 workers={workers}
                 now={now.server}
                 showWorker
+                label="All leases"
               />
             </Panel>
           </>
@@ -88,6 +91,8 @@ export function WorkerLeases(props: {
           workers={props.workers}
           now={props.now}
           showWorker={false}
+          label="Leases"
+          name="leases"
         />
       )}
     </Loaded>
@@ -116,7 +121,10 @@ function HolderName({ holder }: { readonly holder: Holder }) {
   );
 }
 
-/** Each lease as a row. On a phone each row stacks into a block of labelled lines. */
+/**
+ * Each lease as a row, oldest granted first, a page at a time. On a phone each row stacks into a
+ * block of labelled lines.
+ */
 export function LeaseTable(props: {
   readonly leases: readonly LeaseRecord[];
   readonly tokens: readonly TokenRecord[];
@@ -125,76 +133,83 @@ export function LeaseTable(props: {
   readonly now: number;
   /** Off on a worker's own page, where every lease is on that worker. */
   readonly showWorker: boolean;
+  /** Names the pager: the title of the panel the table sits in. */
+  readonly label: string;
+  /** Where the table keeps its page in the URL, on a page with another table. */
+  readonly name?: string;
 }) {
-  const { leases, now, showWorker, tokens, workers } = props;
-  if (leases.length === 0) return <p className="muted">No leases.</p>;
+  const { label, leases, name, now, showWorker, tokens, workers } = props;
+  const columns: Column<LeaseRecord>[] = [
+    {
+      cell: (lease) => (
+        <Link to={leasePath(lease.id)} className="id" title={lease.id}>
+          {lease.id}
+        </Link>
+      ),
+      header: "Lease",
+    },
+    {
+      cell: (lease) => (
+        <span>
+          <HolderName holder={holderOf(lease.requesterId, tokens)} />
+        </span>
+      ),
+      header: "Holder",
+    },
+    ...(showWorker
+      ? [
+          {
+            cell: (lease: LeaseRecord) => <LeaseWorker lease={lease} workers={workers} />,
+            header: "Worker",
+          },
+        ]
+      : []),
+    {
+      cell: (lease) => {
+        const device = deviceOfLease(lease, workers);
+        return (
+          <span>
+            {device === undefined ? null : <>{device.spec.model} </>}
+            <span className="muted">
+              <Id>{lease.deviceId}</Id>
+            </span>
+          </span>
+        );
+      },
+      header: "Device",
+    },
+    { cell: (lease) => deviceOfLease(lease, workers)?.mode ?? "—", header: "Mode" },
+    {
+      cell: (lease) => deviceOfLease(lease, workers)?.spec.imageTag ?? "—",
+      header: "Image tag",
+      mono: true,
+    },
+    {
+      cell: (lease) => <Ago at={lease.grantedAt} now={now} />,
+      header: "Granted",
+      numeric: true,
+    },
+    {
+      cell: (lease) => <Until at={lease.ttlDeadline} now={now} />,
+      header: "Expires in",
+      numeric: true,
+    },
+    {
+      cell: (lease) => <Ago at={lease.lastRenewedAt} now={now} />,
+      header: "Last renewed",
+      numeric: true,
+    },
+  ];
   return (
-    <table className="table table-wide">
-      <thead>
-        <tr>
-          <th scope="col">Lease</th>
-          <th scope="col">Holder</th>
-          {showWorker ? <th scope="col">Worker</th> : null}
-          <th scope="col">Device</th>
-          <th scope="col">Mode</th>
-          <th scope="col">Image tag</th>
-          <th scope="col" className="num">
-            Granted
-          </th>
-          <th scope="col" className="num">
-            Expires in
-          </th>
-          <th scope="col" className="num">
-            Last renewed
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {leases.map((lease) => {
-          const device = deviceOfLease(lease, workers);
-          return (
-            <tr key={`${lease.workerId ?? ""} ${lease.id}`}>
-              <td data-label="Lease">
-                <Link to={leasePath(lease.id)} className="id" title={lease.id}>
-                  {lease.id}
-                </Link>
-              </td>
-              <td data-label="Holder">
-                <span>
-                  <HolderName holder={holderOf(lease.requesterId, tokens)} />
-                </span>
-              </td>
-              {showWorker ? (
-                <td data-label="Worker">
-                  <LeaseWorker lease={lease} workers={workers} />
-                </td>
-              ) : null}
-              <td data-label="Device">
-                <span>
-                  {device === undefined ? null : <>{device.spec.model} </>}
-                  <span className="muted">
-                    <Id>{lease.deviceId}</Id>
-                  </span>
-                </span>
-              </td>
-              <td data-label="Mode">{device?.mode ?? "—"}</td>
-              <td data-label="Image tag" className="mono">
-                {device?.spec.imageTag ?? "—"}
-              </td>
-              <td data-label="Granted" className="num">
-                <Ago at={lease.grantedAt} now={now} />
-              </td>
-              <td data-label="Expires in" className="num">
-                <Until at={lease.ttlDeadline} now={now} />
-              </td>
-              <td data-label="Last renewed" className="num">
-                <Ago at={lease.lastRenewedAt} now={now} />
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <DataTable
+      label={label}
+      rows={inGrantOrder(leases)}
+      columns={columns}
+      rowId={(lease) => `${lease.workerId ?? ""} ${lease.id}`}
+      empty="No leases."
+      wide
+      {...(name === undefined ? {} : { name })}
+    />
   );
 }
 
