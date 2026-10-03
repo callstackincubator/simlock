@@ -157,10 +157,7 @@ async function createHarness(
     }),
   });
   const executor = options.useLeaseEngineExecutor
-    ? {
-        execute: (proposal: Parameters<LeaseEngine["executeCleanup"]>[0]) =>
-          engine.executeCleanup(proposal),
-      }
+    ? engine.cleanup
     : (() => {
         const claims = new DeviceOperationClaims();
         const decisions = new SerializedDecision();

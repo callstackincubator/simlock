@@ -1401,7 +1401,7 @@ describe("LeaseEngine RAM budget by mode", () => {
       await before.engine.release(grant.lease.id, "explicit");
     }
     await before.engine.settle();
-    await before.engine.executeCleanup({
+    await before.engine.cleanup.execute({
       action: "shutdown",
       reason: "test",
       rule: "test",
@@ -1459,7 +1459,7 @@ describe("LeaseEngine RAM budget by mode", () => {
       ["shutdown", idle.device.id],
       ["destroy", idle.device.id],
     ] as const) {
-      await after.engine.executeCleanup({ action, reason: "test", rule: "test", target });
+      await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
