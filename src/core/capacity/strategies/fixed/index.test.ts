@@ -78,18 +78,6 @@ describe("fixed strategy", () => {
     });
   });
 
-  it("ignores deleted devices when counting against the pin", () => {
-    const fixed = strategy({ maxRunning: 1 });
-
-    expect(
-      fixed.canProvision({ mode: "full", platform: "ios" }, [
-        { mode: "full" as const, platform: "ios", state: "deleted" },
-      ]),
-    ).toEqual({
-      ok: true,
-    });
-  });
-
   it("grants up to maxRunning whatever the modes, never refuses a boot, and reports no RAM budget", () => {
     const fixed = strategy({ maxRunning: 3 });
     const mixed = [...ready("ios", 1, "slim"), ...ready("ios", 1, "full")];

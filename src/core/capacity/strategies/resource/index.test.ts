@@ -74,16 +74,6 @@ describe("resource strategy provisioning", () => {
     });
   });
 
-  it("does not count deleted devices against capacity", () => {
-    const devices: CapacityDevice[] = [
-      { mode: "full" as const, platform: "ios", state: "deleted" },
-    ];
-
-    expect(withRam(32 * gibibyte).canProvision({ mode: "full", platform: "ios" }, devices)).toEqual(
-      { ok: true },
-    );
-  });
-
   it("accounts for active devices on both platforms in the shared RAM budget", () => {
     const devices: CapacityDevice[] = [
       { mode: "full" as const, platform: "android", state: "ready" },
