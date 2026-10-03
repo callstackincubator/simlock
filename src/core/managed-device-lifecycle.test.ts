@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError } from "./driver.js";
@@ -181,6 +182,7 @@ describe("ManagedDeviceLifecycle", () => {
     harness.driver.hangMakeReady();
 
     const readying = harness.lifecycle.readyProvisionedForLease(harness.device);
+    const readyingState = promiseState(readying);
     await vi.waitFor(() =>
       expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1),
     );
@@ -188,6 +190,8 @@ describe("ManagedDeviceLifecycle", () => {
     await expect(
       harness.lifecycle.readyProvisionedForLease(harness.device),
     ).resolves.toBeUndefined();
+    // Both checks above ran with the driver call still in flight, not after it had returned.
+    expect(readyingState.state).toBe("pending");
 
     harness.driver.releaseMakeReady();
     await expect(readying).resolves.toMatchObject({ device: { state: "ready" } });

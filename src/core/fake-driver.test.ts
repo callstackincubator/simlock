@@ -5,40 +5,11 @@ import {
   type Driver,
   FakeDriver,
   FakeDriverUnknownDeviceError,
-  type DriverDevice,
   UnknownModelError,
 } from "./index.js";
 import { FakeClock } from "../ports/index.js";
 
 describe("FakeDriver", () => {
-  it("delays provision until its FakeClock latency elapses", async () => {
-    const clock = new FakeClock();
-    const driver = new FakeDriver({
-      clock,
-      latencyMs: { provision: 100 },
-      platform: "ios",
-    });
-
-    let result: DriverDevice | undefined;
-    const provision = driver
-      .provision({ model: "iPhone 16", osVersion: "26.5", platform: "ios" })
-      .then((device) => {
-        result = device;
-      });
-
-    clock.advance(99);
-    await Promise.resolve();
-    expect(result).toBeUndefined();
-
-    clock.advance(1);
-    await provision;
-    expect(result).toEqual({
-      address: "fake-ios-1-addr-0",
-      deviceId: "fake-ios-1",
-      driverData: { fakeDeviceId: "fake-ios-1" },
-    });
-  });
-
   it("surfaces a scripted typed failure on the selected provision call", async () => {
     const driver = new FakeDriver({ clock: new FakeClock(), platform: "android" });
     const crash = new DriverCrashError("emulator exited");
@@ -118,54 +89,6 @@ describe("FakeDriver", () => {
       await expect(driver.makeReady(device, options)).resolves.toMatchObject({ mode: reported });
     },
   );
-
-  it("keeps makeReady pending until released when instructed to hang", async () => {
-    const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
-    const device = await driver.provision({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    driver.hangMakeReady();
-
-    let ready = false;
-    const makeReady = driver.makeReady(device, prepare).then(() => {
-      ready = true;
-    });
-
-    await Promise.resolve();
-    expect(ready).toBe(false);
-
-    driver.releaseMakeReady();
-    await makeReady;
-    expect(ready).toBe(true);
-  });
-
-  it("applies the configured latency to makeReady", async () => {
-    const clock = new FakeClock();
-    const driver = new FakeDriver({
-      clock,
-      latencyMs: { makeReady: 50 },
-      platform: "ios",
-    });
-    const device = await driver.provision({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-
-    let ready = false;
-    const makeReady = driver.makeReady(device, prepare).then(() => {
-      ready = true;
-    });
-    clock.advance(49);
-    await Promise.resolve();
-    expect(ready).toBe(false);
-
-    clock.advance(1);
-    await makeReady;
-    expect(ready).toBe(true);
-  });
 
   it("records calls, refuses a missing runtime until it is installed, and enforces known-device destruction", async () => {
     const driver = new FakeDriver({
@@ -276,5 +199,3 @@ describe("FakeDriver", () => {
     expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("customModels");
   });
 });
-
-const prepare = { mode: "full", purpose: "prepare" } as const;

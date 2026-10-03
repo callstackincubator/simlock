@@ -25,6 +25,7 @@ import {
   SystemClock,
   type Filesystem,
 } from "../../ports/index.js";
+import { promiseState } from "../../test-support/promise-state.js";
 import {
   IosSimctlDriver,
   iosRuntimeVersionFromId,
@@ -1702,7 +1703,6 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("boot", driverData.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", driverData.udid, "-b") } },
       ]);
-      const onSlimmed = vi.fn();
 
       await expect(
         (await createDriver(runner)).makeReady(
@@ -1724,7 +1724,6 @@ describe("IosSimctlDriver", () => {
         simctlArgs("boot", driverData.udid),
         simctlArgs("bootstatus", driverData.udid, "-b"),
       ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
     });
 
     it.each([false, true])(
@@ -2818,9 +2817,15 @@ describe("IosSimctlDriver", () => {
       );
 
       await waitForCalls(runner, 6);
-      clock.advance(300_000);
+      const readyState = promiseState(ready);
 
-      await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
+      // Just past the default 120s: a reboot timed against it would have given up by now.
+      clock.advance(120_001);
+      await flushMicrotasks221();
+      expect(readyState.state).toBe("pending");
+
+      clock.advance(300_000 - 120_001);
+      expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
       expect(runner.calls[5]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
