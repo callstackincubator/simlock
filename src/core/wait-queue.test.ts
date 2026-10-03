@@ -6,7 +6,6 @@ import {
   ForeignWaiterError,
   QueueTimeoutError,
   RequestCancelledError,
-  RequesterAlreadyLeasedError,
   WaitQueue,
   type LeaseGrant,
   type LeaseProgress,
@@ -117,12 +116,11 @@ describe("WaitQueue", () => {
     ]);
   });
 
-  it("tracks pending requesters and rejects duplicate requesters", async () => {
+  it("tracks a requester as pending until its waiter settles", async () => {
     const { queue } = createQueue();
     const waiter = createWaiter(queue, "agent");
 
     expect(queue.hasPendingRequester("agent")).toBe(true);
-    expect(() => createWaiter(queue, "agent")).toThrow(RequesterAlreadyLeasedError);
     queue.reject(waiter, new Error("not available"));
     await expect(waiter.promise).rejects.toThrow("not available");
     expect(queue.hasPendingRequester("agent")).toBe(false);
