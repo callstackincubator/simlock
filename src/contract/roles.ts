@@ -3,7 +3,7 @@
  * below an operation's -- is the dispatcher's job (§2), which is PR 2. This module only
  * declares the vocabulary the rest of the contract is typed against.
  */
-export const ROLES = ["agent", "admin"] as const;
+const ROLES = ["agent", "admin"] as const;
 export type Role = (typeof ROLES)[number];
 
 /**

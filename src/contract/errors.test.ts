@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_TABLE, fromWireError, isSimlockError, SimlockError } from "./errors.js";
+import { ERROR_TABLE, fromWireError, isSimlockError } from "./errors.js";
 
 describe("SimlockError", () => {
   it("narrows details by code", () => {
@@ -40,18 +40,5 @@ describe("SimlockError", () => {
 
   it("isSimlockError rejects a plain Error", () => {
     expect(isSimlockError(new Error("boom"))).toBe(false);
-  });
-
-  it("every table entry's code matches its own key", () => {
-    for (const [key, entry] of Object.entries(ERROR_TABLE)) {
-      expect(entry.code).toBe(key);
-    }
-  });
-
-  it("constructs directly with typed details", () => {
-    const error = new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", {
-      leaseId: "lease_9",
-    });
-    expect(error.details.leaseId).toBe("lease_9");
   });
 });

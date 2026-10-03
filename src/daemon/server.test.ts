@@ -160,8 +160,8 @@ describe("DaemonServer", () => {
     // with no overlap against the daemon's range is `PROTOCOL_VERSION_UNSUPPORTED`, carrying
     // both ranges and the daemon version -- there is no more exact-match
     // `PROTOCOL_VERSION_MISMATCH` on this daemon (a real protocol-2 daemon out in the world
-    // still answers with the old code; see `contract/protocol.test.ts`'s
-    // `mapLegacyProtocolMismatch` for how a client maps that).
+    // still answers with the old code; see `simlock-client/client.test.ts`'s legacy-daemon test
+    // for how a client maps that).
     const wrongVersion = await createClient(harness.socketPath);
     await expect(
       wrongVersion.request("hello", {

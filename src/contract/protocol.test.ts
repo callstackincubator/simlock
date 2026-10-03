@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   helloRequestSchema,
-  LEGACY_DAEMON_PROTOCOL_VERSION,
-  mapLegacyProtocolMismatch,
   negotiateProtocolVersion,
   normalizeProtocolVersion,
-  PROTOCOL_VERSION_RANGE,
 } from "./protocol.js";
 
 describe("negotiateProtocolVersion", () => {
@@ -27,21 +24,6 @@ describe("normalizeProtocolVersion", () => {
 
   it("passes a range through unchanged", () => {
     expect(normalizeProtocolVersion({ min: 1, max: 3 })).toEqual({ min: 1, max: 3 });
-  });
-});
-
-describe("mapLegacyProtocolMismatch", () => {
-  it("reports the daemon range as {2, 2} and an unknown daemon version", () => {
-    const error = mapLegacyProtocolMismatch(
-      PROTOCOL_VERSION_RANGE,
-      "Protocol version 3 is not supported",
-    );
-    expect(error.code).toBe("PROTOCOL_VERSION_UNSUPPORTED");
-    expect(error.details).toEqual({
-      client: PROTOCOL_VERSION_RANGE,
-      daemon: { min: LEGACY_DAEMON_PROTOCOL_VERSION, max: LEGACY_DAEMON_PROTOCOL_VERSION },
-      daemonVersion: "unknown",
-    });
   });
 });
 
