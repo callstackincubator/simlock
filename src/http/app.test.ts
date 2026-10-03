@@ -1650,21 +1650,31 @@ describe("POST /v1/components/install", () => {
 });
 
 describe("operator-only listing routes", () => {
-  it("GET /v1/leases (dispatches lease.list; an agent only sees its own)", async () => {
-    const { app, registry } = buildHarness();
-    registry.leases = [
-      makeLease({ id: "lse_1", ownerId: "tok_agent" }),
-      makeLease({ id: "lse_2", ownerId: "tok_other" }),
-    ];
+  it.each([
+    ["an agent", agentAuth, { principal: "tok_agent", role: "agent" }],
+    ["an operator", operatorAuth, { principal: "tok_operator", role: "admin" }],
+  ] as const)(
+    "GET /v1/leases dispatches lease.list under %s's own session and answers the handler's leases",
+    async (_caller, headers, session) => {
+      // Which leases a caller may see is `lease.list`'s rule, owned and tested by the dispatcher;
+      // the route's part is to dispatch under the caller's session and return what it answers.
+      const { app, dispatcher } = buildHarness();
+      const leases = [makeLease({ id: "lse_1", ownerId: "tok_somebody" })];
+      dispatcher.handlers["lease.list"] = () => ({ leases });
 
-    const asAgent = await app.request("/v1/leases", { headers: agentAuth });
-    const agentBody = (await asAgent.json()) as { leases: Array<{ id: string }> };
-    expect(agentBody.leases.map((lease) => lease.id)).toEqual(["lse_1"]);
+      const response = await app.request("/v1/leases", { headers });
 
-    const asOperator = await app.request("/v1/leases", { headers: operatorAuth });
-    const operatorBody = (await asOperator.json()) as { leases: Array<{ id: string }> };
-    expect(operatorBody.leases.map((lease) => lease.id).sort()).toEqual(["lse_1", "lse_2"]);
-  });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ leases });
+      expect(dispatcher.calls).toEqual([
+        expect.objectContaining({
+          input: {},
+          operation: "lease.list",
+          session: expect.objectContaining(session),
+        }),
+      ]);
+    },
+  );
 
   it("GET /v1/lease-requests answers 403 for an agent token", async () => {
     const { app, dispatcher } = buildHarness();
