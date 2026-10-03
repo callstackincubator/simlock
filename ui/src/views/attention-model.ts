@@ -3,6 +3,7 @@
  * nothing else. Pure, so the Attention view and the count in the shell read one list, and an
  * item leaves it the moment the data no longer says it.
  */
+import type { Stat } from "../layout";
 import type { WorkerDevice, WorkerView } from "./workers-model";
 
 /** One thing that needs attention. `condition` is the word the console shows for it. */
@@ -66,4 +67,17 @@ function deviceItems(worker: WorkerView): AttentionItem[] {
     }
     return [];
   });
+}
+
+/** The Attention view's stat cards: how many items, and how many workers and devices they name. */
+export function attentionStats(items: readonly AttentionItem[]): readonly Stat[] {
+  const workers = new Set(items.map((item) => item.worker.id));
+  const devices = new Set(
+    items.flatMap((item) => ("device" in item ? [`${item.worker.id}/${item.device.id}`] : [])),
+  );
+  return [
+    { caption: "need attention now", label: "Items", value: String(items.length) },
+    { caption: "with at least one item", label: "Workers affected", value: String(workers.size) },
+    { caption: "quarantined or stalled", label: "Devices affected", value: String(devices.size) },
+  ];
 }

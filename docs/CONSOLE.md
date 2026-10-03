@@ -8,8 +8,9 @@ internet.
 The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
-This version has sign-in and a page for each entry in the console's
-navigation: Workers, Leases, Waiting, Attention and Events.
+This version has sign-in and a page for each tab along the top of the
+console: Workers, Leases, Waiting, Attention and Events. On a narrow screen
+the row of tabs scrolls sideways.
 
 ## Turn it on
 
@@ -212,8 +213,8 @@ The first three come from a gateway only: a single host has no gateway to lose
 or disagree with, and cannot be drained. The other three show on a single host
 too.
 
-The navigation shows how many items there are beside **Attention**, on every
-page. It shows no number while there are none.
+The **Attention** tab shows how many items there are, on every page. It shows
+no number while there are none.
 
 Each item shows within about a second of the daemon reporting it. A stalled
 device is the exception on a gateway: a device becomes stalled when its time
@@ -264,7 +265,8 @@ are off by as much.
 A hidden tab stops asking the daemon for anything. When you come back to it,
 it catches up at once.
 
-The line under the header says how the console's connection is:
+The box at the top right, beside **Sign out**, says how the console's
+connection is:
 
 | It says | What it means |
 | --- | --- |
@@ -274,7 +276,7 @@ The line under the header says how the console's connection is:
 
 While reconnecting, the console keeps the last data on screen and tries the
 daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
-daemon answers, the console refreshes the page and the line goes back to
+daemon answers, the console refreshes the page and the box goes back to
 Connected. You do not need to reload.
 
 ## What the page loads

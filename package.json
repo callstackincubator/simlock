@@ -82,6 +82,8 @@
     "oxlint": "^1.74.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-is": "^19.3.0",
+    "recharts": "^3.10.1",
     "release-it": "^20.2.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",

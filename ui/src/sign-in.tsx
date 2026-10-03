@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 
 import type { Fetch } from "./api";
 import { useSession } from "./console-context";
+import { Brand } from "./layout";
 import { checkToken, refusalMessage } from "./sign-in-check";
 
 /** Checks a pasted token and signs in with it, or keeps the reason it was refused. */
@@ -34,36 +35,44 @@ export function SignIn({ fetch }: { readonly fetch: Fetch }) {
   const refused = refusal !== undefined;
 
   return (
-    <main className="sign-in">
-      <div className="sign-in-panel">
-        <p className="brand">
-          <span className="brand-mark" aria-hidden="true" />
-          Simlock
-        </p>
-        <h1>Sign in</h1>
-        <form onSubmit={onSubmit} noValidate>
-          <label htmlFor="token">Operator token</label>
-          <input
-            id="token"
-            name="token"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            aria-describedby={refused ? "token-hint token-refusal" : "token-hint"}
-            aria-invalid={refused || undefined}
-          />
-          <p id="token-hint" className="hint">
-            Create one with <code>simlock token create --role operator</code>.
-          </p>
-          <Refusal message={refusal} />
-          <button className="button" type="submit" disabled={checking}>
-            {checking ? "Checking…" : "Sign in"}
-          </button>
-        </form>
-      </div>
-    </main>
+    <div className="sign-in">
+      <header className="topbar">
+        <Brand />
+      </header>
+      <main className="sign-in-main">
+        <div className="panel sign-in-panel">
+          <div className="panel-header">
+            <div>
+              <h1 className="panel-title">Sign in</h1>
+              <p className="panel-description">The console needs an operator token.</p>
+            </div>
+          </div>
+          <form className="panel-body" onSubmit={onSubmit} noValidate>
+            <label htmlFor="token">Operator token</label>
+            <input
+              id="token"
+              name="token"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              aria-describedby={refused ? "token-hint token-refusal" : "token-hint"}
+              aria-invalid={refused || undefined}
+            />
+            <p id="token-hint" className="hint">
+              Create one with <code>simlock token create --role operator</code>.
+            </p>
+            <Refusal message={refusal} />
+            <div className="form-actions">
+              <button className="button" type="submit" disabled={checking}>
+                {checking ? "Checking…" : "Sign in"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
   );
 }
 

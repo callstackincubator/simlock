@@ -318,8 +318,8 @@ test.describe("the workers views", () => {
       await page.getByRole("link", { name: view?.id ?? "" }).click();
 
       const deviceTable = page
-        .getByRole("heading", { level: 2, name: "Devices" })
-        .locator("xpath=following-sibling::*[1]");
+        .getByRole("region", { name: "Devices", exact: true })
+        .locator(".panel-body");
       await expect(deviceTable.locator("tbody tr")).toHaveCount(devices.length);
       for (const device of devices) {
         const cells = deviceRow(page, device.id).getByRole("cell");
@@ -391,8 +391,8 @@ test.describe("the workers views", () => {
       await expect(fact(main, "iOS")).toContainText("Models: iPhone 16, iPad Air");
       await expect(fact(main, "iOS")).toContainText(/Runtimes: 18\.4.*, 26\.0/);
       const installs = page
-        .getByRole("heading", { level: 2, name: "Installs in progress" })
-        .locator("xpath=following-sibling::*[1]");
+        .getByRole("region", { name: "Installs in progress", exact: true })
+        .locator(".panel-body");
       await expect(installs).toHaveText(/^iOS 19\.0 downloading for \d+ s, 1 waiter$/);
     } finally {
       await host.dispose();

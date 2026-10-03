@@ -99,8 +99,8 @@ test.describe("the shell", () => {
     expect(await text()).toBe("rgb(242, 242, 240)");
 
     await page.emulateMedia({ colorScheme: "light" });
-    expect(await background()).toBe("rgb(255, 255, 255)");
-    expect(await text()).toBe("rgb(14, 14, 15)");
+    expect(await background()).toBe("rgb(248, 248, 247)");
+    expect(await text()).toBe("rgb(17, 17, 16)");
   });
 
   for (const colorScheme of ["light", "dark"] as const) {

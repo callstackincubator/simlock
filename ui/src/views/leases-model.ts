@@ -8,6 +8,7 @@
 import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
+import type { Stat } from "../layout";
 import { type WorkerDevice, type WorkerView, workerName } from "./workers-model";
 
 /** One lease as `GET /v1/leases` lists it. `workerId` is set on a gateway and absent on a host. */
@@ -103,6 +104,27 @@ export function workerNameOfLease(
  */
 export function leasePath(id: string): `/${string}` {
   return `/leases/${encodeURIComponent(id)}/`;
+}
+
+/** How soon a lease expires for the Leases view to count it as expiring. */
+const EXPIRING_WITHIN_MS = 15 * 60_000;
+
+/**
+ * The Leases view's stat cards: how many leases, how many holders hold them, and how many
+ * expire within 15 minutes of the daemon's `now` unless they are renewed.
+ */
+export function leasesStats(leases: readonly LeaseRecord[], now: number): readonly Stat[] {
+  const holders = new Set(leases.map((lease) => lease.requesterId));
+  const expiring = leases.filter((lease) => lease.ttlDeadline - now <= EXPIRING_WITHIN_MS);
+  return [
+    { caption: "held now", label: "Leases", value: String(leases.length) },
+    { caption: "holding at least one lease", label: "Holders", value: String(holders.size) },
+    {
+      caption: "expire within 15 minutes unless renewed",
+      label: "Expiring soon",
+      value: String(expiring.length),
+    },
+  ];
 }
 
 /** The lease id a page path names, or `undefined` for the list (`/leases`). */

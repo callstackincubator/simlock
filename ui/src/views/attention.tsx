@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
+import { Id, PageHeader, Panel, StatCards } from "../layout";
 import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { Status, type Tone } from "../status";
-import { type AttentionItem, attentionItems } from "./attention-model";
+import { type AttentionItem, attentionItems, attentionStats } from "./attention-model";
 import {
   stateEnteredAt,
   type WorkerList,
@@ -24,29 +25,37 @@ export function AttentionView() {
   const now = useNow();
   return (
     <section className="view">
-      <h1>Attention</h1>
+      <PageHeader
+        title="Attention"
+        subtitle="Workers and devices that need you, as the daemon reports them."
+      />
       <Loaded state={state}>
-        {(list) => <AttentionList items={attentionItems(list.workers)} now={now.server} />}
+        {(list) => {
+          const items = attentionItems(list.workers);
+          return (
+            <>
+              <StatCards stats={attentionStats(items)} />
+              <Panel
+                title="Needs attention"
+                description="Each item leaves this list when the daemon reports it cleared."
+              >
+                <AttentionList items={items} now={now.server} />
+              </Panel>
+            </>
+          );
+        }}
       </Loaded>
     </section>
   );
 }
 
 /**
- * How many items need attention, beside the view's name in the navigation, on every page.
- * Nothing while there are none, or before the first answer.
+ * How many items need attention, for the count on the view's tab, on every page. `undefined`
+ * before the first answer.
  */
-export function AttentionCount() {
+export function useAttentionCount(): number | undefined {
   const { data } = useLiveResource<WorkerList>("/v1/workers");
-  if (data === undefined) return null;
-  const count = attentionItems(data.workers).length;
-  if (count === 0) return null;
-  return (
-    <span className="nav-count">
-      {count}
-      <span className="visually-hidden">{count === 1 ? " item" : " items"}</span>
-    </span>
-  );
+  return data === undefined ? undefined : attentionItems(data.workers).length;
 }
 
 export function AttentionList(props: {
@@ -85,7 +94,7 @@ function Subject({ item }: { readonly item: AttentionItem }) {
   if (!("device" in item)) return worker;
   return (
     <>
-      Device <span className="mono">{item.device.id}</span> on {worker}
+      Device <Id>{item.device.id}</Id> on {worker}
     </>
   );
 }

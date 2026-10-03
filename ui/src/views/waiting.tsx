@@ -1,9 +1,16 @@
+import { Id, PageHeader, Panel, StatCards } from "../layout";
 import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
 import { Status, waitingStageStatus } from "../status";
-import { requestedDevice, type WaitingList, type WaitingRequest, waitingOn } from "./waiting-model";
+import {
+  requestedDevice,
+  type WaitingList,
+  type WaitingRequest,
+  waitingOn,
+  waitingStats,
+} from "./waiting-model";
 import { type WorkerList, type WorkerView, workerName, workerPath } from "./workers-model";
 
 /**
@@ -16,14 +23,25 @@ export function WaitingView() {
   const now = useNow();
   return (
     <section className="view">
-      <h1>Waiting</h1>
+      <PageHeader
+        title="Waiting"
+        subtitle="Requests waiting for a device, oldest first, and their place in the queue."
+      />
       <Loaded state={requests}>
         {(list) => (
-          <WaitingTable
-            requests={list.requests}
-            workers={workers.data?.workers ?? []}
-            now={now.server}
-          />
+          <>
+            <StatCards stats={waitingStats(list.requests, now.server)} />
+            <Panel
+              title="Waiting requests"
+              description="Each leaves this list when it gets its device, fails or is cancelled."
+            >
+              <WaitingTable
+                requests={list.requests}
+                workers={workers.data?.workers ?? []}
+                now={now.server}
+              />
+            </Panel>
+          </>
         )}
       </Loaded>
     </section>
@@ -47,8 +65,12 @@ export function WaitingTable(props: {
           <th scope="col">Device</th>
           <th scope="col">Worker</th>
           <th scope="col">Stage</th>
-          <th scope="col">Place in queue</th>
-          <th scope="col">Waiting for</th>
+          <th scope="col" className="num">
+            Place in queue
+          </th>
+          <th scope="col" className="num">
+            Waiting for
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -66,10 +88,10 @@ export function WaitingTable(props: {
               <td data-label="Stage">
                 <Status tone={stage.tone}>{stage.word}</Status>
               </td>
-              <td data-label="Place in queue" className="mono">
+              <td data-label="Place in queue" className="num">
                 {request.queuePosition ?? "—"}
               </td>
-              <td data-label="Waiting for" className="mono">
+              <td data-label="Waiting for" className="num">
                 {formatDuration(now - request.createdAt)}
               </td>
             </tr>
@@ -86,7 +108,8 @@ function WorkerCell(props: {
 }) {
   const worker = waitingOn(props.request, props.workers);
   if (worker === undefined) {
-    return <span className="mono">{props.request.workerId ?? "—"}</span>;
+    const id = props.request.workerId;
+    return id === undefined ? "—" : <Id>{id}</Id>;
   }
   return <Link to={workerPath(worker.id)}>{workerName(worker)}</Link>;
 }
