@@ -93,7 +93,6 @@ export function useNow(): Now {
 }
 
 /** Calls `listener` for every event the stream delivers while the calling view is on screen. */
-// fallow-ignore-next-line unused-export -- the events view (#276) reads the stream through this.
 export function useLiveEvents(listener: (event: StreamEvent) => void): void {
   const { connection } = useLive();
   useEffect(() => connection.onEvent(listener), [connection, listener]);
@@ -103,7 +102,6 @@ export function useLiveEvents(listener: (event: StreamEvent) => void): void {
  * Calls `listener` each time the stream opens, with how long it was closed, so a view can load
  * what it missed (ADR 0013 §2, §5).
  */
-// fallow-ignore-next-line unused-export -- the events view (#276) fills its list through this.
 export function useStreamOpened(listener: (opened: StreamOpened) => void): void {
   const { connection } = useLive();
   useEffect(() => connection.onStreamOpened(listener), [connection, listener]);
