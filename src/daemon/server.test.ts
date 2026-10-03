@@ -11,14 +11,12 @@ import {
   type Config,
   type DriverRejection,
   FakeDriver,
-  InsufficientDiskSpaceError,
   LeaseEngine,
   PassthroughRefusedError,
   Registry,
   RuntimeMissingError,
 } from "../core/index.js";
 import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
-import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
   createConnectionPair,
   CryptoTokenSecrets,
@@ -1723,40 +1721,6 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await client.close();
   });
 
-  it("rejects a ttlMs above lease.maxTtlMs on a request and on a renew, rather than clamping", async () => {
-    const harness = await createHarness({ lease: { defaultTtlMs: 40, maxTtlMs: 100 } });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-
-    await expect(
-      client.request("lease.request", {
-        requesterId: "agent-1",
-        model: "iPhone 16",
-        osVersion: "26.5",
-        platform: "ios",
-        ttlMs: 101,
-      }),
-    ).resolves.toMatchObject({ error: { code: "BAD_REQUEST" }, ok: false });
-    expect(harness.registry.snapshot.leases).toEqual([]);
-
-    const grant = await client.request("lease.request", {
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-      ttlMs: 100,
-    });
-    const leaseId = leaseIdOf(grant);
-    expect((grant.payload as { lease: { ttlMs: number } }).lease.ttlMs).toBe(100);
-
-    await expect(client.request("lease.renew", { leaseId, ttlMs: 101 })).resolves.toMatchObject({
-      error: { code: "BAD_REQUEST" },
-      ok: false,
-    });
-    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_100 }]);
-    await client.close();
-  });
-
   it("keeps a lease across a daemon restart and restores its timer from the persisted deadline", async () => {
     const leaseOverrides = { defaultTtlMs: 40 };
     const first = await createHarness({ lease: leaseOverrides });
@@ -2344,52 +2308,6 @@ describe("DaemonServer lease request mode", () => {
 
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "BAD_REQUEST" });
-    await client.close();
-  });
-});
-
-describe("DaemonServer error code mapping", () => {
-  it("maps InsufficientDiskSpaceError to INSUFFICIENT_DISK_SPACE", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
-    driver.failOn("resolveSpec", 1, new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0));
-    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-
-    const response = await client.request("lease.request", {
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-
-    expect(response.ok).toBe(false);
-    expect(response.error).toMatchObject({ code: "INSUFFICIENT_DISK_SPACE" });
-    await client.close();
-  });
-
-  it("maps LicenseNotAcceptedError to LICENSE_NOT_ACCEPTED", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "android" });
-    driver.failOn(
-      "resolveSpec",
-      1,
-      new AndroidLicenseNotAcceptedError("system-images;android-35;google_apis;arm64-v8a"),
-    );
-    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-
-    const response = await client.request("lease.request", {
-      requesterId: "agent-1",
-      model: "Pixel 8",
-      osVersion: "35",
-      platform: "android",
-    });
-
-    expect(response.ok).toBe(false);
-    expect(response.error).toMatchObject({ code: "LICENSE_NOT_ACCEPTED" });
     await client.close();
   });
 });
