@@ -2,6 +2,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import type { z } from "zod";
+
 import { EVENT_FILE_NAME, type EventEnvelope, eventKey, readEventFile } from "../bus/index.js";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
 import {
@@ -38,7 +40,7 @@ import {
   type StatusGetOutput,
   type WorkerView,
 } from "../admin/index.js";
-import type { Role } from "../contract/index.js";
+import { type Role, waitingRequestSchema } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import {
   awaitWithin,
@@ -49,6 +51,8 @@ import {
 import { followLog, type Signals } from "./follow-log.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
+
+type WaitingRequestEntry = z.infer<typeof waitingRequestSchema>;
 
 const USAGE = `Usage: simlock <command> [options]
 
@@ -1290,22 +1294,58 @@ async function runList(
     devices: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     leases: { type: "boolean" },
+    requests: { type: "boolean" },
     rules: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: simlock list [--devices|--leases|--rules]\n");
+    environment.stdout.write("Usage: simlock list [--devices|--leases|--rules|--requests]\n");
     return 0;
   }
-  if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
-    throw new UsageError("list accepts only one of --devices, --leases, or --rules");
-  const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
+  if ([values.devices, values.leases, values.rules, values.requests].filter(Boolean).length > 1)
+    throw new UsageError("list accepts only one of --devices, --leases, --rules, or --requests");
   const client = await connectDaemonClient(environment, token);
   try {
+    if (values.requests) {
+      const requests = waitingRequestSchema.array().parse(await client.list({ kind: "requests" }));
+      environment.stdout.write(`${formatWaitingRequests(requests, environment.clock.now())}\n`);
+      return 0;
+    }
+    const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
     writeResult(environment, await client.list({ kind }));
     return 0;
   } finally {
     await client.close();
   }
+}
+
+/**
+ * One line per waiting request: `Request req_7: agent-b on wrk_1, ios iPhone 16 18.4 mode slim,
+ * queued at 2, waiting 12s` -- the request, who sent it, the worker whose queue it waits in, the
+ * device it asked for, where it stands, and for how long.
+ */
+function formatWaitingRequests(requests: readonly WaitingRequestEntry[], now: number): string {
+  if (requests.length === 0) return "No requests are waiting.";
+  return requests
+    .map((request) => {
+      const { spec } = request;
+      const device = [
+        spec.platform,
+        spec.model,
+        spec.osVersion,
+        spec.mode === undefined ? undefined : `mode ${spec.mode}`,
+        spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+      ]
+        .filter((part) => part !== undefined)
+        .join(" ");
+      const where = request.workerId === undefined ? "" : ` on ${request.workerId}`;
+      const stage =
+        request.queuePosition === undefined
+          ? request.stage
+          : `${request.stage} at ${String(request.queuePosition)}`;
+      const waited = Math.max(0, Math.round((now - request.createdAt) / 1000));
+      return `Request ${request.id}: ${request.requesterId}${where}, ${device}, ${stage}, waiting ${String(waited)}s`;
+    })
+    .join("\n");
 }
 
 async function runCatalog(

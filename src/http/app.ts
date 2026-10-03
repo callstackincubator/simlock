@@ -282,6 +282,17 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json({ request: serializeRequest(outcome.view) }, 201);
   });
 
+  // Every request waiting for a device, whoever sent it. Operator-role in effect: `list.get` is
+  // an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher.
+  app.get("/v1/lease-requests", agentAuth, async (c) => {
+    const requests = await deps.dispatch(
+      "list.get",
+      { kind: "requests" },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json({ requests });
+  });
+
   app.get("/v1/lease-requests/:id", agentAuth, async (c) => {
     const id = c.req.param("id");
     const initial = tracker.get(id);

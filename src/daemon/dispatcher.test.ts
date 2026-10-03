@@ -1494,6 +1494,130 @@ describe("Dispatcher: status.get installs in progress", () => {
   });
 });
 
+describe("Dispatcher: list.get requests and status.get waiting", () => {
+  const IOS_REQUEST = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+
+  /** A lease request from `requesterId`, left running: it resolves once granted. */
+  function request(
+    dispatcher: Dispatcher,
+    requesterId: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    return dispatcher.dispatch(
+      "lease.request",
+      { ...IOS_REQUEST, requesterId, ...extra },
+      session({ principal: "host" }),
+    );
+  }
+
+  /** Fills iOS's two devices (`testConfig`), so the next request queues. */
+  async function fillIos(dispatcher: Dispatcher): Promise<void> {
+    await request(dispatcher, "holder-1");
+    await request(dispatcher, "holder-2");
+  }
+
+  const requests = (dispatcher: Dispatcher) =>
+    dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
+
+  it("list.get requests on a worker returns every open request with its queue position", async () => {
+    const { clock, dispatcher, engine } = await buildDispatcher();
+    await fillIos(dispatcher);
+    const firstAt = clock.now();
+    void request(dispatcher, "agent-a", { idempotencyKey: "key-a", mode: "full" });
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    clock.advance(5_000);
+    void request(dispatcher, "agent-b");
+    await expect.poll(() => engine.queueDepth).toBe(2);
+
+    const listed = await requests(dispatcher);
+
+    expect(listed).toEqual([
+      {
+        createdAt: firstAt,
+        id: expect.any(String),
+        queuePosition: 1,
+        requesterId: "agent-a",
+        spec: { ...IOS_REQUEST, mode: "full" },
+        stage: "queued",
+      },
+      {
+        createdAt: firstAt + 5_000,
+        id: expect.any(String),
+        queuePosition: 2,
+        requesterId: "agent-b",
+        spec: IOS_REQUEST,
+        stage: "queued",
+      },
+    ]);
+    // The idempotency key and the owner stay the requester's.
+    expect(JSON.stringify(listed)).not.toContain("key-a");
+    expect(JSON.stringify(listed)).not.toContain('"host"');
+  });
+
+  it("a request that is starting a device has stage starting and no queue position", async () => {
+    const { dispatcher } = await buildDispatcher({
+      driverOptions: { latencyMs: { provision: 60_000 } },
+    });
+    void request(dispatcher, "agent-a");
+
+    await expect.poll(async () => (await requests(dispatcher)).length).toBe(1);
+
+    expect(await requests(dispatcher)).toEqual([
+      {
+        createdAt: expect.any(Number),
+        id: expect.any(String),
+        requesterId: "agent-a",
+        spec: IOS_REQUEST,
+        stage: "starting",
+      },
+    ]);
+  });
+
+  it("a granted, failed or cancelled request is not listed", async () => {
+    const { clock, dispatcher, engine, registry } = await buildDispatcher();
+    await fillIos(dispatcher);
+    const timedOut = request(dispatcher, "agent-timeout", { timeoutMs: 1_000 });
+    const cancelled = request(dispatcher, "agent-cancel");
+    await expect.poll(() => engine.queueDepth).toBe(2);
+    expect(await requests(dispatcher)).toHaveLength(2);
+
+    clock.advance(1_000);
+    await expect(timedOut).rejects.toMatchObject({ name: "QueueTimeoutError" });
+    await dispatcher.dispatch(
+      "lease.cancel",
+      { requesterId: "agent-cancel" },
+      session({ principal: "host" }),
+    );
+    await expect(cancelled).rejects.toThrow();
+
+    await expect
+      .poll(() => registry.leaseRequests().map((record) => record.state))
+      .toEqual(["granted", "granted", "failed", "cancelled"]);
+    expect(await requests(dispatcher)).toEqual([]);
+  });
+
+  it("status.get waiting matches list.get requests on a worker", async () => {
+    const { dispatcher, engine } = await buildDispatcher({
+      driverOptions: { latencyMs: { provision: 60_000 } },
+    });
+    // Both iOS devices are being made: the two requests start, the third queues behind them.
+    void request(dispatcher, "agent-a");
+    void request(dispatcher, "agent-b");
+    void request(dispatcher, "agent-c");
+    await expect.poll(() => engine.queueDepth).toBe(1);
+
+    const listed = await requests(dispatcher);
+    const { waiting } = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(listed.map((entry) => ("stage" in entry ? entry.stage : undefined))).toEqual([
+      "starting",
+      "starting",
+      "queued",
+    ]);
+    expect(waiting).toEqual(listed);
+  });
+});
+
 /** Lets every settled promise and queued continuation run. */
 async function flushPromises(): Promise<void> {
   for (let count = 0; count < 100; count += 1) await Promise.resolve();

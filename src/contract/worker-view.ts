@@ -47,7 +47,7 @@ export interface WorkerReads {
  * reads that carry them were made. */
 export type WorkerViewReport = Pick<
   WorkerView,
-  "capacity" | "devices" | "health" | "host" | "installs" | "leases" | "queueDepth"
+  "capacity" | "devices" | "health" | "host" | "installs" | "leases" | "queueDepth" | "waiting"
 > &
   Partial<Pick<WorkerView, "catalog" | "downloads" | "lease">>;
 
@@ -67,6 +67,9 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
     installs: status.installs ?? [],
     leases: status.leases,
     queueDepth: status.queueDepth,
+    // Copied as `installs` is: the requests waiting in the worker's own queue. A worker too old
+    // to list them reports none.
+    waiting: status.waiting ?? [],
     devices: viewDevicesSchema.parse(reads.devices),
     ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
     ...(config === undefined

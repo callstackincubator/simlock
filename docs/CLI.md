@@ -910,7 +910,11 @@ component installs waiting or running on that worker, whoever started them,
 in the shape [`simlock status`](#simlock-status) describes. It is re-read
 when an install on that worker starts, finishes or fails, and on every
 periodic refresh, so an install queued behind another may appear only then.
-A disconnected or incompatible worker lists none. `catalog` is what that
+A disconnected or incompatible worker lists none. `waiting` lists the
+requests waiting in that worker's own queue, the same ones
+[`simlock list --requests`](#simlock-list---devices--leases--rules--requests)
+run on that worker prints. It is re-read on every lease event on that worker,
+and a disconnected or incompatible worker lists none. `catalog` is what that
 worker can lease, each model with the runtimes it pairs with, and lists a
 newly installed component as soon as its install ends. `host` is the
 machine: operating system, its version, CPU architecture, and the version of
@@ -1127,10 +1131,10 @@ depth, plus a `workers` array of worker views (the same records
 [`simlock worker list`](#simlock-worker-listdrainundrainremove) prints). See
 [Against a gateway](#against-a-gateway).
 
-## `simlock list [--devices|--leases|--rules]`
+## `simlock list [--devices|--leases|--rules|--requests]`
 
 Scriptable listings of managed devices, active leases, or registered cleanup
-rules. Defaults to `--devices`. Against a gateway, `--devices` and `--leases`
+rules, and the requests waiting for a device. Defaults to `--devices`. Against a gateway, `--devices` and `--leases`
 are the fleet's (each record naming its `workerId`) while `--rules` lists
 nothing at all: cleanup rules run where the devices and the reaper are, and a
 gateway has neither. Each lease record's `requesterId` is the
@@ -1145,6 +1149,30 @@ returns rather than a worker's full registry records: a gateway has never held
 a device's driver address or a driver's private data, and does not invent one.
 `--rules` lists nothing on a gateway — cleanup rules are a machine's own
 configuration, and a gateway runs no reaper.
+
+`--requests` prints one line per request waiting for a device, oldest first,
+rather than JSON:
+
+```
+Request req_7: agent-b, ios iPhone 16 18.4 mode slim, queued at 2, waiting 12s
+Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 16, starting, waiting 3s
+```
+
+Each line names the request, the agent that sent it, the device it asked for
+(only the fields it named), where it stands, and how long it has waited.
+`queued at 2` is its place in the queue, counting from 1, the requests ahead
+of it that are already starting included. `starting` means the daemon is working
+on it: placing it as it arrives, or finding, creating, booting or downloading
+a device for it. With nothing waiting it prints
+`No requests are waiting.` A granted, failed or cancelled request is not
+listed.
+
+Against a gateway, `--requests` lists the gateway's own queue first, then
+the requests waiting in each worker's own queue, from that worker's local
+agents, with ` on <workerId>`. A request the gateway has sent to a worker is
+listed once, as the gateway's. A disconnected worker's requests are not
+listed. A worker's request is stamped by that worker's clock, so if that
+clock is off, its time waited is off by as much.
 
 ## `simlock catalog [--platform <ios|android>] [--json]`
 

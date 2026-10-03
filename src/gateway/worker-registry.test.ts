@@ -369,6 +369,37 @@ describe("WorkerRegistry", () => {
     expect(workers.view("wrk_2")?.installs).toBeUndefined();
   });
 
+  it("drops a worker's waiting requests from its view when it disconnects or turns incompatible", () => {
+    const { workers } = registry();
+    const waiting = [
+      {
+        createdAt: 1,
+        id: "req_1",
+        queuePosition: 1,
+        requesterId: "local-agent",
+        spec: { model: "iPhone 17", platform: "ios" as const },
+        stage: "queued" as const,
+      },
+    ];
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.connected("wrk_2", undefined, "0.3.0");
+    workers.refresh("wrk_1", { waiting });
+    workers.refresh("wrk_2", { waiting });
+    expect(workers.view("wrk_1")?.waiting).toEqual(waiting);
+
+    workers.disconnected("wrk_1");
+    const incompatible = workers.incompatible(
+      "wrk_2",
+      undefined,
+      { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+      "0.2.0",
+    );
+
+    expect(workers.view("wrk_1")?.waiting).toBeUndefined();
+    expect(incompatible.waiting).toBeUndefined();
+    expect(workers.view("wrk_2")?.waiting).toBeUndefined();
+  });
+
   it("keeps a disconnected view with the leases it last reported", () => {
     const { clock, events, workers } = registry();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

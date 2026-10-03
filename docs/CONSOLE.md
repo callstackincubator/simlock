@@ -9,8 +9,8 @@ The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 This version has sign-in, the console's navigation (Workers, Leases, Waiting,
-Attention and Events), and the Workers pages. The other pages say "Coming
-soon" until their views are built.
+Attention and Events), the Workers pages and the Waiting page. The other
+pages say "Coming soon" until their views are built.
 
 ## Turn it on
 
@@ -125,14 +125,36 @@ Select a worker to open its page. It adds:
 A page the daemon cannot answer on a single host says "Not available on a
 single host" in place of its content.
 
+## Waiting
+
+**Waiting** lists every request waiting for a device, oldest first, as
+`simlock list --requests` does. Each shows:
+
+| Fact | What it says |
+| --- | --- |
+| Requester | The agent that asked |
+| Device | The platform and model it asked for, and the runtime, mode and image tag when it named them |
+| Worker | The worker whose own queue it waits in, or `—` for a request in a gateway's queue |
+| Stage | `queued` while it waits its turn, `starting` while the daemon is working on it: placing it as it arrives, or finding, creating, booting or downloading a device for it |
+| Place in queue | Where it stands, counting from 1, the requests ahead of it that are already starting included; `—` while starting |
+| Waiting for | How long since the daemon received it |
+
+On a gateway the list has the gateway's own queue and, for each connected
+worker, the requests its own agents sent to it directly. A request the
+gateway has passed to a worker shows once, as the gateway's. On a single
+host every request shows that host as its worker.
+
+A request leaves the list as soon as it gets its device, fails, or is
+cancelled.
+
 ## Live updates
 
 Every page keeps itself current. A change on the daemon, such as a lease
 being granted or a worker disconnecting, shows within about a second, with
 no reload. Durations count up every second on their own. They are measured
 by the clock of the daemon the console talks to, so a browser whose clock is
-wrong still shows them right. On a gateway, a worker's lease and install times
-come from that worker's clock: if it is far from the gateway's, its durations
+wrong still shows them right. On a gateway, a worker's lease, install and
+waiting times come from that worker's clock: if it is far from the gateway's, its durations
 are off by as much.
 
 A hidden tab stops asking the daemon for anything. When you come back to it,

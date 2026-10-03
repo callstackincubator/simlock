@@ -39,6 +39,7 @@ export type WorkerViewSnapshot = Pick<
   | "leases"
   | "queueDepth"
   | "version"
+  | "waiting"
 >;
 
 /** A worker's device in the shape a grant carries it: what `GET /v1/leases/{id}` builds a lease
@@ -235,8 +236,8 @@ export class WorkerRegistry {
     };
     // ADR 0008 §8: host facts come from `status.get`, which an incompatible worker is never
     // asked. A view left over from an earlier, compatible session must not keep showing them,
-    // nor the installs that status listed (ADR 0010 §7).
-    const { host: _stale, installs: _staleInstalls, ...withoutHost } = view;
+    // nor the installs or waiting requests that status listed (ADR 0010 §7).
+    const { host: _stale, installs: _staleInstalls, waiting: _staleWaiting, ...withoutHost } = view;
     this.#workers.set(workerId, withoutHost);
     this.#notifyViewsChanged();
     return withoutHost;
@@ -345,8 +346,9 @@ export class WorkerRegistry {
     const existing = this.#workers.get(workerId);
     if (existing === undefined || existing.connection === "disconnected") return;
     // ADR 0010 §7: an install on a worker nobody can reach is not known to be in progress, so
-    // the view stops listing it rather than showing it running for ever.
-    const { installs: _unknown, ...withoutInstalls } = existing;
+    // the view stops listing it rather than showing it running for ever. The same goes for the
+    // requests waiting in that worker's own queue.
+    const { installs: _unknown, waiting: _unknownWaiting, ...withoutInstalls } = existing;
     this.#workers.set(workerId, {
       ...withoutInstalls,
       connection: "disconnected",

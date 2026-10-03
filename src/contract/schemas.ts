@@ -236,6 +236,15 @@ export const leaseGrantSchema = z.object({
   timing: leaseTimingSchema,
 });
 
+/** The device a lease request named, with every field it left out left out. */
+const requestedDeviceSchema = z.object({
+  platform: platformSchema,
+  model: z.string(),
+  osVersion: z.string().optional(),
+  mode: deviceModeSchema.optional(),
+  imageTag: imageTagSchema.optional(),
+});
+
 /**
  * One stored lease request (`LeaseRequestRecord`, src/core/domain.ts): the shape a frontend reads
  * a request back in, whichever frontend sent it. `grant` is the grant the request was answered
@@ -246,18 +255,31 @@ export const leaseRequestRecordSchema = z.object({
   requesterId: z.string(),
   ownerId: z.string(),
   idempotencyKey: z.string().optional(),
-  request: z.object({
-    platform: platformSchema,
-    model: z.string(),
-    osVersion: z.string().optional(),
-    mode: deviceModeSchema.optional(),
-    imageTag: imageTagSchema.optional(),
-  }),
+  request: requestedDeviceSchema,
   createdAt: z.number(),
   state: z.enum(["open", "granted", "failed", "cancelled"]),
   settledAt: z.number().optional(),
   grant: leaseGrantSchema.optional(),
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
+});
+
+/**
+ * A request still waiting for a device (`list.get` with `requests`, `status.get`'s `waiting`).
+ * `stage` is `queued` while the request holds a place in the queue, with that place in
+ * `queuePosition`, counted from 1 the way `lease.queued` counts it; `starting` while the daemon is
+ * working on it: placing it as it arrives, or finding, making, booting or downloading a device
+ * for it. `workerId` names the worker whose own queue
+ * the request waits in; only a gateway sets it. The request's idempotency key and owner are
+ * never part of it: a key lets its holder replay the request, and neither is the operator's.
+ */
+export const waitingRequestSchema = z.object({
+  id: z.string(),
+  requesterId: z.string(),
+  spec: requestedDeviceSchema,
+  createdAt: z.number(),
+  stage: z.enum(["queued", "starting"]),
+  queuePosition: z.number().int().positive().optional(),
+  workerId: z.string().optional(),
 });
 
 /**
@@ -878,6 +900,10 @@ export const workerViewSchema = z.object({
   /** ADR 0010 §7: the `installs` of the worker's last `status.get`. Empty for a worker whose
    * status lists none, including one too old to list them. */
   installs: workerInstallsSchema.optional(),
+  /** The `waiting` of the worker's last `status.get`: the requests waiting in its own queue,
+   * copied as `installs` is. Empty for a worker too old to list them; absent for a
+   * disconnected or incompatible one, which the gateway cannot ask. */
+  waiting: z.array(waitingRequestSchema).optional(),
 });
 
 /**

@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 
 import { ComingSoon } from "./coming-soon";
+import { WaitingView } from "./waiting";
 import { WorkersView } from "./workers";
 
 /**
@@ -18,7 +19,7 @@ export interface View {
 export const VIEWS: readonly View[] = [
   { path: "/workers", label: "Workers", Component: WorkersView },
   { path: "/leases", label: "Leases", Component: () => <ComingSoon title="Leases" /> },
-  { path: "/waiting", label: "Waiting", Component: () => <ComingSoon title="Waiting" /> },
+  { path: "/waiting", label: "Waiting", Component: WaitingView },
   { path: "/attention", label: "Attention", Component: () => <ComingSoon title="Attention" /> },
   { path: "/events", label: "Events", Component: () => <ComingSoon title="Events" /> },
 ];

@@ -394,6 +394,40 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
+  it("lists an open request only while a wait drives it, never one left open with nothing behind it", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+    // An open record no wait drives, as a restarted daemon finds one before settling it.
+    const orphan = await store.createLeaseRequest({
+      ownerId: "agent",
+      request,
+      requesterId: "lost",
+    });
+    const { id } = await book.admit(request, keyed, () => ({ promise: new Promise(() => {}) }));
+
+    expect(book.waiting([{ id: orphan.id }, { id, queuePosition: 1 }])).toEqual([
+      { createdAt: 1_000, id: orphan.id, requesterId: "lost", spec: request, stage: "starting" },
+      {
+        createdAt: 1_000,
+        id,
+        queuePosition: 1,
+        requesterId: "agent",
+        spec: request,
+        stage: "queued",
+      },
+    ]);
+    expect(book.waiting([{ id, queuePosition: 1 }])).toEqual([
+      {
+        createdAt: 1_000,
+        id,
+        queuePosition: 1,
+        requesterId: "agent",
+        spec: request,
+        stage: "queued",
+      },
+    ]);
+  });
+
   it("replays a repeat naming the same mode", async () => {
     const book = bookOver(memoryStore());
     await book.admit({ ...request, mode: "slim" }, keyed, () => granted("lse_1"));

@@ -4916,3 +4916,79 @@ function testConfig(): Config {
     },
   };
 }
+
+describe("simlock list --requests", () => {
+  it("prints a starting request without a place in the queue, one on a worker with that worker, and a future timestamp as waiting 0s", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      list: async (input) => {
+        asked.push(input);
+        return [
+          {
+            createdAt: -12_000,
+            id: "req_1",
+            requesterId: "agent-b",
+            spec: { imageTag: "google_apis", model: "Pixel 8", platform: "android" },
+            stage: "starting",
+          },
+          {
+            createdAt: -3_400,
+            id: "req_2",
+            queuePosition: 2,
+            requesterId: "local-agent",
+            spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+            stage: "queued",
+            workerId: "wrk_1",
+          },
+          {
+            // Stamped by a worker whose clock runs ahead of this one.
+            createdAt: 5_000,
+            id: "req_3",
+            queuePosition: 1,
+            requesterId: "skewed-agent",
+            spec: { model: "iPhone 16", platform: "ios" },
+            stage: "queued",
+            workerId: "wrk_2",
+          },
+        ];
+      },
+    });
+
+    await expect(
+      runCli(["list", "--requests"], output.environmentWith({ connectAdmin: async () => client })),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ kind: "requests" }]);
+    expect(output.stdout).toBe(
+      "Request req_1: agent-b, android Pixel 8 image tag google_apis, starting, waiting 12s\n" +
+        "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
+        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
+    );
+  });
+
+  it.each([["--devices"], ["--leases"], ["--rules"]])(
+    "exits 2 with USAGE for --requests beside %s, without asking the daemon",
+    async (other) => {
+      const output = outputCapture();
+      let listed = 0;
+      const client = fakeClient({
+        list: () => {
+          listed += 1;
+          return Promise.resolve([]);
+        },
+      });
+
+      await expect(
+        runCli(
+          ["list", "--requests", other],
+          output.environmentWith({ connectAdmin: async () => client }),
+        ),
+      ).resolves.toBe(2);
+      expect(listed).toBe(0);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+        error: { code: "USAGE" },
+      });
+    },
+  );
+});

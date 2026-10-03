@@ -142,11 +142,13 @@ export interface GatewayDispatcherOptions {
     | "ownerId"
     | "leaseRequesterId"
     | "pendingRequestOwner"
+    | "waitingRequests"
   >;
   /** #118: read-only access for `lease.list`/`list.get`/`status.get`'s lease projection
    * (`FleetLeaseIndex#project`/`#all`) -- kept separate from `coordinator` because this
-   * dispatcher only ever *reads* it, never mutates it. */
-  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all">;
+   * dispatcher only ever *reads* it, never mutates it. `isGatewayRequester` marks the requests
+   * this gateway sent a worker, which `list.get`'s `requests` already lists as its own. */
+  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "isGatewayRequester">;
 }
 
 export class GatewayDispatcher {
@@ -241,8 +243,9 @@ export class GatewayDispatcher {
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       host: this.options.host,
-      // ADR 0005 §20: the gateway's own fleet queue depth.
+      // ADR 0005 §20: the gateway's own fleet queue depth, and the requests waiting in it.
       queueDepth: this.options.coordinator.queueDepth,
+      waiting: [...this.options.coordinator.waitingRequests()],
       leaseIndex: this.options.leaseIndex,
     });
     // ADR 0011 §3: a gateway serves the console on its own listener, as a worker does.
@@ -363,6 +366,8 @@ export class GatewayDispatcher {
         return this.#fleetLeases();
       case "rules":
         return [];
+      case "requests":
+        return this.#fleetWaiting();
       case "devices":
       case undefined:
         return this.options.workers
@@ -370,6 +375,23 @@ export class GatewayDispatcher {
           .flatMap((view) => view.devices.map((device) => ({ ...device, workerId: view.id })));
     }
   };
+
+  /**
+   * The fleet queue's requests, then each worker's own queue, each of those with its `workerId`.
+   * A worker lists a request this gateway sent it under the gateway's own requester id (ADR 0005
+   * §27); the gateway already lists that request, so the worker's copy is left out.
+   */
+  #fleetWaiting() {
+    const { leaseIndex } = this.options;
+    const onWorkers = this.options.workers
+      .views()
+      .flatMap((view) =>
+        (view.waiting ?? [])
+          .filter((request) => !leaseIndex.isGatewayRequester(request.requesterId))
+          .map((request) => ({ ...request, workerId: view.id })),
+      );
+    return [...this.options.coordinator.waitingRequests(), ...onWorkers];
+  }
 
   /** Every lease every worker's view reports, each projected through the lease index -- rewritten
    * to its gateway id/requester/`worker` for a lease this gateway issued (test: "lease.list
