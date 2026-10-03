@@ -788,10 +788,13 @@ export class LicenseNotAcceptedError extends Error {
 
 /**
  * Serializes disk-space preflight across concurrent component installs sharing a volume.
- * `assertDiskSpace` alone only ever sees the disk's free space at the instant it is called: two
- * installs racing the same preflight (an iOS runtime download and an Android system-image
- * install, or two of either) can each observe enough free space and both proceed, jointly
- * overfilling the volume neither alone would have. A single shared `DiskSpaceGuard` instance,
+ * Checked before any multi-GB component download/install, so a full disk fails fast with a
+ * clear message instead of filling up mid-download (see safety rule 4's spirit -- downloads
+ * must never surprise the machine they run on). A check of free space alone only ever sees the
+ * disk at the instant it runs: two installs racing the same preflight (an iOS runtime download
+ * and an Android system-image install, or two of either) can each observe enough free space and
+ * both proceed, jointly overfilling the volume neither alone would have. A single shared
+ * `DiskSpaceGuard` instance,
  * held by `ComponentInstaller` (wired once in `src/daemon/main.ts`; drivers never see it),
  * fixes that by tracking bytes reserved but not yet released, keyed per path, and checking free
  * space *minus* those outstanding reservations rather than free space alone.
@@ -807,8 +810,7 @@ export class DiskSpaceGuard {
 
   /**
    * Reserves `requiredBytes` against `path`'s free space, minus whatever this guard already has
-   * outstanding there. Throws `InsufficientDiskSpaceError` (same shape `assertDiskSpace` throws)
-   * when the reservation would not fit. On success, returns a release function the caller must
+   * outstanding there. Throws `InsufficientDiskSpaceError` when the reservation would not fit. On success, returns a release function the caller must
    * invoke exactly once (typically in a `finally`) once the install this reservation was made
    * for has settled, freeing the bytes for the next reservation.
    */
@@ -841,25 +843,5 @@ export class DiskSpaceGuard {
         this.#outstandingBytesByPath.set(path, remaining);
       }
     };
-  }
-}
-
-/**
- * Checked before a driver starts any multi-GB component download/install, so a full disk fails
- * fast with a clear message instead of filling up mid-download (see safety rule 4's spirit --
- * downloads must never surprise the machine they run on). `path` defaults to `"."`, the same
- * convention `CleanupReaper` uses for its own disk-pressure check (`src/core/reaper.ts`): the
- * daemon process's own working-directory volume. Single-shot: does not account for another
- * concurrent install's own in-flight reservation -- see `DiskSpaceGuard` for that.
- */
-export async function assertDiskSpace(
-  filesystem: Pick<Filesystem, "diskFree">,
-  platform: Platform,
-  requiredBytes: number,
-  path = ".",
-): Promise<void> {
-  const availableBytes = await filesystem.diskFree(path);
-  if (availableBytes < requiredBytes) {
-    throw new InsufficientDiskSpaceError(platform, requiredBytes, availableBytes);
   }
 }
