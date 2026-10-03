@@ -1,11 +1,13 @@
 import type { ComponentType } from "react";
 
 import { ComingSoon } from "./coming-soon";
+import { WorkersView } from "./workers";
 
 /**
  * Every view the console has, in navigation order. An entry is one nav link and one page: its
  * `path` is the page's URL, `label` names it in the nav and the page title, and `Component`
- * renders the page inside the shell. Adding a view is adding an entry here.
+ * renders the page inside the shell. A view's own pages live under its path, as one worker's
+ * page lives at `/workers/<id>`. Adding a view is adding an entry here.
  */
 export interface View {
   readonly path: `/${string}`;
@@ -14,7 +16,7 @@ export interface View {
 }
 
 export const VIEWS: readonly View[] = [
-  { path: "/workers", label: "Workers", Component: () => <ComingSoon title="Workers" /> },
+  { path: "/workers", label: "Workers", Component: WorkersView },
   { path: "/leases", label: "Leases", Component: () => <ComingSoon title="Leases" /> },
   { path: "/waiting", label: "Waiting", Component: () => <ComingSoon title="Waiting" /> },
   { path: "/attention", label: "Attention", Component: () => <ComingSoon title="Attention" /> },

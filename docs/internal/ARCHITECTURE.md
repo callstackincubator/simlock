@@ -62,7 +62,12 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   auth or request log. The console is a client of the HTTP API like any other:
   it reads only `/v1`, with the operator's token, through one fetch helper
   (`ui/src/api.ts`). Its views are listed once, in `ui/src/views/index.tsx`,
-  which is both the navigation and the router's table. See
+  which is both the navigation and the router's table. Views read data only
+  through the live layer (ADR 0013, `ui/src/live/`): `useLiveResource(path)`
+  marks a route as one the screen reads, and `LiveConnection` refetches every
+  such route on each event from `GET /v1/events/stream` and every second,
+  one request per route at a time; it also owns the disconnect, backoff and
+  recovery rules and the clock offset behind `useNow()`. See
   [CONSOLE.md](../CONSOLE.md) for the user's side and
   [DESIGN.md](DESIGN.md) for the style.
 - **CLI**: by default it acquires a lease, prints one JSON result line on

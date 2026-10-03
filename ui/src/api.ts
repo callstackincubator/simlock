@@ -37,6 +37,8 @@ interface SendOptions {
   readonly fetch: Fetch;
   /** Absent for the one route that needs none, `GET /v1/healthz`. */
   readonly token?: string;
+  /** Aborts the request, and the body of a response already handed back. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -58,6 +60,9 @@ export async function send<T>(
     timedOut = true;
     controller.abort();
   }, REQUEST_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  if (options.signal?.aborted === true) abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
     const response = await options.fetch(path, {
       cache: "no-store",
@@ -70,13 +75,31 @@ export async function send<T>(
     if (timedOut) throw new RequestTimeoutError(path);
     throw error;
   } finally {
+    // The `abort` listener stays: a streamed body is still being read after this returns, and
+    // `signal` is how its reader closes it.
     clearTimeout(timer);
   }
+}
+
+/** A response's body, with the `Date` header the daemon sent it with (ADR 0013 §4). */
+export interface ApiResponse<T> {
+  readonly body: T;
+  /** The raw `Date` header, or `null` when the response had none. */
+  readonly date: string | null;
 }
 
 export interface ApiClient {
   /** `GET` a route and parse its JSON. Rejects with {@link ApiError} on any error status. */
   getJson<T>(path: ApiPath): Promise<T>;
+  /** {@link getJson}, with the response's `Date` header. */
+  get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  /**
+   * Opens a streaming route and hands back its body once the headers arrive. The 10-second
+   * bound covers the headers only; the body is open until it ends or `signal` aborts it.
+   */
+  stream(path: ApiPath, signal: AbortSignal): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
+  /** `GET /v1/healthz`, with no token: whether the daemon answered with success. */
+  healthz(): Promise<ApiResponse<boolean>>;
 }
 
 export interface ApiClientOptions {
@@ -88,20 +111,40 @@ export interface ApiClientOptions {
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
+  const authorized = (signal?: AbortSignal): SendOptions => {
+    const token = options.token();
+    return {
+      fetch: options.fetch,
+      ...(token === undefined ? {} : { token }),
+      ...(signal === undefined ? {} : { signal }),
+    };
+  };
+  const get = <T>(path: ApiPath) =>
+    send(path, authorized(), async (response) => {
+      await refuseError(response, options.signOut);
+      return { body: (await response.json()) as T, date: response.headers.get("Date") };
+    });
   return {
-    getJson: <T>(path: ApiPath) => {
-      const token = options.token();
-      return send(path, { fetch: options.fetch, ...(token === undefined ? {} : { token }) }, (r) =>
-        readJson<T>(r, options.signOut),
-      );
-    },
+    get,
+    getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,
+    stream: (path, signal) =>
+      send(path, authorized(signal), async (response) => {
+        await refuseError(response, options.signOut);
+        if (response.body === null) throw new ApiError(response.status, undefined, "No body");
+        return { body: response.body, date: response.headers.get("Date") };
+      }),
+    healthz: () =>
+      send("/v1/healthz", { fetch: options.fetch }, async (response) => ({
+        body: response.ok,
+        date: response.headers.get("Date"),
+      })),
   };
 }
 
-async function readJson<T>(response: Response, signOut: () => void): Promise<T> {
+/** Throws {@link ApiError} for an error status; a `401` signs the operator out first. */
+async function refuseError(response: Response, signOut: () => void): Promise<void> {
   if (response.status === 401) signOut();
   if (!response.ok) throw await apiError(response);
-  return (await response.json()) as T;
 }
 
 /** The API's error body is `{ error: { code, message } }`; anything else still fails by status. */

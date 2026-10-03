@@ -68,7 +68,10 @@ sees orange should think "I can act here", nothing else.
 
 **A status always shows a word.** The colour is a second signal, never the only
 one: `● connected`, not a green dot. Use the daemon's own word for the state
-(`leased`, `quarantined`, `drained`), so the console and the CLI agree.
+(`leased`, `quarantined`, `drained`), so the console and the CLI agree. In the
+console a status is an 8px square of its colour, then the word in `--text`
+(`Status` in `ui/src/status.tsx`). A word the console does not know, from a
+newer daemon, shows as itself in `--status-idle`.
 
 Every pair of text and background colour in both themes meets WCAG AA: 4.5:1
 for text, and 3:1 for the focus ring and an input's border. The browser lane
@@ -94,7 +97,13 @@ scale; never a value between.
 ## Layout
 
 - Phone first. Every page works at 360px wide with no sideways scrolling of the
-  page. A wide table scrolls inside its own box, never the page.
+  page. Under 768px a table's rows stack into blocks, each cell a line with its
+  column's name beside it (`data-label`), so nothing scrolls sideways.
+- A list of things that each carry several facts, such as workers, is a grid
+  of cards: `--surface` panels, each a heading and its facts as label and value
+  pairs.
+- One line under the header says how the console's connection is, on every
+  page.
 - Under 768px: the header, then the navigation as a wrapping row, then the
   page. From 768px: the header across the top, the navigation as a 200px
   column on the left, the page beside it.

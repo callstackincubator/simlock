@@ -11,7 +11,7 @@ export default defineConfig({
           name: "unit",
           // `ui/` holds the console's own unit tests: plain functions, no browser. The browser
           // lane is Playwright's (`pnpm test:console`).
-          include: ["src/**/*.test.ts", "ui/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
         },
       },
       {

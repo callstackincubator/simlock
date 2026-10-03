@@ -12,7 +12,7 @@ test.describe("sign-in", () => {
     await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
     await expect(page).toHaveURL(/\/workers$/);
     await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
-    await expect(page.getByText("Coming soon.")).toBeVisible();
+    await expect(page.locator(".connection")).toHaveText("Connected");
     await expect(page.getByLabel("Operator token")).toHaveCount(0);
   });
 

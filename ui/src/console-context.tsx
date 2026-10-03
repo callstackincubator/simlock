@@ -21,7 +21,7 @@ function useServices(): ConsoleServices {
   return services;
 }
 
-/** The daemon's API for the signed-in operator. Every view reads its data through this. */
+/** The daemon's API for the signed-in operator. The live data layer reads every route with it. */
 export function useApi(): ApiClient {
   return useServices().api;
 }
