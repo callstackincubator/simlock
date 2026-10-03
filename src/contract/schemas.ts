@@ -178,8 +178,8 @@ export const grantedDeviceSchema = z.object({
    * last `ready` transition. Undefined for a device still `provisioning` (never made ready
    * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
    * from before this field existed loads without one rather than failing to start. It becomes
-   * defined the next time the device is made ready (`boot`/`readyProvisioned`); nothing here
-   * ever guesses at a value it wasn't told.
+   * defined the next time the device is made ready (`bootForLease`/`readyProvisionedForLease`);
+   * nothing here ever guesses at a value it wasn't told.
    */
   address: z.string().optional(),
   /** The mode the device actually has (see `DeviceRecord.mode`). */

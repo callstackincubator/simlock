@@ -83,29 +83,6 @@ async function shutdownDevice(
 }
 
 describe("ManagedDeviceLifecycle", () => {
-  it("boots a registered shutdown device and emits device.ready after its commit", async () => {
-    const harness = await createHarness();
-    const ready = await readyDevice(harness);
-    await harness.driver.shutdown({
-      address: ready.address ?? "",
-      deviceId: ready.driverDeviceId,
-      driverData: ready.driverData,
-    });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
-      event: "device.shutdown",
-      payload: { deviceId: ready.id, initiator: "test" },
-    });
-    let stateAtEvent = "unknown";
-    harness.eventBus.subscribe("device.ready", () => {
-      stateAtEvent = harness.registry.snapshot.devices[0]?.state ?? "missing";
-    });
-
-    const booted = await harness.lifecycle.boot(shutdown);
-
-    expect(booted).toMatchObject({ id: shutdown.id, state: "ready" });
-    expect(stateAtEvent).toBe("ready");
-  });
-
   it("replaces the stored address with the one makeReady re-read when booting a device for a lease", async () => {
     // The address a device is reachable at is a property of its current boot, not of the device:
     // an Android console port is assigned per boot, so a serial captured at provision goes stale
@@ -388,43 +365,7 @@ describe("ManagedDeviceLifecycle", () => {
     });
   });
 
-  it("persists a driver's reported mode on boot (#makeReady path)", async () => {
-    const clock = new FakeClock(1_000);
-    const eventBus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });
-    let nextId = 0;
-    const registry = await Registry.load({
-      clock,
-      eventBus,
-      filesystem: new MemoryFilesystem(),
-      idGenerator: { generate: () => `${nextId++}` },
-      statePath,
-    });
-    const lifecycle = new ManagedDeviceLifecycle(
-      new DriverCatalog([driver]),
-      registry,
-      new SerializedDecision(),
-      new DeviceOperationClaims(),
-      clock,
-    );
-    const driverDevice = await driver.provision({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    const device = await registry.registerDevice({
-      driverData: driverDevice.driverData,
-      driverDeviceId: driverDevice.deviceId,
-      provisionDuration: 0,
-      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-    });
-
-    const ready = await lifecycle.readyProvisioned(device);
-
-    expect(ready).toMatchObject({ mode: "slim" });
-  });
-
-  it("persists a driver's reported mode via the bootForLease handoff path (#makeReadyForLease)", async () => {
+  it("persists a driver's reported mode via the readyProvisionedForLease handoff path (#makeReadyForLease)", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });
@@ -461,7 +402,7 @@ describe("ManagedDeviceLifecycle", () => {
     expect(handoff?.device).toMatchObject({ mode: "slim" });
   });
 
-  it("boot stores full, replacing a stored slim, when the driver reports no mode (#makeReady, shutdown path)", async () => {
+  it("bootForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, shutdown path)", async () => {
     // A driver that reports no mode must not leave a previously stored "slim" on the record,
     // or a device that is no longer slim keeps reporting `mode: "slim"`.
     const harness = await createHarness();
@@ -475,7 +416,6 @@ describe("ManagedDeviceLifecycle", () => {
         mode: "slim",
       },
     );
-    expect(ready.mode).toBe("slim");
     await harness.driver.shutdown({
       address: ready.address ?? "",
       deviceId: ready.driverDeviceId,
@@ -486,98 +426,20 @@ describe("ManagedDeviceLifecycle", () => {
       payload: { deviceId: ready.id, initiator: "test" },
     });
     expect(shutdown.mode).toBe("slim");
-
-    // `harness.driver` (a plain `FakeDriver` with no `mode` option) reports no mode on this
-    // boot -- the driver-side equivalent of a boot that did not slim.
-    const booted = await harness.lifecycle.boot(shutdown);
-
-    expect(booted?.mode).toBe("full");
-  });
-
-  it("bootForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, shutdown path)", async () => {
-    const harness = await createHarness();
-    const ready = await harness.registry.transitionDevice(
-      harness.device.id,
-      "ready",
-      { event: "device.ready", payload: { bootDuration: 0, deviceId: harness.device.id } },
-      {
-        address: harness.device.driverDeviceId,
-        driverData: harness.device.driverData,
-        mode: "slim",
-      },
-    );
-    await harness.driver.shutdown({
-      address: ready.address ?? "",
-      deviceId: ready.driverDeviceId,
-      driverData: ready.driverData,
-    });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
-      event: "device.shutdown",
-      payload: { deviceId: ready.id, initiator: "test" },
-    });
     const claim = harness.claims.tryClaim(shutdown.id, "boot");
     if (claim === undefined) throw new Error("expected boot claim");
 
+    // `harness.driver` (a plain `FakeDriver` with no `mode` option) reports no mode on this
+    // boot -- the driver-side equivalent of a boot that did not slim.
     const handoff = await harness.lifecycle.bootForLease(shutdown, claim);
 
     expect(handoff?.device.mode).toBe("full");
   });
 
-  it("readyProvisioned stores full, replacing a stored slim, when the driver reports no mode (#makeReady, provisioning path)", async () => {
+  it("readyProvisionedForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, provisioning path)", async () => {
     // A device can't naturally re-enter "provisioning" once it leaves, so the persisted state is
     // seeded directly (as a restarted daemon would load it from disk) to exercise the same
-    // provisioning-branch code path the "shutdown" tests above cover for the other branch.
-    const clock = new FakeClock(1_000);
-    const eventBus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    const driverDevice = await driver.provision({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [
-          {
-            createdAt: 0,
-            driverData: driverDevice.driverData,
-            driverDeviceId: driverDevice.deviceId,
-            mode: "slim",
-            id: "dev_stale",
-            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-            state: "provisioning",
-          },
-        ],
-        leases: [],
-      }),
-    );
-    const registry = await Registry.load({
-      clock,
-      eventBus,
-      filesystem,
-      idGenerator: { generate: () => "unused" },
-      statePath,
-    });
-    const lifecycle = new ManagedDeviceLifecycle(
-      new DriverCatalog([driver]),
-      registry,
-      new SerializedDecision(),
-      new DeviceOperationClaims(),
-      clock,
-    );
-    const device = registry.snapshot.devices[0];
-    if (device === undefined) throw new Error("expected seeded device");
-    expect(device.mode).toBe("slim");
-
-    const readyDevice = await lifecycle.readyProvisioned(device);
-
-    expect(readyDevice?.mode).toBe("full");
-  });
-
-  it("readyProvisionedForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, provisioning path)", async () => {
+    // provisioning-branch code path the "shutdown" test above covers for the other branch.
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -621,6 +483,7 @@ describe("ManagedDeviceLifecycle", () => {
     );
     const device = registry.snapshot.devices[0];
     if (device === undefined) throw new Error("expected seeded device");
+    expect(device.mode).toBe("slim");
 
     const handoff = await lifecycle.readyProvisionedForLease(device);
 
@@ -674,8 +537,10 @@ describe("ManagedDeviceLifecycle", () => {
     it("passes a slim spec's mode to makeReady on a prepare boot, from provisioning and from shutdown", async () => {
       const harness = await slimHarness();
 
-      const ready = await harness.lifecycle.readyProvisioned(harness.device);
-      if (ready === undefined) throw new Error("expected a ready device");
+      const provisioned = await harness.lifecycle.readyProvisionedForLease(harness.device);
+      if (provisioned === undefined) throw new Error("expected a ready device");
+      provisioned.claim.release();
+      const ready = provisioned.device;
       await harness.lifecycle.shutdown(ready, "test", "cleanup");
       const shutdown = harness.registry.snapshot.devices[0];
       if (shutdown === undefined) throw new Error("expected the device");
@@ -693,8 +558,10 @@ describe("ManagedDeviceLifecycle", () => {
 
     it("passes a slim spec's mode on a recovery boot too, under purpose recover", async () => {
       const harness = await slimHarness();
-      const ready = await harness.lifecycle.readyProvisioned(harness.device);
-      if (ready === undefined) throw new Error("expected a ready device");
+      const provisioned = await harness.lifecycle.readyProvisionedForLease(harness.device);
+      if (provisioned === undefined) throw new Error("expected a ready device");
+      provisioned.claim.release();
+      const ready = provisioned.device;
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
         ownerId: "agent",
