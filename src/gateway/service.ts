@@ -16,6 +16,7 @@ import type {
   UplinkListener,
   UplinkListenerFactory,
 } from "../ports/index.js";
+import { WORKER_VIEW_REFRESH_INTERVAL_MS } from "../contract/index.js";
 import { NoopLogger, uplinkOutcome } from "../ports/index.js";
 import type { DrainStore } from "./drain-store.js";
 import { WorkerLink, type WorkerClientFactory } from "./worker-link.js";
@@ -29,7 +30,7 @@ import { WorkerRegistry } from "./worker-registry.js";
  * far below the shortest interesting lease TTL and far above anything that would make a fleet's
  * worth of `status.get` calls noticeable.
  */
-const DEFAULT_WORKER_REFRESH_INTERVAL_MS = 30_000;
+const DEFAULT_WORKER_REFRESH_INTERVAL_MS = WORKER_VIEW_REFRESH_INTERVAL_MS;
 
 /**
  * P-2: how long a coalescing window for repeated `worker.rejected` refusals stays open.

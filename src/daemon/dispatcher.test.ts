@@ -19,7 +19,12 @@ import {
   SerializedDecision,
   RuntimeMissingError,
 } from "../core/index.js";
-import { OPERATIONS } from "../contract/index.js";
+import {
+  OPERATIONS,
+  statusDeviceSchema,
+  WORKER_VIEW_CATALOG_EVENTS,
+  WORKER_VIEW_REFRESH_INTERVAL_MS,
+} from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
@@ -104,6 +109,24 @@ function fakePassthroughOptions(
   };
 }
 
+/** A fake clock that can also be set back, as a wall clock can be. */
+class SettableClock extends FakeClock {
+  #offset = 0;
+
+  setBack(ms: number): void {
+    this.#offset -= ms;
+  }
+
+  override now(): number {
+    return super.now() + this.#offset;
+  }
+}
+
+/** `config` with `gateway.label` set, or unchanged when there is no label. */
+function withGatewayLabel(config: Config, label: string | undefined): Config {
+  return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
+}
+
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
@@ -153,6 +176,8 @@ async function buildDispatcher(
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
     >;
+    /** `gateway.label` in this daemon's config; unset by default. */
+    readonly gatewayLabel?: string;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -172,11 +197,14 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = testConfig(
-    overrides.downloadsPolicy,
-    overrides.lease ?? {},
-    overrides.exec ?? {},
-    overrides.capacity,
+  const config = withGatewayLabel(
+    testConfig(
+      overrides.downloadsPolicy,
+      overrides.lease ?? {},
+      overrides.exec ?? {},
+      overrides.capacity,
+    ),
+    overrides.gatewayLabel,
   );
   const wiring = testComponentWiring({
     clock: clock,
@@ -232,9 +260,11 @@ async function buildDispatcher(
     components: wiring.components,
     config,
     doctor,
+    eventBus,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
     health: () => "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
+    instanceId: "instance-1",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
@@ -244,6 +274,7 @@ async function buildDispatcher(
     reaper,
     registry,
     tokens,
+    version: "1.2.3",
   });
   return {
     clock,
@@ -348,6 +379,237 @@ describe("Dispatcher: parsing", () => {
     await expect(
       dispatcher.dispatch("daemon.stop", {}, session({ role: "admin" })),
     ).rejects.toMatchObject({ code: "UNKNOWN_REQUEST" });
+  });
+});
+
+/**
+ * ADR 0012: a worker answers the fleet operations as a fleet of one. `worker.list` is this host's
+ * own view; the operations that act on a gateway's workers refuse with their own code.
+ */
+describe("Dispatcher: the fleet operations on a worker", () => {
+  const admin = session({ principal: "operator", role: "admin" });
+
+  it("worker.list on a worker returns one view whose id is the instance id", async () => {
+    const { clock, dispatcher } = await buildDispatcher();
+    clock.advance(500);
+
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(workers).toHaveLength(1);
+    expect(workers[0]).toMatchObject({
+      connection: "connected",
+      drained: false,
+      id: "instance-1",
+      lastSeenAt: 1_500,
+      version: "1.2.3",
+    });
+    expect(workers[0]).not.toHaveProperty("protocol");
+  });
+
+  it("worker.list on a worker carries gateway.label as label, and no label when it is unset", async () => {
+    const labelled = await buildDispatcher({ gatewayLabel: "mac-mini-1" });
+    const unlabelled = await buildDispatcher();
+
+    const withLabel = await labelled.dispatcher.dispatch("worker.list", {}, admin);
+    const withoutLabel = await unlabelled.dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(withLabel.workers[0]?.label).toBe("mac-mini-1");
+    expect(withoutLabel.workers[0]).not.toHaveProperty("label");
+  });
+
+  it("worker.list on a worker reads the driver's catalog once per refresh interval, not on every call", async () => {
+    const { clock, dispatcher, driver } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+
+    // A console polls every second; every poll up to the last millisecond of the interval
+    // answers from the one read.
+    await dispatcher.dispatch("worker.list", {}, admin);
+    for (let elapsed = 1_000; elapsed < WORKER_VIEW_REFRESH_INTERVAL_MS; elapsed += 1_000) {
+      clock.advance(1_000);
+      await dispatcher.dispatch("worker.list", {}, admin);
+    }
+    clock.advance(999);
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+
+    clock.advance(1);
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("worker.list on a worker shares one catalog read between calls that arrive while it runs", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+
+    await Promise.all([
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("worker.list", {}, admin),
+    ]);
+
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+  });
+
+  it("worker.list on a worker reads the catalog again when the clock is set back", async () => {
+    const clock = new SettableClock(100_000);
+    const { dispatcher, driver } = await buildDispatcher({ clock });
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    clock.setBack(60_000);
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("worker.list on a worker re-reads its catalog on each event a gateway re-reads a worker's catalog on, until disposed", async () => {
+    const { dispatcher, driver, eventBus } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+    const payload = {
+      alreadyPresent: false,
+      componentId: "27.0",
+      durationMs: 1,
+      platform: "ios",
+      version: "27.0",
+    };
+    expect(WORKER_VIEW_CATALOG_EVENTS).toEqual(["component.installed"]);
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    eventBus.emit("component.installed", payload, "test");
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+
+    dispatcher.dispose();
+    await dispatcher.dispatch("worker.list", {}, admin);
+    eventBus.emit("component.installed", payload, "test");
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(3);
+  });
+
+  it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
+    const { components, dispatcher } = await buildDispatcher();
+    const runtimes = async () =>
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+        (entry) => entry.runtimes,
+      );
+    expect(await runtimes()).toEqual(["26.5"]);
+
+    await components.install({ component: "27.0", platform: "ios" });
+
+    expect(await runtimes()).toEqual(expect.arrayContaining(["26.5", "27.0"]));
+  });
+
+  it("worker.list on a worker reads the catalog again after a read that failed", async () => {
+    let calls = 0;
+    const { dispatcher } = await buildDispatcher({
+      catalog: {
+        listCatalog: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("the catalog could not be read");
+          return [
+            {
+              defaultRuntime: "26.5",
+              modelAliases: {},
+              models: [],
+              modelRuntimes: {},
+              platform: "ios",
+              runtimes: ["26.5"],
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch("worker.list", {}, admin)).rejects.toThrow(
+      "the catalog could not be read",
+    );
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(calls).toBe(2);
+    expect(workers[0]?.catalog.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+  });
+
+  it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
+    const { components, dispatcher, driver } = await buildDispatcher({
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+      hostFacts: () => ({
+        ...HOST_SYSTEM,
+        tools: [{ build: "16F6", name: "xcode", platform: "ios", version: "16.4" }],
+      }),
+    });
+    // One lease on one device, and one install held mid-download: every field has something
+    // in it, so a field the view dropped or took from the wrong read cannot pass as empty.
+    await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      session(),
+    );
+    driver.holdInstalls();
+    void components.install({ component: "27.0", platform: "ios" });
+    await flushPromises();
+
+    const [{ workers }, status, devices, catalog, config] = await Promise.all([
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("status.get", {}, admin),
+      dispatcher.dispatch("list.get", { kind: "devices" }, admin),
+      dispatcher.dispatch("catalog.get", {}, admin),
+      dispatcher.dispatch("config.get", {}, admin),
+    ]);
+
+    expect(status.leases).toHaveLength(1);
+    expect(status.installs).toHaveLength(1);
+    expect(status.host.tools).toHaveLength(1);
+    expect(catalog.platforms[0]?.models).toEqual(["iPhone 17 Pro"]);
+    expect(workers[0]).toMatchObject({
+      capacity: status.capacity,
+      catalog: catalog.platforms,
+      devices: statusDeviceSchema.array().parse(devices),
+      downloads: { policy: config.downloads.policy, timeoutMs: config.downloads.timeoutMs },
+      health: status.daemon.health,
+      host: status.host,
+      installs: status.installs,
+      lease: { maxTtlMs: config.lease.maxTtlMs },
+      leases: status.leases,
+      queueDepth: status.queueDepth,
+    });
+    expect(workers[0]?.devices).toHaveLength(1);
+    expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
+  });
+
+  it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
+    const { components, dispatcher } = await buildDispatcher();
+    const install = vi.spyOn(components, "install");
+    const calls = [
+      ["worker.drain", { workerId: "instance-1" }],
+      ["worker.undrain", { workerId: "instance-1" }],
+      ["worker.remove", { workerId: "instance-1" }],
+      ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
+    ] as const;
+
+    const refusals = await Promise.all(
+      calls.map(([operation, input]) =>
+        dispatcher.dispatch(operation, input, admin).then(
+          () => ({ operation, outcome: "answered" }),
+          (error: unknown) => ({ error, operation }),
+        ),
+      ),
+    );
+
+    expect(refusals).toEqual(
+      calls.map(([operation]) => ({
+        error: expect.objectContaining({
+          code: "UNSUPPORTED_IN_WORKER_MODE",
+          details: { operation },
+        }),
+        operation,
+      })),
+    );
+    // The refusal is the whole answer: nothing was installed on this host instead, and the
+    // message says how to install here.
+    expect(install).not.toHaveBeenCalled();
+    expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
+      "install on this host without naming workers",
+    );
   });
 });
 

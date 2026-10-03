@@ -350,8 +350,8 @@ const { results } = await admin.installComponentOnWorkers(
   resolves either way; read the outcomes.
 - It rejects before any worker is asked with `UNKNOWN_WORKER` for an id the
   gateway does not know, `WORKER_UNREACHABLE` for a named worker it cannot
-  ask, `FORBIDDEN` for an agent session, and `UNKNOWN_REQUEST` from a daemon
-  that is not a gateway.
+  ask, `FORBIDDEN` for an agent session, and `UNSUPPORTED_IN_WORKER_MODE`
+  from a single host. Use `installComponent` there instead.
 - A worker's new component is in the gateway's `getCatalog()` by the time
   the call resolves, unless the gateway could not read that worker's
   catalog just then; its next read brings it in. Nothing is retried or kept
@@ -668,6 +668,19 @@ neither of which changes a call's shape:
   uplink. Treat it as you would `DAEMON_CONNECTION_LOST` for that one lease:
   the lease is not necessarily gone, you simply cannot reach it right now,
   and it runs on the worker's TTL either way.
+
+The fleet methods on the admin client work against a single host too, which
+answers as a fleet of one:
+
+- `listWorkers()` returns one entry, the host itself, with the same fields a
+  gateway gives each of its workers. Its `id` is the id the host presents to
+  a gateway, its `label` is `gateway.label`, and it is always `connected` and
+  never `drained`.
+- `drainWorker`, `undrainWorker`, `removeWorker` and
+  `installComponentOnWorkers` reject with `UNSUPPORTED_IN_WORKER_MODE`, whose
+  `details.operation` names the operation. It mirrors
+  `UNSUPPORTED_IN_GATEWAY_MODE`: the operation exists, but not on this kind of
+  daemon. Do not retry it.
 
 ## What this client does not do
 

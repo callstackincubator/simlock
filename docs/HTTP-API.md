@@ -750,7 +750,8 @@ installs the component itself under its own `downloads.policy`, Android
 license setting, disk check and `downloads.timeoutMs`. A worker set to
 `downloads.policy: "never"` refuses; the gateway has no download policy of
 its own and stores or forwards no image. A drained worker is asked like any
-other. `workers` on a daemon that is not a gateway is `400 UNKNOWN_REQUEST`.
+other. `workers` on a single host is `501 UNSUPPORTED_IN_WORKER_MODE`; leave
+it out to install on that host.
 
 Before any worker is asked, these are JSON errors:
 
@@ -927,10 +928,12 @@ liveness signal — [`GET /v1/workers`](#worker-routes) is how you look at it.
 
 ### Worker routes
 
-Role: `operator` for all four. They exist on a **gateway**; a worker has no
-workers of its own and does not implement the underlying operations at all.
+Role: `operator` for all four. They exist on a **gateway** and on a single
+host. A single host answers as a fleet of one: `GET /v1/workers` lists the
+host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 
-- `GET /v1/workers` — every worker view the gateway currently holds.
+- `GET /v1/workers` — every worker view the gateway currently holds, or the
+  host's own view on a single host.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.
@@ -1062,9 +1065,21 @@ first. Unknown ids are the one place remove differs: `200 { "removed": false
 gateway has already forgotten — the same reading `token.revoke` gives an
 unknown token id.
 
-On a **worker** daemon none of these routes exist: they are not registered at
-all, so they answer `404` like any other unrouted path rather than a
-gateway-mode refusal. There is nothing for them to act on.
+On a **single host** (a daemon in `worker` mode), `GET /v1/workers` returns
+one view, the host itself, with the same fields a gateway shows for each of
+its workers. `id` is the id the host presents to a gateway, `label` is its
+`gateway.label` (absent when unset), `connection` is `connected`, `drained`
+is `false`, and `lastSeenAt` is the time of the request. Every other field
+comes from the host's own status, devices, catalog and config. Status and
+devices are read on every request. The catalog is read again every 30
+seconds, and straight after a component is installed, as a gateway reads its
+workers' catalogs; a removed component leaves it on the next read. A host that
+has joined a gateway still answers about itself: its `drained` is `false`
+even when the gateway has drained it, because that flag is the gateway's.
+
+The drain, undrain and remove routes answer `501 UNSUPPORTED_IN_WORKER_MODE`
+on a single host, with `operation` in the body: there is no gateway there to
+take the host out of rotation or forget it.
 
 ### Operator routes
 
@@ -1116,11 +1131,11 @@ Every failure is the same shape the daemon protocol uses:
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
-Three notes on these codes.
+Four notes on these codes.
 
 `WORKER_UNREACHABLE` sits on `503` with `NO_CAPACITY` rather than on `502`,
 because its `kind` is `transport` and every other `transport`-kind code in
@@ -1143,6 +1158,11 @@ and `nuke`/`cleanup`/`doctor`/`driver.passthrough` and component listings
 and removals stay per-worker permanently rather than pending some later
 fan-out. A component install through a gateway is a different request, one
 that names its workers.
+
+`UNSUPPORTED_IN_WORKER_MODE` is the same refusal from the other side: the
+operation acts on a gateway's workers, and the daemon is a single host. It
+is permanent for that daemon, so do not retry it. Both codes carry
+`operation` in the body.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

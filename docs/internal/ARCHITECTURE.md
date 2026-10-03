@@ -513,6 +513,25 @@ and `worker.remove` are the operator's edits to them. A **drained** worker
 keeps its existing leases and receives no new dispatches — the tool for
 taking a machine down without killing anyone's device.
 
+A worker answers these operations as a **fleet of one** (ADR 0012).
+`worker.list` returns one view, the worker itself: its instance id, its
+`gateway.label`, `connected`, never drained, `lastSeenAt` the time of the
+call. The reported fields come from its own `status.get`, `list.get`,
+`catalog.get` and `config.get`, turned into view fields by
+`workerViewFields` in `src/contract/worker-view.ts` — the same pure function
+`WorkerLink` builds a gateway's views with, so the two cannot disagree about
+a field. The catalog is the one read the worker keeps: `catalog.get` runs
+each driver's catalog read (`simctl list` on iOS), and the console polls
+`GET /v1/workers` every second, so the dispatcher re-reads it only once
+`WORKER_VIEW_REFRESH_INTERVAL_MS` (the gateway's own refresh tick) has
+passed, or after one of `WORKER_VIEW_CATALOG_EVENTS`. Both constants live
+in `src/contract/worker-view.ts`, and `WorkerLink` reads the same two, so a
+host's view of itself and a gateway's view of it re-read the catalog on the
+same rhythm. The dispatcher's subscriptions end when `DaemonServer` stops. `worker.drain`, `worker.undrain`, `worker.remove` and
+`worker.install-component` answer `UNSUPPORTED_IN_WORKER_MODE` (`501`, exit
+`2`), the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The `/v1/workers*` routes
+are registered in both modes.
+
 Drain is the one piece of worker state the gateway *decides* rather than
 observes, and it is why the **worker registry** and the worker *view* are two
 different things. The view is the observation: rebuilt on every connect,
@@ -1601,9 +1620,10 @@ last count are not seen; see KNOWN-PITFALLS.md.
 
 #### Through a gateway
 
-`worker.install-component` (ADR 0010 §7) is gateway-only: it is in
-`GATEWAY_ONLY_OPERATIONS`, so a worker answers `UNKNOWN_REQUEST`, and no
-worker ever receives it, which is why it moves no protocol version. Its input
+`worker.install-component` (ADR 0010 §7) only installs through a gateway: a
+worker refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2), and no
+worker ever receives it over an uplink, which is why it moves no protocol
+version. Its input
 is `{ platform, version, workers }`; `version` runs `component.install`'s own
 schema and `workers` is `"all"` or 1 to 64 distinct ids. One function,
 `relayComponentInstall` in `src/gateway/component-relay.ts`, does the

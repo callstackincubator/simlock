@@ -4,3 +4,4 @@ export * from "./protocol.js";
 export * from "./pushes.js";
 export * from "./roles.js";
 export * from "./schemas.js";
+export * from "./worker-view.js";

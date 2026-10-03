@@ -813,6 +813,10 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
  * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
  * different facts, and a console that dims one must not read the other as a full machine.
+ *
+ * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
+ * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
+ * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
  */
 export const workerViewSchema = z.object({
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across

@@ -56,7 +56,8 @@ Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config, token
   worker <list|drain|undrain|remove>
-                              Inspect and manage the workers of a gateway
+                              Inspect and manage the workers of a gateway; on a
+                              single host, list shows the host itself
   component install <ios|android> <version> [--worker <id>... | --all-workers]
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]
@@ -1798,10 +1799,11 @@ function parseTokenRole(value: unknown): "agent" | "operator" | "worker" {
 }
 
 /**
- * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation on
- * the gateway, so this function is argument parsing and rendering and nothing else -- a worker
- * daemon answers `UNKNOWN_REQUEST` for all four, which surfaces as the daemon's own error line
- * rather than a mode check the CLI would have to keep in step.
+ * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation, so
+ * this function is argument parsing and rendering and nothing else. A worker daemon answers as a
+ * fleet of one (ADR 0012): `list` shows the host itself, and `drain`, `undrain` and `remove`
+ * answer `UNSUPPORTED_IN_WORKER_MODE`, which surfaces as the daemon's own error line rather than
+ * a mode check the CLI would have to keep in step.
  */
 async function runWorker(
   argv: readonly string[],

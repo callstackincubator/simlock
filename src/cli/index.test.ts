@@ -4664,6 +4664,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   const daemon = new DaemonServer({
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,
@@ -4788,6 +4789,7 @@ async function startInMemoryDaemon(options: {
     adminSecret,
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,

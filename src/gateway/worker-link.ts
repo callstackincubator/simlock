@@ -15,15 +15,18 @@
  * only: routing counts installed runtimes and never reads it (ADR 0009 §3). The uplink session is
  * admin, so the gateway may read it.
  */
-import { z } from "zod";
-
 import type { EventBus, EventName } from "../bus/index.js";
-import { grantedDeviceSchema, isSimlockError, statusDeviceSchema } from "../contract/index.js";
+import {
+  grantedDeviceSchema,
+  isSimlockError,
+  WORKER_VIEW_CATALOG_EVENTS,
+  workerViewFields,
+} from "../contract/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import type { WorkerGrantedDevice, WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
+import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
 
 /**
  * How long the gateway waits for one round trip to a worker before giving up on it.
@@ -103,13 +106,7 @@ export interface WorkerLinkOptions {
   readonly isCurrentLink?: () => boolean;
 }
 
-/** The device shape a view carries. Worker device records arrive through `list.get` as full
- * `DeviceRecord`s (admin's own view of a registry); narrowing them here is what keeps
- * `driverData` -- an opaque, driver-defined blob -- from crossing the fleet into a gateway
- * client's `status.get`. */
-const viewDevicesSchema = z.array(statusDeviceSchema);
-
-/** The same `list.get` answer narrowed to the grant shape instead, which keeps `driverDeviceId`
+/** The `list.get` answer narrowed to the grant shape rather than the view's device shape, which keeps `driverDeviceId`
  * for the lease payload a gateway serves its holder (`GET /v1/leases/{id}`). Kept off the view,
  * in the registry beside it: see `WorkerGrantedDevice`. `list.get`'s contract also admits a
  * device without `driverDeviceId`, so one that does not parse is left out on its own rather than
@@ -379,14 +376,19 @@ export class WorkerLink {
     // The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
-    // never visible before its device.
+    // never visible before its device. The view's fields come from the contract's one view
+    // builder (ADR 0012 §1), the same one a worker answers `worker.list` about itself with; it
+    // narrows the device records, so no `driverData` crosses the fleet into a gateway client's
+    // `status.get`.
     this.options.registry.refresh(this.workerId, {
-      ...viewStatus(status),
-      devices: viewDevicesSchema.parse(devices),
+      ...workerViewFields({
+        devices,
+        status,
+        ...(catalog === undefined ? {} : { catalog }),
+        ...(config === undefined ? {} : { config }),
+      }),
       grantedDevices: grantedDevices(devices),
       version: client.daemonVersion,
-      ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
-      ...(config === undefined ? {} : viewConfig(config)),
     });
   }
 
@@ -490,7 +492,9 @@ export class WorkerLink {
     this.options.eventBus.emit(envelope.event as EventName, payload as never, envelope.module);
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
-      void this.refresh({ includeCatalog: envelope.event === "component.installed" });
+      void this.refresh({
+        includeCatalog: (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event),
+      });
   }
 }
 
@@ -552,36 +556,6 @@ function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): 
     resolve = settle;
   });
   return { done, options, resolve };
-}
-
-/** What a worker's view keeps of its `status.get`. */
-function viewStatus(
-  status: Awaited<ReturnType<SimlockAdminClient["getStatus"]>>,
-): Pick<WorkerViewSnapshot, "capacity" | "health" | "host" | "installs" | "leases" | "queueDepth"> {
-  return {
-    capacity: status.capacity,
-    health: status.daemon.health,
-    host: status.host,
-    // ADR 0010 §7: copied as the worker lists them, already bounded by the contract's parse
-    // (safety rule 10). A worker too old to list installs reports none.
-    installs: status.installs ?? [],
-    leases: status.leases,
-    queueDepth: status.queueDepth,
-  };
-}
-
-/** The few keys of a worker's config its view keeps. */
-function viewConfig(
-  config: Awaited<ReturnType<SimlockAdminClient["getConfig"]>>,
-): Pick<WorkerViewSnapshot, "downloads" | "lease"> {
-  return {
-    // ADR 0010 §7: the worker's own install budget, read with its policy.
-    downloads: { policy: config.downloads.policy, timeoutMs: config.downloads.timeoutMs },
-    // ADR 0005 §15: the one other field this gateway keeps out of a worker's config,
-    // alongside `downloads` -- `WorkerRegistry#refresh` is where it is compared against the
-    // gateway's own `lease.maxTtlMs` and warned about.
-    lease: { maxTtlMs: config.lease.maxTtlMs },
-  };
 }
 
 const defaultConnect: WorkerClientFactory = (connection, principal) =>
