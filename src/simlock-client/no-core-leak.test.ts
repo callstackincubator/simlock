@@ -12,28 +12,24 @@
  * the emitted declarations, not the source.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { importsOf, isUnder, sourceFilesRecursive } from "../test-support/imports.js";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
-const FORBIDDEN_IMPORT_SUBSTRINGS = [
-  "/core/",
-  "/daemon/",
-  "/daemon.js",
-  "/drivers/",
-  "/http/",
-  "/cli/",
-  "/mcp/",
-];
+/** Top-level `src/` directories the emitted declarations must never reach, matched against each
+ * specifier resolved relative to the emit root (which mirrors `src/`). */
+const FORBIDDEN_IMPORT_DIRS = ["core", "daemon", "drivers", "http", "cli", "mcp"];
 
 let outDir: string;
-let dtsFiles: Array<{ readonly path: string; readonly contents: string }>;
+let dtsFiles: string[];
 
 describe("public package surface (simlock/client, simlock/admin)", () => {
   let tmpTsconfigPath: string;
@@ -56,10 +52,7 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
     );
     const tscBin = join(repoRoot, "node_modules", ".bin", "tsc");
     execFileSync(tscBin, ["-p", tmpTsconfigPath], { cwd: repoRoot, stdio: "pipe" });
-    dtsFiles = collectDtsFiles(outDir).map((path) => ({
-      contents: readFileSync(path, "utf8"),
-      path,
-    }));
+    dtsFiles = sourceFilesRecursive(outDir).filter((path) => path.endsWith(".d.ts"));
   }, 60_000);
 
   afterAll(() => {
@@ -68,45 +61,18 @@ describe("public package surface (simlock/client, simlock/admin)", () => {
   });
 
   it("compiles both entry points and emits declarations for each", () => {
-    expect(dtsFiles.some((file) => file.path.endsWith(join("client", "index.d.ts")))).toBe(true);
-    expect(dtsFiles.some((file) => file.path.endsWith(join("admin", "index.d.ts")))).toBe(true);
+    expect(dtsFiles.some((path) => path.endsWith(join("client", "index.d.ts")))).toBe(true);
+    expect(dtsFiles.some((path) => path.endsWith(join("admin", "index.d.ts")))).toBe(true);
   });
 
   it("never imports a core/daemon/drivers-private module from the compiled public surface", () => {
     expect(dtsFiles.length).toBeGreaterThan(0);
-    for (const file of dtsFiles) {
-      for (const specifier of importSpecifiers(file.contents)) {
-        for (const forbidden of FORBIDDEN_IMPORT_SUBSTRINGS) {
-          expect(
-            specifier.includes(forbidden),
-            `${file.path} imports "${specifier}", which references forbidden "${forbidden}"`,
-          ).toBe(false);
-        }
-      }
-    }
+    // Reported where the surface first crosses into a private module, not once more for every
+    // import inside the module it reached.
+    const leaks = importsOf(dtsFiles, outDir).filter(({ file, normalized }) =>
+      FORBIDDEN_IMPORT_DIRS.some((dir) => isUnder(normalized, dir) && !isUnder(file, dir)),
+    );
+
+    expect(leaks.map(({ file, specifier }) => `${file} imports "${specifier}"`)).toEqual([]);
   });
 });
-
-/** Import/re-export specifiers only -- e.g. from `import("../core/index.js").Foo` or
- * `export * from "./x.js"` -- deliberately not a plain substring scan of the whole file, which
- * would false-positive on prose in a carried-over JSDoc comment (e.g. a `.d.ts` comment that
- * merely *mentions* `src/http/errors.ts` in passing, as `errors.ts` does today). */
-function importSpecifiers(contents: string): string[] {
-  const specifiers: string[] = [];
-  const pattern = /(?:from\s+["']([^"']+)["']|import\(["']([^"']+)["']\))/g;
-  for (const match of contents.matchAll(pattern)) {
-    const specifier = match[1] ?? match[2];
-    if (specifier !== undefined) specifiers.push(specifier);
-  }
-  return specifiers;
-}
-
-function collectDtsFiles(dir: string): string[] {
-  const results: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) results.push(...collectDtsFiles(full));
-    else if (entry.name.endsWith(".d.ts")) results.push(full);
-  }
-  return results;
-}

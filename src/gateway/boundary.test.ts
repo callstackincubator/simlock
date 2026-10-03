@@ -1,12 +1,17 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, posix } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  importsOf,
+  isUnder,
+  normalizeSpecifier,
+  sourceFilesRecursive,
+  srcDir,
+} from "../test-support/imports.js";
+
 const gatewayDir = dirname(fileURLToPath(import.meta.url));
-const srcDir = dirname(gatewayDir);
 const daemonDir = join(srcDir, "daemon");
 
 /**
@@ -59,40 +64,6 @@ const ALLOWED_CORE_IMPORTS = [
   "core/driver.js",
 ];
 
-/**
- * A relative import specifier, resolved against the directory of the file that wrote it and
- * expressed relative to `src/` -- e.g. `"../../core/registry.js"` from
- * `src/gateway/routing/policy.ts` becomes `"core/registry.js"`, exactly like
- * `"../core/registry.js"` from `src/gateway/policy.ts` does. A non-relative specifier (an npm
- * package, a `node:` built-in) is returned unchanged: it can never resolve inside `src/`, so no
- * prefix check below will ever match it.
- */
-function normalizeSpecifier(fileDir: string, specifier: string): string {
-  if (!specifier.startsWith(".")) return specifier;
-  const resolved = posix.normalize(posix.join(fileDir, specifier));
-  return posix.relative(srcDir, resolved);
-}
-
-/** Whether a normalised specifier names a module inside the top-level `src/` directory `dir` --
- * `dir` itself (an import of its barrel, `"core"` with no further path) or anything under it. */
-function isUnder(normalized: string, dir: string): boolean {
-  return normalized === dir || normalized.startsWith(`${dir}/`);
-}
-
-/**
- * Recursive and by relative path (M4): a flat, non-recursive listing let a future subdirectory
- * under `src/gateway/` skip this test's notice entirely, silently, the moment one was added --
- * exactly the kind of gap that should fail loudly instead. `recursive: true` is Node 20+; the
- * repo requires Node 22.
- */
-function sourceFilesRecursive(dir: string): string[] {
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts"),
-    )
-    .map((entry) => join(entry.parentPath, entry.name));
-}
-
 describe("gateway module boundary", () => {
   const sourceFiles = sourceFilesRecursive(gatewayDir);
 
@@ -103,11 +74,7 @@ describe("gateway module boundary", () => {
   it.each(sourceFiles.map((path) => [path.slice(gatewayDir.length + 1), path] as const))(
     "%s imports no engine module",
     (relativePath, filePath) => {
-      const contents = readFileSync(filePath, "utf8");
-      const fileDir = dirname(filePath);
-
-      for (const specifier of importSpecifiers(stripComments(contents))) {
-        const normalized = normalizeSpecifier(fileDir, specifier);
+      for (const { specifier, normalized } of importsOf([filePath])) {
         for (const forbidden of FORBIDDEN_IMPORT_DIRS) {
           expect({
             fileName: relativePath,
@@ -132,10 +99,7 @@ describe("gateway module boundary", () => {
   );
 
   it("the one daemon module the gateway imports is itself free of core", () => {
-    const contents = stripComments(readFileSync(join(daemonDir, "dispatch.ts"), "utf8"));
-
-    for (const specifier of importSpecifiers(contents)) {
-      const normalized = normalizeSpecifier(daemonDir, specifier);
+    for (const { normalized } of importsOf([join(daemonDir, "dispatch.ts")])) {
       expect(isUnder(normalized, "core")).toBe(false);
       expect(isUnder(normalized, "drivers")).toBe(false);
       expect(isUnder(normalized, "http")).toBe(false);
@@ -165,11 +129,7 @@ describe("daemon module boundary (reverse direction, H9)", () => {
   it.each(daemonSourceFiles.map((path) => [path.slice(daemonDir.length + 1), path] as const))(
     "%s does not import src/gateway",
     (relativePath, filePath) => {
-      const contents = stripComments(readFileSync(filePath, "utf8"));
-      const fileDir = dirname(filePath);
-
-      for (const specifier of importSpecifiers(contents)) {
-        const normalized = normalizeSpecifier(fileDir, specifier);
+      for (const { normalized } of importsOf([filePath])) {
         expect({
           fileName: relativePath,
           matchesGateway: isUnder(normalized, "gateway"),
@@ -182,55 +142,6 @@ describe("daemon module boundary (reverse direction, H9)", () => {
       }
     },
   );
-});
-
-describe("sourceFilesRecursive", () => {
-  // M4: the other half of the gap -- a flat `readdirSync` never looked inside a subdirectory at
-  // all, so a module placed under one skipped this whole suite silently rather than failing it.
-  it("descends into a subdirectory, and still skips test files there", () => {
-    const dir = mkdtempSync(join(tmpdir(), "simlock-boundary-test-"));
-    try {
-      mkdirSync(join(dir, "nested"));
-      writeFileSync(join(dir, "top.ts"), "export {};");
-      writeFileSync(join(dir, "nested", "deep.ts"), "export {};");
-      writeFileSync(join(dir, "nested", "deep.test.ts"), "export {};");
-
-      const found = sourceFilesRecursive(dir)
-        .map((path) => path.slice(dir.length + 1))
-        .sort();
-
-      expect(found).toEqual(["nested/deep.ts", "top.ts"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("normalizeSpecifier / isUnder", () => {
-  // C2: the round's title/body tell -- the old check compared the raw specifier text to a
-  // literal `"../core"` prefix, which is only ever true for a file directly under
-  // `src/gateway/`. `src/gateway/routing/policy.ts` (a subdirectory #118 adds) reaches the same
-  // module as `"../../core/registry.js"`, one `..` longer, and a bare `startsWith` check does
-  // not know the two name the same forbidden module. Resolving both against the file's own
-  // directory into a path relative to `src/` is what makes them compare equal.
-  it("resolves a nested file's longer relative path to the same normalized module as a top-level one", () => {
-    const topLevel = normalizeSpecifier(gatewayDir, "../core/registry.js");
-    const nested = normalizeSpecifier(join(gatewayDir, "routing"), "../../core/registry.js");
-
-    expect(nested).toBe(topLevel);
-    expect(nested).toBe("core/registry.js");
-    expect(isUnder(nested, "core")).toBe(true);
-  });
-
-  it("leaves a non-relative specifier (a package, a node: built-in) unchanged", () => {
-    expect(normalizeSpecifier(gatewayDir, "zod")).toBe("zod");
-    expect(normalizeSpecifier(gatewayDir, "node:fs")).toBe("node:fs");
-  });
-
-  it("does not flag a same-directory or sibling-module import as forbidden", () => {
-    const normalized = normalizeSpecifier(gatewayDir, "./worker-registry.js");
-    expect(isUnder(normalized, "core")).toBe(false);
-  });
 });
 
 describe("gateway module boundary regression fixtures", () => {
@@ -262,49 +173,3 @@ describe("gateway module boundary regression fixtures", () => {
     expect(ALLOWED_DAEMON_IMPORTS).not.toContain(normalized);
   });
 });
-
-describe("importSpecifiers", () => {
-  // M4: the gap the first review round found -- a dynamic `await import(...)` routed around
-  // every check above without either of these.
-  it("catches a dynamic import, not just a static `from`", () => {
-    expect(importSpecifiers('const mod = await import("../core/registry.js");')).toContain(
-      "../core/registry.js",
-    );
-  });
-
-  it("catches a bare side-effect import with no `from` clause", () => {
-    expect(importSpecifiers('import "../core/registry.js";')).toContain("../core/registry.js");
-  });
-
-  it("still catches an ordinary static import exactly once", () => {
-    expect(importSpecifiers('import { x } from "../core/registry.js";')).toEqual([
-      "../core/registry.js",
-    ]);
-  });
-});
-
-/** Strips block and line comments so a specifier that appears only in prose (a doc comment
- * naming a forbidden import, as several in this module do) is never mistaken for a real one. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
-/**
- * Every module specifier a static `import ... from "…"`, a bare side-effect `import "…"`, a
- * re-export (`export ... from "…"`), or a dynamic `await import("…")` names, in the
- * (comment-stripped) text. Formatter-wrapped multi-line static imports are still caught because
- * the `from "…"` clause always lands on one line; the dynamic form is its own pattern (M4) --
- * without it, a boundary this test enforces on every static import could be routed around with
- * one `await import("../core/registry.js")` and this suite would stay green.
- */
-function importSpecifiers(contents: string): string[] {
-  const specifiers: string[] = [];
-  const patterns = [/(?:from|import)\s*["']([^"']+)["']/g, /import\s*\(\s*["']([^"']+)["']/g];
-  for (const pattern of patterns) {
-    for (const match of contents.matchAll(pattern)) {
-      const specifier = match[1];
-      if (specifier !== undefined) specifiers.push(specifier);
-    }
-  }
-  return specifiers;
-}
