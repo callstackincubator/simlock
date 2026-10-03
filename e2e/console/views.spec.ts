@@ -158,6 +158,50 @@ test.describe("every view", () => {
     }
   });
 
+  test("clicking a chart shows no outline, tabbing to it does", async ({ browserName, page }) => {
+    // Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
+    const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
+    const { host } = await hostWithLease();
+    try {
+      await openSignedIn(page, host);
+      for (const [path, title] of [
+        ["/workers", "Leases, last hour"],
+        ["/events", "Events per minute"],
+      ] as const) {
+        await visit(page, host, path);
+        const chart = page.getByRole("region", { name: title }).locator(".chart");
+        const ring = () => chart.evaluate((element) => getComputedStyle(element).outlineStyle);
+        /** Whether focus is on the chart's own focusable layer, and what outline it draws. */
+        const focused = () =>
+          chart.evaluate((element) => {
+            const active = document.activeElement;
+            return {
+              inChart: active !== null && element.contains(active),
+              own: active === null ? "" : getComputedStyle(active).outlineStyle,
+            };
+          });
+
+        // From the panel's title, the next stop is the chart: the keyboard draws the ring.
+        await page.getByRole("heading", { level: 2, name: title }).click();
+        await page.keyboard.press(tab);
+        expect(await focused(), `${path} tabbed`).toEqual({ inChart: true, own: "none" });
+        expect(await ring(), `${path} tabbed`).toBe("solid");
+        // Still usable from the keyboard: the arrow keys show a minute's count.
+        await page.keyboard.press("ArrowLeft");
+        await expect(chart.locator(".chart-tip")).toBeVisible();
+
+        // Focus leaves, and a click brings it back with no ring.
+        await page.getByRole("heading", { level: 2, name: title }).click();
+        expect(await ring(), `${path} left`).toBe("none");
+        await chart.locator("svg").first().click();
+        expect(await focused(), `${path} clicked`).toEqual({ inChart: true, own: "none" });
+        expect(await ring(), `${path} clicked`).toBe("none");
+      }
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("the tab bar moves between views and the page URL follows", async ({ daemon, page }) => {
     await page.goto("/");
     await signIn(page, daemon.tokens.operator);

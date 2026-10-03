@@ -152,7 +152,8 @@ scale; never a value between.
   title, a caption saying what it counts, its numbers as a line of text under
   it, and every minute as a table behind a "Minute by minute" disclosure, so
   nothing is visible only in the picture. A chart can be focused, and the
-  arrow keys step through it.
+  arrow keys step through it. Its focus ring goes round the whole chart, for
+  keyboard focus only: a click on a chart draws none.
 
 ## Layout
 

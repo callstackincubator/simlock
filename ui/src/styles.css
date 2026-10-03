@@ -844,14 +844,14 @@ input[aria-invalid="true"] {
   color: var(--text-muted);
 }
 
-.chart:focus-within {
+/* A chart takes focus so the arrow keys can step through it. The ring goes round the whole
+ * chart, and only for keyboard focus: a click on a chart draws none. */
+.chart:has(:focus-visible) {
   outline: var(--focus-width) solid var(--accent-text);
   outline-offset: 2px;
 }
 
-.chart svg:focus,
-.chart .recharts-surface:focus,
-.chart .recharts-wrapper:focus {
+.chart :focus {
   outline: none;
 }
 
