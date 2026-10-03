@@ -1,0 +1,1228 @@
+/*
+ * The console's design tokens and components. docs/internal/DESIGN.md is the guide these
+ * follow; change both together.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2rem;
+
+  --label-tracking: 0.08em;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  --radius: 0;
+  --focus-width: 2px;
+  --duration: 120ms;
+
+  /* Light theme. */
+  --bg: #f8f8f7;
+  --surface: #f1f1ef;
+  --field: #e9e9e7;
+  --chip: #e6e6e3;
+  --border: #dededb;
+  --border-strong: #85857f;
+  --text: #111110;
+  --text-muted: #5a5a55;
+  --accent: #f76b15;
+  --accent-hover: #e2560a;
+  --on-accent: #111110;
+  --accent-text: #b93d0b;
+  --selection: #fed7aa;
+
+  --status-ok: #15803d;
+  --status-warn: #a16207;
+  --status-error: #b91c1c;
+  --status-idle: #57534e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e0e0f;
+    --surface: #161618;
+    --field: #1e1e21;
+    --chip: #232326;
+    --border: #2b2b2f;
+    --border-strong: #75757d;
+    --text: #f2f2f0;
+    --text-muted: #a1a1a8;
+    --accent: #ff7a1a;
+    --accent-hover: #ff9442;
+    --on-accent: #0e0e0f;
+    --accent-text: #ff8c42;
+    --selection: #7c2d12;
+
+    --status-ok: #4ade80;
+    --status-warn: #facc15;
+    --status-error: #f87171;
+    --status-idle: #a8a29e;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--text);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--text-xl);
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: var(--accent-text);
+}
+
+a:hover {
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A label: mono, uppercase, letter-spaced. Tabs, stat labels, table headers and buttons. */
+
+.button,
+.tabs a,
+.chip,
+.stat-label,
+.table th,
+.chart-data summary {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+/* Buttons. Primary is filled orange with dark text, secondary is outlined, quiet is text only. */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration),
+    border-color var(--duration),
+    color var(--duration);
+}
+
+.button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.button-secondary {
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+.button-secondary:hover {
+  border-color: var(--text);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.button-quiet:hover {
+  border-color: transparent;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* A button that does nothing here, such as Next on the last page. It keeps its place and its
+ * focus; its text and edge go quiet. */
+.button[aria-disabled="true"],
+.button[aria-disabled="true"]:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Inputs: a grey fill and a 1px border. */
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+input {
+  min-height: 44px;
+  width: 100%;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* A select draws its own chevron, the same in every browser and theme: two gradients that meet
+ * in a V, in the text's colour, 12px in from the right edge. Gradients are CSS, not images, so
+ * the CSP's `img-src 'self'` has nothing to refuse. The right padding keeps the value clear of
+ * it. */
+select {
+  appearance: none;
+  min-height: 40px;
+  padding: 0 calc(var(--space-3) + 20px) 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background-color: var(--field);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position:
+    right calc(var(--space-3) + 5px) center,
+    right var(--space-3) center;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--status-error);
+}
+
+.hint {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.refusal {
+  margin: 0 0 var(--space-2);
+  color: var(--status-error);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/* The header: the wordmark in an orange block and its chip on the left; the connection and
+ * sign-out on the right. */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-4);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.wordmark {
+  padding: 0 var(--space-1);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.chip {
+  padding: var(--space-1) var(--space-2);
+  background: var(--chip);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1.25;
+}
+
+.topbar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+/* The connection: a bordered box with the state as a word and its colour. */
+.connection {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--text-sm);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-2);
+  top: -100px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--accent-text);
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: var(--space-2);
+}
+
+/* The tab bar: one tab per view, the current one underlined in orange. When the tabs do not
+ * fit, as on a phone, it scrolls sideways inside itself; the page does not. */
+
+.tabs {
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tabs ul {
+  display: flex;
+  width: max-content;
+  margin: 0;
+  padding: 0 var(--space-4);
+  list-style: none;
+}
+
+.tabs a {
+  /* Holds the count's hidden words, so they scroll with the tab and never widen the page. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 48px;
+  padding: 0 var(--space-3);
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tabs a:hover {
+  color: var(--text);
+}
+
+.tabs a[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.tabs a:focus-visible {
+  outline-offset: -2px;
+}
+
+/* A count on a tab, such as how many items need attention. A number, not a status: no status
+ * colour, and never the accent. */
+.nav-count {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+}
+
+.main {
+  min-width: 0;
+  padding: var(--space-6) var(--space-4) var(--space-12);
+}
+
+.main:focus {
+  outline: none;
+}
+
+.view {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* A page header: the title and a muted subtitle, actions on the right. */
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.page-heading {
+  min-width: 0;
+}
+
+.page-heading h1 {
+  overflow-wrap: anywhere;
+}
+
+.page-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* Stat cards: a mono label, a big number, a small caption. */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stat {
+  min-width: 0;
+  padding: var(--space-4) var(--space-6) var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.stat p {
+  margin: 0;
+}
+
+.stat-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.stat-value {
+  margin-top: var(--space-2);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.stat-caption {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Panels: a card with a header (a title, a description, actions) over its body. */
+
+/* Positioned, so what a table hides off-screen on a phone stays inside the panel. */
+.panel {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  font-size: var(--text-md);
+}
+
+.panel-description {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.panel-body {
+  padding: var(--space-4) var(--space-6);
+}
+
+.panel-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* A table fills its panel edge to edge. */
+.panel-body > .table,
+.panel-body > .chart-data .table {
+  width: calc(100% + 2 * var(--space-6));
+  margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-6));
+}
+
+.panel-body > .chart-data .table {
+  margin-top: 0;
+  border-top: 1px solid var(--border);
+}
+
+.panel-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+/* Cards: one per worker. */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  min-width: 0;
+  padding: var(--space-4) var(--space-6) var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.card-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+.card .muted {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+/* A long id: one line, cut with an ellipsis; the whole id is in its title. */
+
+.id {
+  display: inline-block;
+  max-width: min(100%, 16rem);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+/* Facts: a label and its value, side by side. */
+
+.facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+}
+
+.panel-body > .facts {
+  margin-top: 0;
+}
+
+.facts > div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.facts dt {
+  color: var(--text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts dd p {
+  margin: 0;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plain-list li + li {
+  margin-top: var(--space-1);
+}
+
+/* A status: the daemon's word, with a square of its colour before it. Never the accent. */
+
+.status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  align-self: center;
+}
+
+.status-ok .status-dot {
+  background: var(--status-ok);
+}
+
+.status-warn .status-dot {
+  background: var(--status-warn);
+}
+
+.status-error .status-dot {
+  background: var(--status-error);
+}
+
+.status-idle .status-dot {
+  background: var(--status-idle);
+}
+
+.statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+/* The attention table: one row per item, its status first in a column wide enough for the
+ * longest word, "over RAM budget". */
+
+.attention-table th:first-child {
+  width: 14rem;
+}
+
+/* The pager under a long list: which rows show of how many, the page size, and previous and
+ * next with the page number between them. Under a table it runs edge to edge, with a line above
+ * it like a row's. */
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.pager-range {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.pager-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
+.pager-page {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-body > .pager,
+.panel-body > .panel-footer {
+  margin: var(--space-4) calc(-1 * var(--space-6)) calc(-1 * var(--space-4));
+  padding: var(--space-3) var(--space-6);
+  border-top: 1px solid var(--border);
+}
+
+.panel-footer {
+  font-size: var(--text-sm);
+}
+
+/* A grid of cards and the pager under them. The pager is a bar of the cards' own colour. */
+.card-list {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.card-list > .pager {
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* Events: a filter by subject, then one block per event, newest first. */
+
+.filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  border: 0;
+  font-size: var(--text-sm);
+}
+
+.filter legend {
+  margin-bottom: var(--space-1);
+  padding: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.filter label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.filter input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent-text);
+}
+
+/* The feed: a box of fixed height that scrolls, edge to edge in its panel. Only the rows in view
+ * are in the page, each placed by its offset; the list is as tall as every row together. The
+ * browser's own scroll anchoring is off: the feed keeps the reader's row in place itself. */
+
+.feed {
+  position: relative;
+}
+
+.panel-body > .feed {
+  margin: 0 calc(-1 * var(--space-6)) calc(-1 * var(--space-4));
+}
+
+.feed-box {
+  height: min(40rem, 70vh);
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
+}
+
+.feed-box:focus-visible {
+  outline-offset: -2px;
+}
+
+/* "N new events": over the top of the box, while the operator reads further down. */
+.feed-new {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 1;
+  min-height: 32px;
+  background: var(--bg);
+  transform: translateX(-50%);
+}
+
+.events {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.event-head time,
+.event-worker {
+  color: var(--text-muted);
+}
+
+.event-name {
+  font-weight: 500;
+}
+
+.event-payload {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+
+.event-payload > div {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.event-payload dt {
+  color: var(--text-muted);
+}
+
+.event-payload dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Charts: an orange line or columns with a faint orange fill, light grid lines, mono axis
+ * labels. Recharts draws the SVG; every colour here overrides its defaults. */
+
+.chart {
+  margin: 0 0 var(--space-3);
+}
+
+.chart svg {
+  overflow: visible;
+}
+
+.chart .recharts-cartesian-grid line {
+  stroke: var(--border);
+}
+
+.chart .recharts-cartesian-axis-line {
+  stroke: var(--border);
+}
+
+.chart .recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.chart-area .recharts-area-curve {
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+
+.chart-area .recharts-area-area {
+  fill: var(--accent);
+  fill-opacity: 0.08;
+}
+
+.chart-area .recharts-tooltip-cursor {
+  stroke: var(--border-strong);
+}
+
+.chart-columns .recharts-bar-rectangle path {
+  fill: var(--accent);
+}
+
+.chart-cursor {
+  fill: var(--accent);
+  fill-opacity: 0.08;
+}
+
+.chart-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+}
+
+.chart-tip {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.chart-tip-label {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* A chart takes focus so the arrow keys can step through it. The ring goes round the whole
+ * chart, and only for keyboard focus: a click on a chart draws none. */
+.chart:has(:focus-visible) {
+  outline: var(--focus-width) solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.chart :focus {
+  outline: none;
+}
+
+.chart-summary {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.chart-summary strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.chart-data summary {
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.chart-data summary:hover {
+  color: var(--text);
+}
+
+.chart-data[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+/* Tables: a row per item, in a panel. Headers are labels, rows are roomy, numbers sit right.
+ * Under 768px each row stacks into labelled lines, so the page never scrolls sideways. */
+
+/* Fixed layout: the columns share the panel's width and a long cell wraps or is cut, so a table
+ * never grows wider than its panel. */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  table-layout: fixed;
+}
+
+.table th,
+.table td {
+  padding: var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  overflow-wrap: break-word;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-left: var(--space-6);
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: var(--space-6);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .mono {
+  overflow-wrap: break-word;
+}
+
+.table th {
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.table .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.table th.num {
+  width: 8rem;
+}
+
+/* A table stacks its rows into labelled lines where its columns would be too narrow: every
+ * table under 768px, and a wide one, of six columns or more, under 1100px. */
+@media (max-width: 1099.98px) {
+  .table-wide thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table-wide thead th {
+    white-space: normal;
+  }
+
+  .table-wide,
+  .table-wide tbody,
+  .table-wide tr {
+    display: block;
+  }
+
+  .table-wide tr {
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-wide tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table-wide td,
+  .table-wide td:first-child,
+  .table-wide td:last-child {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .num {
+    text-align: left;
+  }
+
+  .table-wide th.num {
+    width: auto;
+  }
+
+  .table-wide td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table thead th {
+    white-space: normal;
+  }
+
+  .table,
+  .table tbody,
+  .table tr {
+    display: block;
+  }
+
+  .table tr {
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td,
+  .table td:first-child,
+  .table td:last-child {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .table .num {
+    text-align: left;
+  }
+
+  .table th.num {
+    width: auto;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+}
+
+/* Sign-in: the same header, then one panel with the token's input and the button. */
+
+.sign-in {
+  min-height: 100vh;
+}
+
+.sign-in .topbar {
+  border-bottom: 1px solid var(--border);
+}
+
+.sign-in-main {
+  display: grid;
+  justify-items: center;
+  padding: var(--space-12) var(--space-4);
+}
+
+.sign-in-panel {
+  width: 100%;
+  max-width: 440px;
+}
+
+.sign-in-panel .panel-title {
+  font-size: var(--text-lg);
+}
+
+.sign-in form {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-6);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (min-width: 768px) {
+  .topbar {
+    padding: var(--space-4) var(--space-6);
+  }
+
+  .tabs ul {
+    padding: 0 var(--space-6);
+  }
+
+  .main {
+    padding: var(--space-8) var(--space-6) var(--space-12);
+  }
+
+  .panel-row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+
+  .panel-row-even {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0ms;
+  }
+}

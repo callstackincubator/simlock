@@ -164,6 +164,79 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("the worker view builder gives a gateway the same view it built before this change", async () => {
+    // Every field a refresh fills, set to a value that is not a default, and the whole view
+    // compared as one literal: the expected value is what the gateway built before the view
+    // builder moved into the contract, so any field the move dropped, renamed or reshaped
+    // fails here by name.
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient("admin", "9.8.7");
+    const install = {
+      component: "26.0",
+      platform: "ios" as const,
+      since: 500,
+      state: "downloading" as const,
+      waiters: 2,
+    };
+    const capacity = {
+      ...statusFixture().capacity,
+      global: { maxRunning: 4, overLimit: false, reserved: 1, running: 2, warm: 1 },
+    };
+    const waiting = {
+      createdAt: 600,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "local-agent",
+      spec: { model: "iPhone 17", platform: "ios" as const },
+      stage: "queued" as const,
+    };
+    worker.status = statusFixture({
+      capacity,
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture({ arch: "x64" }),
+      installs: [install],
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 3,
+      waiting: [waiting],
+    });
+    worker.devices = [
+      { ...deviceFixture("dev_1", "leased"), createdAt: 1, driverData: { private: true } },
+    ];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    worker.downloadPolicy = "always";
+    worker.downloadTimeoutMs = 45 * 60_000;
+    worker.leaseMaxTtlMs = 6 * 60 * 60_000;
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
+
+    expect(harness.service.workers.view("wrk_1")).toEqual({
+      capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      devices: [deviceFixture("dev_1", "leased")],
+      downloads: { policy: "always", timeoutMs: 45 * 60_000 },
+      drained: false,
+      health: "starting",
+      host: hostFixture({ arch: "x64" }),
+      id: "wrk_1",
+      installs: [install],
+      label: "mac-mini-1",
+      lastSeenAt: 1_000,
+      lease: { maxTtlMs: 6 * 60 * 60_000 },
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 3,
+      version: "9.8.7",
+      waiting: [waiting],
+    });
+
+    await harness.service.stop();
+  });
+
   it("narrows a worker's device records: no driver-private data crosses the fleet", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -239,6 +312,33 @@ describe("GatewayService", () => {
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
     ]);
+
+    await harness.service.stop();
+  });
+
+  it("a gateway's worker view carries a worker device's stalled flag", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.devices = [
+      {
+        ...deviceFixture("dev_stuck"),
+        state: "provisioning" as const,
+        createdAt: 1,
+        driverData: {},
+        stalled: true,
+        transitionAgeMs: 120_000,
+      },
+      { ...deviceFixture("dev_ready", "ready"), createdAt: 1, driverData: {} },
+    ];
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
+
+    const [stuck, ready] = harness.service.workers.view("wrk_1")?.devices ?? [];
+    expect(stuck).toMatchObject({ id: "dev_stuck", stalled: true });
+    expect(ready?.id).toBe("dev_ready");
+    expect(ready).not.toHaveProperty("stalled");
 
     await harness.service.stop();
   });
@@ -442,6 +542,37 @@ describe("GatewayService", () => {
     );
 
     await harness.service.stop();
+  });
+
+  describe("waiting requests on the view", () => {
+    it("a worker's lease.queued event refreshes its view's waiting list on the gateway", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = fleet();
+      await harness.service.start();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.downloads).toBeDefined(),
+      );
+      expect(harness.service.workers.view("wrk_1")?.waiting).toEqual([]);
+
+      const queued = {
+        createdAt: 500,
+        id: "req_1",
+        queuePosition: 1,
+        requesterId: "local-agent",
+        spec: { model: "iPhone 17", platform: "ios" as const },
+        stage: "queued" as const,
+      };
+      worker.status = statusFixture({ queueDepth: 1, waiting: [queued] });
+      worker.pushEvent({ event: "lease.queued" });
+
+      // Well inside the periodic refresh, which this test never lets come round.
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.waiting).toEqual([queued]),
+      );
+      await harness.service.stop();
+    });
   });
 
   describe("installs in progress on the view (ADR 0010 §7)", () => {

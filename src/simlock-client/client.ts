@@ -242,7 +242,8 @@ export interface SimlockAdminClient extends SimlockClient {
   listTokens(): Promise<TokenListOutput>;
   revokeToken(input: TokenRevokeInput): Promise<TokenRevokeOutput>;
 
-  /** ADR 0005 §23. Gateway-only: a worker answers `UNKNOWN_REQUEST`, since it has no fleet. */
+  /** ADR 0005 §23. A worker lists itself as its only worker; `drainWorker`, `undrainWorker` and
+   * `removeWorker` reject on a worker with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012). */
   listWorkers(): Promise<WorkerListOutput>;
   drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
   undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
@@ -263,7 +264,7 @@ export interface SimlockAdminClient extends SimlockClient {
    * ADR 0010 §7, gateway-only: installs one component on named workers (`workers: [ids]`) or on
    * every connected one (`workers: "all"`). Every targeted worker is asked at the same time and
    * answers for itself; the result lists one entry per worker. `options.onProgress` hears each
-   * worker's progress with its `workerId`. A worker answers `UNKNOWN_REQUEST`.
+   * worker's progress with its `workerId`. A worker answers `UNSUPPORTED_IN_WORKER_MODE`.
    */
   installComponentOnWorkers(
     input: WorkerInstallComponentInput,

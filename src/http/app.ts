@@ -282,6 +282,17 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json({ request: serializeRequest(outcome.view) }, 201);
   });
 
+  // Every request waiting for a device, whoever sent it. Operator-role in effect: `list.get` is
+  // an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher.
+  app.get("/v1/lease-requests", agentAuth, async (c) => {
+    const requests = await deps.dispatch(
+      "list.get",
+      { kind: "requests" },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json({ requests });
+  });
+
   app.get("/v1/lease-requests/:id", agentAuth, async (c) => {
     const id = c.req.param("id");
     const initial = tracker.get(id);
@@ -588,6 +599,13 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity")))),
   );
 
+  // The token records, for a console to name a lease's holder by its token's label. `token.list`
+  // is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher, and
+  // its output schema has no secret and no hash, so neither can reach the body.
+  app.get("/v1/tokens", agentAuth, async (c) =>
+    c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity")))),
+  );
+
   app.get("/v1/devices", agentAuth, async (c) => {
     const devices = await deps.dispatch(
       "list.get",
@@ -597,47 +615,45 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json({ devices });
   });
 
-  // ADR 0005 §23's worker routes, registered only on a gateway. A worker daemon has no worker
-  // registry, so on one these paths are simply not routes -- a `404`, which is what "this
-  // endpoint has no such resource" means, rather than a `501` implying the fleet exists here
-  // and is switched off.
-  if (deps.config.mode === "gateway") {
-    // Operator-role in effect: `worker.*` are admin operations, so an agent token gets
-    // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
-    app.get("/v1/workers", agentAuth, async (c) =>
-      c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity")))),
-    );
+  // ADR 0005 §23's worker routes, registered in both modes (ADR 0012 §3). A worker answers them
+  // as a fleet of one: `GET /v1/workers` lists this host, and the drain, undrain and remove
+  // routes answer `501 UNSUPPORTED_IN_WORKER_MODE` from its dispatcher.
+  //
+  // Operator-role in effect: `worker.*` are admin operations, so an agent token gets
+  // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
+  app.get("/v1/workers", agentAuth, async (c) =>
+    c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity")))),
+  );
 
-    app.post("/v1/workers/:id/drain", agentAuth, async (c) =>
-      c.json(
-        await deps.dispatch(
-          "worker.drain",
-          { workerId: c.req.param("id") },
-          buildHttpSession(c.get("identity")),
-        ),
+  app.post("/v1/workers/:id/drain", agentAuth, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "worker.drain",
+        { workerId: c.req.param("id") },
+        buildHttpSession(c.get("identity")),
       ),
-    );
+    ),
+  );
 
-    app.delete("/v1/workers/:id/drain", agentAuth, async (c) =>
-      c.json(
-        await deps.dispatch(
-          "worker.undrain",
-          { workerId: c.req.param("id") },
-          buildHttpSession(c.get("identity")),
-        ),
+  app.delete("/v1/workers/:id/drain", agentAuth, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "worker.undrain",
+        { workerId: c.req.param("id") },
+        buildHttpSession(c.get("identity")),
       ),
-    );
+    ),
+  );
 
-    app.delete("/v1/workers/:id", agentAuth, async (c) =>
-      c.json(
-        await deps.dispatch(
-          "worker.remove",
-          { workerId: c.req.param("id") },
-          buildHttpSession(c.get("identity")),
-        ),
+  app.delete("/v1/workers/:id", agentAuth, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "worker.remove",
+        { workerId: c.req.param("id") },
+        buildHttpSession(c.get("identity")),
       ),
-    );
-  }
+    ),
+  );
 
   app.get("/v1/events", agentAuth, async (c) => {
     const since = c.req.query("since");

@@ -6,3 +6,5 @@ dist/
 .claude/settings.local.json
 .claude/worktrees/
 .stryker-tmp/
+test-results/
+playwright-report/

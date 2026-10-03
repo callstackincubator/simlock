@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     tags: [{ name: "slow" }, { name: "ios" }, { name: "android" }],
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
     // Stryker runs every test file in one worker thread. One test fails there deterministically
     // after other files have run, though it passes alone: it is left out until that order
     // dependence is fixed, so it cannot abort every mutation run.

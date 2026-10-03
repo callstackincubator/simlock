@@ -47,6 +47,8 @@ export interface AggregateStatusOptions {
   readonly host: StatusOutput["host"];
   /** The gateway's fleet queue depth -- 0 until #118 gives it a queue. */
   readonly queueDepth: number;
+  /** The requests waiting in the fleet queue. Each worker's own are on its view. */
+  readonly waiting?: StatusOutput["waiting"];
   /**
    * #118: rewrites each view's leases to gateway-facing form (its own id, fleet-level
    * `requesterId`, `worker`) for the ones this gateway actually issued -- see
@@ -92,6 +94,7 @@ export function aggregateStatus(
       ),
     ),
     queueDepth: options.queueDepth,
+    waiting: [...(options.waiting ?? [])],
     workers: [...views],
   };
 }

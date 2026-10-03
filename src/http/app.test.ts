@@ -8,6 +8,7 @@ import {
   RequesterAlreadyLeasedError,
   UnknownLeaseError,
 } from "../core/index.js";
+import { runDispatch } from "../daemon/dispatch.js";
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure, StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
@@ -1665,6 +1666,36 @@ describe("operator-only listing routes", () => {
     expect(operatorBody.leases.map((lease) => lease.id).sort()).toEqual(["lse_1", "lse_2"]);
   });
 
+  it("GET /v1/lease-requests answers 403 for an agent token", async () => {
+    const { app, dispatcher } = buildHarness();
+    const waiting = {
+      createdAt: 900,
+      id: "req_1",
+      queuePosition: 1,
+      requesterId: "agent-b",
+      spec: { model: "iPhone 16", platform: "ios" },
+      stage: "queued",
+    };
+    // `list.get`'s own role check, through the contract's real pipeline: the route adds none.
+    dispatcher.handlers["list.get"] = (input, session) =>
+      runDispatch("list.get", input, session, {
+        handlers: {
+          "list.get": (listInput) => {
+            expect(listInput).toEqual({ kind: "requests" });
+            return [waiting];
+          },
+        },
+      });
+
+    const asAgent = await app.request("/v1/lease-requests", { headers: agentAuth });
+    const asOperator = await app.request("/v1/lease-requests", { headers: operatorAuth });
+
+    expect(asAgent.status).toBe(403);
+    expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    expect(asOperator.status).toBe(200);
+    expect(await asOperator.json()).toEqual({ requests: [waiting] });
+  });
+
   it("GET /v1/devices dispatches list.get(kind: devices)", async () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["list.get"] = (input) => {
@@ -1765,22 +1796,50 @@ describe("hardening from review", () => {
 
 /**
  * ADR 0005 §23. The routes themselves are thin -- one dispatch each -- so what is worth
- * asserting is which daemon has them at all, that the gateway-only ones reach the right
- * operation with the id from the path, and that a refusal's typed `details` reach the body.
+ * asserting is which daemon has them at all, that they reach the right operation with the id
+ * from the path, and that a refusal's typed `details` reach the body. What a worker's own
+ * dispatcher answers for all four operations is proven in `src/daemon/dispatcher.test.ts`;
+ * `e2e/single-host-fleet.test.ts` drives `GET /v1/workers` and the drain route end to end.
  */
-describe("worker routes (gateway mode)", () => {
+describe("worker routes", () => {
   function gatewayHarness() {
     return buildHarness({ config: testConfig({}, "gateway") });
   }
 
-  it("are not routes at all on a worker", async () => {
-    const { app } = buildHarness();
+  it("are routes on a worker too (ADR 0012 §3), each dispatching its operation", async () => {
+    const { app, config, dispatcher } = buildHarness();
+    expect(config.mode).toBe("worker");
+    dispatcher.handlers["worker.list"] = () => ({ workers: [] });
+    for (const operation of ["worker.drain", "worker.undrain", "worker.remove"] as const) {
+      dispatcher.handlers[operation] = () => {
+        throw new DispatchError("UNSUPPORTED_IN_WORKER_MODE", `${operation} is refused`, {
+          operation,
+        });
+      };
+    }
 
-    const response = await app.request("/v1/workers", { headers: operatorAuth });
+    const list = await app.request("/v1/workers", { headers: operatorAuth });
+    const drain = await app.request("/v1/workers/w/drain", {
+      headers: operatorAuth,
+      method: "POST",
+    });
+    const undrain = await app.request("/v1/workers/w/drain", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    const remove = await app.request("/v1/workers/w", { headers: operatorAuth, method: "DELETE" });
 
-    // 404, not 501: a worker has no worker registry, so this is not an endpoint that exists
-    // and is switched off -- it is not an endpoint.
-    expect(response.status).toBe(404);
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual({ workers: [] });
+    // Each refusal names the operation its handler was reached through, so the body proves
+    // which route dispatched what.
+    const refusals = [drain, undrain, remove];
+    expect(refusals.map((response) => response.status)).toEqual([501, 501, 501]);
+    expect(await Promise.all(refusals.map((response) => response.json()))).toEqual(
+      ["worker.drain", "worker.undrain", "worker.remove"].map((operation) => ({
+        error: { code: "UNSUPPORTED_IN_WORKER_MODE", message: expect.any(String), operation },
+      })),
+    );
   });
 
   it("GET /v1/workers returns the views", async () => {

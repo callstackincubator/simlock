@@ -43,7 +43,7 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   kind, not just transport: it is the one frontend meant to be reached over a
   real network, so it calls the daemon's dispatcher **in-process** — the exact
   same one the socket path calls — rather than going through the unix socket at
-  all, and requires a bearer token on every route but `GET /v1/healthz`. It
+  all, and requires a bearer token on every `/v1` route but `GET /v1/healthz`. It
   grants exactly the same TTL-renewed lease every other frontend does (ADR
   0004) — being reachable over a real network is no longer a reason for a
   different lease model, because there is only one. Its listener now starts
@@ -55,6 +55,31 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   before convergence completes now waits on the shared dispatcher's readiness
   gate exactly like a socket request, instead of being refused. See
   [HTTP-API.md](../HTTP-API.md) for the full route reference.
+- **Web console** (ADR 0011): a React app in `ui/`, built by Vite into
+  `dist/ui` and served by the same HTTP listener at every path outside `/v1`.
+  `src/http/server.ts` puts it in front of `app.fetch`, so `app.ts` stays a
+  pure request-to-response function and the console never touches the API's
+  auth or request log. The console is a client of the HTTP API like any other:
+  it reads only `/v1`, with the operator's token, through one fetch helper
+  (`ui/src/api.ts`). Its views are listed once, in `ui/src/views/index.tsx`,
+  which is both the tab bar and the router's table. Views read data only
+  through the live layer (ADR 0013, `ui/src/live/`): `useLiveResource(path)`
+  marks a route as one the screen reads, and `LiveConnection` refetches every
+  such route on each event from `GET /v1/events/stream` and every second,
+  one request per route at a time; it also owns the disconnect, backoff and
+  recovery rules and the clock offset behind `useNow()`. The one exception
+  is the last hour of events, which is not a route's latest answer: its feed
+  (`ui/src/views/event-feed.ts`, behind `useRecentEvents()`) takes each
+  event off the stream through the live layer and loads `GET /v1/events`
+  itself, for the last hour and for each gap the stream left. The events view
+  lists it, and the workers view's lease chart counts back through it.
+  Every route still answers whole lists; the console pages them in the
+  browser. Every table of a view's items is `DataTable` (`ui/src/table.tsx`, on
+  `@tanstack/react-table`), which keeps its page in the URL's query through
+  `usePaging` (`ui/src/pager.tsx`); the events feed draws only the rows in
+  view, with `@tanstack/react-virtual`. See
+  [CONSOLE.md](../CONSOLE.md) for the user's side and
+  [DESIGN.md](DESIGN.md) for the style.
 - **CLI**: by default it acquires a lease, prints one JSON result line on
   stdout, then stays alive — renewing the lease at one third of the lease's TTL
   and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is the
@@ -512,6 +537,25 @@ consequences are worth stating plainly:
 and `worker.remove` are the operator's edits to them. A **drained** worker
 keeps its existing leases and receives no new dispatches — the tool for
 taking a machine down without killing anyone's device.
+
+A worker answers these operations as a **fleet of one** (ADR 0012).
+`worker.list` returns one view, the worker itself: its instance id, its
+`gateway.label`, `connected`, never drained, `lastSeenAt` the time of the
+call. The reported fields come from its own `status.get`, `list.get`,
+`catalog.get` and `config.get`, turned into view fields by
+`workerViewFields` in `src/contract/worker-view.ts` — the same pure function
+`WorkerLink` builds a gateway's views with, so the two cannot disagree about
+a field. The catalog is the one read the worker keeps: `catalog.get` runs
+each driver's catalog read (`simctl list` on iOS), and the console polls
+`GET /v1/workers` every second, so the dispatcher re-reads it only once
+`WORKER_VIEW_REFRESH_INTERVAL_MS` (the gateway's own refresh tick) has
+passed, or after one of `WORKER_VIEW_CATALOG_EVENTS`. Both constants live
+in `src/contract/worker-view.ts`, and `WorkerLink` reads the same two, so a
+host's view of itself and a gateway's view of it re-read the catalog on the
+same rhythm. The dispatcher's subscriptions end when `DaemonServer` stops. `worker.drain`, `worker.undrain`, `worker.remove` and
+`worker.install-component` answer `UNSUPPORTED_IN_WORKER_MODE` (`501`, exit
+`2`), the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The `/v1/workers*` routes
+are registered in both modes.
 
 Drain is the one piece of worker state the gateway *decides* rather than
 observes, and it is why the **worker registry** and the worker *view* are two
@@ -1601,9 +1645,10 @@ last count are not seen; see KNOWN-PITFALLS.md.
 
 #### Through a gateway
 
-`worker.install-component` (ADR 0010 §7) is gateway-only: it is in
-`GATEWAY_ONLY_OPERATIONS`, so a worker answers `UNKNOWN_REQUEST`, and no
-worker ever receives it, which is why it moves no protocol version. Its input
+`worker.install-component` (ADR 0010 §7) only installs through a gateway: a
+worker refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2), and no
+worker ever receives it over an uplink, which is why it moves no protocol
+version. Its input
 is `{ platform, version, workers }`; `version` runs `component.install`'s own
 schema and `workers` is `"all"` or 1 to 64 distinct ids. One function,
 `relayComponentInstall` in `src/gateway/component-relay.ts`, does the

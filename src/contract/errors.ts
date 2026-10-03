@@ -120,6 +120,13 @@ export interface ErrorDetailsMap {
    * different instruction from "that is not an operation".
    */
   UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
+  /**
+   * ADR 0012 §2: the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The operation exists, this daemon
+   * is a worker, and the operation only applies to a gateway's workers: `worker.drain`,
+   * `worker.undrain`, `worker.remove` and `worker.install-component`. Not `UNKNOWN_REQUEST`: the
+   * operation is known, it just does not apply to a single host.
+   */
+  UNSUPPORTED_IN_WORKER_MODE: { readonly operation: string };
   /** ADR 0005 §8: `worker.remove` on a worker whose uplink is currently open. Carries the id
    * so a caller can say which one without re-parsing the message. */
   WORKER_CONNECTED: { readonly workerId: string };
@@ -190,6 +197,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   PASSTHROUGH_REFUSED: true,
   UNKNOWN_PASSTHROUGH_TOOL: true,
   UNSUPPORTED_IN_GATEWAY_MODE: true,
+  UNSUPPORTED_IN_WORKER_MODE: true,
   WORKER_CONNECTED: true,
   UNKNOWN_WORKER: true,
   WORKER_UNREACHABLE: true,
@@ -345,6 +353,14 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.
   UNSUPPORTED_IN_GATEWAY_MODE: {
     code: "UNSUPPORTED_IN_GATEWAY_MODE",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 501,
+  },
+  // The same 501 and exit 2 as `UNSUPPORTED_IN_GATEWAY_MODE`, for the same reason: a
+  // well-formed request this daemon's mode does not implement.
+  UNSUPPORTED_IN_WORKER_MODE: {
+    code: "UNSUPPORTED_IN_WORKER_MODE",
     kind: "domain",
     cliExitCode: 2,
     httpStatus: 501,

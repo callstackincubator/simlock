@@ -369,6 +369,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventHistory,
     healthMonitor: leaseEngine.healthMonitor,
     hostFacts: () => fitHostFacts(hostFacts.current()),
+    // ADR 0012 §1: `worker.list` answers with this host under the id it presents to a gateway.
+    instanceId,
     host: new DaemonEndpointHost({
       connector: ipc,
       endpoint: socketPath,
@@ -390,6 +392,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     reaper,
     nuke,
     registry,
+    // `status.get` and `list.get` flag a stalled device by the rule `doctor` reports, so they
+    // need what `doctor` has: the drivers, and the claims that keep a live reclaim from reading
+    // as a stall.
+    stalls: { claims: leaseEngine.claimReader, drivers },
     resolveRole,
     adminSecret,
     tokens,

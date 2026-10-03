@@ -12,7 +12,7 @@ const base = process.argv[2] ?? "origin/main";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
 
 const mergeBase = git("merge-base", base, "HEAD").trim();
-const diff = git("diff", "-U0", "--no-color", mergeBase, "--", "src/*.ts", ":!*.test.ts");
+const diff = git("diff", "-U0", "--no-color", mergeBase, "--", "src/*.ts", "ui/src/*.ts", "ui/src/*.tsx", ":!*.test.ts", ":!*.test.tsx");
 
 /** `file:start-end` for every hunk that adds lines, the form Stryker's --mutate takes. */
 const ranges = [];
@@ -28,7 +28,7 @@ for (const line of diff.split("\n")) {
 }
 
 if (ranges.length === 0) {
-  console.log(`No changed source lines under src/ since ${base}; nothing to mutate.`);
+  console.log(`No changed source lines under src/ or ui/src/ since ${base}; nothing to mutate.`);
   process.exit(0);
 }
 

@@ -86,6 +86,12 @@ export class ForeignWaiterError extends Error {
 
 export type WaiterState = "new" | "queued" | "processing" | "granted" | "rejected";
 
+/** Where a waiter stands (`WaitQueue#places`): `queuePosition` only while it is `queued`. */
+export interface QueuePlace {
+  readonly id: string;
+  readonly queuePosition?: number;
+}
+
 export interface Waiter {
   readonly id: string;
   readonly request: DeviceRequest;
@@ -148,6 +154,21 @@ export class WaitQueue {
    */
   list(): readonly Waiter[] {
     return [...this.#waiters];
+  }
+
+  /**
+   * Every waiter not yet granted or rejected, oldest first, with its place in the FIFO while it
+   * is `queued`: its 1-based index there, counting the waiters ahead of it that are already being
+   * worked on, which is how a `queued` progress report and `lease.queued` count. A waiter being
+   * worked on (`new` or `processing`) has no place. Read now, not as last reported: a waiter
+   * moves up as the ones ahead of it leave.
+   */
+  places(): readonly QueuePlace[] {
+    return [...this.#pendingWaiters].map((waiter) =>
+      waiter.state === "queued"
+        ? { id: waiter.id, queuePosition: this.#waiters.indexOf(waiter) + 1 }
+        : { id: waiter.id },
+    );
   }
 
   hasPendingRequester(requesterId: string): boolean {

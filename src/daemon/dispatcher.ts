@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { EventHistory } from "../bus/index.js";
+import type { EventBus, EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
   ComponentInUseError,
@@ -10,9 +10,12 @@ import {
   type DeviceRecord,
   type DeviceRequest,
   type Doctor,
+  type Driver,
   type HostFacts,
+  isStalledTransition,
   type Nuke,
   type Registry,
+  type StallInput,
   effectiveAllowDownload,
   RuntimeMissingError,
   transitionEnteredAt,
@@ -34,12 +37,15 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  consoleUrlField,
   fitPlatformCatalog,
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
-  type GatewayOnlyOperationName,
   type OperationName,
+  WORKER_VIEW_CATALOG_EVENTS,
+  WORKER_VIEW_REFRESH_INTERVAL_MS,
+  workerViewFields,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
 import {
@@ -127,6 +133,17 @@ export interface DispatcherOptions {
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
   /**
+   * What the `stalled` flag `status.get` and `list.get` put on a device is worked out from
+   * (`isStalledTransition`, with `config.stalledTransition` and the clock): the drivers this
+   * daemon runs, and its device operation claims, so a live operation is never read as a
+   * stall. Optional so the tests that never stall a device need not fabricate either; absent,
+   * no device is flagged.
+   */
+  readonly stalls?: {
+    readonly drivers: readonly Pick<Driver, "estimate" | "platform">[];
+    readonly claims: NonNullable<StallInput["claims"]>;
+  };
+  /**
    * ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
    * owner of tokens.json." Optional so tests that don't exercise `token.*` (the overwhelming
    * majority) don't need to fabricate one -- `#tokenCreate`/`#tokenList`/`#tokenRevoke` throw a
@@ -143,6 +160,17 @@ export interface DispatcherOptions {
    * since the session's `role` is itself resolved from `hello`'s payload (see `session.ts`).
    */
   readonly awaitReady: () => Promise<void>;
+  /** This daemon's instance id (`instance.json`), the id it presents to a gateway. `worker.list`
+   * answers with it as the one worker's id (ADR 0012 §1). */
+  readonly instanceId: string;
+  /** This daemon's own version, the one its `hello` reply carries; `worker.list`'s `version`. */
+  readonly version: string;
+  /**
+   * Where `worker.list` hears `WORKER_VIEW_CATALOG_EVENTS`, so its kept catalog is read again at
+   * once rather than on its next interval. Optional for the tests that never call `worker.list`;
+   * without it the kept catalog is only re-read on the interval.
+   */
+  readonly eventBus?: Pick<EventBus, "subscribe">;
 }
 
 /**
@@ -162,9 +190,8 @@ type Handler<Op extends OperationName> = (
 ) => Promise<unknown> | unknown;
 
 /** Every operation this (worker-mode) dispatcher implements: the contract's set minus
- * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6) and minus the
- * gateway-only ones (ADR 0005 §23). */
-type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOperationName>;
+ * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6). */
+type WorkerOperationName = Exclude<OperationName, "daemon.stop">;
 
 /**
  * The transport-independent dispatcher (ADR 0003 §2). One `dispatch()` call does, in order:
@@ -172,8 +199,7 @@ type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOpe
  * output. Handlers never see a raw payload or run their own role/ownership check -- both
  * already happened by the time a handler's function body runs.
  *
- * Deliberately excludes `hello` (protocol-level, answered before a session exists), the
- * gateway-only `worker.*` operations (ADR 0005 §23 -- see `#handlers`), and
+ * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
  * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
  * stays reachable across a version mismatch; still requires a completed handshake and the
  * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
@@ -183,23 +209,38 @@ export class Dispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
   /**
-   * Total over every operation but `daemon.stop` and the gateway-only ones. Deliberately *not*
-   * a partial map: a declared operation whose handler was never written is otherwise invisible
-   * to the compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
-   * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
+   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a declared
+   * operation whose handler was never written is otherwise invisible to the compiler and only
+   * shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how `driver.passthrough` came
+   * to be declared, dispatched, and unimplemented at once.
    *
-   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`; ADR 0010 §7:
-   * `worker.install-component`) are excluded from the type rather than given handlers that throw. A worker daemon has no worker
-   * registry to answer them from, and the honest answer is the one `dispatch()`'s own
-   * missing-handler guard already gives -- `UNKNOWN_REQUEST`, "this daemon does not implement
-   * that operation". Excluding them here also means adding a gateway operation cannot silently
-   * acquire a meaningless worker-side implementation: it either lands in
-   * `GATEWAY_ONLY_OPERATIONS` or the compiler asks for a handler in this map.
+   * ADR 0012: a worker answers the fleet operations as a fleet of one. `worker.list` returns
+   * this host as its only worker; the operations that act on a gateway's workers refuse with
+   * `UNSUPPORTED_IN_WORKER_MODE`, so adding a gateway operation still makes the compiler ask
+   * what a worker answers.
    */
   readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
+  /**
+   * `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
+   * `WORKER_VIEW_REFRESH_INTERVAL_MS`, the rhythm a gateway re-reads a worker's catalog at, and
+   * dropped on `WORKER_VIEW_CATALOG_EVENTS`, the events a gateway re-reads it on. Without it
+   * every `worker.list` runs each driver's catalog read (`simctl list` on iOS), and the console
+   * polls that route every second. Holds the promise, so calls that arrive while a read runs
+   * share it; a read that fails is dropped, so the next call reads again.
+   */
+  #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
+  /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
+  readonly #unsubscribe: (() => void)[] = [];
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    // Observers only (architecture rule 5): dropping a kept read decides nothing.
+    for (const event of WORKER_VIEW_CATALOG_EVENTS) {
+      const unsubscribe = options.eventBus?.subscribe(event, () => {
+        this.#viewCatalog = undefined;
+      });
+      if (unsubscribe !== undefined) this.#unsubscribe.push(unsubscribe);
+    }
     this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
@@ -226,9 +267,23 @@ export class Dispatcher {
       "component.install": this.#componentInstall,
       "component.list": this.#componentList,
       "component.remove": this.#componentRemove,
+      "worker.list": this.#workerList,
+      "worker.drain": unsupportedOnWorker("worker.drain"),
+      "worker.undrain": unsupportedOnWorker("worker.undrain"),
+      "worker.remove": unsupportedOnWorker("worker.remove"),
+      "worker.install-component": unsupportedOnWorker(
+        "worker.install-component",
+        "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
+      ),
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
+  }
+
+  /** Ends this dispatcher's bus subscriptions. `DaemonServer` calls it when the daemon stops. */
+  dispose(): void {
+    for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
+    this.#viewCatalog = undefined;
   }
 
   /** ADR 0003 §2's pipeline, run by the shared `runDispatch` (see `./dispatch.js`) over this
@@ -302,11 +357,16 @@ export class Dispatcher {
       // config rather than being assumed, because it is what tells a client whether the device
       // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
       // #117 is what makes `gateway` mean something beyond this field.
-      daemon: { health: this.options.health(), mode: this.options.config.mode },
+      daemon: {
+        health: this.options.health(),
+        mode: this.options.config.mode,
+        ...consoleUrlField(this.options.config.http),
+      },
       host: this.options.hostFacts(),
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
+      waiting: [...this.options.queue.waitingRequests()],
     };
   };
 
@@ -566,6 +626,8 @@ export class Dispatcher {
         return [...snapshot.leases];
       case "rules":
         return this.options.reaper.rules;
+      case "requests":
+        return [...this.options.queue.waitingRequests()];
       case "devices":
       case undefined:
         return snapshot.devices.map((device) => this.#decorateDevice(device));
@@ -600,6 +662,69 @@ export class Dispatcher {
   };
 
   #configGet: Handler<"config.get"> = () => this.options.config;
+
+  /**
+   * ADR 0012 §1: this host as its own fleet of one. The fields a gateway reads over the uplink
+   * come from the same four reads, made here against this dispatcher's own handlers; the
+   * contract's one builder turns them into a view. The parses only turn the handlers' core
+   * records into the wire types the builder takes: `worker.list`'s own output schema, applied
+   * by `dispatch()`, is what bounds and narrows the view on the wire. The catalog is the kept
+   * one (see `#viewCatalog`); status and devices are read on every call, as a gateway reads
+   * them on every worker event. `drained` is always `false`: a gateway that drained this worker
+   * holds that flag, not this host.
+   */
+  #workerList: Handler<"worker.list"> = async (_input, session) => {
+    const [status, devices, catalog] = await Promise.all([
+      this.#statusGet({}, session),
+      this.#listGet({ kind: "devices" }, session),
+      this.#keptViewCatalog(session),
+    ]);
+    const label = this.options.config.gateway.label;
+    return {
+      workers: [
+        {
+          ...workerViewFields({
+            catalog: OPERATIONS["catalog.get"].output.parse(catalog),
+            config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
+            devices: OPERATIONS["list.get"].output.parse(devices),
+            status: OPERATIONS["status.get"].output.parse(status),
+          }),
+          connection: "connected",
+          drained: false,
+          id: this.options.instanceId,
+          lastSeenAt: this.options.clock.now(),
+          version: this.options.version,
+          ...(label === undefined ? {} : { label }),
+        },
+      ],
+    };
+  };
+
+  /**
+   * The kept catalog for `worker.list`, read again once it is older than the interval. The age
+   * is wall-clock time, so one that is negative (the clock was set back) counts as stale rather
+   * than keeping the catalog for as long as the clock went back. A failed read drops whatever is
+   * kept, at worst one read newer than it, which costs one more read.
+   */
+  #keptViewCatalog(session: DispatchSession): Promise<unknown> {
+    const now = this.options.clock.now();
+    const kept = this.#viewCatalog;
+    const age = kept === undefined ? undefined : now - kept.readAt;
+    if (
+      kept !== undefined &&
+      age !== undefined &&
+      age >= 0 &&
+      age < WORKER_VIEW_REFRESH_INTERVAL_MS
+    ) {
+      return kept.catalog;
+    }
+    const catalog = Promise.resolve(this.#catalogGet({}, session));
+    this.#viewCatalog = { catalog, readAt: now };
+    catalog.catch(() => {
+      this.#viewCatalog = undefined;
+    });
+    return catalog;
+  }
 
   /**
    * ADR 0010 §4 and §6: an operator's explicit install. The command itself is the consent, so the
@@ -693,11 +818,34 @@ export class Dispatcher {
     return this.options.tokens;
   }
 
-  /** Moved verbatim from `DaemonServer`; see its former comment there. */
-  #decorateDevice(device: DeviceRecord): DeviceRecord & { readonly transitionAgeMs?: number } {
+  /**
+   * A device as `status.get` and `list.get` report it: with `transitionAgeMs` while it is
+   * mid-transition, and `stalled: true` once that transition is a stall by the rule `doctor`
+   * reports (`isStalledTransition`). A device that is not stalled carries no `stalled` at all.
+   */
+  #decorateDevice(
+    device: DeviceRecord,
+  ): DeviceRecord & { readonly transitionAgeMs?: number; readonly stalled?: true } {
     const enteredAt = transitionEnteredAt(device);
     if (enteredAt === undefined) return device;
-    return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
+    const now = this.options.clock.now();
+    return {
+      ...device,
+      transitionAgeMs: now - enteredAt,
+      ...(this.#isStalled(device, now) ? { stalled: true as const } : {}),
+    };
+  }
+
+  #isStalled(device: DeviceRecord, now: number): boolean {
+    const stalls = this.options.stalls;
+    if (stalls === undefined) return false;
+    return isStalledTransition({
+      claims: stalls.claims,
+      config: this.options.config.stalledTransition,
+      device,
+      driver: stalls.drivers.find((driver) => driver.platform === device.spec.platform),
+      now,
+    });
   }
 }
 
@@ -723,4 +871,14 @@ function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): vo
   } catch {
     // Already gone.
   }
+}
+
+/** ADR 0012 §2: an operation that acts on a gateway's workers, asked of a worker. */
+function unsupportedOnWorker(
+  operation: OperationName,
+  message = `${operation} acts on a gateway's workers, and this daemon is not a gateway`,
+): ErasedHandler {
+  return () => {
+    throw new DispatchError("UNSUPPORTED_IN_WORKER_MODE", message, { operation });
+  };
 }

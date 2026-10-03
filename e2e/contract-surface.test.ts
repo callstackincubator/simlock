@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { GATEWAY_ONLY_OPERATIONS, OPERATIONS, type OperationName } from "../src/contract/index.js";
+import { OPERATIONS, type OperationName } from "../src/contract/index.js";
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
 import { freeLoopbackPort, withDaemon } from "./helpers/index.js";
@@ -92,20 +92,11 @@ describe("contract surface", () => {
     expect(probedOperations()).toContain("component.install");
 
     // Asserted as one object rather than per operation so a failure names every unreachable
-    // operation at once, instead of stopping at the first. The gateway-only operations
-    // (ADR 0005 §23) are the one deliberate exception: a worker has no worker registry, so
-    // `UNKNOWN_REQUEST` -- "this daemon does not implement that operation" -- is the honest
-    // answer rather than a routing mistake. The gateway's own sweep below is what proves they
-    // are reachable somewhere.
+    // operation at once, instead of stopping at the first. The `worker.*` operations are
+    // included: a worker answers them as a fleet of one (ADR 0012), so they parse their input
+    // here too, even the ones it then refuses with `UNSUPPORTED_IN_WORKER_MODE`.
     expect(await sweep(env)).toEqual(
-      Object.fromEntries(
-        probedOperations().map((name) => [
-          name,
-          (GATEWAY_ONLY_OPERATIONS as readonly string[]).includes(name)
-            ? "UNKNOWN_REQUEST"
-            : "BAD_REQUEST",
-        ]),
-      ),
+      Object.fromEntries(probedOperations().map((name) => [name, "BAD_REQUEST"])),
     );
   });
 

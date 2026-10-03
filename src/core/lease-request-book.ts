@@ -5,6 +5,7 @@ import type { SerializedDecision } from "./serialized-decision.js";
 import {
   type LeaseProgress,
   type LeaseRequestOptions,
+  type QueuePlace,
   RequestCancelledError,
 } from "./wait-queue.js";
 
@@ -151,6 +152,41 @@ export class InMemoryLeaseRequestStore<Grant> implements LeaseRequestStore<Grant
     this.#records = records;
     return Promise.resolve(settled);
   }
+}
+
+/**
+ * A request still waiting for a device, as an operator sees it: who asked, for what, since when,
+ * and where it stands. `queued` while it holds a place in the queue, `starting` while the daemon works
+ * on it: placing it as it arrives, or finding, making, booting or downloading its device. Its idempotency key and owner are not here: they
+ * are the requester's, not the operator's.
+ */
+export interface WaitingRequest {
+  readonly id: string;
+  readonly requesterId: string;
+  /** The device as the request named it, with every field it left out left out. */
+  readonly spec: DeviceRequest;
+  readonly createdAt: number;
+  readonly stage: "queued" | "starting";
+  readonly queuePosition?: number;
+}
+
+/**
+ * The one place a stored request and its place in a queue become a waiting entry. A daemon and a
+ * gateway both list through it (`LeaseRequestBook#waiting`).
+ */
+function waitingRequest(
+  record: Pick<LeaseRequestRecord<unknown>, "createdAt" | "id" | "request" | "requesterId">,
+  place: QueuePlace,
+): WaitingRequest {
+  return {
+    createdAt: record.createdAt,
+    id: record.id,
+    requesterId: record.requesterId,
+    spec: { ...record.request },
+    ...(place.queuePosition === undefined
+      ? { stage: "starting" }
+      : { queuePosition: place.queuePosition, stage: "queued" }),
+  };
 }
 
 /** The same `(requesterId, idempotencyKey)` arrived again naming a different device. */
@@ -351,6 +387,20 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     if (open === undefined || open.phase === "settled") return undefined;
     open.watchers.add(listener);
     return () => open.watchers.delete(listener);
+  }
+
+  /**
+   * Every stored request that a live wait in `places` is driving, oldest first. A wait leaves
+   * `places` the moment it ends, before its result is written, so a settled request is never
+   * listed; nor is an open record no wait drives, such as one a restarted daemon has not settled
+   * yet.
+   */
+  waiting(places: readonly QueuePlace[]): WaitingRequest[] {
+    const byId = new Map(places.map((place) => [place.id, place]));
+    return this.options.store.leaseRequests().flatMap((record) => {
+      const place = byId.get(record.id);
+      return place === undefined ? [] : [waitingRequest(record, place)];
+    });
   }
 
   /** The id of the stored request that was granted `leaseId`, while that record is retained. */

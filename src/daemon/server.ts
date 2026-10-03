@@ -47,6 +47,7 @@ import {
   Dispatcher,
   DispatchError,
   type ContractDispatcher,
+  type DispatcherOptions,
   type DispatchSession,
 } from "./dispatcher.js";
 import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
@@ -149,6 +150,8 @@ export interface DaemonServerEngineOptions {
   readonly leases: LeaseCommands;
   /** `status.get`'s host block (ADR 0008 §5); see `DispatcherOptions.hostFacts`. */
   readonly hostFacts: () => HostFacts;
+  /** This daemon's instance id; `worker.list` answers with it (see `DispatcherOptions`). */
+  readonly instanceId: string;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
@@ -161,6 +164,8 @@ export interface DaemonServerEngineOptions {
    * `DispatcherOptions.execEnv`). */
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
+  /** What a device's `stalled` flag is worked out from; see `DispatcherOptions.stalls`. */
+  readonly stalls?: DispatcherOptions["stalls"];
   /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
   readonly tokens?: TokenStore;
 }
@@ -294,9 +299,12 @@ function buildDispatcher(
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
     // The `operation` log line's error code: the same classifier this server answers with.
     errorCode: classifyError,
+    // `worker.list` drops its kept catalog when a component is installed or removed.
+    eventBus: options.eventBus,
     eventHistory: options.eventHistory,
     health: hooks.health,
     hostFacts: options.hostFacts,
+    instanceId: options.instanceId,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
@@ -306,7 +314,9 @@ function buildDispatcher(
     queue: options.queue,
     reaper: options.reaper,
     registry: options.registry,
+    ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    version: options.version,
   });
 }
 
@@ -329,6 +339,8 @@ export class DaemonServer {
    */
   readonly #parkedDispatches = new Set<Promise<void>>();
   readonly #dispatcher: ContractDispatcher;
+  /** The worker's own dispatcher, held to dispose on stop; absent on a gateway. */
+  readonly #workerDispatcher: Dispatcher | undefined;
   readonly #resolveRole: SessionRoleResolver;
   /**
    * The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
@@ -357,10 +369,11 @@ export class DaemonServer {
       const engine: DaemonServerEngineOptions = options;
       this.#engine = engine;
       this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, engine.registry);
-      this.#dispatcher = buildDispatcher(options, {
+      this.#workerDispatcher = buildDispatcher(options, {
         awaitReady: () => this.#awaitReady(),
         health: () => this.#health,
       });
+      this.#dispatcher = this.#workerDispatcher;
     } else {
       // Gateway mode (ADR 0005 §32): the handlers come ready-made, and there is no engine to
       // hold. Owner-routed facts are inert here, deliberately: the gateway issues no leases of
@@ -605,6 +618,7 @@ export class DaemonServer {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
+    this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
     // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the
@@ -805,7 +819,8 @@ export class DaemonServer {
         });
       }
       // ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
-      // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`),
+      // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`,
+      // and a worker's `UNSUPPORTED_IN_WORKER_MODE`),
       // so a socket client can narrow on them exactly as an HTTP one does.
       await this.#respondError(
         connection.socket,
@@ -1117,10 +1132,9 @@ export class DaemonServer {
       case "token.revoke":
         return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
       // ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
-      // surface, and whether a *given* daemon implements one is the dispatcher's answer, not
-      // the transport's -- a worker's dispatcher has no handler for these and says
-      // `UNKNOWN_REQUEST` itself, which is the same code this switch's default produces but
-      // for the honest reason.
+      // surface, and what a *given* daemon answers is the dispatcher's business, not the
+      // transport's -- a worker's dispatcher answers `worker.list` about itself and refuses the
+      // rest with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
       case "worker.list":
         return this.#dispatcher.dispatch(
           "worker.list",
@@ -1313,8 +1327,8 @@ export class DaemonServer {
    * reconnects repeats the request to join it again.
    *
    * A gateway's `worker.install-component` takes the same path: its progress names the worker
-   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher has
-   * no handler for it and answers `UNKNOWN_REQUEST`.
+   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
+   * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
    */
   #installComponent(
     connection: Connection,

@@ -134,7 +134,7 @@ export interface DoctorOptions {
   /**
    * Read-only view of the per-device operation claims. A device this daemon holds a
    * claim on is work in progress by definition, which is what keeps a healthy
-   * backgrounded reclaim from being read as a stall -- see `stalledTransitionFinding`.
+   * backgrounded reclaim from being read as a stall -- see `isStalledTransition`.
    */
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
   /**
@@ -718,7 +718,7 @@ function registryDriftFindings(
   // including erasing it, so neither run state nor marks are compared.
   //
   // A device this daemon holds an operation claim on is excluded the same way, the same
-  // live-versus-orphaned test `stalledTransitionFinding` already applies (see its comment). A
+  // live-versus-orphaned test `isStalledTransition` already applies (see its comment). A
   // lease-path boot from `shutdown` runs `makeReady` while the committed record still says
   // `shutdown` -- observed reality goes `running` before the transition that would update
   // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
@@ -726,7 +726,7 @@ function registryDriftFindings(
   // afterwards finds the record changed underneath it and silently drops its
   // `address`/`driverData`/`mode`, dropping the waiter. The claim is held for the
   // whole boot, so it exactly brackets the window this needs to cover -- unlike
-  // `stalledTransitionFinding`, this applies regardless of `device.state`, since the record can
+  // `isStalledTransition`, this applies regardless of `device.state`, since the record can
   // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);
@@ -793,7 +793,7 @@ function liveDriftFindings(
  * healthy reclaim into a false stall finding, while one that is too loose only delays a real
  * one. So this takes the slower branch rather than assuming.
  */
-function slowestReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
+function slowestReclaimEstimateMs(driver: Pick<Driver, "estimate">, spec: DeviceSpec): number {
   return Math.max(
     driver.estimate({ clean: "standard", operation: "reclaim" }, spec),
     driver.estimate({ clean: "full", operation: "reclaim" }, spec),
@@ -810,11 +810,12 @@ function slowestReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
  * registered record remains for reconcile when the driver cannot destroy it").
  *
  * The threshold is `driver.estimate(...) * thresholdMultiplier`, floored at
- * `minimumThresholdMs`: not `estimate` itself, because the estimate is tuned for a
- * routine run and real-world variance (a cold Android boot, a loaded host) can
- * legitimately run well past it without anything having stalled. No driver for the
- * device's platform, or no recorded entry time (defensive; see `transitionEnteredAt`),
- * means there is nothing to compare against, so no finding rather than a guess.
+ * `minimumThresholdMs` (see `stallThresholdMs`): not `estimate` itself, because the
+ * estimate is tuned for a routine run and real-world variance (a cold Android boot, a
+ * loaded host) can legitimately run well past it without anything having stalled. No
+ * driver for the device's platform, or no recorded entry time (defensive; see
+ * `transitionEnteredAt`), means there is nothing to compare against, so no stall rather
+ * than a guess.
  *
  * A device this daemon holds an operation claim on is excluded outright, before any
  * of that arithmetic: the claim *is* the statement that work is in progress, so a
@@ -826,9 +827,53 @@ function slowestReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
  * and contend for the same disk. The estimate the threshold is built from now reflects
  * that erase rather than the 1s it used to claim (#56), but tuning a threshold against
  * contended disk speed would still be guessing; the claim answers it exactly. A reclaim
- * orphaned by a crash has no claim in the new process, so the case this finding exists to
+ * orphaned by a crash has no claim in the new process, so the case this test exists to
  * catch is untouched.
+ *
+ * The one place the stall rule lives (architecture rule 10): `doctor`'s
+ * `stalled-transition` finding and the `stalled` flag `status.get` and `list.get` put on a
+ * device both ask it.
  */
+export function isStalledTransition(input: StallInput): boolean {
+  const { claims, config, device, driver, now } = input;
+  if (device.state !== "provisioning" && device.state !== "reclaiming") {
+    return false;
+  }
+  if (claims?.isClaimed(device.id) === true) {
+    return false;
+  }
+  const enteredAt = transitionEnteredAt(device);
+  if (enteredAt === undefined || driver === undefined) {
+    return false;
+  }
+  return now - enteredAt > stallThresholdMs(device, driver, config);
+}
+
+/** What `isStalledTransition` reads: one device, the driver for its platform (absent when that
+ * platform has none), the `stalledTransition` config, the operation claims and the time. */
+export interface StallInput {
+  readonly device: DeviceRecord;
+  readonly driver: Pick<Driver, "estimate"> | undefined;
+  readonly config: Config["stalledTransition"];
+  readonly claims: Pick<DeviceOperationClaims, "isClaimed"> | undefined;
+  readonly now: number;
+}
+
+/** How long `device` may stay in its transition before it is a stall. */
+function stallThresholdMs(
+  device: DeviceRecord,
+  driver: Pick<Driver, "estimate">,
+  config: Config["stalledTransition"],
+): number {
+  const estimateMs =
+    device.state === "provisioning"
+      ? driver.estimate({ operation: "provision" }, device.spec) +
+        driver.estimate({ operation: "boot" }, device.spec)
+      : slowestReclaimEstimateMs(driver, device.spec);
+  return Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
+}
+
+/** The `stalled-transition` finding for a device `isStalledTransition` holds for. */
 function stalledTransitionFinding(
   device: DeviceRecord,
   driversByPlatform: ReadonlyMap<Platform, Driver>,
@@ -836,37 +881,28 @@ function stalledTransitionFinding(
   now: number,
   claims?: Pick<DeviceOperationClaims, "isClaimed">,
 ): DoctorFinding | undefined {
-  if (device.state !== "provisioning" && device.state !== "reclaiming") {
-    return undefined;
-  }
-  if (claims?.isClaimed(device.id) === true) {
-    return undefined;
-  }
-  const enteredAt = transitionEnteredAt(device);
   const driver = driversByPlatform.get(device.spec.platform);
-  if (enteredAt === undefined || driver === undefined) {
+  if (!isStalledTransition({ claims, config, device, driver, now })) {
     return undefined;
   }
-
-  const estimateMs =
-    device.state === "provisioning"
-      ? driver.estimate({ operation: "provision" }, device.spec) +
-        driver.estimate({ operation: "boot" }, device.spec)
-      : slowestReclaimEstimateMs(driver, device.spec);
-  const thresholdMs = Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
-  const ageMs = now - enteredAt;
-  if (ageMs <= thresholdMs) {
+  // Narrowing only: `isStalledTransition` holds just for a device in one of these two states,
+  // with an entry time and a driver.
+  const enteredAt = transitionEnteredAt(device);
+  if (
+    driver === undefined ||
+    enteredAt === undefined ||
+    (device.state !== "provisioning" && device.state !== "reclaiming")
+  ) {
     return undefined;
   }
-
   return {
-    ageMs,
+    ageMs: now - enteredAt,
     deviceId: device.id,
     enteredAt,
     kind: "stalled-transition",
     platform: device.spec.platform,
     state: device.state,
-    thresholdMs,
+    thresholdMs: stallThresholdMs(device, driver, config),
   };
 }
 

@@ -20,6 +20,7 @@ import {
   WaitQueue,
   type LeaseProgress,
   type LeaseRequestOptions,
+  type QueuePlace,
   type WaiterState,
 } from "../core/wait-queue.js";
 
@@ -103,6 +104,11 @@ export class FleetQueue {
    * `WaitQueue#list`. */
   list(): readonly FleetWaiter[] {
     return this.#queue.list().map((waiter) => asFleet(waiter));
+  }
+
+  /** Where each waiter not yet settled stands. See `WaitQueue#places`. */
+  places(): readonly QueuePlace[] {
+    return this.#queue.places();
   }
 
   hasPendingRequester(requesterId: string): boolean {

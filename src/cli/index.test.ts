@@ -2772,6 +2772,44 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
   });
 
+  it("simlock status prints the console address when HTTP is enabled", async () => {
+    const print = async (status: StatusGetOutput) => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
+
+    expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
+      "Daemon: running (worker)\nConsole: http://127.0.0.1:4700/\nHost: ",
+    );
+    expect(await print(EMPTY_STATUS)).not.toContain("Console:");
+  });
+
+  it("simlock daemon start prints the console address when HTTP is enabled", async () => {
+    const start = async (status: StatusGetOutput) => {
+      const output = outputCapture();
+      await runCli(
+        ["daemon", "start"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
+
+    expect(await start({ ...EMPTY_STATUS, daemon })).toBe(
+      "Daemon running\nConsole: http://127.0.0.1:4700/\n",
+    );
+    expect(await start(EMPTY_STATUS)).toBe("Daemon running\n");
+  });
+
   it("prints an install line while one runs and none after", async () => {
     const install = {
       component: "26.4",
@@ -2913,6 +2951,37 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       await print(statusWith({ limitBytes: 12 * gib, overLimit: true, usedBytes: 13 * gib })),
     ).toContain("RAM budget: 13.00 GiB/12.00 GiB used (over limit)\n");
     expect(await print(statusWith())).not.toContain("RAM");
+  });
+
+  it("simlock status marks a stalled device", async () => {
+    const device = (id: string, extra: object) => ({
+      id,
+      mode: "full" as const,
+      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" as const },
+      state: "provisioning" as const,
+      ...extra,
+    });
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      devices: [
+        device("dev_stuck", { stalled: true, transitionAgeMs: 120_000 }),
+        device("dev_fresh", { transitionAgeMs: 2_000 }),
+      ],
+    };
+    const output = outputCapture();
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    expect(output.stdout).toContain(
+      "Device dev_stuck: provisioning, mode full (mid-transition 120000ms, stalled)\n",
+    );
+    expect(output.stdout).toContain(
+      "Device dev_fresh: provisioning, mode full (mid-transition 2000ms)\n",
+    );
   });
 });
 
@@ -4664,6 +4733,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   const daemon = new DaemonServer({
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,
@@ -4788,6 +4858,7 @@ async function startInMemoryDaemon(options: {
     adminSecret,
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,
@@ -4876,3 +4947,79 @@ function testConfig(): Config {
     },
   };
 }
+
+describe("simlock list --requests", () => {
+  it("prints a starting request without a place in the queue, one on a worker with that worker, and a future timestamp as waiting 0s", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      list: async (input) => {
+        asked.push(input);
+        return [
+          {
+            createdAt: -12_000,
+            id: "req_1",
+            requesterId: "agent-b",
+            spec: { imageTag: "google_apis", model: "Pixel 8", platform: "android" },
+            stage: "starting",
+          },
+          {
+            createdAt: -3_400,
+            id: "req_2",
+            queuePosition: 2,
+            requesterId: "local-agent",
+            spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+            stage: "queued",
+            workerId: "wrk_1",
+          },
+          {
+            // Stamped by a worker whose clock runs ahead of this one.
+            createdAt: 5_000,
+            id: "req_3",
+            queuePosition: 1,
+            requesterId: "skewed-agent",
+            spec: { model: "iPhone 16", platform: "ios" },
+            stage: "queued",
+            workerId: "wrk_2",
+          },
+        ];
+      },
+    });
+
+    await expect(
+      runCli(["list", "--requests"], output.environmentWith({ connectAdmin: async () => client })),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ kind: "requests" }]);
+    expect(output.stdout).toBe(
+      "Request req_1: agent-b, android Pixel 8 image tag google_apis, starting, waiting 12s\n" +
+        "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
+        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
+    );
+  });
+
+  it.each([["--devices"], ["--leases"], ["--rules"]])(
+    "exits 2 with USAGE for --requests beside %s, without asking the daemon",
+    async (other) => {
+      const output = outputCapture();
+      let listed = 0;
+      const client = fakeClient({
+        list: () => {
+          listed += 1;
+          return Promise.resolve([]);
+        },
+      });
+
+      await expect(
+        runCli(
+          ["list", "--requests", other],
+          output.environmentWith({ connectAdmin: async () => client }),
+        ),
+      ).resolves.toBe(2);
+      expect(listed).toBe(0);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+        error: { code: "USAGE" },
+      });
+    },
+  );
+});

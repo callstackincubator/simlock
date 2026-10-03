@@ -9,6 +9,7 @@
  */
 import { z } from "zod";
 
+import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   cleanupRuleSummarySchema,
@@ -33,6 +34,7 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  waitingRequestSchema,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -101,9 +103,16 @@ export const statusGet = defineOperation({
      * workers that joined it -- which is what `simlock simctl` / `simlock adb` branch on
      * (§19c). They live together in a block because they are both facts about the process and
      * neither is a fact about a device; `health` moved in here from the top level with the
-     * same protocol bump that added `mode`.
+     * same protocol bump that added `mode`. `consoleUrl` is where the daemon serves its web
+     * console (ADR 0011 §3), present only when HTTP is enabled; additive, so an older daemon
+     * simply sends none.
      */
-    daemon: z.object({ health: daemonHealthSchema, mode: daemonModeSchema }),
+    daemon: z.object({
+      health: daemonHealthSchema,
+      mode: daemonModeSchema,
+      // Bounded: a gateway parses every worker's answer (safety rule 10).
+      consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
+    }),
     /**
      * ADR 0008 §5: the machine, beside `daemon`, the process. Served from memory, so reading it
      * never makes `status.get` wait.
@@ -116,6 +125,13 @@ export const statusGet = defineOperation({
      * installs, each with its `workerId`. Optional because an older daemon sends none.
      */
     installs: statusInstallsSchema.optional(),
+    /**
+     * The requests waiting for a device in this daemon's own queue, oldest first: a worker's
+     * local queue, a gateway's fleet queue. A gateway lists its workers' own queues on each
+     * worker view and in `list.get`'s `requests`, not here. Optional because an older daemon
+     * sends none.
+     */
+    waiting: z.array(waitingRequestSchema).optional(),
     /**
      * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
      * from a worker's answer -- a worker has no fleet, and an empty array would read as "a
@@ -490,19 +506,22 @@ export const leaseReleaseAll = defineOperation({
  *
  * Arm order is load-bearing: a full record matches the first arm, so a worker's answer is
  * unchanged. `rules` is per-machine cleanup configuration, so a gateway answers it with an
- * empty list rather than inventing a fleet-wide rule set.
+ * empty list rather than inventing a fleet-wide rule set. `requests` lists the requests waiting
+ * for a device: a worker's own, or on a gateway the fleet queue's and then each worker's, each
+ * of those with its `workerId`.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const listGet = defineOperation({
   name: "list.get",
   role: "admin",
   effect: "read",
-  input: z.object({ kind: z.enum(["devices", "leases", "rules"]).optional() }),
+  input: z.object({ kind: z.enum(["devices", "leases", "rules", "requests"]).optional() }),
   output: z.union([
     z.array(deviceRecordSchema),
     z.array(statusDeviceSchema),
     z.array(statusLeaseSchema),
     z.array(cleanupRuleSummarySchema),
+    z.array(waitingRequestSchema),
   ]),
 });
 
@@ -626,11 +645,10 @@ export const tokenRevoke = defineOperation({
 
 // ---- worker.list / worker.drain / worker.undrain / worker.remove (ADR 0005 §8, §23) ---------
 //
-// Gateway-only operations: they act on the gateway's worker registry, which a worker daemon
-// does not have. A worker's `Dispatcher` deliberately declares no handler for them at all
-// (see `src/daemon/dispatcher.ts`'s `#handlers` type), so asking a worker for one answers
-// `UNKNOWN_REQUEST` -- "this daemon does not implement that operation" -- rather than a
-// fabricated empty fleet. The gateway's own dispatcher implements all four.
+// They act on the gateway's worker registry. A worker answers them as a fleet of one (ADR
+// 0012): `worker.list` returns one view, the worker itself, and `worker.drain`,
+// `worker.undrain` and `worker.remove` answer `UNSUPPORTED_IN_WORKER_MODE`, since a single host
+// has no gateway to drain it or forget it.
 //
 // `admin` throughout: these are operator tools (drain a machine for maintenance, forget a
 // machine that is gone), and ADR 0003 §3's matrix puts every daemon-wide administrative
@@ -807,7 +825,7 @@ const workerInstallResultSchema = z.object({
  * gateway. The gateway asks each target at the same time with `component.install`, and each
  * worker answers for itself under its own `downloads.policy`. One result per worker, in
  * ascending worker id. Progress arrives as `component-progress` pushes carrying `workerId`.
- * Gateway-only: a worker answers `UNKNOWN_REQUEST`.
+ * A worker answers `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerInstallComponent = defineOperation({
@@ -885,21 +903,5 @@ export const OPERATIONS = {
   "worker.install-component": workerInstallComponent,
   "component.remove": componentRemove,
 } as const;
-
-/**
- * The operations only a gateway implements (ADR 0005 §23). Named as a set here, rather than
- * spelled out again in each dispatcher, so "which operations are gateway-only" has exactly one
- * answer: the worker's dispatcher excludes these from its handler table, and the gateway's
- * implements them.
- */
-export const GATEWAY_ONLY_OPERATIONS = [
-  "worker.list",
-  "worker.drain",
-  "worker.undrain",
-  "worker.remove",
-  "worker.install-component",
-] as const satisfies readonly OperationName[];
-
-export type GatewayOnlyOperationName = (typeof GATEWAY_ONLY_OPERATIONS)[number];
 
 export type OperationName = keyof typeof OPERATIONS;

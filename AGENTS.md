@@ -55,11 +55,14 @@ End-user docs live directly under [docs/](docs/) and must stay self-contained
 - [CLIENT.md](docs/CLIENT.md) — the programmatic client (`simlock/client`, `simlock/admin`)
 - [CONFIGURATION.md](docs/CONFIGURATION.md) — every config key, its default, and how limits interact
 - [HTTP-API.md](docs/HTTP-API.md) — the network-facing HTTP API
+- [CONSOLE.md](docs/CONSOLE.md) — the web console: turning it on, opening it, signing in
 - [EVENTS.md](docs/EVENTS.md) — catalog of business events, end-user cut
 
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
 - [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
+- [DESIGN.md](docs/internal/DESIGN.md) — the design guide for the web console
+  (and the landing page): type, colour, status colours, spacing, voice
 - [DELIVERY.md](docs/internal/DELIVERY.md) — how work flows through GitHub
   Issues: the three walkthroughs, handoffs, what is automated, where ADRs fit
 - [templates/](docs/internal/templates/) — the feature and task spec bodies a

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
@@ -40,6 +40,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
+import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
@@ -1648,8 +1649,61 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await client.close();
   });
 
-  it("answers worker.install-component with UNKNOWN_REQUEST: a worker has no workers to install on", async () => {
-    const harness = await createHarness();
+  it("answers worker.list with this daemon's instance id and the version its hello reports", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    const greeting = await client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(greeting).toMatchObject({ ok: true, payload: { version: "test" } });
+
+    await expect(client.request("worker.list", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { workers: [{ id: "instance-test", version: "test" }] },
+    });
+    await client.close();
+  });
+
+  it("re-reads worker.list's kept catalog once this daemon's bus reports a component installed", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const catalogReads = vi.spyOn(harness.driver, "listCatalog");
+
+    await client.request("worker.list", {});
+    await client.request("worker.list", {});
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+
+    harness.eventBus.emit(
+      "component.installed",
+      {
+        alreadyPresent: false,
+        componentId: "27.0",
+        durationMs: 1,
+        platform: "ios",
+        version: "27.0",
+      },
+      "test",
+    );
+    await client.request("worker.list", {});
+
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("disposes the worker's dispatcher, ending its bus subscriptions, when the daemon stops", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const dispose = vi.spyOn(Dispatcher.prototype, "dispose");
+
+    await harness.daemon.stop("test");
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    dispose.mockRestore();
+  });
+
+  it("answers worker.install-component with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
@@ -1659,7 +1713,13 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
         version: "35",
         workers: "all",
       }),
-    ).resolves.toMatchObject({ error: { code: "UNKNOWN_REQUEST" }, ok: false });
+    ).resolves.toMatchObject({
+      error: {
+        code: "UNSUPPORTED_IN_WORKER_MODE",
+        details: { operation: "worker.install-component" },
+      },
+      ok: false,
+    });
     await client.close();
   });
 
@@ -2953,6 +3013,7 @@ async function createHarness(
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,

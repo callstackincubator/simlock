@@ -2,6 +2,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import type { z } from "zod";
+
 import { EVENT_FILE_NAME, type EventEnvelope, eventKey, readEventFile } from "../bus/index.js";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
 import {
@@ -38,7 +40,7 @@ import {
   type StatusGetOutput,
   type WorkerView,
 } from "../admin/index.js";
-import type { Role } from "../contract/index.js";
+import { type Role, waitingRequestSchema } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import {
   awaitWithin,
@@ -50,13 +52,16 @@ import { followLog, type Signals } from "./follow-log.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
+type WaitingRequestEntry = z.infer<typeof waitingRequestSchema>;
+
 const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config, token
   worker <list|drain|undrain|remove>
-                              Inspect and manage the workers of a gateway
+                              Inspect and manage the workers of a gateway; on a
+                              single host, list shows the host itself
   component install <ios|android> <version> [--worker <id>... | --all-workers]
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]
@@ -1289,22 +1294,58 @@ async function runList(
     devices: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     leases: { type: "boolean" },
+    requests: { type: "boolean" },
     rules: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: simlock list [--devices|--leases|--rules]\n");
+    environment.stdout.write("Usage: simlock list [--devices|--leases|--rules|--requests]\n");
     return 0;
   }
-  if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
-    throw new UsageError("list accepts only one of --devices, --leases, or --rules");
-  const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
+  if ([values.devices, values.leases, values.rules, values.requests].filter(Boolean).length > 1)
+    throw new UsageError("list accepts only one of --devices, --leases, --rules, or --requests");
   const client = await connectDaemonClient(environment, token);
   try {
+    if (values.requests) {
+      const requests = waitingRequestSchema.array().parse(await client.list({ kind: "requests" }));
+      environment.stdout.write(`${formatWaitingRequests(requests, environment.clock.now())}\n`);
+      return 0;
+    }
+    const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
     writeResult(environment, await client.list({ kind }));
     return 0;
   } finally {
     await client.close();
   }
+}
+
+/**
+ * One line per waiting request: `Request req_7: agent-b on wrk_1, ios iPhone 16 18.4 mode slim,
+ * queued at 2, waiting 12s` -- the request, who sent it, the worker whose queue it waits in, the
+ * device it asked for, where it stands, and for how long.
+ */
+function formatWaitingRequests(requests: readonly WaitingRequestEntry[], now: number): string {
+  if (requests.length === 0) return "No requests are waiting.";
+  return requests
+    .map((request) => {
+      const { spec } = request;
+      const device = [
+        spec.platform,
+        spec.model,
+        spec.osVersion,
+        spec.mode === undefined ? undefined : `mode ${spec.mode}`,
+        spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+      ]
+        .filter((part) => part !== undefined)
+        .join(" ");
+      const where = request.workerId === undefined ? "" : ` on ${request.workerId}`;
+      const stage =
+        request.queuePosition === undefined
+          ? request.stage
+          : `${request.stage} at ${String(request.queuePosition)}`;
+      const waited = Math.max(0, Math.round((now - request.createdAt) / 1000));
+      return `Request ${request.id}: ${request.requesterId}${where}, ${device}, ${stage}, waiting ${String(waited)}s`;
+    })
+    .join("\n");
 }
 
 async function runCatalog(
@@ -1569,13 +1610,17 @@ async function runDaemon(
   if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
     const client = await connectDaemonClient(environment, token, { launch: true });
+    let status: StatusGetOutput;
     try {
-      await client.getStatus();
+      status = await client.getStatus();
     } finally {
       await client.close();
     }
     if (values.json) writeResult(environment, { status: "running" });
-    else environment.stdout.write("Daemon running\n");
+    else {
+      const lines = ["Daemon running", ...consoleLines(status.daemon)];
+      environment.stdout.write(`${lines.join("\n")}\n`);
+    }
     return 0;
   }
   if (command === "stop") {
@@ -1798,10 +1843,11 @@ function parseTokenRole(value: unknown): "agent" | "operator" | "worker" {
 }
 
 /**
- * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation on
- * the gateway, so this function is argument parsing and rendering and nothing else -- a worker
- * daemon answers `UNKNOWN_REQUEST` for all four, which surfaces as the daemon's own error line
- * rather than a mode check the CLI would have to keep in step.
+ * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation, so
+ * this function is argument parsing and rendering and nothing else. A worker daemon answers as a
+ * fleet of one (ADR 0012): `list` shows the host itself, and `drain`, `undrain` and `remove`
+ * answer `UNSUPPORTED_IN_WORKER_MODE`, which surfaces as the daemon's own error line rather than
+ * a mode check the CLI would have to keep in step.
  */
 async function runWorker(
   argv: readonly string[],
@@ -2246,6 +2292,11 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
   environment.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+/** The web console's address line, for `status` and `daemon start`: none when HTTP is off. */
+function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
+  return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
@@ -2274,6 +2325,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
       device.transitionAgeMs === undefined
         ? undefined
         : `mid-transition ${device.transitionAgeMs}ms`,
+      device.stalled === true ? "stalled" : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
@@ -2287,6 +2339,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   );
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
+    ...consoleLines(daemon),
     `Host: ${formatHost(host)}`,
     globalLine,
     ...capacityLines,

@@ -10,8 +10,9 @@ import {
 } from "../contract/index.js";
 
 /** Every status this frontend ever answers with; keeps `mapError` exhaustive by construction.
- * 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34): the request was well-formed and the
- * daemon is healthy, this endpoint simply does not implement that operation. 504 is
+ * 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34) and `UNSUPPORTED_IN_WORKER_MODE`'s (ADR
+ * 0012 §2): the request was well-formed and the daemon is healthy, this daemon's mode simply
+ * does not implement that operation. 504 is
  * `EXEC_TIMEOUT`'s (ADR 0005 §19e): a `device.exec` command the daemon killed for outrunning
  * `exec.timeoutMs` is the one case where what this frontend was waiting on never finished,
  * which is exactly what a gateway timeout says. */

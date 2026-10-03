@@ -6,7 +6,8 @@ uses instead of the CLI/MCP frontends' unix socket. It is off by default
 enabled, binds `127.0.0.1` unless configured otherwise. Reaching it from
 another machine is the operator's own tunnel (Tailscale, cloudflared, a
 reverse proxy) — Simlock does no TLS termination in v1, and `Authorization`
-is required on every route regardless of how it's reached, loopback included.
+is required on every API route regardless of how it's reached, loopback
+included (see [Authentication](#authentication) for the two exceptions).
 
 This frontend calls the exact same in-process `Dispatcher` the unix socket
 calls — not a second copy of role/ownership logic, and not a
@@ -43,8 +44,11 @@ terminal state. No route blocks on device work in flight.
 
 ## Authentication
 
-Every route requires `Authorization: Bearer slk_<secret>` except `GET
-/v1/healthz`. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
+Every route requires `Authorization: Bearer slk_<secret>` except two: `GET
+/v1/healthz`, and the web console's own files, which the daemon serves at
+every path outside `/v1` (see [CONSOLE.md](CONSOLE.md)). They hold no data;
+the console reads everything it shows from the routes below, with the
+operator's token. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
@@ -63,7 +67,7 @@ Three roles:
 | Role | Can |
 |---|---|
 | `agent` | catalog, status, installed components, its own lease requests and leases, `exec` on its own lease |
-| `operator` | everything `agent` can, plus every other requester's leases/devices, the worker routes, event replay/stream, and releasing any lease |
+| `operator` | everything `agent` can, plus every other requester's leases/devices, the token records, the worker routes, event replay/stream, and releasing any lease |
 | `worker` | open an uplink at [`/v1/uplink`](#get-v1uplink-websocket-upgrade), and nothing else |
 
 A valid token with the wrong role for a route is `403 FORBIDDEN`, not `401` —
@@ -139,8 +143,15 @@ The daemon block carries `health` (`starting`/`running`) and **`mode`**
 daemon answered:
 
 ```json
-{ "daemon": { "health": "running", "mode": "worker" } }
+{ "daemon": { "health": "running", "mode": "worker", "consoleUrl": "http://127.0.0.1:4700/" } }
 ```
+
+**`consoleUrl`** is the web console's address (see [CONSOLE.md](CONSOLE.md)):
+`http://<http.host>:<http.port>/`, with `localhost` for a host of `0.0.0.0` or
+`::` and an IPv6 host in brackets. It is present whenever HTTP is on, so an
+HTTP answer carries it; over the unix socket it is absent while HTTP is off.
+It is also left out if the address would be longer than 512 characters, which
+no real host name is. An older daemon sends none.
 
 Beside it, **`host`** says what machine the daemon runs on: the operating
 system, its version, the CPU architecture, and the version of each platform
@@ -194,16 +205,34 @@ An install leaves the list as soon as it ends, whether it succeeded, failed
 or timed out. A worker always sends the field, empty when nothing is
 installing; an older daemon leaves it out.
 
+**`waiting`** lists the requests waiting in this daemon's own queue for a
+device, oldest first, in the shape
+[`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
+sends it, empty when nothing waits; an older daemon leaves it out.
+
+A device in `devices` that is `provisioning` or `reclaiming` carries
+`transitionAgeMs`, how long it has been in that state. One that has been there
+past its threshold with nothing working on it also carries
+**`stalled: true`**: the same devices `simlock doctor` reports as stalled (see
+`stalledTransition.*` in [CONFIGURATION.md](CONFIGURATION.md)). Every other
+device has no `stalled` field, and an older daemon sends none.
+
+```json
+{ "id": "dev_7", "state": "provisioning", "mode": "full", "transitionAgeMs": 412000, "stalled": true,
+  "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" } }
+```
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of
 them is, absent when none does), every gateway-issued and local lease, every device, the
 connected workers' installs (the 16 oldest across the fleet), the gateway
-queue's depth — every lease, device and install carries the **`workerId`** it lives
-on, and an additive **`workers`** array carries one
+queue's depth and the requests waiting in it — every lease, device and install
+carries the **`workerId`** it lives on, and an additive **`workers`** array
+carries one
 [worker view](#worker-routes) per worker:
 
 ```json
-{ "daemon": { "health": "running", "mode": "gateway" },
+{ "daemon": { "health": "running", "mode": "gateway", "consoleUrl": "http://127.0.0.1:4700/" },
   "host": { "os": "Linux", "osVersion": "6.8.0", "arch": "x64", "tools": [] },
   "workers": [ { "id": "3f81a2c4", "label": "mac-studio-2", "connection": "connected", "drained": false } ] }
 ```
@@ -750,7 +779,8 @@ installs the component itself under its own `downloads.policy`, Android
 license setting, disk check and `downloads.timeoutMs`. A worker set to
 `downloads.policy: "never"` refuses; the gateway has no download policy of
 its own and stores or forwards no image. A drained worker is asked like any
-other. `workers` on a daemon that is not a gateway is `400 UNKNOWN_REQUEST`.
+other. `workers` on a single host is `501 UNSUPPORTED_IN_WORKER_MODE`; leave
+it out to install on that host.
 
 Before any worker is asked, these are JSON errors:
 
@@ -927,10 +957,12 @@ liveness signal — [`GET /v1/workers`](#worker-routes) is how you look at it.
 
 ### Worker routes
 
-Role: `operator` for all four. They exist on a **gateway**; a worker has no
-workers of its own and does not implement the underlying operations at all.
+Role: `operator` for all four. They exist on a **gateway** and on a single
+host. A single host answers as a fleet of one: `GET /v1/workers` lists the
+host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 
-- `GET /v1/workers` — every worker view the gateway currently holds.
+- `GET /v1/workers` — every worker view the gateway currently holds, or the
+  host's own view on a single host.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.
@@ -1021,12 +1053,23 @@ install queued behind another may appear only then. A worker that does not
 send one shows an empty list; a disconnected or incompatible worker shows
 none.
 
+`waiting` is the worker's own `waiting` list from its
+[`GET /v1/status`](#get-v1status): the requests waiting in that worker's
+queue. It is re-read on every lease event on that worker. A worker that does
+not send one shows an empty list; a disconnected or incompatible worker shows
+none.
+
 `catalog` is what that worker can lease, each model with the runtimes it
 pairs with, and lists a newly installed component as soon as its install
 ends. Its `customModels` are that worker's own, so this is where you see
 which worker has a custom Android profile. `host` is the worker's machine, the same block its own
 `GET /v1/status` reports, as of the gateway's last refresh: a tool installed
 or upgraded on the worker shows here without a restart of either side.
+
+`devices` are the worker's devices as its own
+[`GET /v1/status`](#get-v1status) reports them, `stalled` included. A device
+stalls with no event to report it, so the gateway shows a new stall after its
+next periodic refresh of that worker.
 
 `protocol` appears only on an `incompatible` worker: it names both ranges,
 the worker's and the gateway's, so you can see which side to upgrade. A worker
@@ -1062,13 +1105,27 @@ first. Unknown ids are the one place remove differs: `200 { "removed": false
 gateway has already forgotten — the same reading `token.revoke` gives an
 unknown token id.
 
-On a **worker** daemon none of these routes exist: they are not registered at
-all, so they answer `404` like any other unrouted path rather than a
-gateway-mode refusal. There is nothing for them to act on.
+On a **single host** (a daemon in `worker` mode), `GET /v1/workers` returns
+one view, the host itself, with the same fields a gateway shows for each of
+its workers. `id` is the id the host presents to a gateway, `label` is its
+`gateway.label` (absent when unset), `connection` is `connected`, `drained`
+is `false`, and `lastSeenAt` is the time of the request. Every other field
+comes from the host's own status, devices, catalog and config. Status and
+devices are read on every request. The catalog is read again every 30
+seconds, and straight after a component is installed, as a gateway reads its
+workers' catalogs; a removed component leaves it on the next read. A host that
+has joined a gateway still answers about itself: its `drained` is `false`
+even when the gateway has drained it, because that flag is the gateway's.
+
+The drain, undrain and remove routes answer `501 UNSUPPORTED_IN_WORKER_MODE`
+on a single host, with `operation` in the body: there is no gateway there to
+take the host out of rotation or forget it.
 
 ### Operator routes
 
-Role: `operator` for all four.
+Role: `operator` for all six. `GET /v1/leases` also answers an `agent`
+token, with only its own leases. `GET /v1/lease-requests` and `GET /v1/tokens`
+answer it `403 FORBIDDEN`.
 
 `DELETE /v1/leases/{id}` with an `operator` token already releases any single
 lease, on a gateway as anywhere else. The fleet-wide form of that — the CLI's
@@ -1082,8 +1139,11 @@ could reach are still released — a partial result, said plainly, rather than
 an all-or-nothing that leaves the operator guessing.
 
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
-- `GET /v1/devices` — every managed device, with state and
-  `transitionAgeMs` (`simlock list --devices`).
+- `GET /v1/lease-requests` — every request waiting for a device
+  (`simlock list --requests`); see below.
+- `GET /v1/devices` — every managed device, with state,
+  `transitionAgeMs` and `stalled` as [`GET /v1/status`](#get-v1status)
+  describes them (`simlock list --devices`).
 - `GET /v1/events?since=<duration>` — replay business events newer than
   `since` (`simlock events --since`). They come from the daemon's event file,
   so they include events from before a daemon restart and beyond the 1000
@@ -1092,13 +1152,61 @@ an all-or-nothing that leaves the operator guessing.
   memory.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
+- `GET /v1/tokens` — every token this daemon knows (`simlock token list`):
 
-On a **gateway** all four are fleet-wide, which is what makes a single
+  ```json
+  { "tokens": [
+      { "id": "tok_9f2c", "role": "agent", "label": "ci-runner-3", "createdAt": 1735689600000 }
+  ] }
+  ```
+
+  A token's `id` is the `requesterId` on the leases it takes over HTTP, so a client can
+  show a lease's holder by the token's `label`. The answer never carries a
+  secret or a hash. `label` is absent from a token created without one.
+
+On a **gateway** the first five are fleet-wide, which is what makes a single
 console possible: `/v1/leases` and `/v1/devices` return every connected
-worker's, each record carrying the `workerId` it lives on, and the two event
-routes carry the workers' republished events (also `workerId`-tagged)
-interleaved with the gateway's own `worker.*` and `request.dispatched`
-facts.
+worker's, each record carrying the `workerId` it lives on,
+`/v1/lease-requests` returns the gateway's queue and every connected
+worker's, and the two event routes carry the workers' republished events
+(also `workerId`-tagged) interleaved with the gateway's own `worker.*` and
+`request.dispatched` facts. `/v1/tokens` lists the daemon's own tokens: on a
+gateway, the gateway's, since tokens never cross machines.
+
+#### `GET /v1/lease-requests`
+
+Every request still waiting for a device, oldest first, whoever sent it. An
+`agent` token gets `403 FORBIDDEN`.
+
+```json
+{ "requests": [
+  { "id": "req_7", "requesterId": "agent-b",
+    "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4", "mode": "slim" },
+    "createdAt": 1790864071200, "stage": "queued", "queuePosition": 1 },
+  { "id": "req_9", "requesterId": "local-agent",
+    "spec": { "platform": "android", "model": "Pixel 8" },
+    "createdAt": 1790864075000, "stage": "starting", "workerId": "3f81a2c4" }
+] }
+```
+
+- `spec` is the device as the request named it: `platform` and `model`, and
+  `osVersion`, `mode` and `imageTag` only when the request named them.
+- `createdAt` is when the daemon holding the request received it, in
+  milliseconds since the epoch.
+- `stage` is `queued` while the request holds a place in the queue, and
+  `starting` while the daemon is working on it: placing it as it arrives, or
+  finding, creating, booting or downloading a device for it.
+- `queuePosition` is set only while `queued`: its place in the queue counting
+  from 1, the requests ahead of it that are already starting included. It is
+  the request's place now, not the one its `queued` progress first reported.
+- A request leaves the list as soon as it is granted, fails or is cancelled.
+  The request's idempotency key and owner are never listed.
+
+On a **gateway** the list is the gateway's own queue first, without
+`workerId`, then the requests waiting in each connected worker's own queue,
+from that worker's local agents, each with the **`workerId`** whose queue it
+is in. A request the gateway has sent to a worker is listed once, as the
+gateway's own. A worker's `createdAt` comes from that worker's clock.
 
 ## Errors
 
@@ -1116,11 +1224,11 @@ Every failure is the same shape the daemon protocol uses:
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
-Three notes on these codes.
+Four notes on these codes.
 
 `WORKER_UNREACHABLE` sits on `503` with `NO_CAPACITY` rather than on `502`,
 because its `kind` is `transport` and every other `transport`-kind code in
@@ -1143,6 +1251,11 @@ and `nuke`/`cleanup`/`doctor`/`driver.passthrough` and component listings
 and removals stay per-worker permanently rather than pending some later
 fan-out. A component install through a gateway is a different request, one
 that names its workers.
+
+`UNSUPPORTED_IN_WORKER_MODE` is the same refusal from the other side: the
+operation acts on a gateway's workers, and the daemon is a single host. It
+is permanent for that daemon, so do not retry it. Both codes carry
+`operation` in the body.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

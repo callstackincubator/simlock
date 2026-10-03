@@ -63,8 +63,9 @@ command starts it again) to bring the platform up.
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine (its devices, or its installed components) and the daemon answering is a gateway; run it on the worker, or for `component install` name the workers with `--worker` or `--all-workers` |
+| 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers (`worker drain`, `undrain`, `remove`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
-| 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — an operation this daemon's mode does not implement (`worker list` against a worker), or a client newer than the daemon |
+| 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
 | 2 | `UNKNOWN_PASSTHROUGH_TOOL` | a passthrough tool simlock does not wrap |
 | 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device; use a new key |
@@ -98,7 +99,7 @@ surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
 
-The five gateway-mode codes are placed on existing numbers rather than new
+The six fleet codes are placed on existing numbers rather than new
 ones, and the numbers are fixed by the contract's error table in the PRs that
 implement them:
 
@@ -115,13 +116,16 @@ implement them:
   later fleet-wide version. `component install` without a worker flag answers
   it too; with `--worker` or `--all-workers` it installs on the workers you
   name.
+- `UNSUPPORTED_IN_WORKER_MODE` is the same refusal from the other side, and
+  exits `2` for the same reason: `worker drain`, `undrain` and `remove`, and
+  `component install` with a worker flag, act on a gateway's workers, and a
+  single host has none. It is permanent for that daemon.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
-- `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, and `UNKNOWN_REQUEST`
-  are not new codes at all — they are already in the contract's table at exit
-  `2`, and they are listed here because `device.exec` and the `worker.*`
-  operations are new ways to reach them.
+- `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL` are not new codes at
+  all — they are already in the contract's table at exit `2`, and they are
+  listed here because `device.exec` is a new way to reach them.
 - `EXEC_TIMEOUT` joins `QUEUE_TIMEOUT` on `10`, the number that already means
   "a deadline elapsed". The two can never be confused, since only `lease`
   produces one and only `simctl`/`adb` produce the other. What *can* collide
@@ -808,10 +812,10 @@ gateway has rebuilt its index.
 
 Operator commands for the workers connected to a **gateway**. All four need
 the `admin` role (see [Admin credential
-resolution](#admin-credential-resolution)). A worker has no workers of its
-own, so it does not implement these operations at all and answers
-`UNKNOWN_REQUEST` — they are not a gateway-mode refusal of something a worker
-could otherwise do, they are simply not part of a worker's surface. `list`
+resolution](#admin-credential-resolution)). A single host answers as a fleet
+of one: `list` shows the host itself, and `drain`, `undrain` and `remove`
+answer `UNSUPPORTED_IN_WORKER_MODE` (exit 2), because there is no gateway to
+take the host out of rotation or forget it. `list`
 prints one line per worker, or the views as JSON with `--json`; `drain`,
 `undrain` and `remove` print JSON on stdout, unconditionally — `--json` is a
 usage error (exit 2) for those three.
@@ -906,7 +910,11 @@ component installs waiting or running on that worker, whoever started them,
 in the shape [`simlock status`](#simlock-status) describes. It is re-read
 when an install on that worker starts, finishes or fails, and on every
 periodic refresh, so an install queued behind another may appear only then.
-A disconnected or incompatible worker lists none. `catalog` is what that
+A disconnected or incompatible worker lists none. `waiting` lists the
+requests waiting in that worker's own queue, the same ones
+[`simlock list --requests`](#simlock-list---devices--leases--rules--requests)
+run on that worker prints. It is re-read on every lease event on that worker,
+and a disconnected or incompatible worker lists none. `catalog` is what that
 worker can lease, each model with the runtimes it pairs with, and lists a
 newly installed component as soon as its install ends. `host` is the
 machine: operating system, its version, CPU architecture, and the version of
@@ -1057,9 +1065,16 @@ the background, and is never handed to a new requester.
 A device currently `provisioning` or `reclaiming` carries a derived
 `transitionAgeMs` — how long it has been in that state — visible in `status`
 and `list --devices` well before it crosses the threshold that would make
-`doctor` flag it as stalled.
+`doctor` flag it as stalled. Once it crosses it, with nothing working on it,
+`status` marks it `stalled`
+(`Device dev_7: provisioning, mode full (mid-transition 412000ms, stalled)`),
+and `--json` and `list --devices` carry `"stalled": true` on it. These are the
+devices `doctor` reports as `stalled-transition`; no other device carries the
+field.
 
-Human-oriented overview: daemon health *and mode*, the host it runs on
+Human-oriented overview: daemon health *and mode*, the web console's address
+when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
+[CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on
 (`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
@@ -1121,10 +1136,10 @@ depth, plus a `workers` array of worker views (the same records
 [`simlock worker list`](#simlock-worker-listdrainundrainremove) prints). See
 [Against a gateway](#against-a-gateway).
 
-## `simlock list [--devices|--leases|--rules]`
+## `simlock list [--devices|--leases|--rules|--requests]`
 
 Scriptable listings of managed devices, active leases, or registered cleanup
-rules. Defaults to `--devices`. Against a gateway, `--devices` and `--leases`
+rules, and the requests waiting for a device. Defaults to `--devices`. Against a gateway, `--devices` and `--leases`
 are the fleet's (each record naming its `workerId`) while `--rules` lists
 nothing at all: cleanup rules run where the devices and the reaper are, and a
 gateway has neither. Each lease record's `requesterId` is the
@@ -1139,6 +1154,30 @@ returns rather than a worker's full registry records: a gateway has never held
 a device's driver address or a driver's private data, and does not invent one.
 `--rules` lists nothing on a gateway — cleanup rules are a machine's own
 configuration, and a gateway runs no reaper.
+
+`--requests` prints one line per request waiting for a device, oldest first,
+rather than JSON:
+
+```
+Request req_7: agent-b, ios iPhone 16 18.4 mode slim, queued at 2, waiting 12s
+Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 16, starting, waiting 3s
+```
+
+Each line names the request, the agent that sent it, the device it asked for
+(only the fields it named), where it stands, and how long it has waited.
+`queued at 2` is its place in the queue, counting from 1, the requests ahead
+of it that are already starting included. `starting` means the daemon is working
+on it: placing it as it arrives, or finding, creating, booting or downloading
+a device for it. With nothing waiting it prints
+`No requests are waiting.` A granted, failed or cancelled request is not
+listed.
+
+Against a gateway, `--requests` lists the gateway's own queue first, then
+the requests waiting in each worker's own queue, from that worker's local
+agents, with ` on <workerId>`. A request the gateway has sent to a worker is
+listed once, as the gateway's. A disconnected worker's requests are not
+listed. A worker's request is stamped by that worker's clock, so if that
+clock is off, its time waited is off by as much.
 
 ## `simlock catalog [--platform <ios|android>] [--json]`
 
@@ -1274,7 +1313,8 @@ appears in `simlock catalog` at once.
   Run the command again.
 - **Gateway.** A gateway owns no components. Without a worker flag it
   answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2) and says to name workers;
-  see below.
+  see below. On a single host, a worker flag answers
+  `UNSUPPORTED_IN_WORKER_MODE` (exit 2); leave it out.
 
 The command takes no `--json`: its output is already JSON, so the flag is a
 usage error (exit 2), as is a missing or extra argument or a platform other
@@ -1637,7 +1677,9 @@ Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
 `config.mode` selects — a worker (the default) or a gateway — and
 `status` reports it, both in the human line (`Daemon: running (gateway)`) and
-as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
+as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
+print the web console's address on a `Console:` line (see
+[CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
@@ -1696,8 +1738,12 @@ shows the current file with the immediately preceding one prepended.
 ## `simlock worker <list|drain|undrain|remove>`
 
 The operator's view of a fleet. Every subcommand is an admin
-operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
-(exit 2), because a worker has no worker registry to answer from.
+operation. On a single host, `list` prints one line for that host, with the
+same fields a gateway shows for each of its workers: its id is the one it
+presents to a gateway, its label is `gateway.label`, and it is always
+`connected` and never drained. `drain`, `undrain` and `remove` answer
+`UNSUPPORTED_IN_WORKER_MODE` (exit 2) on a single host, because there is no
+gateway to take it out of rotation or forget it.
 
 - `list [--json]` — one line per worker: its id (the worker's own instance
   identity — stable across restarts, and not its label or host name), its
