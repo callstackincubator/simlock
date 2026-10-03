@@ -61,6 +61,16 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.agents/scripts/ensure-pnpm.sh --hook"
+          }
+        ]
+      }
+    ],
     "WorktreeCreate": [
       {
         "hooks": [

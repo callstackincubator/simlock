@@ -17,19 +17,18 @@
 # clonefile (Linux) pnpm links from its store offline. If the store lacks a package the branch's
 # lockfile needs, pnpm installs online once.
 #
-# The pnpm on PATH must be the version package.json pins under devEngines. A different one
-# fails here, loudly, instead of failing later with a misleading error.
+# pnpm is the version package.json pins under devEngines: ensure-pnpm.sh installs it into a
+# cache when the one on PATH is missing or different, instead of failing later with a
+# misleading error.
 set -eu
 
 main_root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 
 check_pnpm() {
-  want=$(node -p 'require(process.argv[1]).devEngines.packageManager.version' "$main_root/package.json")
-  have=$(pnpm --version 2>/dev/null || echo none)
-  if [ "$have" != "$want" ]; then
-    echo "pnpm on PATH is $have ($(command -v pnpm || echo 'not found')); this repo pins $want." >&2
-    echo "Put pnpm $want first on PATH (npm install -g pnpm@$want), then retry." >&2
-    exit 1
+  bin=$("$(dirname "$0")/ensure-pnpm.sh")
+  if [ -n "$bin" ]; then
+    PATH="$bin:$PATH"
+    export PATH
   fi
 }
 

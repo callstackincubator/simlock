@@ -231,5 +231,7 @@ when it closes. See [adr/README.md](adr/README.md).
   `.claude/skills/implement`, `.claude/skills/review`,
   `.claude/skills/verify-hardware`
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
-  `.claude/settings.json`), `.agents/scripts/merge-pr.sh`,
+  `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
+  hook; installs the pinned pnpm into a cache when PATH lacks it),
+  `.agents/scripts/merge-pr.sh`,
   `scripts/slow-e2e.sh`, `scripts/mutate.mjs` (`pnpm mutate`)
