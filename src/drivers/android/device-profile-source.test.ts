@@ -281,12 +281,8 @@ describe("parseDevicesXml", () => {
     expect(parseDevicesXml(xml)).toEqual([]);
   });
 
-  it("rejects a device name containing an embedded line break or NUL byte", () => {
-    const withNewline =
-      '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
-      "<d:device><d:name>Evil\nPhone</d:name></d:device></d:devices>";
-    expect(() => parseDevicesXml(withNewline)).toThrow();
-
+  // An embedded line break is covered through UserDeviceProfileSource's diagnostic test above.
+  it("rejects a device name containing a NUL byte", () => {
     const withNul =
       '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
       "<d:device><d:name>Evil\u0000Phone</d:name></d:device></d:devices>";
@@ -308,9 +304,10 @@ describe("parseDevicesXml", () => {
     expect(parseDevicesXml("   \n  ")).toEqual([]);
   });
 
-  it("throws for content with no recognizable <devices> root", () => {
+  // Content that is not XML at all is covered through UserDeviceProfileSource's malformed-file
+  // diagnostic test above.
+  it("throws for well-formed XML with no recognizable <devices> root", () => {
     expect(() => parseDevicesXml("<not-devices-at-all/>")).toThrow();
-    expect(() => parseDevicesXml("this is not xml")).toThrow();
   });
 });
 

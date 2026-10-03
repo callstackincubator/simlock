@@ -1026,7 +1026,9 @@ describe("IosSimctlDriver", () => {
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
     const driver = await createDriver(scriptedListRunner());
 
-    await expect(driver.listCatalog()).resolves.toEqual({
+    // Strict: a catalog key an iOS driver does not fill (`images`, `customModels`) must be
+    // absent, not present as undefined.
+    await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "26.5",
       modelAliases: {},
       modelRuntimes: {
@@ -1037,25 +1039,6 @@ describe("IosSimctlDriver", () => {
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
     });
-  });
-
-  it("reports no other names and no images", async () => {
-    const driver = await createDriver(scriptedListRunner());
-
-    const catalog = await driver.listCatalog();
-
-    expect(catalog.models.length).toBeGreaterThan(0);
-    expect(catalog.modelAliases).toEqual({});
-    expect(catalog).not.toHaveProperty("images");
-  });
-
-  it("has no customModels field", async () => {
-    const driver = await createDriver(scriptedListRunner());
-
-    const catalog = await driver.listCatalog();
-
-    expect(catalog.models.length).toBeGreaterThan(0);
-    expect(catalog).not.toHaveProperty("customModels");
   });
 
   describe("model and runtime pairing", () => {
@@ -1159,18 +1142,9 @@ describe("IosSimctlDriver", () => {
         driver.resolveSpec({ model: "iphone 16", osVersion: "26.0", platform: "ios" }),
       ).resolves.toEqual({ model: "iPhone 16", osVersion: "26.0", platform: "ios" });
     });
-
-    it("still shells out to simctl exactly once per listCatalog call", async () => {
-      const runner = pairingRunner();
-      const driver = await createDriver(runner);
-
-      await driver.listCatalog();
-
-      expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
-    });
   });
 
-  it("shells out to simctl exactly once per listCatalog call, reusing the catalog parse", async () => {
+  it("shells out to simctl exactly once per listCatalog call", async () => {
     const runner = scriptedListRunner();
     const driver = await createDriver(runner);
 
@@ -1704,6 +1678,8 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("bootstatus", driverData.udid, "-b") } },
       ]);
 
+      // `driverData` has no `slimSignature`/`slimMarkToken`, exactly what a registry written
+      // before slim mode shipped holds, so this also proves such data still loads.
       await expect(
         (await createDriver(runner)).makeReady(
           {
@@ -2744,35 +2720,6 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("loads driverData that predates the slim fields without throwing (backwards compatibility)", async () => {
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", driverData.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", driverData.udid, "-b") } },
-      ]);
-
-      // `driverData` has no `full`/`slimSignature`/`slimMarkToken` -- exactly what a `state.json`
-      // registry written before slim mode shipped looks like. Slim is off here, so this is just
-      // proving `iosDriverData` doesn't choke on the missing fields (a slim-on equivalent is
-      // covered by "boots, applies the disable list..." above, which starts from data with no
-      // prior slim markers either).
-      await expect(
-        (await createDriver(runner)).makeReady(
-          {
-            address: driverData.udid,
-            deviceId: driverData.udid,
-            driverData,
-          },
-          prepareFull,
-        ),
-      ).resolves.toEqual({
-        address: driverData.udid,
-        deviceId: driverData.udid,
-        driverData,
-        // Slim mode is off, so this boot slimmed nothing: the device is full.
-        mode: "full",
-      });
     });
 
     it("times out the post-slim bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
