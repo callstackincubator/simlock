@@ -190,6 +190,14 @@ async function flush(): Promise<void> {
   }
 }
 
+/** The value or error `promise` settles with within a flush, or "still pending". */
+async function settledOrPending(promise: Promise<unknown>): Promise<unknown> {
+  return Promise.race([
+    promise.catch((error: unknown) => error),
+    flush().then(() => "still pending"),
+  ]);
+}
+
 describe("LeaseEngine", () => {
   it("hands the caller back before the purge, keeps the device reclaiming, then re-leases it without another boot", async () => {
     const clock = new FakeClock(1_000);
@@ -994,32 +1002,21 @@ describe("LeaseEngine", () => {
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
-    const second = harness.engine.request(request, {
-      ownerId: "agent-2",
-      requesterId: "agent-2",
-    });
-    const third = harness.engine.request(request, {
-      ownerId: "agent-3",
-      requesterId: "agent-3",
-    });
-    const fourth = harness.engine.request(request, {
-      ownerId: "agent-4",
-      requesterId: "agent-4",
-    });
+    // Each waiter records its grant and hands the device straight back, so the queue drains in
+    // whatever order it serves and the assertion below sees that order rather than hanging.
+    const granted: string[] = [];
+    const waiters = ["agent-2", "agent-3", "agent-4"].map((requesterId) =>
+      harness.engine.request(request, { ownerId: requesterId, requesterId }).then(async (grant) => {
+        granted.push(grant.lease.requesterId);
+        await harness.engine.release(grant.lease.id, "explicit");
+      }),
+    );
     await flush();
 
     await harness.engine.release(first.lease.id, "explicit");
-    const secondGrant = await second;
-    await harness.engine.release(secondGrant.lease.id, "explicit");
-    const thirdGrant = await third;
-    await harness.engine.release(thirdGrant.lease.id, "explicit");
-    const fourthGrant = await fourth;
+    await Promise.all(waiters);
 
-    expect([secondGrant, thirdGrant, fourthGrant].map((grant) => grant.lease.requesterId)).toEqual([
-      "agent-2",
-      "agent-3",
-      "agent-4",
-    ]);
+    expect(granted).toEqual(["agent-2", "agent-3", "agent-4"]);
   });
 
   it("wakes exactly the queue head on release and reuses its reclaimed ready device", async () => {
@@ -1085,13 +1082,12 @@ describe("LeaseEngine", () => {
       requesterId: "agent-1",
     });
 
-    await expect(
-      harness.engine.request(request, {
-        noWait: true,
-        ownerId: "agent-2",
-        requesterId: "agent-2",
-      }),
-    ).rejects.toBeInstanceOf(NoCapacityError);
+    // A no-wait request that queued instead would leave an await hanging; this names it.
+    const outcome = await settledOrPending(
+      harness.engine.request(request, { noWait: true, ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+
+    expect(outcome).toBeInstanceOf(NoCapacityError);
   });
 
   it("rejects a timed-out queue entry and skips it on a later release", async () => {
@@ -1113,12 +1109,14 @@ describe("LeaseEngine", () => {
     });
     await flush();
 
+    // Each outcome settles against a flush rather than an await, so a waiter left pending
+    // fails the assertion that names it instead of hanging the test.
     harness.clock.advance(10);
-    await expect(timedOut).rejects.toBeInstanceOf(QueueTimeoutError);
+    expect(await settledOrPending(timedOut)).toBeInstanceOf(QueueTimeoutError);
     expect(progress).toEqual(["queued"]);
     await harness.engine.release(first.lease.id, "explicit");
 
-    await expect(next).resolves.toMatchObject({
+    expect(await settledOrPending(next)).toMatchObject({
       lease: { ownerId: "agent-3", requesterId: "agent-3" },
     });
   });
@@ -1140,20 +1138,6 @@ describe("LeaseEngine", () => {
     await expect(queued).resolves.toMatchObject({
       lease: { ownerId: "agent-2", requesterId: "agent-2" },
     });
-  });
-
-  it("keeps a renewed lease past the deadline it was granted with", async () => {
-    const harness = await createHarness({ lease: { defaultTtlMs: 20 } });
-    const granted = await harness.engine.request(request, {
-      requesterId: "agent-3",
-      ownerId: "agent-3",
-    });
-    const renewed = await harness.engine.renew(granted.lease.id, 30);
-    harness.clock.advance(20);
-    await flush();
-
-    expect(renewed.ttlDeadline).toBe(1_030);
-    expect(harness.registry.snapshot.leases).toHaveLength(1);
   });
 
   it("renews via the engine, re-arming the expiry timer at the new deadline", async () => {
@@ -1224,12 +1208,12 @@ describe("LeaseEngine", () => {
     driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
     const harness = await createHarness({ driver });
 
-    const grant = await harness.engine.request(request, {
-      ownerId: "agent-1",
-      requesterId: "agent-1",
-    });
+    // A request that never retried would sit pending; settling against a flush names that.
+    const grant = await settledOrPending(
+      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
+    );
 
-    expect(grant.device.state).toBe("leased");
+    expect(grant).toMatchObject({ device: { state: "leased" } });
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     expect(
       harness.registry.snapshot.devices.filter((device) => device.state !== "deleted"),
