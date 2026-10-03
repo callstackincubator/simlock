@@ -24,12 +24,17 @@ else happens to it.
 | `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
 | `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `feature:spec`     | spec session, on creation           | Business or technical spec in progress.                   |
-| `feature:ready`    | maintainer                          | No sub-issues; one PR delivers the whole feature.         |
+| `feature:ready`    | maintainer                          | Business sections and ADRs accepted; agents do the rest.  |
 | `feature:planned`  | spec session, on split              | Split into tasks. Never picked up itself.                 |
 | `feature:blocked`  | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `task:draft`       | spec session, on creation           | Scope written; technical spec, approval, or deps missing. |
 | `task:ready`       | automation, or maintainer           | An agent may implement it.                                |
 | `task:blocked`     | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
+
+Two labels sit outside that scheme. `flaky-test` marks a bug that names a
+test failing without a code change (testing rule 5). `needs-hardware` marks
+a pull request parked because a Done when line needs a real simulator or
+emulator run that has not happened (rule 16).
 
 Transitions per kind:
 
@@ -37,7 +42,8 @@ Transitions per kind:
   a comment naming the feature it became.
 - **bug**: `new` → `triage` → `ready`, with `needs-info` as a side-trip that
   returns to `triage` when the reporter answers.
-- **feature**: `spec` → `ready` or `planned`. Both end at closed.
+- **feature**: `spec` → `ready` or `planned`, and `ready` → `planned` when
+  the delivering agent splits it. Both end at closed.
 - **task**: `draft` → `ready`, and back to `draft` if the approval, the
   technical spec, or a closed dependency goes away.
 - **any kind**: `triage` or `ready` → `blocked` when an agent stops on a
@@ -56,6 +62,13 @@ is open, done means closed as completed.
    `feature:spec` or `task:draft` issue is a spec that is not finished. Agents
    do not label their way into work: only a maintainer, or the automation a
    maintainer configured, moves an issue to a state an agent may act on.
+   One delegation follows from `feature:ready`: the maintainer has accepted
+   the business sections and every ADR the feature links, and that is the
+   approval for the rest. An agent delivering it may write the feature's
+   task specs, split it, and tick each task's approval box, then deliver
+   the tasks as they turn ready. A new decision that needs an ADR, or a
+   comment that would change the spec, is not covered: the agent stops and
+   hands off.
 
 2. **The assignee is the claim, and a handoff is how a claim is released.**
    Before doing anything on an issue an agent assigns itself, and it never
@@ -132,7 +145,9 @@ is open, done means closed as completed.
    that closes it is merged; for a bug the failing test from triage is the
    regression test and must be in that PR. A `feature:ready` issue is done
    when its PR is merged and the PR body walks every completion condition.
-   A `feature:planned` issue is done when every sub-issue is closed.
+   A `feature:planned` issue is done when every sub-issue is closed. The
+   delivering agent merges its own PR, but only through the gate in rule
+   15.
    Verification is part of delivery, not a step after it: every task PR
    walks its Done when, and the PR that closes the last open sub-issue also
    walks the parent's Completion conditions. The maintainer closes the
@@ -175,19 +190,22 @@ is open, done means closed as completed.
     `origin/<branch>` rather than switching to it. Nothing depends on which
     worktree a branch was made in.
 
-14. **A PR is opened only after two reviews, and every finding is answered.**
-    Review is part of delivery in the same way verification is (rule 9): the
-    PR arrives reviewed, it is not reviewed on arrival. Before opening a PR,
-    the delivering agent runs two reviews of the diff against `main`, each
-    by a fresh sub-agent on the most capable model available (never a
-    smaller one chosen for speed), and each blind to the delivering session
-    and to the other reviewer.
+14. **A PR is marked ready only after two reviews, and every finding is
+    answered.** Review is part of delivery in the same way verification is
+    (rule 9). The PR opens as a draft as soon as the spec's tests are
+    committed red, so CI runs from the first push and the PR body can carry
+    the work's status. It leaves draft only after two reviews of the diff
+    against `main`, each by a fresh sub-agent on the model the `review`
+    skill pins (never a smaller one chosen for speed), and each blind to the
+    implementer and to the other reviewer.
     The *spec review* gets the issue body, its parent feature, the ADRs
     under Decisions, the files under Rules in play, and the diff — nothing
     else, and never the PR body. It answers: is every line of Scope and Done
     when delivered, does the diff do anything the spec did not ask for, and
     does every test title state a claim the spec made. It reads; it does not
-    run anything.
+    run anything. A diff that only adds or changes ADRs gets this review
+    alone, judged as a design record rather than against Completion
+    conditions.
     The *code review* gets every file under this directory, the ADR index,
     and the diff — never the issue. It answers, in this order: for each
     changed function, what input, state, or interleaving makes it wrong; and
@@ -197,16 +215,38 @@ is open, done means closed as completed.
     afterwards.
     Each review returns findings, one per defect: a claim, the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
-    finding is a claim, not a fact: the delivering agent verifies each one
-    against the code before acting. A confirmed finding is fixed and the
-    review that raised it runs again on the new diff; a rejected finding is
-    listed in the PR body under `## Review`, one line each with the reason,
-    so the maintainer sees what was overruled. Accepted findings are not
-    narrated. Two rounds at most: a blocking finding the agent could neither
-    fix nor reject after the second round means it stops and hands off with
-    the finding under Findings (rule 2), rather than opening a PR it knows is
-    contested. A PR from a person gets the same two reviews when the
+    finding needs a concrete failure or a named cost and who pays it; a diff
+    touching a file the spec did not list is a note, never blocking, unless
+    a user would see the difference. A finding is a claim, not a fact: it is
+    verified against the code before anyone acts on it. A confirmed finding
+    is fixed and the review that raised it runs again on the new diff; a
+    rejected finding is listed in the PR body under `## Review`, one line
+    each with the reason, so the maintainer sees what was overruled.
+    Accepted findings are not narrated. Two rounds at most: a blocking
+    finding still confirmed after the second round means the agent stops
+    and hands off with the finding under Findings (rule 2), leaving the PR
+    in draft. A PR from a person gets the same two reviews when the
     maintainer asks for them.
+
+15. **An agent merges only through the gate.** `.agents/scripts/merge-pr.sh`
+    is the one place a delivery PR is merged from; agents may not run
+    `gh pr merge` themselves. The script merges only a ready PR with no
+    `needs-hardware` label, a `## Review` section and no "spec needs" line,
+    green CI, and no conflict. Before calling it the agent also checks what
+    the script cannot read: no blocking finding is open, and every mutant
+    `pnpm mutate` left alive is explained in the PR body. Anything short of
+    that parks the issue with a handoff and leaves the PR for the
+    maintainer.
+
+16. **Real devices run one lane at a time, through the script.** The slow
+    e2e lane starts real simulators and emulators on a shared machine, and
+    two lanes at once produce timeouts that look like bugs. Agents run it
+    only through `scripts/slow-e2e.sh`, which holds a machine-wide lock,
+    runs detached so no tool time limit kills it halfway, and logs to a
+    file. With a person present the agent asks before starting it.
+    Unattended, it runs when the lock is free; when the lock stays busy or
+    the machine has no devices, the PR gets `needs-hardware` and waits for
+    the maintainer.
 
 ## Procedures
 
@@ -216,7 +256,7 @@ closes the issue:
 ```bash
 gh issue list --search 'label:bug:ready,feature:ready,task:ready no:assignee'
 gh issue edit <n> --add-assignee @me
-git switch -c task/<n>              # or bug/<n>, feature/<n>
+.agents/scripts/worktree.sh task/<n>    # or bug/<n>, feature/<n>; resumes origin/<branch>
 ```
 
 The PR body contains `Closes #<n>`. For a bug, branch from `bug/<n>-repro`
@@ -235,8 +275,11 @@ command, so the one-label invariant never breaks in between:
 gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 ```
 
-The repo's own skills (`spec-session`, `triage-bug`, `deliver`, `review`)
-encode these procedures; use them rather than retyping the steps.
+The repo's own skills encode these procedures; use them rather than
+retyping the steps. `deliver` is the orchestrator: it claims, then hands
+each stage to a forked skill — `implement`, `review`, `verify-hardware` —
+that runs on the model its frontmatter pins and returns a fixed report.
+`spec-session` and `triage-bug` cover the rest.
 
 ## Automation
 
@@ -268,5 +311,6 @@ rules mechanically, so nobody has to remember them:
   closes `#<n>` and closes nothing else.
 
 The judgment calls stay manual by design: `bug:new` → `bug:triage`,
-`bug:triage` → `bug:ready`, `feature:spec` → `feature:ready`, and the
-approval box on each task.
+`bug:triage` → `bug:ready`, and `feature:spec` → `feature:ready`. The
+approval box on each task is the maintainer's click, except on the tasks of
+a `feature:ready` feature, where the delivering agent ticks it (rule 1).

@@ -26,7 +26,9 @@ though the suite is green — being green is exactly the failure mode.
    red, whatever you believed covered it stops short of the part that
    matters — usually because the test exercises an internal callback rather
    than the observable output the path exists to produce. Write the test that
-   goes red, then restore the code.
+   goes red, then restore the code. `pnpm mutate` does this mechanically
+   for every line a branch changed and prints each mutant the suite let
+   live; run it before review.
 
 4. **A test that enforces a rule must see everything the rule covers.** A
    boundary or invariant test enforces its rule only where it happens to
@@ -41,3 +43,9 @@ though the suite is green — being green is exactly the failure mode.
    decide; a failure that reproduces there is not yours to fix in this
    change, and one that does not reproduce is yours. Never skip, disable, or
    quarantine a test to get to green.
+   Once a failure has reproduced on a base commit, it is recorded so nobody
+   proves it again: an open issue labelled `flaky-test` names the test by
+   file and title. A failure that matches an open `flaky-test` issue skips
+   the base-commit run; link the issue in the PR instead. One that
+   reproduced on base and has no issue gets a `bug:new` issue with that
+   label. Closing the issue ends the exemption.

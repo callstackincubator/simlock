@@ -1,20 +1,23 @@
 ---
 name: review
-description: Run the two pre-PR reviews from delivery rule 14 on a branch or an open PR — a spec review blind to the rules and a code review blind to the issue, each by a fresh sub-agent — then verify every finding, fix or reject each, and write the Review section for the PR body. Use when the user says "review #N", "review this branch", "review PR N", or from the deliver skill before opening a PR.
+description: Run the two blind pre-merge reviews from delivery rule 14 on a PR or branch — a spec review blind to the rules and a code review blind to the issue, each by a fresh sub-agent — verify every finding, and hand back a fixed report block. Does not edit code. Use when the user says "review #N", "review this branch", "review PR N", or when the deliver orchestrator delegates review.
+model: opus
+effort: high
+context: fork
 ---
 
-# Review a change before its PR
+# Review a change before it is marked ready
 
 Rule 14 in `docs/internal/agent-rules/delivery.md` governs this skill: two
-reviews, each blind to the other and to you; every finding verified, then
-fixed or rejected with a reason; two rounds at most. Rule 12 governs
-everything you write.
+reviews, each blind to the other and to the implementer; every finding
+verified and either confirmed or rejected with a reason; two rounds at most.
+You do not edit code. You find, verify, and report; the implementer fixes.
 
-Argument: an issue number, a PR number, or nothing. With nothing, review the
-current branch; the issue is the second segment of its `<kind>/<n>` name.
-With a PR number, the branch is the PR's head and the issue is the one its
-body closes. If the PR is not yours, do not push to it: run steps 1 to 4 and
-post the confirmed findings as one comment (step 6).
+Arguments: a PR number, optionally `round 2` and which review to re-run
+(`spec`, `code`, or `both`). With a branch instead of a PR, the issue is the
+second segment of its `<kind>/<n>` name. If the PR is not a delivery PR (a
+person's PR the maintainer asked about), post the confirmed findings as one
+comment at the end (step 6) and push nothing.
 
 ## 1. Gather the inputs
 
@@ -24,7 +27,7 @@ is exactly what you put there and nothing else.
 ```bash
 git fetch origin main
 R=$(mktemp -d)
-git diff origin/main...HEAD > "$R/diff.patch"
+gh pr diff <PR> > "$R/diff.patch"
 gh issue view <N> --json body -q .body > "$R/issue.md"
 ```
 
@@ -34,16 +37,22 @@ For a bug, add the triage report as `$R/triage.md`; the Simplest fix section
 is the agreed approach. Copy all of `docs/internal/agent-rules/` and
 `docs/internal/adr/README.md` into `$R/rules/`.
 
-Do not add the PR body, your commit messages, your handoff draft, or any
-note from this session. The reviewers must not know what you believe the
-diff does.
+Do not add the PR body, commit messages, or any note from the implementer.
+The reviewers must not know what anyone believes the diff does.
 
-## 2. Spawn the spec review
+**An ADR-only diff** (every changed path is under `docs/internal/adr/`) gets
+the spec review alone, with the ADR brief in step 2. It gets no code review.
 
-A fresh sub-agent on the most capable model available, never a smaller one
-chosen for speed. Read-only: it reads `$R/diff.patch`, `$R/issue.md`,
+## 2. Spawn both reviews, in the foreground
+
+Spawn the spec review and the code review in **one message**, as two Agent
+calls with `run_in_background: false` and `model: "opus"`. They run in
+parallel, and your turn cannot end while they run, so you never hand back
+before the findings are in. On `round 2`, spawn only the review named.
+
+**Spec review.** Read-only. It reads `$R/diff.patch`, `$R/issue.md`,
 `$R/feature.md`, `$R/triage.md` and `$R/spec/`, and nothing under
-`$R/rules/`. Give it this brief, verbatim, with the paths filled in:
+`$R/rules/`. Brief, verbatim, with the paths filled in:
 
 ```markdown
 You are reviewing a diff against a specification. You have not seen the
@@ -58,34 +67,49 @@ Answer three questions, and only these:
    feature: every Completion condition) delivered by the diff? For each
    line, name the hunk that delivers it or say "not delivered".
 2. Does the diff do anything the specification did not ask for? Name it.
+   This is a note, never blocking, unless it changes behaviour a user sees.
 3. For every test the diff adds or changes: does the title state a claim
    the specification made, and does the body assert that claim? A title
    that promises more than the body proves is a defect.
+
+A finding counts only with a concrete failure (this input or state gives
+this wrong result) or a named cost and who pays it. Drop style, naming and
+"could be simpler" with no defect.
 
 Report one finding per defect, in this form and no other:
 
 - [blocking|note] <claim in one sentence>. Evidence: `<file>:<line>`.
 
-Blocking means the PR should not merge as is. Note means a reviewer should
-know. Do not suggest fixes. Do not praise. If there are no findings, say
+Do not suggest fixes. Do not praise. If there are no findings, say
 "No findings." and stop.
 ```
 
-## 3. Spawn the code review
+For an ADR-only diff, replace questions 1 to 3 with: does the record decide
+every question the specification leaves to a decision; does it contradict
+an accepted ADR or the specification; is any consequence it states false.
+Do not judge it against Completion conditions: an accepted ADR is a target
+the code has not reached yet.
 
-In parallel with step 2. A fresh sub-agent on the same class of model, in
-its own worktree of the branch under review, so it can run and break things
-without touching yours. It reads `$R/diff.patch` and `$R/rules/`, and
-nothing else under `$R`. Give it this brief, verbatim:
+**Code review.** In its own detached worktree of the PR head, so it can run
+and break things without touching anyone else's checkout:
+
+```bash
+W="$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/worktrees/review-<PR>"
+git fetch origin <branch> && git worktree add --detach "$W" origin/<branch>
+.agents/scripts/worktree.sh --prepare "$W"     # node_modules in seconds, pinned pnpm
+```
+
+The reviewer reads `$R/diff.patch` and `$R/rules/`, and nothing else under
+`$R`. Brief, verbatim:
 
 ```markdown
 You are reviewing a diff for correctness and for conformance to the rules
 of this repository. You have no other context and you have not seen the
 issue this diff implements; judge the code, not the intent.
 
-Rules: <path to $R/rules/>. Diff: <path>. Repository: your working
-directory, checked out at the reviewed commit. You may run `pnpm check`,
-`pnpm test`, and any command that helps you answer; you may edit code to
+Rules: <path to $R/rules/>. Diff: <path>. Repository: <worktree path>,
+checked out at the reviewed commit. You may run `pnpm check`, `pnpm test`,
+`pnpm mutate`, and any command that helps you answer; you may edit code to
 see what the suite catches, as long as `git checkout .` restores it before
 you report.
 
@@ -100,59 +124,60 @@ Answer two questions, in this order:
 2. Does the diff break any rule in the rules directory? Cite the file and
    the rule number.
 
+A finding counts only with a concrete failure (this input or state gives
+this wrong result) or a named cost and who pays it. Drop style, naming and
+"could be simpler" with no defect.
+
 Report one finding per defect, in this form and no other:
 
 - [blocking|note] <claim in one sentence>. Evidence: `<file>:<line>`, or a
   fenced block with the command you ran and its output.
 
-Blocking means the PR should not merge as is. Note means a reviewer should
-know. Do not suggest fixes. Do not praise. If there are no findings, say
+Do not suggest fixes. Do not praise. If there are no findings, say
 "No findings." and stop.
 ```
 
-## 4. Verify every finding
+Remove the code review's worktree when it is done:
+`git worktree remove --force "$W"`.
+
+## 3. Verify every finding
 
 A finding is a claim, not a fact. For each one, reproduce its evidence
 yourself: read the cited lines, or run the cited command. Then decide:
 
-- **Confirmed**: fix it on the branch. Do not note it anywhere; the diff is
-  the record.
-- **Rejected**: write one line for the PR body, `<claim> — <why it is
-wrong>`, in plain words.
+- **Confirmed**: it goes under Fix in the report, as `path:line what is
+wrong`, written so it makes sense without the PR open.
+- **Rejected**: one line, `<claim> — <why it is wrong>`.
 
 Two findings that disagree with each other, one from each review, usually
 mean the spec is missing a line. Resolve it in favour of the rules, reject
-the other with that reason, and say "spec needs: ..." in the PR body.
+the other with that reason, and add the missing line under Spec needs.
 
-## 5. Second round
+## 4. Decide what runs again
 
-If any confirmed finding changed the diff, regenerate `$R/diff.patch` and
-run again only the review whose findings you fixed, with a fresh sub-agent.
-Verify as in step 4. That is the last round.
+A confirmed finding changes the diff, so the review that raised it runs
+again on the next round. After round 2 there is no third: a blocking
+finding still confirmed is reported as open, and the orchestrator parks the
+issue.
 
-A blocking finding still open after the second round, one you could neither
-fix nor reject with a reason, means the change is contested. Do not open
-the PR. Push the branch, hand off with the finding under Findings (deliver
-skill, step 6), and stop.
+## 5. Report
 
-## 6. Write the Review section
+End with exactly this block, nothing after it:
 
-Into the PR body, after the checklist:
-
-```markdown
-## Review
-
-Spec review: <n> findings, <m> fixed. Code review: <n> findings, <m> fixed.
-
-Rejected:
-
-- <claim> — <reason>
+```
+PR: #M  Round: 1 | 2  Kind: code | adr-only
+Spec review: n findings (b blocking)  Code review: n findings (b blocking) | skipped
+Fix: <one confirmed finding per line, blocking first, as `path:line what is wrong`, or "none">
+Rejected: <one per line, `claim — reason`, or "none">
+Spec needs: <the line the spec is missing, or "none">
+Rerun: spec | code | both | none
 ```
 
-Omit "Rejected:" when nothing was. This section is outside the 200-word
-budget, like the checklist, and it still obeys rule 12: one line per
-rejected finding, no narration of what was fixed.
+The orchestrator pastes the Fix lines into the implementer's task and the
+Rejected lines into the PR's `## Review` section, so both must stand alone.
 
-On a PR that is not yours, post the same text as one comment instead, with
-the confirmed findings listed under "Confirmed:" since nobody has fixed
-them, ending with `*Written by an agent.*`.
+## 6. A PR that is not a delivery PR
+
+Post the same findings as one comment, confirmed ones under "Confirmed:"
+and rejected ones under "Rejected:", ending with `*Written by an agent.*`.
+Rule 12 applies: one line per finding, no narration.

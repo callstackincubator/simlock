@@ -1,6 +1,9 @@
 ---
 name: triage-bug
 description: Triage a bug:triage issue — reproduce it as a failing test, find the root cause, and post a report proposing the simplest fix, without fixing it. Use when the user says "triage #N", "triage the next bug", or points at an issue labelled bug:triage.
+model: opus
+effort: high
+context: fork
 ---
 
 # Triage a bug
@@ -54,9 +57,10 @@ test. Two orphan builds in the fixture means two builds in the assertion.
 Read-only inspection of the host — listing a directory, reading a plist,
 running `df` — is fine and often the fastest evidence. Say what you read.
 Do not run the slow e2e lane or anything that starts real simulators or
-emulators without asking the maintainer first. If reproduction needs it,
-ask; if the answer is no, say so in the report and go as far as the fake
-driver allows.
+emulators: you run forked, with nobody to ask. Go as far as the fake driver
+allows. If only a real device reproduces it, stop and hand off (Stopping
+early) with Blocked on: "a real-device run of <test>", which the maintainer
+runs with the `verify-hardware` skill.
 
 If you cannot reproduce after a genuine attempt:
 
@@ -122,8 +126,8 @@ happens to it.
 
 ## 6. Report and release
 
-If a person is present in this session, show the text first and wait for a
-yes before posting. Running unattended, post directly.
+You run forked, so post directly; the maintainer reads the report before
+deciding anything.
 
 Post one comment with exactly these sections, then unassign. If a report
 already exists on the thread, yours replaces it: make the first line
@@ -172,7 +176,7 @@ maintainer's decision after reading the report.
 ## Stopping early
 
 If you stop before the report is posted — out of context, told to stop,
-waiting on the maintainer's answer about the slow lane — push whatever is on
+needing a real-device run — push whatever is on
 `bug/<N>-repro`, leave one comment headed `## Handoff` with Done, Not done,
 Findings and Blocked on, and unassign yourself. Findings is where a partial
 root cause or a rejected hypothesis goes so the next agent does not redo it.

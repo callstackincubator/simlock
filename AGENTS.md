@@ -30,7 +30,9 @@ changes in this repo:
   `*:ready` and `bug:triage`, the body is the spec and comments are
   discussion, reporters' issues are never rewritten, branches are
   `<kind>/<n>`, handoffs are one `## Handoff` comment per stop, every PR
-  gets a spec review and a code review before it opens.
+  gets a spec review and a code review before it leaves draft, agents merge
+  only through `.agents/scripts/merge-pr.sh`, and real devices run only
+  through `scripts/slow-e2e.sh`.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ is binding as a target while the code has not
