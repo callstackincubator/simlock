@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createRoutingPolicy, isRoutingPolicyName } from "./routing.js";
+import { createRoutingPolicy } from "./routing.js";
 import { catalogFixture, deviceFixture, statusFixture } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
@@ -24,14 +24,6 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
     ...overrides,
   };
 }
-
-describe("routing registry", () => {
-  it("recognizes only registered names", () => {
-    expect(isRoutingPolicyName("warm-then-free")).toBe(true);
-    expect(isRoutingPolicyName("round-robin")).toBe(false);
-    expect(isRoutingPolicyName(42)).toBe(false);
-  });
-});
 
 describe("the registered warm-then-free policy", () => {
   const policy = createRoutingPolicy("warm-then-free");

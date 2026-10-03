@@ -63,10 +63,6 @@ const routingPolicies = {
 
 export type RoutingPolicyName = keyof typeof routingPolicies;
 
-export function isRoutingPolicyName(value: unknown): value is RoutingPolicyName {
-  return typeof value === "string" && value in routingPolicies;
-}
-
 export function createRoutingPolicy(name: RoutingPolicyName): RoutingPolicy {
   return composeRoutingPolicy(routingPolicies[name]);
 }

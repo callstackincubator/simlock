@@ -12,9 +12,7 @@ import {
   type OwnedRootError,
   REDACTED_VALUE,
 } from "../core/index.js";
-import { ROUTING_POLICIES } from "../core/config.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
-import { isRoutingPolicyName } from "../gateway/index.js";
 import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
@@ -1180,15 +1178,6 @@ function discoverIos(
     tcpProbe: new FakeTcpProbe(),
   });
 }
-
-describe("gateway.routing names", () => {
-  // `startDaemon` refuses a gateway whose `gateway.routing` the gateway's registry does not know,
-  // so a name config accepts but the registry lacks would pass config validation and then
-  // stop the daemon from starting.
-  it("every name config accepts for gateway.routing is a registered routing policy", () => {
-    expect(ROUTING_POLICIES.filter((name) => !isRoutingPolicyName(name))).toEqual([]);
-  });
-});
 
 describe("deviceModeWiring", () => {
   it.each(["slim", "full"] as const)(
