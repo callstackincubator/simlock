@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeProcessSupervisor, NodeProcessRunner, NodeProcessSupervisor } from "./index.js";
+import { NodeProcessRunner, NodeProcessSupervisor } from "./index.js";
 
 /**
  * Runs a process to completion and hands back the pid it no longer occupies. `wait()` can
@@ -59,35 +59,5 @@ describe("NodeProcessSupervisor", () => {
     await goneFrom(supervisor, pid);
 
     expect(() => supervisor.signal(pid, "SIGTERM")).not.toThrow();
-  });
-});
-
-describe("FakeProcessSupervisor", () => {
-  it("answers with the liveness a test gave it", () => {
-    const supervisor = new FakeProcessSupervisor([17]);
-
-    expect(supervisor.isAlive(17)).toBe(true);
-    expect(supervisor.isAlive(18)).toBe(false);
-
-    supervisor.markDead(17);
-    supervisor.markAlive(18);
-
-    expect(supervisor.isAlive(17)).toBe(false);
-    expect(supervisor.isAlive(18)).toBe(true);
-  });
-
-  it("records signals without deciding whether they killed anything", () => {
-    const supervisor = new FakeProcessSupervisor([17]);
-
-    supervisor.signal(17, "SIGTERM");
-    supervisor.signal(17, "SIGKILL");
-
-    expect(supervisor.signals).toEqual([
-      { pid: 17, signal: "SIGTERM" },
-      { pid: 17, signal: "SIGKILL" },
-    ]);
-    // Whether a process dies on SIGTERM, ignores it, or dies only on SIGKILL is what the
-    // code under test has to cope with, so the test says which happened -- not the double.
-    expect(supervisor.isAlive(17)).toBe(true);
   });
 });

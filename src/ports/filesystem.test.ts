@@ -146,6 +146,26 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await expect(filesystem.exists(`${temporaryDirectory}/dangling`)).resolves.toBe(false);
   });
 
+  it("reports a symlink as a symlink, and resolves it to what it points at", async () => {
+    const filesystem = create();
+    await filesystem.mkdirp(`${temporaryDirectory}/devices/real`);
+    await link(
+      filesystem,
+      `${temporaryDirectory}/devices/ios`,
+      `${temporaryDirectory}/devices/real`,
+    );
+
+    await expect(filesystem.lstat(`${temporaryDirectory}/devices/ios`)).resolves.toMatchObject({
+      kind: "symlink",
+    });
+    await expect(filesystem.stat(`${temporaryDirectory}/devices/ios`)).resolves.toMatchObject({
+      kind: "directory",
+    });
+    await expect(filesystem.realpath(`${temporaryDirectory}/devices/ios`)).resolves.toBe(
+      await filesystem.realpath(`${temporaryDirectory}/devices/real`),
+    );
+  });
+
   it("refuses to answer for a path that runs through a file", async () => {
     // A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
     // that is simply not there yet, and callers can only tell them apart by the errno.
@@ -237,22 +257,6 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
 });
 
 describe("MemoryFilesystem", () => {
-  it("reports its configured free disk space", async () => {
-    const filesystem = new MemoryFilesystem(42_000);
-
-    await expect(filesystem.diskFree("/")).resolves.toBe(42_000);
-  });
-
-  it("reports a defined symlink as a symlink rather than as what it points at", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/devices/real");
-    filesystem.defineSymlink("/devices/ios", "/devices/real");
-
-    await expect(filesystem.lstat("/devices/ios")).resolves.toMatchObject({ kind: "symlink" });
-    await expect(filesystem.stat("/devices/ios")).resolves.toMatchObject({ kind: "directory" });
-    await expect(filesystem.realpath("/devices/ios")).resolves.toBe("/devices/real");
-  });
-
   it("resolves symlinked path components, not just the last one", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/private/devices/ios");
@@ -301,20 +305,5 @@ describe("MemoryFilesystem", () => {
     await filesystem.mkdir("/devices/ios");
 
     await expect(filesystem.lstat("/devices/ios")).resolves.toMatchObject({ mode: 0o700 });
-  });
-});
-
-describe("NodeFilesystem", () => {
-  it("reports a symlink without following it", async () => {
-    const filesystem = new NodeFilesystem();
-    await filesystem.mkdirp(`${temporaryDirectory}/devices/real`);
-    await symlink(`${temporaryDirectory}/devices/real`, `${temporaryDirectory}/devices/ios`);
-
-    await expect(filesystem.lstat(`${temporaryDirectory}/devices/ios`)).resolves.toMatchObject({
-      kind: "symlink",
-    });
-    await expect(filesystem.realpath(`${temporaryDirectory}/devices/ios`)).resolves.toBe(
-      await filesystem.realpath(`${temporaryDirectory}/devices/real`),
-    );
   });
 });

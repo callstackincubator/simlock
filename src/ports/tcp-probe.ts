@@ -142,8 +142,4 @@ export class FakeTcpProbe implements TcpProbe {
   startListening(port: number): void {
     this.#listening.add(port);
   }
-
-  stopListening(port: number): void {
-    this.#listening.delete(port);
-  }
 }
