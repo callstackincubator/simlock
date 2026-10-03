@@ -101,18 +101,16 @@ describe("reaching a leased device", () => {
     },
   );
 
-  it.each([
-    [["simctl", "delete", "ABCD"], "simctl delete"],
-    [["adb", "kill-server"], "adb kill-server"],
-    [["adb", "-s", "emulator-5586", "emu", "kill"], "adb emu kill"],
-  ])("refuses %s with a usage error naming what to run instead", async (args, refused) => {
+  // One verb is enough: which verbs are refused is each driver's decision, tested with the
+  // drivers. What only separate processes show is the refusal reaching the shell as exit 2.
+  it("refuses a destructive passthrough with a usage error naming what to run instead", async () => {
     const env = await withDaemon();
 
-    const refusal = await env.cli(args);
+    const refusal = await env.cli(["simctl", "delete", "ABCD"]);
 
     expect(refusal.code).toBe(2);
     expect(refusal.error?.code).toBe("USAGE");
-    expect(refusal.error?.message).toContain(refused);
+    expect(refusal.error?.message).toContain("simctl delete");
     expect(refusal.error?.message).toContain("simlock release");
     expect(refusal.stdout).toBe("");
   });
