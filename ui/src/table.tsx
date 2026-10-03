@@ -20,6 +20,7 @@ import { TABLE_SIZES } from "./paging";
 /** One column: its header, and what each row shows in it. */
 export interface Column<T> {
   readonly header: string;
+  /** Called as the table draws, not mounted, so it calls no hook: a component it returns may. */
   readonly cell: (row: T) => ReactNode;
   /** A number or a duration: mono, and right-aligned where the table has columns. */
   readonly numeric?: boolean;
@@ -57,16 +58,13 @@ export function DataTable<T extends RowData>(props: {
     sizes: TABLE_SIZES,
     total: rows.length,
   });
-  // A view builds its columns on every render, round the facts it has now, so these are too.
+  // The table cuts out the page and keeps each row's id. It does not draw the cells: its
+  // `FlexRender` mounts a cell function as a component, a view builds its columns anew on every
+  // render, so each refresh would mount a new component, draw the cell's elements afresh and take
+  // the keyboard's focus off a link in it. Below, each cell's function is called instead.
   const helper = createColumnHelper<typeof features, T>();
   const definitions = helper.columns(
-    columns.map((column, index) =>
-      helper.display({
-        cell: ({ row }) => column.cell(row.original),
-        header: column.header,
-        id: String(index),
-      }),
-    ),
+    columns.map((column, index) => helper.display({ header: column.header, id: String(index) })),
   );
   // The URL owns the page (`usePaging`), and the pager moves it; the table cuts out that page.
   const table = useTable({
@@ -102,7 +100,7 @@ export function DataTable<T extends RowData>(props: {
                     data-label={column?.header}
                     className={cellClass(column?.numeric, column?.mono)}
                   >
-                    <table.FlexRender cell={cell} />
+                    {column?.cell(row.original)}
                   </td>
                 );
               })}

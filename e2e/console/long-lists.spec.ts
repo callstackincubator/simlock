@@ -269,6 +269,47 @@ test.describe("long lists page", () => {
     await expect(page).toHaveURL(/\/leases\?page=2$/);
   });
 
+  test("a focused link in a table keeps its focus, and its row its place, across two refreshes", async ({
+    daemon,
+    page,
+  }) => {
+    // One list, served again on every refresh: its countdowns move, so each render shows.
+    const listed = leases(60);
+    let served = 0;
+    await answer(page, "/v1/leases", () => {
+      served += 1;
+      return { leases: listed };
+    });
+    await open(page, daemon, "/leases?page=2");
+    const table = page.getByRole("region", { name: "All leases" }).locator("table");
+    const row = table.locator("tbody tr").nth(2);
+    const link = row.getByRole("link");
+    const expires = row.locator('td[data-label="Expires in"]');
+    await expect(link).toHaveText("lse_0028");
+    await link.focus();
+    await expect(link).toBeFocused();
+    // The element itself is marked: a link drawn again in its place would not carry the mark.
+    await link.evaluate((element) => {
+      (element as unknown as { kept?: boolean }).kept = true;
+    });
+
+    // Twice: the daemon answers once more, then the row's countdown moves, so a render follows.
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      const since = served;
+      await expect.poll(() => served, { timeout: 3_000 }).toBeGreaterThan(since);
+      const before = await expires.textContent();
+      await expect.poll(() => expires.textContent(), { timeout: 3_000 }).not.toBe(before);
+    }
+
+    await expect(link).toBeFocused();
+    expect(await link.evaluate((element) => (element as unknown as { kept?: boolean }).kept)).toBe(
+      true,
+    );
+    expect(await firstColumn(table)).toEqual(ids(26, 50));
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/leases\/lse_0028\/$/);
+  });
+
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
     let count = 25;
     await answer(page, "/v1/leases", () => ({ leases: leases(count) }));
