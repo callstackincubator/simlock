@@ -27,12 +27,13 @@ function byMinutesAgo(minutes: readonly { at: number; count: number }[]): Map<nu
 
 describe("the lease history", () => {
   it("the lease history counts back from today's leases through granted, released and expired events", () => {
-    // Held now: 3. One was granted after the view's last tick of now, so it is in now's count.
+    // Held now: 3. One was granted after the view's last tick of now, stamped in the next minute
+    // by the daemon's clock, so it is in now's count.
     // Walking back: 10 s ago one was granted (1 before it); 3 min ago one was
     // released (2 before it); 5 min ago one expired (3 before it); 20 min ago one was granted
     // (2 before it). Other events change nothing.
     const events = [
-      event("lease.granted", NOW + 500),
+      event("lease.granted", NOW + 45_000),
       event("lease.granted", NOW - 10_000),
       event("device.ready", NOW - 15_000),
       event("lease.released", CURRENT - 3 * MINUTE + 5_000),

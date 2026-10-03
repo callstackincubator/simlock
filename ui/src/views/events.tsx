@@ -31,8 +31,9 @@ const FILTERS: readonly { readonly value: Subject | "all"; readonly label: strin
 ];
 
 /**
- * The events of the last hour, newest first, filled from `GET /v1/events` and the stream as
- * `EventFeed` says, while the calling view is on screen.
+ * The events the calling view holds, newest first: the last hour when it opened, then each one
+ * the stream sends while it is on screen, filled as `EventFeed` says. The newest
+ * {@link MAX_EVENTS} are kept; none drops off by age.
  */
 export function useRecentEvents(): ResourceState<readonly ConsoleEvent[]> {
   const api = useApi();

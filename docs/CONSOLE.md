@@ -116,7 +116,8 @@ has nothing to show.
 Above the workers, **Leases, last hour** charts how many leases were held at
 the end of each minute. It starts from the leases held now and counts back
 through the lease events of the last hour, the same events the Events page
-shows, so it can only go back as far as those. **Minute by minute** under the
+shows, so it can only go back as far as those. A lease that ends with no
+event, such as one on a worker removed from a gateway, is not counted back. **Minute by minute** under the
 chart lists each minute's number. **Busiest workers** ranks the workers by
 the leases each holds now.
 

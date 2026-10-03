@@ -327,8 +327,8 @@ input[aria-invalid="true"] {
   top: var(--space-2);
 }
 
-/* The tab bar: one tab per view, the current one underlined in orange. Under 640px it scrolls
- * sideways inside itself; the page does not. */
+/* The tab bar: one tab per view, the current one underlined in orange. When the tabs do not
+ * fit, as on a phone, it scrolls sideways inside itself; the page does not. */
 
 .tabs {
   border-bottom: 1px solid var(--border);
@@ -933,7 +933,68 @@ input[aria-invalid="true"] {
 }
 
 .table th.num {
-  width: 9.5rem;
+  width: 8rem;
+}
+
+/* A table stacks its rows into labelled lines where its columns would be too narrow: every
+ * table under 768px, and a wide one, of six columns or more, under 1100px. */
+@media (max-width: 1099.98px) {
+  .table-wide thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table-wide thead th {
+    white-space: normal;
+  }
+
+  .table-wide,
+  .table-wide tbody,
+  .table-wide tr {
+    display: block;
+  }
+
+  .table-wide tr {
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-wide tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table-wide td,
+  .table-wide td:first-child,
+  .table-wide td:last-child {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .num {
+    text-align: left;
+  }
+
+  .table-wide th.num {
+    width: auto;
+  }
+
+  .table-wide td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
 }
 
 @media (max-width: 767.98px) {

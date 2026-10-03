@@ -94,7 +94,7 @@ export function DeviceTable({
 }) {
   if (worker.devices.length === 0) return <p className="muted">No devices.</p>;
   return (
-    <table className="table">
+    <table className="table table-wide">
       <thead>
         <tr>
           <th scope="col">Device</th>

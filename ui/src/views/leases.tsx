@@ -129,7 +129,7 @@ export function LeaseTable(props: {
   const { leases, now, showWorker, tokens, workers } = props;
   if (leases.length === 0) return <p className="muted">No leases.</p>;
   return (
-    <table className="table">
+    <table className="table table-wide">
       <thead>
         <tr>
           <th scope="col">Lease</th>
@@ -203,10 +203,10 @@ function LeaseWorker(props: {
   readonly lease: LeaseRecord;
   readonly workers: readonly WorkerView[];
 }) {
-  const worker = workerOfLease(props.lease, props.workers);
-  if (worker?.label !== undefined) return worker.label;
-  const id = worker?.id ?? props.lease.workerId;
-  return id === undefined ? "—" : <Id>{id}</Id>;
+  const name = workerNameOfLease(props.lease, props.workers);
+  if (name === undefined) return "—";
+  const labelled = workerOfLease(props.lease, props.workers)?.label !== undefined;
+  return labelled ? name : <Id>{name}</Id>;
 }
 
 /** How long ago `at` was, with the moment itself for a tooltip and a machine. */

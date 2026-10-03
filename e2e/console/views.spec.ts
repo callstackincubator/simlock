@@ -324,19 +324,22 @@ test.describe("every view", () => {
     try {
       const id = decodeURIComponent(pages.lease.replace(/^\/leases\/|\/$/g, ""));
       await openSignedIn(page, host);
-      for (const width of [1280, 360]) {
+      // A desktop, the widths where the table stacks its rows, and a phone.
+      for (const width of [1280, 1024, 768, 360]) {
         await page.setViewportSize({ height: 800, width });
         await visit(page, host, "/leases");
         const link = page.getByRole("link", { name: id, exact: true });
         await expect(link).toHaveAttribute("title", id);
         const shape = await link.evaluate((element) => ({
           cut: element.scrollWidth > element.clientWidth,
+          // Cut, but still long enough to tell one lease from another: a dozen characters.
+          readable: element.clientWidth >= 96,
           lines: Math.round(
             element.getBoundingClientRect().height /
               parseFloat(getComputedStyle(element).lineHeight),
           ),
         }));
-        expect(shape, `${width}px`).toEqual({ cut: true, lines: 1 });
+        expect(shape, `${width}px`).toEqual({ cut: true, lines: 1, readable: true });
       }
       // The details page has the whole id.
       await page.getByRole("link", { name: id, exact: true }).click();

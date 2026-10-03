@@ -58,7 +58,7 @@ export function WaitingTable(props: {
   const { now, requests, workers } = props;
   if (requests.length === 0) return <p className="muted">No requests are waiting.</p>;
   return (
-    <table className="table">
+    <table className="table table-wide">
       <thead>
         <tr>
           <th scope="col">Requester</th>

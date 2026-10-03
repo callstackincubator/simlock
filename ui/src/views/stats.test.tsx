@@ -136,6 +136,16 @@ describe("the stat cards", () => {
       "Workers affected | 2 | with at least one item",
       "Devices affected | 1 | quarantined or stalled",
     ]);
+    // Device ids are a worker's own: the same id quarantined on two workers is two devices.
+    const twins = [
+      worker("wrk_x", { devices: [device("d1", "quarantined")] }),
+      worker("wrk_y", { devices: [device("d1", "quarantined")] }),
+    ];
+    expect(cards(attentionStats(attentionItems(twins)))).toEqual([
+      "Items | 2 | need attention now",
+      "Workers affected | 2 | with at least one item",
+      "Devices affected | 2 | quarantined or stalled",
+    ]);
 
     const newest: ConsoleEvent = {
       event: "lease.granted",
