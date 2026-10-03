@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { promiseState } from "../test-support/promise-state.js";
 import { FakeParentWatch, NodeParentWatch } from "./index.js";
 
 describe("FakeParentWatch", () => {
@@ -71,8 +72,16 @@ describe("NodeParentWatch", () => {
       watch.watch(child.pid as number, resolve);
     });
 
+    const exitedState = promiseState(exited);
+
     child.kill("SIGKILL");
-    await exited;
+
+    // Real time against a 20ms poll, so bounded generously -- but a watch that never notices
+    // fails here, by name, rather than on the test's own timeout.
+    await vi.waitFor(() => expect(exitedState.state).toBe("fulfilled"), {
+      interval: 20,
+      timeout: 2_000,
+    });
   });
 
   it("stop() prevents onExit from firing", async () => {

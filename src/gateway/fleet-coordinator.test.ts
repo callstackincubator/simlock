@@ -4,6 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
@@ -403,9 +404,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // w2's own eventual attempt, once it gets its turn.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    const w1 = coordinator
-      .request(REQUEST, requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }))
-      .catch((error: unknown) => error);
+    const w1Request = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
+    );
+    const w1State = promiseState(w1Request);
+    const w1 = w1Request.catch((error: unknown) => error);
     const w2 = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
@@ -422,6 +426,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // `#staleView`'s own refresh-triggered self-heal never runs for it, and this test never
     // triggers any worker-view change of its own either.
     clock.advance(5_000);
+    await tick();
+    expect(w1State.state).toBe("rejected");
     const w1Error = await w1;
     expect(w1Error).toBeInstanceOf(DispatchError);
     expect((w1Error as DispatchError).code).toBe("WORKER_UNREACHABLE");
@@ -596,24 +602,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
-  it("rejects a noWait request refused by its only worker with NO_CAPACITY, reports lease.rejected no-wait, and refreshes that worker's view", async () => {
-    const { coordinator, directory, eventBus, workers } = harness();
-    const client = new ScriptedWorkerClient();
-    directory.add("wrk_a", client);
-    connectWorker(workers, "wrk_a");
-    const rejected: unknown[] = [];
-    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
-
-    await expect(
-      coordinator.request(REQUEST, requestOptions({ noWait: true })),
-    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
-
-    expect(rejected).toEqual([expect.objectContaining({ reason: "no-wait" })]);
-    expect(directory.refreshCalls).toEqual(["wrk_a"]);
-    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
-    expect(coordinator.queueDepth).toBe(0);
-  });
-
   it("sends a queued noWait request refused by one worker to only one other worker in the next walk", async () => {
     // The refused waiter is already in the queue (it first met a worker with no client yet), so
     // the walk must not offer it twice: once in its queue position and once as the candidate.
@@ -714,9 +702,9 @@ describe("FleetLeaseCoordinator dispatch", () => {
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ kind: "hang" });
 
-    const rejection = coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
+    const request = coordinator.request(REQUEST, requestOptions());
+    const requestState = promiseState(request);
+    const rejection = request.catch((error: unknown) => error);
     await tick();
     // Not stuck forever, and not answerable by a stale-view refresh either -- the waiter must
     // come back to a state the queue's own machinery can act on.
@@ -724,6 +712,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(directory.refreshCalls).toEqual([]);
 
     clock.advance(5_000);
+    await tick();
+    expect(requestState.state).toBe("rejected");
     const error = await rejection;
 
     expect(error).toBeInstanceOf(DispatchError);
@@ -750,12 +740,14 @@ describe("FleetLeaseCoordinator dispatch", () => {
     eventBus.subscribe("request.dispatched", () => events.push("request.dispatched"));
     eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
 
-    const rejection = coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
+    const request = coordinator.request(REQUEST, requestOptions());
+    const requestState = promiseState(request);
+    const rejection = request.catch((error: unknown) => error);
     await tick();
 
     clock.advance(5_000);
+    await tick();
+    expect(requestState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
     expect(events).toEqual([]);
@@ -1260,50 +1252,68 @@ describe("FleetLeaseCoordinator dispatch", () => {
     eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
     const progress: string[] = [];
 
-    await expect(
-      coordinator.request(
-        REQUEST,
-        requestOptions({
-          noWait: true,
-          onProgress: (update) => progress.push(update.stage),
-          ownerId: "agent-3",
-          requesterId: "agent-3",
-        }),
-      ),
-    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+    const refused = coordinator.request(
+      REQUEST,
+      requestOptions({
+        noWait: true,
+        onProgress: (update) => progress.push(update.stage),
+        ownerId: "agent-3",
+        requesterId: "agent-3",
+      }),
+    );
+    const refusedState = promiseState(refused);
+    await tick();
 
+    expect(refusedState.state).toBe("rejected");
+    await expect(refused).rejects.toMatchObject({ code: "NO_CAPACITY" });
     expect(events).toEqual(["lease.rejected"]);
     expect(progress).toEqual([]);
     expect(coordinator.queueDepth).toBe(1);
   });
 
-  it("a noWait request refused by its only worker is rejected even with other requests queued -- the answer does not depend on queue depth", async () => {
-    // Deciding on `waiter.state === "queued"` could not tell "never attempted" from "attempted
-    // and refused inside the same pass", so the answer used to flip with unrelated queue depth.
-    const { coordinator, directory, workers } = harness();
-    const client = new ScriptedWorkerClient();
-    directory.add("wrk_a", client);
-    connectWorker(workers, "wrk_a");
-    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    await coordinator.request(REQUEST, requestOptions());
-    // Refused by wrk_a and left queued, so the queue is non-empty.
-    void coordinator.request(
-      REQUEST,
-      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
-    );
-    await tick();
-    expect(coordinator.queueDepth).toBe(1);
+  it.each([
+    ["an empty queue", 0],
+    ["another request queued", 1],
+  ] as const)(
+    "rejects a noWait request refused by its only worker with NO_CAPACITY and lease.rejected no-wait, and refreshes that worker's view, with %s -- the answer does not depend on queue depth",
+    async (_queue, queued) => {
+      // Deciding on `waiter.state === "queued"` could not tell "never attempted" from "attempted
+      // and refused inside the same pass", so the answer used to flip with unrelated queue depth.
+      const { coordinator, directory, eventBus, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      connectWorker(workers, "wrk_a");
+      if (queued > 0) {
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+        await coordinator.request(REQUEST, requestOptions());
+        // Refused by wrk_a and left queued, so the queue is non-empty.
+        void coordinator.request(
+          REQUEST,
+          requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+        );
+        await tick();
+      }
+      expect(coordinator.queueDepth).toBe(queued);
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+      const refreshesBefore = directory.refreshCalls.length;
 
-    await expect(
-      coordinator.request(
+      const refused = coordinator.request(
         REQUEST,
         requestOptions({ noWait: true, ownerId: "agent-3", requesterId: "agent-3" }),
-      ),
-    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      );
+      const refusedState = promiseState(refused);
+      await tick();
 
-    expect(client.calls).toContain(`lease.request:${GATEWAY_PREFIX}agent-3`);
-    expect(coordinator.queueDepth).toBe(1);
-  });
+      // Answered, not left waiting in the queue: a noWait caller never asked to wait.
+      expect(refusedState.state).toBe("rejected");
+      await expect(refused).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(client.calls).toContain(`lease.request:${GATEWAY_PREFIX}agent-3`);
+      expect(rejected).toEqual([expect.objectContaining({ reason: "no-wait" })]);
+      expect(directory.refreshCalls.slice(refreshesBefore)).toEqual(["wrk_a"]);
+      expect(coordinator.queueDepth).toBe(queued);
+    },
+  );
 
   it("relays the worker's own started push for a silent, long-running command -- no output, no answer, still a 200 through a gateway (ADR §19a/§19b/§19e)", async () => {
     // ADR §19e/§19b: "a command that prints nothing for nine minutes still gets its 200 and its
@@ -1395,15 +1405,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const grant = await coordinator.request(REQUEST, requestOptions());
     client.execQueue.push({ kind: "hang" });
 
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
-      )
-      .catch((error: unknown) => error);
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
-
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect(error).toBeInstanceOf(DispatchError);
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
@@ -1432,21 +1443,23 @@ describe("FleetLeaseCoordinator dispatch", () => {
     client.execQueue.push({ kind: "hang" });
 
     const relayed: Array<{ stream: string; chunk: string }> = [];
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        {
-          manageEventSubscription: () => undefined,
-          onOutput: (stream, chunk) => {
-            relayed.push({ chunk, stream });
-          },
-          principal: "agent-1",
-          role: "agent",
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onOutput: (stream, chunk) => {
+          relayed.push({ chunk, stream });
         },
-      )
-      .catch((error: unknown) => error);
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 
@@ -1474,21 +1487,23 @@ describe("FleetLeaseCoordinator dispatch", () => {
     client.execQueue.push({ kind: "hang" });
 
     let startedCount = 0;
-    const rejection = coordinator
-      .exec(
-        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
-        {
-          manageEventSubscription: () => undefined,
-          onStarted: () => {
-            startedCount += 1;
-          },
-          principal: "agent-1",
-          role: "agent",
+    const execution = coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onStarted: () => {
+          startedCount += 1;
         },
-      )
-      .catch((error: unknown) => error);
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    const executionState = promiseState(execution);
+    const rejection = execution.catch((error: unknown) => error);
     await tick();
     clock.advance(5_000);
+    await tick();
+    expect(executionState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 

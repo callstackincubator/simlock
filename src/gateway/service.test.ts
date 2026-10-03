@@ -9,6 +9,7 @@ import {
   type UplinkAuthOutcome,
   type UplinkAuthResult,
 } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { GatewayService, REJECTION_COALESCE_WINDOW_MS } from "./service.js";
 import {
@@ -911,11 +912,14 @@ describe("GatewayService", () => {
     worker.hangUnsubscribe = true;
 
     const stopped = harness.service.stop();
+    const stoppedState = promiseState(stopped);
     // `stop()` is now blocked inside `link.close()`, awaiting the bounded wrapper around the
     // hung unsubscribe -- wait for that timer to actually be armed before advancing past it.
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
     harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
 
+    // Settled by the timer, not merely eventually: a broken bound fails here, by name.
+    await vi.waitFor(() => expect(stoppedState.state).toBe("fulfilled"));
     await expect(stopped).resolves.toBeUndefined();
     expect(worker.closed).toBe(true);
   });

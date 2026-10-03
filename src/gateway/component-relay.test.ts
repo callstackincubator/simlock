@@ -5,6 +5,7 @@ import { SimlockError } from "../admin/index.js";
 import { EventBus } from "../bus/index.js";
 import { WORKER_RESULT_MESSAGE_MAX_LENGTH, type ComponentProgress } from "../contract/index.js";
 import { FakeClock, MemoryUplinkTransport } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import {
   INSTALL_BACKSTOP_MARGIN_MS,
   relayComponentInstall,
@@ -366,10 +367,12 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
     const relay = harness.install("all", {
       onProgress: (update, workerId) => progress.push({ ...update, workerId }),
     });
+    const relayState = promiseState(relay);
     await vi.waitFor(() => expect(installCalls(silent)).toHaveLength(1));
     harness.clock.advance(5_000 + INSTALL_BACKSTOP_MARGIN_MS - 1);
     answer.progress({ stage: "waiting" });
     harness.clock.advance(1);
+    await vi.waitFor(() => expect(relayState.state).toBe("fulfilled"));
     const { results } = await relay;
     answer.progress({ stage: "downloading" });
     answer.resolve(installed());

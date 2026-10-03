@@ -54,24 +54,23 @@ describe("LeaseExpiryScheduler", () => {
     expect(expired).toEqual(["z", "a", "b", "later"]);
   });
 
-  it("disposes all timers and never uses the event bus as an expiry command path", () => {
+  it("cancels every armed timer on dispose, and expires nothing afterwards", async () => {
     const clock = new FakeClock();
-    const scheduler = new LeaseExpiryScheduler(clock, () => undefined);
-    scheduler.arm(lease("one", 10));
-    scheduler.dispose();
-    clock.advance(10);
-    expect(clock.pendingTimerCount).toBe(0);
-  });
-
-  it("contains asynchronous timer-delivery failures", async () => {
-    const clock = new FakeClock(100);
-    const scheduler = new LeaseExpiryScheduler(clock, async () => {
-      throw new Error("delivery failed");
+    const expired: string[] = [];
+    const scheduler = new LeaseExpiryScheduler(clock, async (leaseId) => {
+      expired.push(leaseId);
     });
+    scheduler.arm(lease("one", 10));
+    scheduler.arm(lease("two", 20));
 
-    scheduler.arm(lease("one", 110));
-    expect(() => clock.advance(10)).not.toThrow();
+    scheduler.dispose();
+
+    // Cancelled, not merely left to fire into a no-op: a live timer keeps the daemon's event loop
+    // open for the rest of the lease's TTL.
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(20);
     await Promise.resolve();
+    expect(expired).toEqual([]);
   });
 
   it("A lease expiry that throws logs at error with the lease id.", async () => {

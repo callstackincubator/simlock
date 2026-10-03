@@ -30,10 +30,13 @@ describe("SimlockError", () => {
     }
   });
 
-  it("maps every known code to its table entry's kind", () => {
-    const error = fromWireError("NO_CAPACITY", "no capacity");
-    expect(error.kind).toBe("domain");
-  });
+  it.each(Object.values(ERROR_TABLE).map((entry) => [entry.code, entry.kind] as const))(
+    "maps known code %s to its table entry's kind, %s",
+    (code, kind) => {
+      const error = fromWireError(code, "from the wire");
+      expect({ code: error.code, kind: error.kind }).toEqual({ code, kind });
+    },
+  );
 
   it("isSimlockError rejects a plain Error", () => {
     expect(isSimlockError(new Error("boom"))).toBe(false);
