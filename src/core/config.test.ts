@@ -50,7 +50,6 @@ const gibibyte = 1024 ** 3;
 function createStats(): FakeSystemStats {
   return new FakeSystemStats({
     cpuCount: 8,
-    freeRamBytes: 16 * gibibyte,
     totalRamBytes: 32 * gibibyte,
   });
 }

@@ -13,7 +13,6 @@ const gibibyte = 1024 ** 3;
 function build(name: CapacityStrategyName): CapacityStrategy {
   const systemStats = new FakeSystemStats({
     cpuCount: 8,
-    freeRamBytes: 32 * gibibyte,
     totalRamBytes: 32 * gibibyte,
   });
   const definition = capacityStrategies[name];

@@ -10,7 +10,7 @@ function strategy(options: FixedStrategyOptions) {
   return fixedStrategy.create(
     options,
     // Passed for interface parity only: nothing in this strategy reads it.
-    new FakeSystemStats({ cpuCount: 1, freeRamBytes: gibibyte, totalRamBytes: gibibyte }),
+    new FakeSystemStats({ cpuCount: 1, totalRamBytes: gibibyte }),
   );
 }
 
@@ -70,7 +70,7 @@ describe("fixed strategy", () => {
   it("never refuses on RAM, however little the machine has", () => {
     const fixed = fixedStrategy.create(
       { maxRunning: 8 },
-      new FakeSystemStats({ cpuCount: 1, freeRamBytes: 0, totalRamBytes: 0 }),
+      new FakeSystemStats({ cpuCount: 1, totalRamBytes: 0 }),
     );
 
     expect(fixed.canProvision({ mode: "full", platform: "android" }, ready("android", 7))).toEqual({
@@ -112,9 +112,7 @@ describe("fixed strategy", () => {
 
   it("defaults to a machine-independent pin", () => {
     expect(
-      fixedStrategy.defaults(
-        new FakeSystemStats({ cpuCount: 64, freeRamBytes: 0, totalRamBytes: 512 * gibibyte }),
-      ),
+      fixedStrategy.defaults(new FakeSystemStats({ cpuCount: 64, totalRamBytes: 512 * gibibyte })),
     ).toEqual({ maxRunning: 2 });
   });
 });

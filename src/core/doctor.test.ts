@@ -432,7 +432,7 @@ describe("Doctor", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
-      systemStats: new FakeSystemStats({ cpuCount: 8, freeRamBytes: 32, totalRamBytes: 32 }),
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 }),
     });
 
     await new Doctor({

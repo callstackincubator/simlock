@@ -87,10 +87,7 @@ function planner(
 ) {
   const claims = new DeviceOperationClaims();
   const capacity = new CapacityCoordinator(
-    createCapacityStrategy(
-      capacityConfig,
-      new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
-    ),
+    createCapacityStrategy(capacityConfig, new FakeSystemStats({ cpuCount: 8, totalRamBytes })),
   );
   return { claims, planner: new AcquisitionPlanner(capacity, claims) };
 }

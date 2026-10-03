@@ -1161,7 +1161,6 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       clock: new FakeClock(0),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
       ipc: ipcTransport,
@@ -1198,7 +1197,6 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       clock: new FakeClock(0),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
       ipc: ipcTransport,
@@ -4711,7 +4709,6 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     registry,
     systemStats: new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     }),
   });
@@ -4776,7 +4773,6 @@ function realCliEnvironmentPorts(
     clock: new FakeClock(0),
     systemStats: new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     }),
     ipc: new MemoryIpcTransport(),
@@ -4826,7 +4822,6 @@ async function startInMemoryDaemon(options: {
     registry,
     systemStats: new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     }),
   });

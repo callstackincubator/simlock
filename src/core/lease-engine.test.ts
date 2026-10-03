@@ -161,7 +161,7 @@ async function createHarness(
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
-    systemStats: new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
+    systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
   return { bus, clock, driver, engine, filesystem, registry };
@@ -1637,7 +1637,6 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     const systemStats = () =>
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       });
     // The physical device survives a daemon restart even though the daemon's
@@ -1897,7 +1896,6 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const systemStats = new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     });
     const beforeRegistry = await Registry.load({
@@ -2047,7 +2045,6 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       registry,
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     });

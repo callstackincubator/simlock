@@ -63,7 +63,6 @@ describe("Nuke", () => {
       registry,
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * 1024 ** 3,
         totalRamBytes: 32 * 1024 ** 3,
       }),
     });
@@ -110,7 +109,6 @@ describe("Nuke", () => {
       registry,
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * 1024 ** 3,
         totalRamBytes: 32 * 1024 ** 3,
       }),
     });
