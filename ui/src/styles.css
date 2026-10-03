@@ -1,0 +1,361 @@
+/*
+ * The console's design tokens and base styles. docs/internal/DESIGN.md is the guide these
+ * follow; change both together.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  --radius: 0;
+  --focus-width: 2px;
+  --duration: 120ms;
+
+  /* Light theme. */
+  --bg: #ffffff;
+  --surface: #f5f5f4;
+  --border: #d9d9d6;
+  --text: #0e0e0f;
+  --text-muted: #55555a;
+  --accent: #c2410c;
+  --accent-hover: #9a3412;
+  --on-accent: #ffffff;
+  --selection: #fed7aa;
+
+  --status-ok: #15803d;
+  --status-warn: #a16207;
+  --status-error: #b91c1c;
+  --status-idle: #57534e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e0e0f;
+    --surface: #18181b;
+    --border: #2e2e33;
+    --text: #f2f2f0;
+    --text-muted: #a1a1a8;
+    --accent: #ff7a1a;
+    --accent-hover: #ff9442;
+    --on-accent: #0e0e0f;
+    --selection: #7c2d12;
+
+    --status-ok: #4ade80;
+    --status-warn: #facc15;
+    --status-error: #f87171;
+    --status-idle: #a8a29e;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--text);
+}
+
+h1 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* Buttons. Orange marks interaction; a quiet button is the same control without the fill. */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration),
+    border-color var(--duration);
+}
+
+.button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.button:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.button-quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.button-quiet:hover {
+  background: var(--surface);
+  border-color: var(--text-muted);
+}
+
+/* The brand mark: a square of the accent, the one decoration the console has. */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-weight: 600;
+  font-size: var(--text-lg);
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-2);
+  top: -100px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: var(--space-2);
+}
+
+/* Sign-in. */
+
+.sign-in {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.sign-in-panel {
+  width: 100%;
+  max-width: 400px;
+  padding: var(--space-8) var(--space-6);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sign-in-panel .brand {
+  margin-bottom: var(--space-6);
+}
+
+.sign-in form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+input {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--status-error);
+}
+
+.hint {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.refusal {
+  margin: 0 0 var(--space-2);
+  color: var(--status-error);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/* The shell: header and nav on top on a phone, nav beside the view from 768px. */
+
+.shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "nav"
+    "main";
+  min-height: 100vh;
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav {
+  grid-area: nav;
+  border-bottom: 1px solid var(--border);
+}
+
+.nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0 var(--space-2);
+  list-style: none;
+}
+
+.nav a {
+  display: block;
+  padding: var(--space-3) var(--space-2);
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.nav a:hover {
+  color: var(--text);
+}
+
+.nav a[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.main {
+  grid-area: main;
+  min-width: 0;
+  padding: var(--space-6) var(--space-4);
+}
+
+.main:focus {
+  outline: none;
+}
+
+@media (min-width: 768px) {
+  .shell {
+    grid-template-columns: 200px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "topbar topbar"
+      "nav main";
+  }
+
+  .nav {
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+
+  .nav ul {
+    flex-direction: column;
+    padding: var(--space-4) 0;
+  }
+
+  .nav a {
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 0;
+    border-left: 2px solid transparent;
+  }
+
+  .nav a[aria-current="page"] {
+    border-left-color: var(--accent);
+  }
+
+  .main {
+    padding: var(--space-8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration: 0ms;
+  }
+}

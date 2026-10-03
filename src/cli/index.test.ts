@@ -2772,6 +2772,44 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
   });
 
+  it("simlock status prints the console address when HTTP is enabled", async () => {
+    const print = async (status: StatusGetOutput) => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
+
+    expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
+      "Daemon: running (worker)\nConsole: http://127.0.0.1:4700/\nHost: ",
+    );
+    expect(await print(EMPTY_STATUS)).not.toContain("Console:");
+  });
+
+  it("simlock daemon start prints the console address when HTTP is enabled", async () => {
+    const start = async (status: StatusGetOutput) => {
+      const output = outputCapture();
+      await runCli(
+        ["daemon", "start"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
+
+    expect(await start({ ...EMPTY_STATUS, daemon })).toBe(
+      "Daemon running\nConsole: http://127.0.0.1:4700/\n",
+    );
+    expect(await start(EMPTY_STATUS)).toBe("Daemon running\n");
+  });
+
   it("prints an install line while one runs and none after", async () => {
     const install = {
       component: "26.4",

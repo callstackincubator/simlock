@@ -43,7 +43,7 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   kind, not just transport: it is the one frontend meant to be reached over a
   real network, so it calls the daemon's dispatcher **in-process** — the exact
   same one the socket path calls — rather than going through the unix socket at
-  all, and requires a bearer token on every route but `GET /v1/healthz`. It
+  all, and requires a bearer token on every `/v1` route but `GET /v1/healthz`. It
   grants exactly the same TTL-renewed lease every other frontend does (ADR
   0004) — being reachable over a real network is no longer a reason for a
   different lease model, because there is only one. Its listener now starts
@@ -55,6 +55,16 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   before convergence completes now waits on the shared dispatcher's readiness
   gate exactly like a socket request, instead of being refused. See
   [HTTP-API.md](../HTTP-API.md) for the full route reference.
+- **Web console** (ADR 0011): a React app in `ui/`, built by Vite into
+  `dist/ui` and served by the same HTTP listener at every path outside `/v1`.
+  `src/http/server.ts` puts it in front of `app.fetch`, so `app.ts` stays a
+  pure request-to-response function and the console never touches the API's
+  auth or request log. The console is a client of the HTTP API like any other:
+  it reads only `/v1`, with the operator's token, through one fetch helper
+  (`ui/src/api.ts`). Its views are listed once, in `ui/src/views/index.tsx`,
+  which is both the navigation and the router's table. See
+  [CONSOLE.md](../CONSOLE.md) for the user's side and
+  [DESIGN.md](DESIGN.md) for the style.
 - **CLI**: by default it acquires a lease, prints one JSON result line on
   stdout, then stays alive — renewing the lease at one third of the lease's TTL
   and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is the

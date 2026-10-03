@@ -6,7 +6,8 @@ uses instead of the CLI/MCP frontends' unix socket. It is off by default
 enabled, binds `127.0.0.1` unless configured otherwise. Reaching it from
 another machine is the operator's own tunnel (Tailscale, cloudflared, a
 reverse proxy) — Simlock does no TLS termination in v1, and `Authorization`
-is required on every route regardless of how it's reached, loopback included.
+is required on every API route regardless of how it's reached, loopback
+included (see [Authentication](#authentication) for the two exceptions).
 
 This frontend calls the exact same in-process `Dispatcher` the unix socket
 calls — not a second copy of role/ownership logic, and not a
@@ -43,8 +44,11 @@ terminal state. No route blocks on device work in flight.
 
 ## Authentication
 
-Every route requires `Authorization: Bearer slk_<secret>` except `GET
-/v1/healthz`. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
+Every route requires `Authorization: Bearer slk_<secret>` except two: `GET
+/v1/healthz`, and the web console's own files, which the daemon serves at
+every path outside `/v1` (see [CONSOLE.md](CONSOLE.md)). They hold no data;
+the console reads everything it shows from the routes below, with the
+operator's token. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
 
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
@@ -139,8 +143,15 @@ The daemon block carries `health` (`starting`/`running`) and **`mode`**
 daemon answered:
 
 ```json
-{ "daemon": { "health": "running", "mode": "worker" } }
+{ "daemon": { "health": "running", "mode": "worker", "consoleUrl": "http://127.0.0.1:4700/" } }
 ```
+
+**`consoleUrl`** is the web console's address (see [CONSOLE.md](CONSOLE.md)):
+`http://<http.host>:<http.port>/`, with `localhost` for a host of `0.0.0.0` or
+`::` and an IPv6 host in brackets. It is present whenever HTTP is on, so an
+HTTP answer carries it; over the unix socket it is absent while HTTP is off.
+It is also left out if the address would be longer than 512 characters, which
+no real host name is. An older daemon sends none.
 
 Beside it, **`host`** says what machine the daemon runs on: the operating
 system, its version, the CPU architecture, and the version of each platform
@@ -203,7 +214,7 @@ on, and an additive **`workers`** array carries one
 [worker view](#worker-routes) per worker:
 
 ```json
-{ "daemon": { "health": "running", "mode": "gateway" },
+{ "daemon": { "health": "running", "mode": "gateway", "consoleUrl": "http://127.0.0.1:4700/" },
   "host": { "os": "Linux", "osVersion": "6.8.0", "arch": "x64", "tools": [] },
   "workers": [ { "id": "3f81a2c4", "label": "mac-studio-2", "connection": "connected", "drained": false } ] }
 ```

@@ -212,6 +212,7 @@ lease-loss notifications are documented in
 - [docs/CLIENT.md](docs/CLIENT.md) — the programmatic client (`simlock/client`, `simlock/admin`)
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every config key, its default, and how limits interact
 - [docs/HTTP-API.md](docs/HTTP-API.md) — the network-facing HTTP API
+- [docs/CONSOLE.md](docs/CONSOLE.md) — the web console the daemon serves for operators
 - [docs/EVENTS.md](docs/EVENTS.md) — catalog of business events on `simlock events`
 
 ## Made with ❤️ at Callstack

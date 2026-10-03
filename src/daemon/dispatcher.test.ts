@@ -127,6 +127,11 @@ function withGatewayLabel(config: Config, label: string | undefined): Config {
   return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
 }
 
+/** `config` with its `http` block replaced, or unchanged when there is none. */
+function withHttp(config: Config, http: Config["http"] | undefined): Config {
+  return http === undefined ? config : { ...config, http };
+}
+
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
@@ -178,6 +183,8 @@ async function buildDispatcher(
     >;
     /** `gateway.label` in this daemon's config; unset by default. */
     readonly gatewayLabel?: string;
+    /** The `http` block; disabled by default. */
+    readonly http?: Config["http"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -197,14 +204,17 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = withGatewayLabel(
-    testConfig(
-      overrides.downloadsPolicy,
-      overrides.lease ?? {},
-      overrides.exec ?? {},
-      overrides.capacity,
+  const config = withHttp(
+    withGatewayLabel(
+      testConfig(
+        overrides.downloadsPolicy,
+        overrides.lease ?? {},
+        overrides.exec ?? {},
+        overrides.capacity,
+      ),
+      overrides.gatewayLabel,
     ),
-    overrides.gatewayLabel,
+    overrides.http,
   );
   const wiring = testComponentWiring({
     clock: clock,
@@ -1885,6 +1895,28 @@ describe("Dispatcher: component.list", () => {
     await expect(
       dispatcher.dispatch("component.list", { platform: "android" }, session()),
     ).resolves.toEqual({ components: [] });
+  });
+});
+
+describe("Dispatcher: status.get console address", () => {
+  it("status.get carries consoleUrl when HTTP is enabled and omits it when disabled", async () => {
+    const enabled = await buildDispatcher({
+      http: { enabled: true, host: "127.0.0.1", port: 4711 },
+    });
+    const disabled = await buildDispatcher({
+      http: { enabled: false, host: "127.0.0.1", port: 4711 },
+    });
+
+    const on = await enabled.dispatcher.dispatch("status.get", {}, session());
+    const off = await disabled.dispatcher.dispatch("status.get", {}, session());
+
+    expect(on.daemon).toEqual({
+      consoleUrl: "http://127.0.0.1:4711/",
+      health: "running",
+      mode: "worker",
+    });
+    expect(off.daemon).toEqual({ health: "running", mode: "worker" });
+    expect("consoleUrl" in off.daemon).toBe(false);
   });
 });
 
