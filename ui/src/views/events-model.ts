@@ -148,7 +148,7 @@ export function eventsStats(
   const newest = shown[0];
   return [
     {
-      caption: unfiltered ? "in the last hour" : `of ${held} in the last hour`,
+      caption: unfiltered ? "in the list" : `of ${held} in the list`,
       label: "Events shown",
       value: String(shown.length),
     },

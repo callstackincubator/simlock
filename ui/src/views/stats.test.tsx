@@ -77,7 +77,7 @@ function waitingRequest(id: string, createdAt: number): WaitingRequest {
 }
 
 describe("the stat cards", () => {
-  it("each view shows its stat cards with the numbers its data gives", () => {
+  it("each view's stat cards count what its data gives, as label, number and caption", () => {
     const fleet = [
       worker("wrk_a", {
         capacity: capacity(2),
@@ -150,15 +150,15 @@ describe("the stat cards", () => {
       timestamp: NOW - 9_000,
     };
     expect(cards(eventsStats([newest, older], 2, true))).toEqual([
-      "Events shown | 2 | in the last hour",
+      "Events shown | 2 | in the list",
       `Newest | ${timeOfDay(newest.timestamp)} | lease.granted`,
     ]);
     expect(cards(eventsStats([older], 2, false))).toEqual([
-      "Events shown | 1 | of 2 in the last hour",
+      "Events shown | 1 | of 2 in the list",
       `Newest | ${timeOfDay(older.timestamp)} | device.ready`,
     ]);
     expect(cards(eventsStats([], 0, true))).toEqual([
-      "Events shown | 0 | in the last hour",
+      "Events shown | 0 | in the list",
       "Newest | — | no event to show",
     ]);
   });

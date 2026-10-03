@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConsoleEvent } from "./events-model";
-import { eventsPerMinute, HISTORY_MINUTES, leaseHistory, minuteLabel } from "./history-model";
+import {
+  eventsPerMinute,
+  extremes,
+  HISTORY_MINUTES,
+  leaseHistory,
+  minuteLabel,
+} from "./history-model";
 
 const MINUTE = 60_000;
 /** 12:00:30 on the daemon's clock: half a minute into the current minute. */
@@ -58,7 +64,7 @@ describe("the lease history", () => {
     expect(counts.get(59)).toBe(2);
   });
 
-  it("the lease history never counts below zero when the events say more ended than were held", () => {
+  it("the lease history never counts below zero when the events granted more leases than are held now", () => {
     const events = [event("lease.granted", NOW - 10_000), event("lease.granted", NOW - 20_000)];
 
     const counts = byMinutesAgo(leaseHistory(1, events, NOW));
@@ -92,5 +98,25 @@ describe("events per minute", () => {
     expect(counts.get(2)).toBe(1);
     expect(counts.get(59)).toBe(1);
     expect(minutes.reduce((sum, minute) => sum + minute.count, 0)).toBe(7);
+  });
+});
+
+describe("the highest and lowest minute", () => {
+  it("names the latest minute each of the highest and the lowest count was reached", () => {
+    const minute = (at: number, count: number) => ({ at, count, label: String(at) });
+    const minutes = [
+      minute(1, 2),
+      minute(2, 0),
+      minute(3, 5),
+      minute(4, 0),
+      minute(5, 5),
+      minute(6, 1),
+    ];
+
+    const found = extremes(minutes);
+
+    expect(found?.highest).toEqual(minute(5, 5));
+    expect(found?.lowest).toEqual(minute(4, 0));
+    expect(extremes([])).toBeUndefined();
   });
 });

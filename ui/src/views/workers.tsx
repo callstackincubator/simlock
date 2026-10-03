@@ -62,16 +62,30 @@ export function WorkersView() {
 function LeaseHistory({ workers }: { readonly workers: readonly WorkerView[] }) {
   const events = useRecentEvents();
   const now = useNow();
-  const minutes = leaseHistory(leasesHeld(workers), events.data ?? [], now.server);
   return (
     <Panel
       className="panel-wide"
       title="Leases, last hour"
       description="How many leases were held at the end of each minute, counted back from now through the lease events."
     >
-      <MinuteChart kind="area" title="Leases, last hour" unit="leases held" minutes={minutes} />
-      <LeaseSummary minutes={minutes} />
-      <MinuteTable minutes={minutes} heading="Leases held" />
+      {/* No history until the events have loaded: a flat line would be a guess. */}
+      <Loaded state={events}>
+        {(held) => {
+          const minutes = leaseHistory(leasesHeld(workers), held, now.server);
+          return (
+            <>
+              <MinuteChart
+                kind="area"
+                title="Leases, last hour"
+                unit="leases held"
+                minutes={minutes}
+              />
+              <LeaseSummary minutes={minutes} />
+              <MinuteTable minutes={minutes} heading="Leases held" />
+            </>
+          );
+        }}
+      </Loaded>
     </Panel>
   );
 }

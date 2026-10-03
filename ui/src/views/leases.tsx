@@ -20,6 +20,7 @@ import {
   type TokenList,
   type TokenRecord,
   workerNameOfLease,
+  workerOfLease,
 } from "./leases-model";
 import type { WorkerList, WorkerView } from "./workers-model";
 
@@ -164,7 +165,9 @@ export function LeaseTable(props: {
                 </span>
               </td>
               {showWorker ? (
-                <td data-label="Worker">{workerNameOfLease(lease, workers) ?? "—"}</td>
+                <td data-label="Worker">
+                  <LeaseWorker lease={lease} workers={workers} />
+                </td>
               ) : null}
               <td data-label="Device">
                 <span>
@@ -193,6 +196,17 @@ export function LeaseTable(props: {
       </tbody>
     </table>
   );
+}
+
+/** The worker a lease is on, by its label, or by its id on one line when it has none. */
+function LeaseWorker(props: {
+  readonly lease: LeaseRecord;
+  readonly workers: readonly WorkerView[];
+}) {
+  const worker = workerOfLease(props.lease, props.workers);
+  if (worker?.label !== undefined) return worker.label;
+  const id = worker?.id ?? props.lease.workerId;
+  return id === undefined ? "—" : <Id>{id}</Id>;
 }
 
 /** How long ago `at` was, with the moment itself for a tooltip and a machine. */

@@ -471,11 +471,10 @@ input[aria-invalid="true"] {
 
 /* Panels: a card with a header (a title, a description, actions) over its body. */
 
-/* A table wider than its panel scrolls inside the panel; the page never scrolls sideways. */
+/* Positioned, so what a table hides off-screen on a phone stays inside the panel. */
 .panel {
   position: relative;
   min-width: 0;
-  overflow-x: auto;
   border: 1px solid var(--border);
   background: var(--surface);
 }
@@ -649,8 +648,11 @@ input[aria-invalid="true"] {
 
 /* The attention list: one line per item, its status first. */
 
-.attention-list {
+.panel-body > .attention-list {
   margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-6));
+}
+
+.attention-list {
   padding: 0;
   list-style: none;
 }
@@ -881,10 +883,13 @@ input[aria-invalid="true"] {
 /* Tables: a row per item, in a panel. Headers are labels, rows are roomy, numbers sit right.
  * Under 768px each row stacks into labelled lines, so the page never scrolls sideways. */
 
+/* Fixed layout: the columns share the panel's width and a long cell wraps or is cut, so a table
+ * never grows wider than its panel. */
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-sm);
+  table-layout: fixed;
 }
 
 .table th,
@@ -914,12 +919,7 @@ input[aria-invalid="true"] {
   overflow-wrap: break-word;
 }
 
-.table .id {
-  max-width: 12rem;
-}
-
 .table th {
-  white-space: nowrap;
   padding-top: var(--space-3);
   padding-bottom: var(--space-3);
   color: var(--text-muted);
@@ -930,7 +930,10 @@ input[aria-invalid="true"] {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
-  white-space: nowrap;
+}
+
+.table th.num {
+  width: 9.5rem;
 }
 
 @media (max-width: 767.98px) {
@@ -979,7 +982,10 @@ input[aria-invalid="true"] {
 
   .table .num {
     text-align: left;
-    white-space: normal;
+  }
+
+  .table th.num {
+    width: auto;
   }
 
   .table td::before {

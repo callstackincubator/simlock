@@ -159,8 +159,9 @@ scale; never a value between.
 - Phone first. Every page works at 360px wide with no sideways scrolling of the
   page. Below 640px the tab bar scrolls sideways inside itself. Under 768px a
   table's rows stack into blocks, each cell a line with its column's name
-  beside it (`data-label`). A table wider than its panel on a desktop scrolls
-  inside the panel.
+  beside it (`data-label`). From 768px a table has a fixed layout: a column
+  of numbers is 9.5rem wide, the others share the rest, and a long cell wraps
+  or, for an id, is cut, so a table is never wider than its panel.
 - Stat cards fill the row, each at least 200px wide, and wrap.
 - From 768px a chart and the panel beside it share a row, two thirds and one
   third; two panels of the same weight share it half and half.

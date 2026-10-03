@@ -59,7 +59,7 @@ export function holderOf(requesterId: string, tokens: readonly TokenRecord[]): H
  * The worker a lease lives on. A gateway names it on every lease it lists; a single host names
  * none, and every lease there is on its one worker, the host itself.
  */
-function workerOfLease(
+export function workerOfLease(
   lease: { readonly workerId?: string | undefined },
   workers: readonly WorkerView[],
 ): WorkerView | undefined {

@@ -221,6 +221,104 @@ test.describe("every view", () => {
     }
   });
 
+  test("each view shows its stat cards with the numbers its data gives", async ({ page }) => {
+    const { host } = await hostWithLease();
+    try {
+      /** The view's stat cards as `label | number | caption`, as the page holds the text. */
+      const cards = () =>
+        page
+          .locator(".stat")
+          .evaluateAll((items) =>
+            items.map((item) =>
+              [...item.querySelectorAll("p")].map((part) => part.textContent).join(" | "),
+            ),
+          );
+      const read = async (path: string) => {
+        const response = await fetch(new URL(path, host.url), {
+          headers: { Authorization: `Bearer ${host.tokens.operator}` },
+        });
+        return (await response.json()) as never;
+      };
+      const { workers } = (await read("/v1/workers")) as {
+        workers: {
+          connection: string;
+          devices: unknown[];
+          leases: unknown[];
+          capacity?: { global: { running: number } };
+          waiting?: unknown[];
+        }[];
+      };
+      const [host1] = workers;
+      await openSignedIn(page, host);
+
+      await visit(page, host, "/workers");
+      await expect
+        .poll(cards)
+        .toEqual([
+          "Workers | 1 | connected of 1",
+          `Devices | ${host1?.capacity?.global.running ?? 0} | running of ${host1?.devices.length ?? 0}`,
+          "Leases | 1 | held now",
+          `Waiting | ${host1?.waiting?.length ?? 0} | requests in the workers' queues`,
+        ]);
+
+      const { leases } = (await read("/v1/leases")) as {
+        leases: { requesterId: string; ttlDeadline: number }[];
+      };
+      const expiring = leases.filter((lease) => lease.ttlDeadline - Date.now() <= 15 * 60_000);
+      await visit(page, host, "/leases");
+      await expect
+        .poll(cards)
+        .toEqual([
+          "Leases | 1 | held now",
+          "Holders | 1 | holding at least one lease",
+          `Expiring soon | ${expiring.length} | expire within 15 minutes unless renewed`,
+        ]);
+
+      await visit(page, host, "/waiting");
+      await expect
+        .poll(cards)
+        .toEqual([
+          "Requests waiting | 0 | for a device",
+          "Longest wait | — | no request is waiting",
+        ]);
+
+      await visit(page, host, "/attention");
+      await expect
+        .poll(cards)
+        .toEqual([
+          "Items | 0 | need attention now",
+          "Workers affected | 0 | with at least one item",
+          "Devices affected | 0 | quarantined or stalled",
+        ]);
+
+      // Events: as many as the list shows, and the newest one's time and name.
+      await visit(page, host, "/events");
+      const rows = page.locator("#main li.event");
+      await expect(rows.first()).toBeVisible();
+      const shown = await rows.count();
+      const time = await rows.first().locator("time").textContent();
+      const name = await rows.first().locator(".event-name").textContent();
+      await expect
+        .poll(cards)
+        .toEqual([`Events shown | ${shown} | in the list`, `Newest | ${time} | ${name}`]);
+      // The chart counts every event the list holds, each in its minute.
+      await expect(page.locator(".chart-summary")).toHaveText(
+        new RegExp(
+          `^${shown} events in the last hour; the busiest minute was \\d\\d:\\d\\d, with \\d+\\.$`,
+        ),
+      );
+      // A filter narrows the count to what the list shows.
+      await page.getByRole("radio", { name: "Leases" }).check();
+      const leasesShown = await rows.count();
+      expect(leasesShown).toBeLessThan(shown);
+      await expect
+        .poll(cards)
+        .toContainEqual(`Events shown | ${leasesShown} | of ${shown} in the list`);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   test("a long lease id stays on one line and its full id is in its title", async ({ page }) => {
     const { host, pages } = await hostWithLease();
     try {
@@ -264,7 +362,10 @@ test.describe("every view", () => {
         timeout: 10_000,
       });
 
-      await expect(summary).toHaveText(/^Now 1; highest 1 at/, { timeout: 1_000 });
+      // Now is the lease; the minute before, walked back through its lease.granted, had none.
+      await expect(summary).toHaveText(/^Now 1; highest 1 at \d\d:\d\d; lowest 0 at /, {
+        timeout: 1_000,
+      });
       await expect(area).not.toHaveAttribute("d", before ?? "", { timeout: 1_000 });
     } finally {
       await host.dispose();

@@ -15,8 +15,6 @@ export default defineConfig({
     assetsInlineLimit: 0,
     // Nothing to polyfill in the browsers the console supports, and nothing inline either.
     modulePreload: { polyfill: false },
-    // One bundle, charts included, loaded from the daemon itself: its size matters little.
-    chunkSizeWarningLimit: 1_000,
   },
   server: {
     // Development only: a local daemon with `http.enabled` answers `/v1` on its default port.

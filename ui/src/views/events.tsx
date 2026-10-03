@@ -11,6 +11,7 @@ import { EventFeed } from "./event-feed";
 import {
   type ConsoleEvent,
   eventsStats,
+  MAX_EVENTS,
   payloadPairs,
   type Subject,
   subjectOf,
@@ -67,7 +68,7 @@ export function EventsView() {
               <EventsPerMinute minutes={eventsPerMinute(events, now.server)} />
               <Panel
                 title="Recent events"
-                description="The newest 1000 events of the last hour, each with its payload."
+                description={`Newest first, each with its payload. The newest ${MAX_EVENTS} are kept.`}
               >
                 <fieldset className="filter">
                   <legend>Show</legend>

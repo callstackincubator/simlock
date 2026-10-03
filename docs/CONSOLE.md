@@ -12,6 +12,11 @@ This version has sign-in and a page for each tab along the top of the
 console: Workers, Leases, Waiting, Attention and Events. On a narrow screen
 the row of tabs scrolls sideways.
 
+Each page starts with a row of cards that count what the page shows, such as
+the leases held and how many expire within 15 minutes. A long id, such as a
+lease's, is cut to fit its column; point at it to see it whole, or open its
+page.
+
 ## Turn it on
 
 The console comes with the HTTP API. It is on whenever `http.enabled` is
@@ -107,6 +112,13 @@ Each worker shows:
 
 A worker the gateway could not read from yet says "Not reported" where it
 has nothing to show.
+
+Above the workers, **Leases, last hour** charts how many leases were held at
+the end of each minute. It starts from the leases held now and counts back
+through the lease events of the last hour, the same events the Events page
+shows, so it can only go back as far as those. **Minute by minute** under the
+chart lists each minute's number. **Busiest workers** ranks the workers by
+the leases each holds now.
 
 Select a worker to open its page. It adds:
 
@@ -244,6 +256,10 @@ devices, workers or components. **Other** lists the rest, such as
 `daemon.started`.
 
 The page keeps the newest 1000 events. Older ones drop off the end.
+
+**Events per minute** charts how many of the events the page holds happened in
+each minute of the last hour, whatever **Show** picks. **Minute by minute**
+under it lists each minute's number.
 
 When the console loses the daemon, or the tab was hidden, it loads the events
 it missed as soon as it is back, so the list has no gap. An event the console
