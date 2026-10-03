@@ -1,0 +1,75 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm *)",
+      "Bash(node *)",
+      "Bash(jq *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git switch *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git merge-base *)",
+      "Bash(git rev-parse *)",
+      "Bash(git worktree *)",
+      "Bash(git push origin *)",
+      "Bash(git push -u origin *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue create *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr ready *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh label list *)",
+      "Bash(gh stack *)",
+      "Bash(.agents/scripts/worktree.sh *)",
+      "Bash(scripts/slow-e2e.sh*)"
+    ],
+    "ask": ["Bash(pnpm run test:e2e:slow*)", "Bash(pnpm test:e2e:slow*)"],
+    "deny": [
+      "Bash(git commit --no-verify*)",
+      "Bash(git commit -n*)",
+      "Bash(git commit * --no-verify*)",
+      "Bash(git commit * -n *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git branch -D *)",
+      "Bash(gh pr merge*)",
+      "Bash(gh release *)",
+      "Bash(gh repo delete *)",
+      "Bash(npm publish*)",
+      "Bash(pnpm publish*)",
+      "Bash(pnpm release*)",
+      "Bash(pnpm run release*)"
+    ]
+  },
+  "hooks": {
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.agents/scripts/worktree.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
