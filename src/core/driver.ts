@@ -794,10 +794,10 @@ export class LicenseNotAcceptedError extends Error {
  * disk at the instant it runs: two installs racing the same preflight (an iOS runtime download
  * and an Android system-image install, or two of either) can each observe enough free space and
  * both proceed, jointly overfilling the volume neither alone would have. A single shared
- * `DiskSpaceGuard` instance,
- * held by `ComponentInstaller` (wired once in `src/daemon/main.ts`; drivers never see it),
- * fixes that by tracking bytes reserved but not yet released, keyed per path, and checking free
- * space *minus* those outstanding reservations rather than free space alone.
+ * `DiskSpaceGuard` instance, held by `ComponentInstaller` (wired once in `src/daemon/main.ts`;
+ * drivers never see it), fixes that by tracking bytes reserved but not yet released, keyed per
+ * path, and checking free space *minus* those outstanding reservations rather than free space
+ * alone.
  *
  * `reserve` resolves or throws synchronously with respect to any other in-flight `reserve` call:
  * the only `await` is `filesystem.diskFree`, and the check-then-record step immediately after it
@@ -810,9 +810,10 @@ export class DiskSpaceGuard {
 
   /**
    * Reserves `requiredBytes` against `path`'s free space, minus whatever this guard already has
-   * outstanding there. Throws `InsufficientDiskSpaceError` when the reservation would not fit. On success, returns a release function the caller must
-   * invoke exactly once (typically in a `finally`) once the install this reservation was made
-   * for has settled, freeing the bytes for the next reservation.
+   * outstanding there. Throws `InsufficientDiskSpaceError` when the reservation would not fit.
+   * On success, returns a release function the caller must invoke exactly once (typically in a
+   * `finally`) once the install this reservation was made for has settled, freeing the bytes for
+   * the next reservation.
    */
   async reserve(
     filesystem: Pick<Filesystem, "diskFree">,
