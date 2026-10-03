@@ -5,3 +5,4 @@ dist/
 .fallow/
 .claude/settings.local.json
 .claude/worktrees/
+.stryker-tmp/

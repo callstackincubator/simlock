@@ -5,7 +5,14 @@
   // other source file), and e2e/fake-driver/index.ts is loaded dynamically by the
   // daemon via SIMLOCK_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
   // fallow's static reachability graph without being declared explicitly.
-  "entry": ["src/index.ts", "src/cli/main.ts", "src/daemon/main.ts", "e2e/**/*.test.ts"],
+  // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
+  "entry": [
+    "src/index.ts",
+    "src/cli/main.ts",
+    "src/daemon/main.ts",
+    "e2e/**/*.test.ts",
+    "vitest.mutate.config.ts"
+  ],
   "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.
