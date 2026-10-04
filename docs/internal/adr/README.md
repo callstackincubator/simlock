@@ -45,3 +45,4 @@ the status is stale.
 | [0012](0012-a-worker-answers-the-fleet-operations-as-a-fleet-of-one.md) | A worker answers the fleet operations as a fleet of one | Accepted — not yet implemented |
 | [0013](0013-the-console-reads-routes-and-follows-the-event-stream.md) | The console reads the routes and follows the event stream | Accepted — not yet implemented |
 | [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Accepted |
+| [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted — not yet implemented |

@@ -1,0 +1,217 @@
+# 0015. A lease request is a set of constraints, and the catalog says which class each model is
+
+- **Status:** Accepted — not yet implemented
+- **Date:** 2026-10-04
+- **Issue:** [#326](https://github.com/callstackincubator/simlock/issues/326)
+- **Supersedes:** nothing. Narrows [ADR
+  0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md)
+  §1 and §9: the catalog gains two fields, and one of them (`classDefaults`)
+  is shaped by config. Narrows [ADR
+  0009](0009-gateway-routing-is-a-list-of-stages.md) §3 (the gateway forwards
+  a class as it arrived, since there is no worker name for a class), §4 (the
+  table reads classes and ranges) and §6 (the gateway compares versions, for
+  a range only). Builds on [ADR
+  0007](0007-a-lease-request-chooses-the-device-mode.md): the mode of a fit
+  is the one §4 and §5 decided for the request.
+- **Depends on:** ADR 0008 (#171, closed) and ADR 0009 (#173, open).
+
+## Context
+
+A lease request names one model and, optionally, one exact OS version. The
+core turns it into one `DeviceSpec` and the planner grants a device only when
+`sameSpec` holds. An agent that wants "an iPhone on iOS 18 or newer" must
+pick a model and a version itself, and a warm iPhone 15 on 18.4 is useless to
+a request that guessed iPhone 16.
+
+#326 lets a request name a class (`phone`, `tablet`, `watch`, `tv`, `vision`,
+`auto`, `desktop`) or nothing, and an OS range. Four things have to be
+decided once, because five tasks and both gateway and worker read them: what
+the request looks like on the wire, where a model's class comes from, where
+a request is turned into something a device can fit, and how a gateway
+routes a request that names no model.
+
+## Decision
+
+### 1. The request names a model, a class, or nothing
+
+`lease.request` makes `model` optional and adds `class`, an enum of the seven
+class names. A request with both is `BAD_REQUEST`, decided by the contract
+schema so every transport answers alike. A request with neither means
+`class: "phone"`; that default is applied where the mode's default is (ADR
+0007 §2), not by a transport, so `lease.requested` shows what was asked. The
+HTTP body spells the fields `device` and `class`; the CLI `--device` and
+`--class`; MCP and the client use the contract's names.
+
+### 2. The OS constraint is one string, parsed at the boundary
+
+`osVersion` stays a string. A bare version is exact. A range is the
+node-semver subset the feature names: the comparators `>=`, `>`, `<=`, `<`,
+several joined by spaces, and the hyphen range `A - B`. A partial version
+covers its prefix as node-semver reads it.
+
+One module in the core, `os-range`, owns the grammar: it parses a string into
+a constraint, tests whether a version satisfies it, and orders versions. The
+contract schema refines `osVersion` through its parser, so a malformed range
+is `BAD_REQUEST` on the socket, MCP and HTTP, with a message that names the
+accepted forms. Nothing else in the tree parses a range or compares versions
+for this feature; the drivers' own version helpers stay private to them. No
+dependency is added.
+
+### 3. A model's class is a catalog fact, derived by the driver
+
+`platformCatalogSchema` gains `modelClasses`, a required record with an entry
+for every name in `models`. The iOS driver reads the device type's
+`productFamily`; the Android driver reads the profile's `Tag :` line and maps
+`android-tv`, `android-wear`, every `android-automotive*` tag and
+`android-desktop`; an untagged Android profile is `phone`. No class is
+derived from a name or a screen size, so on Android `tablet` holds no model.
+
+A device record stores no class. The class of a device is
+`modelClasses[device.spec.model]` in the catalog of the worker that holds it,
+looked up at the moment a fit is decided. A record written before this change
+needs nothing.
+
+### 4. The default model per class is a preference list, merged once
+
+Each driver carries a built-in list per class, newest first, of models the
+platform's tooling ships. The config keys `ios.defaultModels.<class>` and
+`android.defaultModels.<class>` take one model name or a list and go in front
+of the built-in list. The composition root merges the two into one map,
+platform to class to ordered names, and hands it to the core the way it hands
+`defaultModes`. The core never holds a model name of its own.
+
+The effective default for a class on a host is the first name on the list
+that the catalog lists, by name or alias, in any letter case. The catalog
+reports it in a new `classDefaults` record, keyed by class, with no entry for
+a class whose list has nothing on the host. A gateway's catalog carries an
+entry only when every connected worker that reports the class agrees, the
+rule `defaultRuntime` already follows; the worker list shows each worker's
+own.
+
+### 5. The core resolves a request into a requirement and a create spec
+
+`LeaseAcquisitionCoordinator` resolves a request, once and before planning,
+into two things.
+
+The **requirement** is what a device must satisfy: platform; the model, by
+the catalog's own name, or the class; the OS constraint; the mode; the image
+tag. The mode is the one ADR 0007 §4 decided for this request: the create
+spec's pool mode, so a slim request a driver cannot slim fits full devices,
+and a `full` request fits only full ones (§5).
+
+The **create spec** is the `DeviceSpec` a new device would have. For an exact
+model and an exact or absent version it is what `resolveSpec` returns today.
+For a class, the model is the first name on the class's list that the
+catalog lists and that pairs, in `modelRuntimes`, with a runtime satisfying
+the OS constraint; with none, the request fails at once with
+`UNKNOWN_MODEL`, and the message names the config key for the platform and
+class. For a range, the runtime is the newest listed pairing that satisfies
+it, chosen by `os-range` from the catalog; with none, the request fails at
+once with `RUNTIME_MISSING` and `downloadable: false`, whatever
+`allowDownload` says. The core then calls `resolveSpec` with that exact model
+and version, so a driver never sees a class or a range, and ADR 0008 §3
+guarantees the pairing it is asked for is one it accepts.
+
+Failing before planning is deliberate: a request the host cannot create is
+refused in one round trip, as an exact request is today, and through a
+gateway ADR 0009 §5 carries that refusal to the next worker.
+
+### 6. One function decides whether a device fits, and the planner reads it
+
+`fits(requirement, device, classOf)` lives in the core beside `sameSpec`. It
+holds when the platform is equal; the model is equal, or the class of the
+device's model is the requested class; the device's `osVersion` satisfies the
+constraint; the pool mode is equal; the image tag is equal or both absent.
+
+`AcquisitionPlanner.plan` looks for a `ready` device that fits, then a
+`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+still names pool identity everywhere else: the warm pool, reclaim, the
+idempotency check. Among several devices that fit, the first in snapshot
+order is taken; nothing promises which.
+
+### 7. The grant and the device record do not change
+
+A grant always names the concrete model, OS, mode and image tag of the device
+it hands over, from the record, as today. `device.provisioned` carries the
+create spec. No response, record or event carries a class or a range except
+`lease.requested` and `lease.rejected`, which carry the request as it
+arrived.
+
+### 8. The gateway forwards what it got and matches with the same functions
+
+A gateway forwards `class` and the `osVersion` string untouched; only an
+exact model is replaced by the worker's own name, as ADR 0009 §3 says. The
+worker applies §5 and §6 itself, so a warm device of another model in the
+class is still found there.
+
+`matchRequest` reads `modelClasses` and `os-range` from the core: a request
+can be served by a worker when its catalog lists the model, or any model of
+the class, paired with an installed runtime that satisfies the constraint.
+The ADR 0009 §4 table keeps its rows: row 3 is "no known worker lists the
+model, or any model of the class", row 4 is "none pairs one with a runtime
+satisfying the constraint". The `warm-hit` stage calls the core's `fits`
+over the worker's `ready` devices with that worker's catalog as `classOf`.
+The gateway compares versions only to evaluate a range; ADR 0009 §6's rule
+for an unnamed runtime stands for an exact or absent version.
+
+A worker whose class default is misconfigured still passes `can-serve` when
+it lists a model of the class; its `UNKNOWN_MODEL` is a refusal ADR 0009 §5
+already retries elsewhere.
+
+### 9. Events change by addition
+
+`lease.requested` and `lease.rejected` carry `class` and a range in
+`requestSpec` when the request named them, and `model` only when it did.
+`request.dispatched` gains optional `class` and its `model` becomes optional.
+No event is added or removed.
+
+### 10. The wire changes without a shim
+
+Each task that changes a request, response or catalog shape raises the
+protocol version by one, as ADR 0007 §12 says. Four of the five tasks do.
+
+## Consequences
+
+- An agent asks for what its test needs, a class and a version floor, and
+  gets whatever fitting device is warm before anything is created.
+- The core reads the catalog on every request that names a class or a range,
+  one more `simctl list` or `avdmanager` run per request on top of the one
+  `resolveSpec` already makes. Neither driver caches the catalog; a cache is
+  a later change if the cost shows.
+- The create pick for a class follows the preference list, so a bad
+  `defaultModels` value is skipped, not fatal. The only way to see that it
+  was skipped is `simlock catalog`, which shows the effective default.
+- Android `tablet` holds no model: a `--class tablet` Android request fails
+  with `UNKNOWN_MODEL` until the tooling tags tablets.
+- The gateway holds a copy of the fit rule's inputs (the catalog, the
+  devices) but not a copy of the rule: both sides import it from the core.
+- A device's class changes if the host's tooling changes what it reports for
+  the model. Nothing is stored, so nothing goes stale.
+- Four protocol bumps across five PRs.
+- The docs change with the implementation. Each task updates the docs it
+  makes true.
+
+## Alternatives considered
+
+- **Store the class on the device record.** One lookup fewer at fit time.
+  Rejected: a new stored field, a migration for every existing record, and
+  two sources for one fact.
+- **Let `resolveSpec` take a class and a range.** The driver already loads
+  the catalog once per request. Rejected: the class pick and the range pick
+  would exist in two drivers and two fake drivers, and the gateway would
+  still need its own copy to route.
+- **Add the `semver` package.** Rejected: the subset is small, its
+  partial-version rule is the only subtle part, and a dependency would
+  accept forms the feature excludes.
+- **Resolve the create spec only when nothing idle fits.** A warm device
+  would rescue a misconfigured default. Rejected by the maintainer in
+  favour of the preference list, which makes the case rare, and of failing
+  in one round trip when it does happen.
+- **A single default model per class, no list.** Rejected by the maintainer:
+  a host without the newest model should drop to an older one, not fail.
+- **`can-serve` requires the worker's effective default to pair.** Stricter,
+  but it would drop a worker holding a warm fitting device, and the refusal
+  retry already covers the loose rule's miss.
+- **A gateway catalog that shows every worker's default per class.**
+  Rejected: `defaultRuntime` already settled that a disagreeing fleet shows
+  nothing, and the worker list carries each worker's own catalog.
