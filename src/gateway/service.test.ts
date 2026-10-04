@@ -850,6 +850,8 @@ describe("GatewayService", () => {
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
     worker.failWith = protocolMismatchError(worker9);
+    // A gateway that subscribed anyway would get a live listener, so the push below could reach it.
+    worker.subscribeDespiteFailure = true;
 
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
@@ -857,6 +859,7 @@ describe("GatewayService", () => {
     );
     worker.pushEvent({ event: "lease.granted", payload: { leaseId: "l1" } });
 
+    expect(worker.subscribed).toBe(false);
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
       protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: worker9 },
     });

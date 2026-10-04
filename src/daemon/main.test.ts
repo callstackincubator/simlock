@@ -1295,6 +1295,29 @@ describe("startDaemon event file", () => {
     ).toHaveLength(1);
   });
 
+  it("mints event ids from the idGenerator the daemon was given", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
+    temporaryDirectories.push(directory);
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers({ eventBus }) {
+         eventBus.emit("component.installed", { componentId: "18.6", durationMs: 1, platform: "ios" }, "test");
+         return [];
+       }`,
+    );
+
+    await start({
+      dataDirectory: directory,
+      drivers: undefined,
+      idGenerator: { generate: () => "from-the-given-generator" },
+    });
+
+    const ids = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { id: string }).id);
+    expect(ids).toContain("evt_from-the-given-generator");
+  });
+
   it("writes no daemon log line for component.installed and device.slimmed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
     temporaryDirectories.push(directory);
