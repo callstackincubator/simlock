@@ -18,10 +18,12 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
     connection: "connected",
     devices: [],
     drained: false,
+    health: "running",
     id,
     lastSeenAt: 1,
     leases: [],
     capacity: statusFixture().capacity,
+    queueDepth: 0,
     ...overrides,
   };
 }
@@ -64,5 +66,66 @@ describe("the registered warm-then-free policy", () => {
       stage: "warm-hit",
       workerId: "wrk_z_warm",
     });
+  });
+
+  it.each([
+    ["starting", "starting" as const],
+    ["failed", "failed" as const],
+    ["not reporting its health", undefined],
+  ])("sends a worker that is %s nothing while a healthy one serves", (_label, health) => {
+    // wrk_a sorts first and holds a warm device, so only the health stage can pass it over.
+    const { health: _drop, ...base } = view("wrk_a", {
+      devices: [deviceFixture("dev_1", "ready")],
+    });
+    const sick = health === undefined ? base : { ...base, health };
+
+    expect(policy.select(REQUEST, [sick, view("wrk_b")])?.workerId).toBe("wrk_b");
+    expect(policy.select(REQUEST, [sick])).toBeUndefined();
+  });
+
+  it("passes over a worker with its own waiters queued, warm device or not", () => {
+    const queued = view("wrk_a", { devices: [deviceFixture("dev_1", "ready")], queueDepth: 1 });
+
+    expect(policy.select(REQUEST, [queued, view("wrk_b")])?.workerId).toBe("wrk_b");
+    expect(policy.select(REQUEST, [queued])).toBeUndefined();
+  });
+
+  it("passes over a worker at its RAM budget while another has room, and asks it when it is the only one", () => {
+    // wrk_b has more free running capacity, so only the RAM rank can prefer wrk_a over it.
+    const atBudget = (maxRunning: number) => ({
+      ...withIos({ maxRunning }),
+      ios: { ...withIos({ maxRunning }).ios, atRamBudget: true },
+    });
+    const roomy = view("wrk_a", { capacity: withIos({ maxRunning: 1 }) });
+    const full = view("wrk_b", { capacity: atBudget(5) });
+
+    expect(policy.select(REQUEST, [full, roomy])).toMatchObject({ workerId: "wrk_a" });
+    expect(policy.select(REQUEST, [full])).toMatchObject({ workerId: "wrk_b" });
+  });
+
+  it("still picks a worker at its RAM budget for a warm device it holds", () => {
+    const capacity = withIos({ maxRunning: 1 });
+    const atBudget = view("wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, atRamBudget: true } },
+      devices: [deviceFixture("dev_1", "ready")],
+    });
+
+    expect(policy.select(REQUEST, [atBudget, view("wrk_b")])).toMatchObject({
+      reason: "warm-hit",
+      workerId: "wrk_a",
+    });
+  });
+
+  it("passes over a worker with no free global slot although its platform has one", () => {
+    const capacity = statusFixture().capacity;
+    const noGlobal = view("wrk_a", {
+      capacity: { ...capacity, global: { ...capacity.global, maxRunning: 1, running: 1 } },
+    });
+
+    expect(capacity.ios.maxRunning - capacity.ios.running - capacity.ios.reserved).toBeGreaterThan(
+      0,
+    );
+    expect(policy.select(REQUEST, [noGlobal, view("wrk_b")])?.workerId).toBe("wrk_b");
+    expect(policy.select(REQUEST, [noGlobal])).toBeUndefined();
   });
 });

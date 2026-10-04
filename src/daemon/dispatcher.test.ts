@@ -2235,6 +2235,65 @@ describe("Dispatcher: status.get RAM budget", () => {
     expect(status.capacity.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
   });
 
+  describe("atRamBudget", () => {
+    // 32 GiB of RAM leaves a 28 GiB budget. A full iOS device takes 2 GiB, an Android one 4.
+    async function withIosDevices(count: number) {
+      const built = await buildDispatcher({
+        capacity: {
+          strategy: "resource",
+          config: {
+            limits: {
+              android: { maxDevices: 30, maxRunning: 30 },
+              ios: { maxDevices: 30, maxRunning: 30 },
+              maxRunning: 60,
+            },
+            ramBudget: sizes,
+          },
+        },
+      });
+      for (let index = 0; index < count; index += 1) {
+        await built.registry.registerDevice({
+          driverData: {},
+          driverDeviceId: `driver-${index}`,
+          provisionDuration: 0,
+          spec: { mode: "full", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        });
+      }
+      return built;
+    }
+    const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+
+    it("is true for a platform whose next full device the planner refuses for RAM, and false while it would be admitted", async () => {
+      // 13 devices use 26 of 28 GiB: one more iOS device fits, an Android one does not.
+      const roomy = await withIosDevices(13);
+      const roomyStatus = await roomy.dispatcher.dispatch("status.get", {}, session());
+      expect(roomyStatus.capacity.ios.atRamBudget).toBe(false);
+      expect(roomyStatus.capacity.android.atRamBudget).toBe(true);
+      await expect(
+        roomy.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
+      ).resolves.toBeDefined();
+
+      // 14 devices use all 28 GiB: not even one more iOS device fits.
+      const full = await withIosDevices(14);
+      const fullStatus = await full.dispatcher.dispatch("status.get", {}, session());
+      expect(fullStatus.capacity.ios.atRamBudget).toBe(true);
+      await expect(
+        full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
+      ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+    });
+
+    it("is false under the fixed strategy, which keeps no budget", async () => {
+      const { dispatcher } = await buildDispatcher({
+        capacity: { strategy: "fixed", config: { maxRunning: 2 } },
+      });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect(status.capacity.ios.atRamBudget).toBe(false);
+      expect(status.capacity.android.atRamBudget).toBe(false);
+    });
+  });
+
   it("omits the RAM budget under the fixed strategy", async () => {
     const { dispatcher } = await buildDispatcher({
       capacity: { strategy: "fixed", config: { maxRunning: 2 } },

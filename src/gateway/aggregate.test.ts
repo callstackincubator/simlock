@@ -734,3 +734,42 @@ describe("aggregateCatalog", () => {
     });
   });
 });
+
+describe("aggregateStatus at-RAM-budget flag", () => {
+  const withBudget = (ios: boolean, android: boolean) => {
+    const base = capacity(1, 2);
+    return {
+      ...base,
+      android: { ...base.android, atRamBudget: android },
+      ios: { ...base.ios, atRamBudget: ios },
+    };
+  };
+  const options = { health: "running", host: GATEWAY_HOST, queueDepth: 0 } as const;
+
+  it("reports atRamBudget for a platform only when every connected worker does", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(true, true), id: "wrk_a" }),
+        view({ capacity: withBudget(true, false), id: "wrk_b" }),
+      ],
+      options,
+    );
+
+    expect(status.capacity.ios.atRamBudget).toBe(true);
+    expect(status.capacity.android.atRamBudget).toBe(false);
+  });
+
+  it("leaves a disconnected worker out of the flag, and reports false for a fleet with no connected worker", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(true, true), id: "wrk_a" }),
+        view({ capacity: withBudget(false, false), connection: "disconnected", id: "wrk_b" }),
+      ],
+      options,
+    );
+    const empty = aggregateStatus([], options);
+
+    expect(status.capacity.ios.atRamBudget).toBe(true);
+    expect(empty.capacity.ios.atRamBudget).toBe(false);
+  });
+});

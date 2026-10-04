@@ -2947,6 +2947,29 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(await print(statusWith())).not.toContain("RAM");
   });
 
+  it("prints, per platform, whether the worker is at its RAM budget", async () => {
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      capacity: {
+        ...EMPTY_STATUS.capacity,
+        android: { ...EMPTY_STATUS.capacity.android, atRamBudget: false },
+        ios: { ...EMPTY_STATUS.capacity.ios, atRamBudget: true },
+      },
+    };
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    expect(lines.find((line) => line.startsWith("Capacity ios:"))).toContain("at RAM budget");
+    expect(lines.find((line) => line.startsWith("Capacity android:"))).not.toContain("RAM budget");
+  });
+
   it("simlock status marks a stalled device", async () => {
     const device = (id: string, extra: object) => ({
       id,
