@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Implement one claimed issue (task, bug, or single-PR feature) tests-first — commit the spec's tests red, open a draft PR, turn them green in checkpoint commits, run pnpm check and pnpm mutate — or apply a list of review or hardware findings to its branch. Ends with a fixed report block. Use when the deliver orchestrator delegates implementation, or when the user says "implement #N".
+description: Implement one claimed issue (task, bug, or single-PR feature) tests-first — commit the spec's tests red, open a draft PR, turn them green in checkpoint commits, run pnpm check and pnpm mutate, closing small spec gaps as Assumption lines in the PR body — or apply a list of review or hardware findings to its branch. Ends with a fixed report block. Use when the deliver orchestrator delegates implementation, or when the user says "implement #N".
 model: sonnet
 effort: medium
 context: fork
@@ -8,10 +8,12 @@ context: fork
 
 # Implement an issue
 
-Rules 3, 7, 9 and 13 in `docs/internal/agent-rules/delivery.md` and all of
-`docs/internal/agent-rules/testing.md` govern this skill. The issue body is
-the spec. You build exactly what it says; you do not claim, review, mark
-ready, or merge — the orchestrator does those.
+Rules 3, 7, 9 and 13 in `docs/internal/agent-rules/delivery.md`, all of
+`docs/internal/agent-rules/testing.md`, and
+`docs/internal/agent-rules/always-in-scope.md` govern this skill. The issue
+body is the spec. You build exactly what it says, plus what
+`always-in-scope.md` lists; you do not claim, review, mark ready, or merge —
+the orchestrator does those.
 
 Arguments: the issue number, its branch (`<kind>/<N>`), the PR number once
 there is one, and the mode: `build`, or `fix` followed by finding lines to
@@ -38,9 +40,25 @@ latest `## Handoff` comment, whose Findings are facts. Never the rest of the
 comment thread. Reread the files under Rules in play before touching the
 code they cover.
 
-If the spec is wrong, contradicts itself, or cannot be built as written,
-stop: push what you have and report it under Open as `spec needs: <line>`.
-Do not work around it.
+**A small gap is an assumption, not a stop** (rule 3). When the body, the
+agent rules, the accepted ADRs and `always-in-scope.md` all leave a small
+question open — a wording, an order, a bound the spec implies but does not
+number, which existing helper to reuse — take the conservative option: the
+smallest change, the one that matches existing behaviour, the one easiest
+to undo. Build it, and record it in the PR body's `## Assumptions` section,
+one line each:
+
+```markdown
+- Assumption: <the question, in a few words> — <what you chose and why it is the conservative option>.
+```
+
+An assumption is a visible proposal, not a spec change: the spec review
+checks every line, and the maintainer may reject one.
+
+Stop only when building would contradict the body, a rule or an accepted
+ADR, or would change behaviour a user sees in a way nobody decided. Then
+push what you have and report it under Open as `spec needs: <line>`. Do not
+work around it.
 
 ## 3. Red tests first (`build` mode)
 
@@ -57,7 +75,9 @@ gh pr create --draft --title "<type>(<scope>): <summary>" --body-file <scratch>/
 
 The PR body starts with `Closes #<N>`, then a `### Status` section the
 orchestrator keeps current, then the Done when lines as an unchecked list,
-and ends with `*Written by an agent.*`.
+then `## Assumptions` ("none", or one `- Assumption:` line per gap you
+closed), and ends with `*Written by an agent.*`. Keep that section current
+as you go, so a resumed run sees it.
 
 ## 4. Green in checkpoints
 
@@ -66,11 +86,13 @@ lowers the failing count and says so in its body: `3 failing -> 1 failing`.
 Run `pnpm typecheck`, `pnpm lint` and the test files you touched before
 each commit; the pre-commit hook runs the rest. Never pass `--no-verify`.
 
-New or changed events need both `docs/EVENTS.md` and
-`docs/internal/EVENTS.md`. Search `docs/` and every user-facing string (help
-text, error messages, HTTP error bodies) for claims your change makes false,
-and fix them in the same branch. Do not widen scope: something you notice
-that is not in the spec becomes a `bug:new` issue or one line under Open.
+Build what `always-in-scope.md` lists as you go: both `EVENTS.md` files for
+a new or changed event; a search of `README.md`, `docs/` and every
+user-facing string (help text, error messages, HTTP error bodies) for claims
+your change makes false, fixed in the same branch; a test for every new
+path, fallbacks included; a `.fallowrc.json` entry for a new file nothing
+imports. Do not widen scope beyond that list: something you notice that is
+not in the spec becomes a `bug:new` issue or one line under Open.
 
 ## 5. Prove it
 
@@ -99,8 +121,10 @@ slow lane yourself.
 
 Each finding line is a defect someone verified. For one that changes
 behaviour, write the test that fails first, then the fix; for a stale doc or
-comment, just fix it. One commit per finding or per closely related group.
-Then step 5 again.
+comment, just fix it. A line ending in `(record as Assumption: ...)` also
+adds that assumption to the PR body. A hardware Evidence line is a failing
+slow-lane test: fix the code, not the test. One commit per finding or per
+closely related group. Then step 5 again.
 
 ## Report
 
@@ -113,5 +137,6 @@ Check: pass | fail (<what failed>)
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
 Hardware: <Done when lines that need real devices, or "none">
 Flaky: <test title — #issue per line, or "none">
+Assumptions: <n, as listed in the PR body, or "none">
 Open: <"spec needs: ..." lines, blockers, or "none">
 ```

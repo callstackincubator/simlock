@@ -37,6 +37,7 @@
       "Bash(gh label list *)",
       "Bash(gh stack *)",
       "Bash(.agents/scripts/worktree.sh *)",
+      "Bash(.agents/scripts/review-inputs.sh *)",
       "Bash(scripts/slow-e2e.sh*)"
     ],
     "ask": ["Bash(pnpm run test:e2e:slow*)", "Bash(pnpm test:e2e:slow*)"],

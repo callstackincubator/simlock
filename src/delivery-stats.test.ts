@@ -61,6 +61,26 @@ const input = {
       body: review("Spec review: 2 findings, 0 fixed. Code review: 1 finding, 1 fixed."),
     },
     {
+      number: 17,
+      title: "this week, blocking findings and notes counted apart",
+      mergedAt: "2026-10-02T12:00:00Z",
+      body: review(
+        [
+          "Spec review: 2 blocking, 1 fixed, 3 notes. Code review: 1 blocking, 1 fixed, 1 note.",
+          "",
+          "Rejected:",
+          "",
+          "- spec: a blocking spec claim — not blocking: nothing breaks",
+        ].join("\n"),
+      ),
+    },
+    {
+      number: 18,
+      title: "this week, an ADR-only diff with notes",
+      mergedAt: "2026-10-02T13:00:00Z",
+      body: review("Spec review: 1 blocking, 0 fixed, 2 notes. Code review: skipped."),
+    },
+    {
       number: 16,
       title: "this week, a Review heading with no counts",
       mergedAt: "2026-10-02T11:00:00Z",
@@ -122,18 +142,20 @@ function section(output: string, heading: string): string[] {
 }
 
 describe("delivery-stats.mjs", () => {
-  it("counts each week's merged PRs, their review findings, fixes, second rounds, alive mutants and handoffs", () => {
+  it("counts each week's merged PRs, their review findings, fixes, notes, second rounds, alive mutants and handoffs", () => {
     const output = run(["--weeks", "2"]);
 
-    // Week from | Merged | Reviewed | Spec review | Code review | No fix | Round 2 | Mutants alive | Handoffs
+    // Week from | Merged | Reviewed | Spec review | Code review | Notes | No fix | Round 2 | Mutants alive | Handoffs
     // #16's Review heading has no counts line, so it is merged but not reviewed; #15 had a code fix.
+    // #10, #11 and #15 count every finding they raised; #17 and #18 their blocking ones, and notes.
     expect(row(output, "2026-09-27")).toEqual([
       "2026-09-27",
+      "7",
       "5",
-      "3",
-      "1/6 (17%)",
-      "3/3 (100%)",
-      "1",
+      "2/9 (22%)",
+      "4/4 (100%)",
+      "6",
+      "2",
       "1",
       "1/12",
       "1",
@@ -144,6 +166,7 @@ describe("delivery-stats.mjs", () => {
       "1",
       "1/1 (100%)",
       "1/3 (33%)",
+      "0",
       "0",
       "0",
       "0/0",
@@ -159,6 +182,7 @@ describe("delivery-stats.mjs", () => {
     expect(section(output, "### spec")).toEqual([
       "- #10 first spec claim — first reason",
       "- #10 second spec claim — second reason",
+      "- #17 a blocking spec claim — not blocking: nothing breaks",
     ]);
     expect(section(output, "### code")).toEqual(["- #10 a code claim — its reason"]);
     expect(section(output, "### untagged")).toEqual(["- #10 an untagged claim — its reason"]);
