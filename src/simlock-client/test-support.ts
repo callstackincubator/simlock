@@ -58,6 +58,11 @@ export class ScriptedConnection implements IpcConnection {
     for (const listener of this.#dataListeners) listener(`${JSON.stringify(frame)}\n`);
   }
 
+  /** Feeds one raw line of text, for a wire value `JSON.stringify` cannot produce (`1e999`). */
+  receiveLine(line: string): void {
+    for (const listener of this.#dataListeners) listener(`${line}\n`);
+  }
+
   /** Replies success to the most recent (or a specific) sent frame id. */
   reply(id: number | string, payload: unknown): void {
     this.receive({ id, ok: true, payload });

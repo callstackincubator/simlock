@@ -140,8 +140,10 @@ same fact has the same `id` in the worker's `events.jsonl` and the gateway's,
 and you can join the two files by it. A relayed line's time is when the fact
 happened on the worker, not when the gateway heard it: a worker whose clock
 runs ahead or behind the gateway's shows that skew in the gateway's order.
-`simlock events`, `GET /v1/events` and the console list events by `timestamp`,
-then by `seq`.
+A replay (`simlock events`, `--since`, `GET /v1/events`, the console's buffer)
+lists events by `timestamp`, then by `seq`; `simlock events --follow` prints
+each live push as it arrives, so a relayed event from a worker whose clock is
+behind prints after a later gateway event.
 
 Relayed events are written to the gateway's own event file
 (`events.jsonl`) along with its own, so `simlock events --since` against a

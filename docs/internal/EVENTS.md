@@ -173,7 +173,10 @@ rings and both streams, and the two files can be joined by it.
 envelope. A relayed line's time is when the fact happened on the worker, so a
 worker's clock skew shows in the gateway's order, and `--since` on the gateway
 filters by that time. `simlock events`, `events.replay`, `GET /v1/events` and
-the console present events by `timestamp`, then `seq`. A worker's `id` and
+the console's buffer present a replay by `timestamp`, then `seq`;
+`simlock events --follow` prints live pushes, and the pushes buffered during its
+replay, in arrival order, so a relayed event from a worker whose clock is behind
+prints after a later gateway event. A worker's `id` and
 `timestamp` are claims, bounded by the push schema before the relay sees them.
 
 **`device.exec` emits no event, and that is deliberate.** It is the one

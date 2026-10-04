@@ -766,11 +766,18 @@ describe("event pushes", () => {
       { ...valid, id: "no-prefix" },
       { ...valid, id: `evt_${"a".repeat(65)}` },
       { ...valid, id: 7 },
-      { ...valid, timestamp: Number.POSITIVE_INFINITY },
+      { ...valid, timestamp: null },
       { ...valid, timestamp: "5" },
     ]) {
       connection.push("event", { subscriptionId: "sub_1", event: bad });
     }
+    // `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit.
+    connection.receiveLine(
+      JSON.stringify({
+        payload: { subscriptionId: "sub_1", event: { ...valid, timestamp: "__overflow__" } },
+        push: "event",
+      }).replace('"__overflow__"', "1e999"),
+    );
     await flushMicrotasks();
     expect(listener).not.toHaveBeenCalled();
 

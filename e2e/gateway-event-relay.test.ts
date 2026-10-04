@@ -1,3 +1,8 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createConnection, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
@@ -6,7 +11,7 @@ import type { RecordedEvent } from "./helpers/events.js";
 /**
  * ADR 0014 §2 and §5 with real processes: a gateway and one worker, the CLI an operator uses.
  * A worker's event keeps its `id` and `timestamp` on the gateway, which is what lets the two
- * event files be joined; `workerId` is the only mark of the relay.
+ * event files be joined; `workerId` and the gateway's own `seq` are the only marks of the relay.
  */
 
 async function gatewayWithWorker() {
@@ -89,33 +94,105 @@ describe("gateway event relay", () => {
 
   it("simlock events --follow on a gateway prints an event that arrives during the replay once", async () => {
     const { gateway, worker } = await gatewayWithWorker();
-    const follower = gateway.cliBackground(["events", "--follow", "--since", "1h"]);
+    const gate = await gateReplay(gateway.socketPath);
+    try {
+      const adminToken = (await readFile(join(gateway.home, "admin.token"), "utf8")).trim();
+      const follower = gateway.cliBackground(["events", "--follow", "--since", "1h"], {
+        env: { SIMLOCK_ADMIN_TOKEN: adminToken, SIMLOCK_HOME: gate.home },
+      });
+      // The follower has subscribed and asked for the replay; the gate holds that request.
+      await waitFor(() => gate.replayHeld(), { label: "the replay request reached the gate" });
 
-    // Leases churn on the worker while the follower replays and then streams, so some events
-    // are both in the replay and pushed.
-    const holders = [0, 1, 2].map((index) =>
-      worker.cliBackground(leaseArgs(`relay-follow-${index}`)),
-    );
-    await Promise.all(holders.map((holder) => holder.firstStdoutLine()));
-    for (const holder of holders) holder.kill("SIGTERM");
-    await Promise.all(holders.map((holder) => holder.waitForExit(15_000)));
-
-    await waitFor(
-      () => parse(follower.stdoutSoFar()).filter((e) => e.event === "lease.released").length >= 3,
-      {
-        label: () =>
-          `the follower printed the releases: ${parse(follower.stdoutSoFar())
-            .map((e) => e.event)
-            .join(",")}`,
+      // A lease is granted while the replay is pending: its push reaches the follower, and the
+      // replay, released only afterwards, is taken after the grant and holds it too.
+      const holder = worker.cliBackground(leaseArgs("relay-follow"));
+      const grant = JSON.parse(await holder.firstStdoutLine()) as { lease: { id: string } };
+      const isGrant = (event: RecordedEvent) =>
+        event.event === "lease.granted" &&
+        (event.payload as { leaseId?: string }).leaseId === grant.lease.id;
+      await waitFor(() => gate.pushedEvents().some(isGrant), {
+        label: "the grant's push reached the follower",
         timeout: 20_000,
-      },
-    );
-    follower.kill("SIGTERM");
-    await follower.waitForExit(15_000);
+      });
+      gate.release();
 
-    const printed = parse(follower.stdoutSoFar());
-    const ids = printed.map((event) => event.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(printed.filter((event) => event.event === "lease.granted")).toHaveLength(3);
+      await waitFor(() => parse(follower.stdoutSoFar()).some(isGrant), {
+        label: "the follower printed the grant",
+      });
+      holder.kill("SIGTERM");
+      await holder.waitForExit(15_000);
+      await waitFor(() => parse(follower.stdoutSoFar()).some((e) => e.event === "lease.released"), {
+        label: "the follower printed the release",
+        timeout: 20_000,
+      });
+      follower.kill("SIGTERM");
+      await follower.waitForExit(15_000);
+
+      const printed = parse(follower.stdoutSoFar());
+      expect(printed.filter(isGrant)).toHaveLength(1);
+      const ids = printed.map((event) => event.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      await gate.close();
+    }
   });
 });
+
+/**
+ * A unix-socket proxy in front of the gateway's daemon socket that holds the follower's
+ * `events.replay` request until `release()`. Everything else, pushes included, passes through, so
+ * an event emitted while the request is held reaches the follower as a push and is then also in
+ * the replay taken after the release.
+ */
+async function gateReplay(upstreamSocket: string) {
+  const home = await mkdtemp(join(tmpdir(), "sl-gate-"));
+  let held: (() => void) | undefined;
+  let released = false;
+  const pushed: RecordedEvent[] = [];
+  const server = createServer((client) => {
+    const upstream = createConnection(upstreamSocket);
+    let fromClient = "";
+    let fromUpstream = "";
+    client.on("data", (chunk: Buffer) => {
+      fromClient += chunk.toString("utf8");
+      const lines = fromClient.split("\n");
+      fromClient = lines.pop() ?? "";
+      for (const line of lines) {
+        const forward = () => upstream.write(`${line}\n`);
+        if ((JSON.parse(line) as { type?: string }).type === "events.replay" && !released) {
+          held = forward;
+        } else forward();
+      }
+    });
+    upstream.on("data", (chunk: Buffer) => {
+      fromUpstream += chunk.toString("utf8");
+      const lines = fromUpstream.split("\n");
+      fromUpstream = lines.pop() ?? "";
+      for (const line of lines) {
+        const frame = JSON.parse(line) as { push?: string; payload?: { event?: RecordedEvent } };
+        if (frame.push === "event" && frame.payload?.event !== undefined) {
+          pushed.push(frame.payload.event);
+        }
+        client.write(`${line}\n`);
+      }
+    });
+    client.on("close", () => upstream.destroy());
+    upstream.on("close", () => client.destroy());
+    client.on("error", () => upstream.destroy());
+    upstream.on("error", () => client.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(join(home, "daemon.sock"), resolve));
+  return {
+    home,
+    replayHeld: () => held !== undefined,
+    pushedEvents: () => pushed,
+    release() {
+      released = true;
+      held?.();
+    },
+    async close() {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(home, { force: true, recursive: true });
+    },
+  };
+}
