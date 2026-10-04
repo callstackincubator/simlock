@@ -29,13 +29,14 @@ async function startGateway() {
   const port = await freeLoopbackPort();
   // `driver: "none"`: a gateway starts no drivers (ADR 0005 §2).
   const gateway = await withDaemon({
-    configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
   });
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   const { secret } = minted.json as { secret: string };
   const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
   return {
+    baseUrl: `http://127.0.0.1:${port}`,
     gateway,
     join: (label: string, script: FakeDriverScript, extraConfig: Record<string, unknown> = {}) =>
       // Seeded before the daemon starts: a worker reports its catalog as its uplink opens.
@@ -191,6 +192,31 @@ describe("a gateway fails a request no worker can serve at once", () => {
     expect(granted.code, granted.stderr).toBe(0);
     const { lease: held } = granted.json as { lease: { id: string } };
     expect((await gateway.cli(["release", held.id], FAST)).code).toBe(0);
+  });
+
+  it("fails the HTTP POST of a request no worker can serve, with allowDownload too", async () => {
+    const { baseUrl, gateway, join } = await startGateway();
+    await join("worker-a", { ios: IPHONE_17 });
+    await waitForWorkers(gateway, ["worker-a"]);
+    const minted = await gateway.cli(["token", "create", "--role", "agent"]);
+    const headers = {
+      authorization: `Bearer ${(minted.json as { secret: string }).secret}`,
+      "content-type": "application/json",
+    };
+
+    const response = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({
+        allowDownload: true,
+        device: "iPhone 99",
+        os: "26.0",
+        platform: "ios",
+      }),
+      headers,
+      method: "POST",
+    });
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "UNKNOWN_MODEL" } });
   });
 
   it("fails a request only a drained worker, or only a disconnected worker, can serve", async () => {

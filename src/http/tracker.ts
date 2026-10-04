@@ -182,7 +182,7 @@ export interface LeaseRequestTrackerOptions {
    * A gateway sets it `false`: it never downloads, so there is nothing slow to outlast the
    * `POST`, and a request it rejects as unservable must fail the `POST` instead.
    */
-  readonly answerDownloadsEarly?: boolean;
+  readonly answerDownloadsEarly?: boolean | undefined;
 }
 
 /**
