@@ -300,14 +300,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // Worker A never answers -- the attempt this waiter is dispatched to stays in flight.
     clientA.requestLeaseQueue.push({ kind: "hang" });
 
-    // No worker connected yet: admission's own first look finds nobody, so this waiter genuinely
-    // enters the queue (`queue.list()`) rather than settling on the fast admission-time path --
-    // exactly the shape a *second* dispatch pass (triggered below) would otherwise re-scan.
+    // Worker A is connected but has no free slot: admission's own first look finds nobody to
+    // send it to, so this waiter genuinely enters the queue (`queue.list()`) rather than settling
+    // on the fast admission-time path -- exactly the shape a *second* dispatch pass (triggered
+    // below) would otherwise re-scan.
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     void coordinator.request(REQUEST, requestOptions());
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
     expect(clientA.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
@@ -340,8 +342,9 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // (two full slots below) does not match what it can actually grant right now.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    // Three requests queue up before any worker is connected -- all genuinely `queued`, not
+    // Three requests queue up behind a worker with no free slot -- all genuinely `queued`, not
     // settled at admission.
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const p1 = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
@@ -357,11 +360,11 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(3);
 
-    // `connectWorker`'s default capacity reports two free iOS slots -- on paper, room for two of
+    // The refresh below reports two free iOS slots -- on paper, room for two of
     // the three queued waiters above. Without the per-pass cap, `#dispatch`'s single pass would
     // run `routing.select` against this same unchanged view for every one of the three, pick
     // worker A for every one of them, and fire three concurrent `lease.request`s in this one pass.
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
 
     // Capped at one dispatch *per pass* -- but C1 (round 3 review) guarantees a fresh pass the
@@ -405,6 +408,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // w2's own eventual attempt, once it gets its turn.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const w1Request = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
@@ -418,7 +422,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(2);
 
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
     // H6's own per-pass cap: only w1 was attempted this pass, w2 passed over.
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);

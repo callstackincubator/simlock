@@ -172,7 +172,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   worker's own `instance.json` identity), label, connection state
   (`connected` / `disconnected` / `incompatible`), daemon health and version,
   capacity per platform, download policy, queue depth, leases, devices,
-  catalog, host facts, drain state, and a last-seen timestamp. It is rebuilt
+  catalog (with when it was read this session and whether one was ever read),
+  host facts, drain state, and a last-seen timestamp. It is rebuilt
   over the uplink — `status.get`, `list.get`, `catalog.get`, `config.get` and
   `events.subscribe` on connect, a refresh of status and devices on every
   worker event about a lease or a device, and a slow periodic tick that also
@@ -600,9 +601,11 @@ gateway sends it `lease.request` with **`noWait: true`**:
   and fails with `NO_CAPACITY` if no worker is picked in it. A failure
   *after* work has begun is the request's own terminal failure, not a return
   to the queue;
-- a request no worker can serve right now is **passed over, not blocked on**,
+- a request a busy fleet cannot take yet is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
-  capacity frees.
+  capacity frees. A request **no worker can serve at all** is not passed
+  over: the same walk rejects it first (see "A request that cannot be
+  served" under Routing).
 
 `noWait` is what keeps the two queues from becoming one problem. Because a
 dispatch either takes immediately or refuses, **no gateway request ever sits
@@ -632,7 +635,8 @@ lists are code, and no config key lists or orders stages.
 The v1 policy (`warm-then-free`) is four stages:
 
 1. `takes-requests` (filter): drop workers that are disconnected,
-   incompatible, drained, or whose capacity has not been read;
+   incompatible, drained, or whose capacity or catalog has not been read
+   since they connected;
 2. `can-serve` (filter): drop workers whose catalog cannot serve the request
    (ADR 0009 §3, `routing/request-match.ts`). The model is the first entry of
    the worker's `models` whose name or `modelAliases` entry equals the
@@ -650,6 +654,31 @@ The same matcher gives the name the gateway forwards: the worker is sent its
 own name for the model, so it resolves exactly what routing matched, and
 `allowDownload` is always forwarded as `false`. `lease.requested` keeps the
 name the client sent.
+
+#### A request that cannot be served
+
+Before the stages, the dispatch walk asks `assess(request, views)`
+(`routing/serviceability.ts`, ADR 0009 §4), over every view, busy or not. It
+is the one place the fast-fail table lives, and it runs for each queued
+request and, last, the request that has just arrived and is not queued yet. An
+arriving request on rows 1 to 5 is rejected without entering the queue (no
+`lease.queued`, no `queued` progress), and a drain or a lost uplink re-runs the
+walk, which rejects a waiting request that has moved onto those rows. In
+order: no worker takes requests, `NO_CAPACITY` (reason `no-worker`); no known
+worker has the platform, `NO_DRIVER`; none lists the model, `UNKNOWN_MODEL`;
+none has the runtime or pairs it with the model, `RUNTIME_MISSING` with
+`downloadable: false` and `osVersion: "default"` for an unnamed runtime (the
+last three with reason `unresolvable-spec`); a known worker can serve it but
+none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
+wait. A worker *takes requests* when it passes `takes-requests`; the gateway
+*knows* a worker when its view has ever held a read catalog
+(`catalogEverRead`) and it is not `incompatible`. The view's `catalogReadAt`
+is set by a refresh that carries a catalog and cleared when the worker
+connects, so a reconnecting worker is known from its last catalog but takes
+requests only once the new one arrives, and a first-time worker with no
+catalog yet is neither. `WorkerLink` coalesces refreshes and keeps
+`includeCatalog` on a queued follow-up, so a catalog refresh that arrives
+during another refresh is still read.
 
 There is no other placement rule in v1: no requester affinity, no label
 selectors, no per-worker platform exclusions. Each of those is a future

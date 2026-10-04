@@ -72,7 +72,7 @@ command starts it again) to bring the platform up.
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
 | 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
 | 10 | `DOWNLOAD_TIMEOUT` | a runtime download, including the time spent waiting for another download on the same platform, outlived `downloads.timeoutMs` |
-| 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
+| 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set, or, through a gateway, no worker that takes requests can serve the request |
 | 11 | `COMPONENT_BUSY` | `component remove` while a component install or removal runs or waits on that platform; try again once it ends |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download`, or no installed image of the `--image-tag` asked for |
@@ -252,9 +252,8 @@ granted.
   lease only reuses an idle device created for the same tag, or for no tag
   when it names none. On iOS the flag is a `BAD_REQUEST` (exit 2). A tag is 1
   to 64 letters, digits, `_`, `.` or `-`. Through a gateway, a lease whose tag
-  no worker lists for that API level, an iOS one included, is sent to no
-  worker: it waits in the queue, or fails with `NO_CAPACITY` (exit 11) under
-  `--no-wait`.
+  no worker lists for that API level, an iOS one included, fails at once with
+  `RUNTIME_MISSING` (exit 12), with or without `--no-wait`.
 - `--detach` — print the lease result (the same JSON shape as the grant line
   below, including `device.mode`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
@@ -648,8 +647,10 @@ differs.
 same grant line, including `--ttl`, `--no-wait`, `--timeout`, and
 `--allow-download`, which is accepted and has no effect through a gateway:
 only runtimes already installed on a worker count, and no download is
-started. The request waits in the gateway's own fleet-wide FIFO queue,
-reporting `queued` with a `queuePosition` exactly as a worker's queue does.
+started. When a worker could serve the request and is busy, it waits in the
+gateway's own fleet-wide FIFO queue, reporting `queued` with a `queuePosition`
+exactly as a worker's queue does. A request no worker can serve does not wait;
+see [A request no worker can serve](#a-request-no-worker-can-serve) below.
 
 The gateway sends a request only to a worker that can serve it. `--device`
 matches a worker's model in any letter case and by any other name that
@@ -662,6 +663,33 @@ runtime when `--os` is given. Among the
 workers that can serve it, the request goes to a machine with a matching warm
 device first, otherwise the one with the most free capacity. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
+
+### A request no worker can serve
+
+A lease through a gateway never waits for something that cannot arrive. A
+worker *takes requests* when it is connected, not drained, and the gateway has
+read its catalog since it connected. The gateway *knows* a worker once it has
+read a catalog from it and the worker is not `incompatible`: a drained or
+disconnected worker stays known, and a worker that reconnects stays known from
+its last catalog. A worker that has just connected for the first time, whose
+catalog has not arrived, is neither.
+
+| Situation | Result |
+| --- | --- |
+| No worker takes requests | `NO_CAPACITY` (exit 11) at once |
+| At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
+| ... and no known worker lists the model | `UNKNOWN_MODEL` (exit 12) at once |
+| ... and no known worker has the runtime, or can pair it with the model | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is `default` when you named none |
+| A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
+| A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
+
+"At once" holds with and without `--no-wait` and `--timeout`, and the same
+requester can ask again right away. The table also applies to a request that is
+already waiting: if the only worker that can serve it is drained or
+disconnects, the request fails with `NO_CAPACITY`. A short disconnect fails the
+requests waiting on that worker; ask again. After a gateway restart a worker is
+not known until it reconnects, so a request only that worker can serve gets
+`UNKNOWN_MODEL` or `RUNTIME_MISSING` in the meantime.
 
 The grant carries one additional block so you can see where it landed:
 

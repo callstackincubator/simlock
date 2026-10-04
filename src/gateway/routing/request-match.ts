@@ -16,15 +16,9 @@ import type { RoutableRequest } from "./pipeline.js";
  * runtimes for which the catalog's `images` lists an image of that tag.
  */
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
-  const catalog = worker.catalog.find((entry) => entry.platform === request.platform);
-  if (catalog === undefined) return undefined;
-  const wanted = fold(request.model);
-  const model = catalog.models.find(
-    (name) =>
-      fold(name) === wanted ||
-      ownList(catalog.modelAliases, name).some((alias) => fold(alias) === wanted),
-  );
-  if (model === undefined) return undefined;
+  const catalog = catalogOf(worker, request);
+  const model = catalog === undefined ? undefined : findModel(catalog, request);
+  if (catalog === undefined || model === undefined) return undefined;
   const { imageTag } = request;
   const runtimes =
     imageTag === undefined
@@ -37,6 +31,37 @@ export function matchRequest(worker: WorkerView, request: RoutableRequest): stri
   const pairs =
     request.osVersion === undefined ? runtimes.length > 0 : runtimes.includes(request.osVersion);
   return pairs ? model : undefined;
+}
+
+/** Whether the worker's catalog has an entry for the request's platform. */
+export function hasPlatform(worker: WorkerView, request: RoutableRequest): boolean {
+  return catalogOf(worker, request) !== undefined;
+}
+
+/**
+ * Whether the worker lists the requested model, by name or alias in any letter case, whatever
+ * runtimes it pairs with. The table of ADR 0009 §4 tells a missing model from a missing runtime
+ * with it.
+ */
+export function listsModel(worker: WorkerView, request: RoutableRequest): boolean {
+  const catalog = catalogOf(worker, request);
+  return catalog !== undefined && findModel(catalog, request) !== undefined;
+}
+
+type PlatformEntry = WorkerView["catalog"][number];
+
+function catalogOf(worker: WorkerView, request: RoutableRequest): PlatformEntry | undefined {
+  return worker.catalog.find((entry) => entry.platform === request.platform);
+}
+
+/** The first entry of `models` whose name or alias is the requested name. */
+function findModel(catalog: PlatformEntry, request: RoutableRequest): string | undefined {
+  const wanted = fold(request.model);
+  return catalog.models.find(
+    (name) =>
+      fold(name) === wanted ||
+      ownList(catalog.modelAliases, name).some((alias) => fold(alias) === wanted),
+  );
 }
 
 /** Locale-independent, so a gateway and a worker on different locales fold a name alike. */

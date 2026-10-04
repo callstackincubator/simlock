@@ -177,9 +177,15 @@ export class WorkerRegistry {
    * saw, which is more useful to a console than an empty one.
    */
   connected(workerId: string, label: string | undefined, version: string | undefined): WorkerView {
-    const existing = this.#workers.get(workerId);
+    // The catalog the last session read stays, so a reconnecting worker is still known from it
+    // (ADR 0009 §4); only when it was read is cleared, since nothing has been read this session.
+    const { catalogReadAt: _stale, ...existing } = this.#workers.get(workerId) ?? {
+      catalog: [],
+      devices: [],
+      leases: [],
+    };
     const view: WorkerView = {
-      ...(existing ?? { catalog: [], devices: [], leases: [] }),
+      ...existing,
       connection: "connected",
       // Read from the persisted set, not from the previous view: a worker connecting for the
       // first time after a gateway restart has no previous view, and must still be drained.
@@ -290,10 +296,13 @@ export class WorkerRegistry {
     const existing = this.#workers.get(workerId);
     if (existing === undefined) return;
     const { grantedDevices, ...snapshot } = refresh;
+    const now = this.options.clock.now();
     const next: WorkerView = {
       ...existing,
       ...snapshot,
-      lastSeenAt: this.options.clock.now(),
+      lastSeenAt: now,
+      // ADR 0009 §4: a refresh that carries a catalog is a read of it.
+      ...(snapshot.catalog === undefined ? {} : { catalogEverRead: true, catalogReadAt: now }),
     };
     this.#workers.set(workerId, next);
     if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);

@@ -190,11 +190,12 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("the worker view builder gives a gateway the same view it built before this change", async () => {
+  it("the worker view builder gives a gateway the view it built before the builder moved, plus when and whether it read the catalog", async () => {
     // Every field a refresh fills, set to a value that is not a default, and the whole view
     // compared as one literal: the expected value is what the gateway built before the view
     // builder moved into the contract, so any field the move dropped, renamed or reshaped
-    // fails here by name.
+    // fails here by name. The two catalog fields are the registry's own record of the read (ADR
+    // 0009 §4), not the builder's.
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient("admin", "9.8.7");
@@ -243,6 +244,8 @@ describe("GatewayService", () => {
       capacity,
       catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
         .platforms,
+      catalogEverRead: true,
+      catalogReadAt: 1_000,
       connection: "connected",
       devices: [deviceFixture("dev_1", "leased")],
       downloads: { policy: "always", timeoutMs: 45 * 60_000 },
