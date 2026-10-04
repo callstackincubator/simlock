@@ -49,6 +49,8 @@ export interface EventMap {
       | "timeout"
       | "no-wait"
       | "unresolvable-spec"
+      /** A gateway's request that no worker taking requests can serve (ADR 0009 §4). */
+      | "no-worker"
       | "already-leased"
       | "boot-timeout"
       | "killed"

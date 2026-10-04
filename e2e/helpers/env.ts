@@ -125,6 +125,9 @@ export interface WithDaemonOptions {
    * a script written later only reaches the gateway on its 30s periodic refresh.
    */
   readonly driverScript?: FakeDriverScript;
+  /** The platforms the fake registers a driver for; omitted registers both. Only with the fake
+   * driver. A worker without a platform's driver lists no catalog for it. */
+  readonly fakeDriverPlatforms?: readonly ("ios" | "android")[];
 }
 
 export interface TestEnv {
@@ -191,6 +194,9 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
           SIMLOCK_DRIVERS_MODULE: FAKE_DRIVER_MODULE,
           SIMLOCK_FAKE_DRIVER_SCRIPT: scriptPath,
           SIMLOCK_FAKE_DRIVER_LOG: logCallPath,
+          ...(options.fakeDriverPlatforms === undefined
+            ? {}
+            : { SIMLOCK_FAKE_DRIVER_PLATFORMS: options.fakeDriverPlatforms.join(",") }),
         }
       : {}),
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),

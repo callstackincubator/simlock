@@ -81,6 +81,7 @@ import {
   type RoutingDecision,
   type RoutingPolicy,
 } from "./routing.js";
+import type { Rejection } from "./routing/serviceability.js";
 import { viewLoadKey } from "./routing/view-state.js";
 
 export interface FleetExecInput {
@@ -607,7 +608,9 @@ export class FleetLeaseCoordinator {
    */
   #admit(waiter: FleetWaiter): void {
     // Attempted. If that attempt is refused, `#attempt` decides the rest: one more walk for a
-    // `noWait` caller (ADR 0009 §5). A target that turned out unreachable re-queues it.
+    // `noWait` caller (ADR 0009 §5). A target that turned out unreachable re-queues it. A
+    // candidate the walk rejected as unservable (ADR 0009 §4) is terminal, so the rejection and
+    // the enqueue below are no-ops on it: `WaitQueue` refuses both for a terminal waiter.
     if (this.#dispatch(waiter)) return;
     if (waiter.options.noWait === true) {
       this.#reject(
@@ -622,7 +625,7 @@ export class FleetLeaseCoordinator {
 
   /**
    * ADR §11: re-run on every worker-view change. Every already-queued waiter not currently in
-   * flight gets one more look, oldest first; one no eligible worker can serve is passed over,
+   * flight gets one more look, oldest first; one no eligible worker can take right now is passed over,
    * not blocked on -- there is no early exit from this loop.
    *
    * H6 (round 3 review): `routing.select` reads the same unchanged `views()` snapshot for every
@@ -639,7 +642,8 @@ export class FleetLeaseCoordinator {
    * settles (a grant via `#settleGrant`, or a terminal rejection), on top of the existing
    * worker-view trigger, so a waiter passed over here always gets looked at again once whatever
    * claimed its worker this pass is done with it, the same "passed over, not blocked on" contract
-   * this method already promises for a request no worker can serve at all. Before this, only a
+   * this method already promises for a request a busy fleet cannot take yet. (A request no worker
+   * can serve at all is not passed over: the walk rejects it, ADR 0009 §4.) Before this, only a
    * worker's own event stream (a `lease.rejected`/`lease.expired` push, or the 30s refresh tick)
    * ever re-ran this method -- several of `#attempt`'s own terminal branches
    * (`WORKER_UNREACHABLE`, `INTERNAL`, a target that disappeared between routing and dispatch)
@@ -676,18 +680,17 @@ export class FleetLeaseCoordinator {
       return false;
     }
     this.#dispatchDepth += 1;
-    let candidateAttempted = false;
     try {
-      candidateAttempted = this.#dispatchPass(candidate);
+      const candidateAttempted = this.#dispatchPass(candidate);
       while (this.#passRequested) {
         this.#passRequested = false;
         this.#dispatchPass();
       }
+      return candidateAttempted;
     } finally {
       this.#dispatchDepth -= 1;
       this.#passRequested = false;
     }
-    return candidateAttempted;
   }
 
   /**
@@ -707,8 +710,8 @@ export class FleetLeaseCoordinator {
    * same place as the per-pass claim set.
    */
   #dispatchPass(candidate?: FleetWaiter): boolean {
-    let candidateAttempted = false;
     const claimedThisPass = new Set<string>();
+    const attempted = new Set<FleetWaiter | undefined>();
     const waiters =
       candidate === undefined || this.#queue.isQueued(candidate)
         ? this.#queue.list()
@@ -716,17 +719,42 @@ export class FleetLeaseCoordinator {
     for (const waiter of waiters) {
       // The candidate is mid-admission, not `queued`, even when it holds a queue position.
       if (waiter !== candidate && waiter.state !== "queued") continue;
-      const eligibleWorkers = this.options.views
-        .views()
-        .filter((worker) => !claimedThisPass.has(worker.id) && !this.#refused(waiter, worker));
-      const request = routable(waiter);
-      const decision = this.options.routing.select(request, eligibleWorkers);
-      if (decision === undefined) continue;
-      claimedThisPass.add(decision.workerId);
-      if (waiter === candidate) candidateAttempted = true;
-      this.#beginAttempt(waiter, decision, forwardedModel(request, eligibleWorkers, decision));
+      if (this.#walkWaiter(waiter, claimedThisPass)) attempted.add(waiter);
     }
-    return candidateAttempted;
+    return attempted.has(candidate);
+  }
+
+  /** One waiter's turn in the walk. Whether it was sent to a worker; a waiter the table rejects
+   * is terminal by then, and `#admit` finds both of its follow-ups no-ops on it. */
+  #walkWaiter(waiter: FleetWaiter, claimedThisPass: Set<string>): boolean {
+    const views = this.options.views.views();
+    const request = routable(waiter);
+    // ADR 0009 §4: the table runs before the stages, over every view -- a worker claimed this
+    // pass or that refused this waiter is busy, not unable, so it still makes a request
+    // servable. A request on rows 1 to 5 never reaches `select`, and never enters the queue.
+    const verdict = this.options.routing.assess(request, views);
+    if (verdict.kind === "reject") {
+      this.#rejectUnservable(waiter, verdict);
+      return false;
+    }
+    const eligibleWorkers = views.filter(
+      (worker) => !claimedThisPass.has(worker.id) && !this.#refused(waiter, worker),
+    );
+    const decision = this.options.routing.select(request, eligibleWorkers);
+    if (decision === undefined) return false;
+    claimedThisPass.add(decision.workerId);
+    this.#beginAttempt(waiter, decision, forwardedModel(request, eligibleWorkers, decision));
+    return true;
+  }
+
+  /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
+   * details a worker gives the same request. */
+  #rejectUnservable(waiter: FleetWaiter, verdict: Rejection): void {
+    this.#reject(
+      waiter,
+      new DispatchError(verdict.code, verdict.message, verdict.details),
+      verdict.reason,
+    );
   }
 
   /**
@@ -999,7 +1027,11 @@ export class FleetLeaseCoordinator {
     }
   }
 
-  #reject(waiter: FleetWaiter, error: Error, reason: "no-wait" | "cancelled" | "timeout"): void {
+  #reject(
+    waiter: FleetWaiter,
+    error: Error,
+    reason: Rejection["reason"] | "no-wait" | "cancelled" | "timeout",
+  ): void {
     if (this.#queue.reject(waiter, error)) {
       this.#emit("lease.rejected", { requestSpec: waiter.request, reason });
     }

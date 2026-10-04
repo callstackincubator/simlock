@@ -906,6 +906,14 @@ export const workerViewSchema = z.object({
   leases: z.array(leaseRecordSchema),
   devices: z.array(statusDeviceSchema),
   catalog: z.array(platformCatalogSchema),
+  /**
+   * ADR 0009 §4: when the gateway last read `catalog` from this worker in its current session.
+   * Cleared when the worker connects and set again by the first refresh that reads a catalog, so
+   * a worker that has just connected has none: its `catalog` is the last session's, or empty.
+   * It is what tells a catalog read and found empty from one that has not arrived. Absent on a
+   * view no gateway built.
+   */
+  catalogReadAt: z.number().optional(),
   /** ADR 0008 §8: the `host` block of the worker's last `status.get`. Absent for a worker the
    * gateway has not read status from, and for an `incompatible` one. */
   host: hostFactsSchema.optional(),

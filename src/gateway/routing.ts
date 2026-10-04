@@ -6,6 +6,7 @@
  * them. Nothing outside this module decides how a worker is chosen.
  */
 import { type RoutableRequest, type RoutingStage, runStages } from "./routing/pipeline.js";
+import { type Assessment, assess } from "./routing/serviceability.js";
 import { canServe } from "./routing/stages/can-serve.js";
 import { freeCapacity } from "./routing/stages/free-capacity.js";
 import { takesRequests } from "./routing/stages/takes-requests.js";
@@ -32,11 +33,17 @@ export interface RoutingDecision {
  * every dispatch pass with no extra bookkeeping.
  */
 export interface RoutingPolicy {
+  /**
+   * Whether the request can be served at all, and if not, why (ADR 0009 §4). Asked before
+   * `select`, over every view: a worker that is merely busy still makes a request servable.
+   */
+  assess(request: RoutableRequest, workers: readonly WorkerView[]): Assessment;
   select(request: RoutableRequest, workers: readonly WorkerView[]): RoutingDecision | undefined;
 }
 
 function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPolicy {
   return {
+    assess,
     select(request, workers) {
       const pick = runStages(stages, request, workers);
       if (pick === undefined) return undefined;

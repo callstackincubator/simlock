@@ -153,3 +153,5 @@ export interface FakeDriverLogEntry {
 
 export const DEFAULT_SCRIPT_ENV = "SIMLOCK_FAKE_DRIVER_SCRIPT";
 export const DEFAULT_LOG_ENV = "SIMLOCK_FAKE_DRIVER_LOG";
+/** Comma-separated platforms the fake registers a driver for; unset registers both. */
+export const DEFAULT_PLATFORMS_ENV = "SIMLOCK_FAKE_DRIVER_PLATFORMS";

@@ -9,6 +9,7 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
     capacity: statusFixture().capacity,
     catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
       .platforms,
+    catalogReadAt: 1,
     connection: "connected",
     devices: [],
     drained: false,
@@ -29,6 +30,7 @@ describe("takes-requests in the registered policy", () => {
     ["incompatible", { connection: "incompatible" as const }],
     ["drained", { drained: true }],
     ["whose capacity has not been read", { capacity: undefined }],
+    ["whose catalog has not been read since it connected", { catalogReadAt: undefined }],
   ])("passes over a worker that is %s for one that takes requests", (_label, overrides) => {
     // wrk_a sorts first and holds a warm device, so only takes-requests can pass it over.
     const { capacity, ...rest } = {

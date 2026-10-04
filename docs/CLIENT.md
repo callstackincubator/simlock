@@ -63,8 +63,8 @@ when no image of that tag is installed for the API level it fails with
 `RUNTIME_MISSING`, whatever `allowDownload` says. On iOS it is a
 `BAD_REQUEST`, and so is a tag that is not 1 to 64 letters, digits, `_`, `.`
 or `-`. Through a gateway, a request whose tag no worker lists for that API
-level, an iOS one included, is sent to no worker: it waits in the queue, or
-fails with `NO_CAPACITY` under `noWait`.
+level, an iOS one included, fails at once with `RUNTIME_MISSING`, with or
+without `noWait`.
 
 ```ts
 const grant = await client.requestLease({

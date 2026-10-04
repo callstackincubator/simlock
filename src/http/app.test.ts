@@ -30,6 +30,7 @@ function buildHarness(
     readonly leaseRequests?: HttpGatewayDeps["leaseRequests"];
     /** A gateway's device reader, in place of the fake worker registry. */
     readonly registry?: HttpGatewayDeps["registry"];
+    readonly answerDownloadsEarly?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -66,6 +67,9 @@ function buildHarness(
     ownerRoutedFacts,
     registry: overrides.registry ?? registry,
     tokens,
+    ...(overrides.answerDownloadsEarly === undefined
+      ? {}
+      : { answerDownloadsEarly: overrides.answerDownloadsEarly }),
   });
 
   return { app, clock, config, dispatcher, eventBus, logSink, registry, tokens };
@@ -547,6 +551,37 @@ describe("POST /v1/lease-requests", () => {
     expect((await response.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
+  });
+
+  it.each([
+    ["with allowDownload", { allowDownload: true }],
+    ["without allowDownload", {}],
+  ])(
+    "fails the POST with the dispatcher's rejection, allowDownload or not, when the app is told downloads do not answer early (%s)",
+    async (_label, extra) => {
+      const { app, dispatcher } = buildHarness({ answerDownloadsEarly: false });
+      const responsePromise = postLeaseRequest(app, { ...defaultBody, ...extra });
+      const call = await waitForDispatch(dispatcher, "lease.request");
+      call.session.onRequestAdmitted?.("req_1", false);
+      call.reject(new DispatchError("UNKNOWN_MODEL", "no worker lists iPhone 17 Pro"));
+
+      const response = await responsePromise;
+
+      expect(response.status).toBe(422);
+      expect((await response.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: "UNKNOWN_MODEL" },
+      });
+    },
+  );
+
+  it("answers 201 as soon as the request is stored with allowDownload, by default", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, { ...defaultBody, allowDownload: true });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.session.onRequestAdmitted?.("req_1", false);
+
+    // Settles with the dispatch still open: nothing was granted or rejected.
+    expect((await responsePromise).status).toBe(201);
   });
 
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {

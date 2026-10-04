@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
+import { QueueTimeoutError } from "../core/wait-queue.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
@@ -167,6 +168,12 @@ async function tick(times = 16): Promise<void> {
 
 const REQUEST = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
 
+/** Capacity with no free iOS slot: a worker that can serve an iPhone 17 request and is busy. */
+function saturatedIos(): ReturnType<typeof statusFixture>["capacity"] {
+  const capacity = statusFixture().capacity;
+  return { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } };
+}
+
 function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["request"]>[1]> = {}) {
   return {
     allowDownload: false,
@@ -294,14 +301,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // Worker A never answers -- the attempt this waiter is dispatched to stays in flight.
     clientA.requestLeaseQueue.push({ kind: "hang" });
 
-    // No worker connected yet: admission's own first look finds nobody, so this waiter genuinely
-    // enters the queue (`queue.list()`) rather than settling on the fast admission-time path --
-    // exactly the shape a *second* dispatch pass (triggered below) would otherwise re-scan.
+    // Worker A is connected but has no free slot: admission's own first look finds nobody to
+    // send it to, so this waiter genuinely enters the queue (`queue.list()`) rather than settling
+    // on the fast admission-time path -- exactly the shape a *second* dispatch pass (triggered
+    // below) would otherwise re-scan.
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     void coordinator.request(REQUEST, requestOptions());
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
     expect(clientA.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
@@ -334,8 +343,9 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // (two full slots below) does not match what it can actually grant right now.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    // Three requests queue up before any worker is connected -- all genuinely `queued`, not
+    // Three requests queue up behind a worker with no free slot -- all genuinely `queued`, not
     // settled at admission.
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const p1 = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
@@ -351,11 +361,11 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(3);
 
-    // `connectWorker`'s default capacity reports two free iOS slots -- on paper, room for two of
+    // The refresh below reports two free iOS slots -- on paper, room for two of
     // the three queued waiters above. Without the per-pass cap, `#dispatch`'s single pass would
     // run `routing.select` against this same unchanged view for every one of the three, pick
     // worker A for every one of them, and fire three concurrent `lease.request`s in this one pass.
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
 
     // Capped at one dispatch *per pass* -- but C1 (round 3 review) guarantees a fresh pass the
@@ -399,6 +409,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // w2's own eventual attempt, once it gets its turn.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const w1Request = coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
@@ -412,7 +423,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(2);
 
-    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
     // H6's own per-pass cap: only w1 was attempted this pass, w2 passed over.
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
@@ -776,20 +787,26 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_a.lse_1");
   });
 
-  it("passes over a request no worker can serve instead of blocking behind it, and never lets a brand-new admission jump an older, equally-eligible waiter still queued behind it (C2, round 3 review)", async () => {
+  it("passes over a request only a busy worker can serve instead of blocking behind it, and never lets a brand-new admission jump an older, equally-eligible waiter still queued behind it (C2, round 3 review)", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_ios", client);
+    directory.add("wrk_android", new ScriptedWorkerClient());
     // `oldFirst`'s own attempt claims the worker for the whole test and never settles -- what
     // matters here is which *other* waiter gets a look at the worker's nominal second slot next,
     // not what `oldFirst` itself resolves to.
     client.requestLeaseQueue.push({ kind: "hang" });
 
-    // Admitted oldest first: an unserviceable android request, then two genuinely iOS-eligible
-    // waiters -- all enter the queue before any worker connects. The round 3 review's own
-    // title-vs-body finding (C2): the previous version of this test had only one iOS-eligible
-    // waiter, so its title's ordering claim asserted nothing a reader could not already get from
-    // the "passed over" half alone -- `oldSecond` and `newPromise` below are what actually exercise it.
+    // Both workers are connected and busy, so every request below waits (a request no worker
+    // could ever serve would fail at once instead). Admitted oldest first: an android request
+    // whose worker stays busy for the whole test, then two iOS waiters.
+    const capacity = statusFixture().capacity;
+    connectWorker(workers, "wrk_ios", { capacity: saturatedIos() });
+    connectWorker(workers, "wrk_android", {
+      capacity: { ...capacity, android: { ...capacity.android, maxRunning: 0 } },
+      models: ["Pixel 9"],
+      platform: "android",
+    });
     const androidPromise = coordinator.request(
       { model: "Pixel 9", platform: "android" },
       requestOptions({ ownerId: "agent-android", requesterId: "agent-android" }),
@@ -805,12 +822,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(3);
 
-    // The one worker that connects can only ever serve iOS -- an android-then-iOS dispatch loop
-    // that gives up (or blocks) on android's own "no worker" answer would never reach either iOS
-    // waiter behind it in this same pass. Its reported capacity (two free slots) is on paper room
-    // for both `oldFirst` and `oldSecond`, but H6's own per-worker-per-pass cap intentionally
-    // leaves `oldSecond` passed over here -- genuinely `queued`, not the bug this test targets.
-    connectWorker(workers, "wrk_ios", { platform: "ios", models: ["iPhone 17"] });
+    // The iOS worker frees two slots. An android-then-iOS dispatch loop that gives up (or
+    // blocks) on android's own "no worker" answer would never reach either iOS waiter behind it
+    // in this same pass. Its reported capacity (two free slots) is on paper room for both
+    // `oldFirst` and `oldSecond`, but H6's own per-worker-per-pass cap intentionally leaves
+    // `oldSecond` passed over here -- genuinely `queued`, not the bug this test targets.
+    workers.refresh("wrk_ios", { capacity: statusFixture().capacity });
     await tick();
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
@@ -1066,6 +1083,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // payload fields can only have come from the decision itself.
     const { coordinator, directory, eventBus, workers } = harness({
       routing: () => ({
+        assess: () => ({ kind: "route-or-wait" }),
         select: (_request, views) =>
           views[0] === undefined
             ? undefined
@@ -1561,6 +1579,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
       routing: (registry) => {
         const real = createRoutingPolicy("warm-then-free");
         return {
+          assess: real.assess,
           select(request, workerViews) {
             selectCalls += 1;
             if (selectCalls === 2) {
@@ -1580,30 +1599,21 @@ describe("FleetLeaseCoordinator dispatch", () => {
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    // Connected, but carrying a model this request cannot use -- so the waiter queues, and the
+    // Connected, but with no free slot -- so the waiter queues behind a busy worker, and the
     // worker is already fully connected. That matters: `connectWorker` raises *two* view changes
     // (`connected`, then `refresh`), and a second top-level dispatch would serve the waiter on
     // its own, masking whether the deferred pass did anything at all. Getting the worker
     // connected before the request leaves exactly one trigger below.
-    connectWorker(workers, "wrk_a", { models: ["iPhone 16"] });
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const grantPromise = coordinator.request(REQUEST, requestOptions());
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    // The single trigger: one refresh that makes the worker eligible. Pass 1 refuses the waiter
+    // The single trigger: one refresh that frees a slot. Pass 1 refuses the waiter
     // and raises a nested view change; only the deferred pass 2 can dispatch it. Asserted on the
     // forwarded RPC rather than by awaiting the grant, so dropping the deferral fails here on a
     // named assertion instead of by timing out (testing rule 2).
-    workers.refresh("wrk_a", {
-      capacity: statusFixture().capacity,
-      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-        .platforms,
-      devices: [],
-      downloads: { policy: "on-request" },
-      health: "running",
-      leases: [],
-      queueDepth: 0,
-    });
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
 
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
@@ -2236,7 +2246,7 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     });
   });
 
-  it("rejects a no-wait request naming an image tag no worker lists with NO_CAPACITY, sending it to no worker", async () => {
+  it("rejects a request naming an image tag no worker lists with RUNTIME_MISSING at once, sending it to no worker", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -2247,12 +2257,15 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
       runtimes: ["34"],
     });
 
-    await expect(
-      coordinator.request(
-        { imageTag: "google_apis_playstore", model: "Pixel 8", platform: "android" },
-        requestOptions({ noWait: true }),
-      ),
-    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+    const outcome = coordinator.request(
+      { imageTag: "google_apis_playstore", model: "Pixel 8", platform: "android" },
+      requestOptions(),
+    );
+    const state = promiseState(outcome);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    await expect(outcome).rejects.toMatchObject({ code: "RUNTIME_MISSING" });
     expect(leaseRequests(client)).toEqual([]);
   });
 
@@ -2281,5 +2294,342 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
 
     expect(leaseRequests(downloader)).toEqual([]);
     expect(installed.lastRequestLeaseInput?.allowDownload).toBe(false);
+  });
+});
+
+describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR 0009 §4)", () => {
+  const capacity = statusFixture().capacity;
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  function lease(
+    harnessed: ReturnType<typeof harness>,
+    request: Parameters<FleetLeaseCoordinator["request"]>[0],
+    options: Parameters<typeof requestOptions>[0] = {},
+  ) {
+    const outcome = harnessed.coordinator.request(request, requestOptions(options));
+    return { outcome, state: promiseState(outcome) };
+  }
+
+  /** One scenario per row of ADR 0009 §4's table, each with the workers it needs connected. */
+  const ROWS = [
+    {
+      code: "NO_CAPACITY",
+      details: undefined,
+      reason: "no-worker",
+      request: REQUEST,
+      row: "row 1: no worker takes requests",
+      setup: async (_workers: WorkerRegistry) => {},
+    },
+    {
+      code: "NO_DRIVER",
+      details: { platform: "android" },
+      reason: "unresolvable-spec",
+      request: { model: "Pixel 8", platform: "android" as const },
+      row: "row 2: no known worker has the platform",
+      setup: async (workers: WorkerRegistry) => connectWorker(workers, "wrk_a"),
+    },
+    {
+      code: "UNKNOWN_MODEL",
+      details: { model: "iPhone 99", platform: "ios" },
+      reason: "unresolvable-spec",
+      request: { ...REQUEST, model: "iPhone 99" },
+      row: "row 3: no known worker lists the model",
+      setup: async (workers: WorkerRegistry) => connectWorker(workers, "wrk_a"),
+    },
+    {
+      code: "RUNTIME_MISSING",
+      details: { downloadable: false, osVersion: "99.0", platform: "ios" },
+      reason: "unresolvable-spec",
+      request: { ...REQUEST, osVersion: "99.0" },
+      row: "row 4: no known worker has the runtime",
+      setup: async (workers: WorkerRegistry) => connectWorker(workers, "wrk_a"),
+    },
+    {
+      code: "NO_CAPACITY",
+      details: undefined,
+      reason: "no-worker",
+      request: REQUEST,
+      row: "row 5: a known worker can serve it and none that takes requests can",
+      setup: async (workers: WorkerRegistry) => {
+        connectWorker(workers, "wrk_a", { models: ["iPhone 16"] });
+        connectWorker(workers, "wrk_b");
+        await workers.setDrained("wrk_b", true);
+      },
+    },
+  ] as const;
+  const WAITS = [
+    { options: {}, wait: "waiting" },
+    { options: { noWait: true }, wait: "with --no-wait" },
+    { options: { timeoutMs: 60_000 }, wait: "with a timeout" },
+    { options: { noWait: true, timeoutMs: 60_000 }, wait: "with --no-wait and a timeout" },
+  ] as const;
+
+  it.each(ROWS.flatMap((row) => WAITS.map(({ options, wait }) => ({ ...row, options, wait }))))(
+    "$row: answers $code at once and sends it to no worker, $wait",
+    async (row) => {
+      const { options } = row;
+      const fleetHarness = harness();
+      const client = new ScriptedWorkerClient();
+      fleetHarness.directory.add("wrk_a", client);
+      fleetHarness.directory.add("wrk_b", client);
+      await row.setup(fleetHarness.workers);
+      const rejected: unknown[] = [];
+      fleetHarness.eventBus.subscribe("lease.rejected", (envelope) =>
+        rejected.push(envelope.payload),
+      );
+
+      const { outcome, state } = lease(fleetHarness, row.request, options);
+      await tick();
+
+      // Settled with no clock advanced: neither the timeout nor a worker's answer was waited on.
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({
+        code: row.code,
+        ...(row.details === undefined ? {} : { details: row.details }),
+      });
+      expect(rejected).toEqual([expect.objectContaining({ reason: row.reason })]);
+      expect(leaseRequests(client)).toEqual([]);
+      expect(fleetHarness.coordinator.queueDepth).toBe(0);
+    },
+  );
+
+  describe("row 6: a worker that takes requests can serve it but is busy", () => {
+    function busyFleet() {
+      const fleetHarness = harness();
+      const client = new ScriptedWorkerClient();
+      fleetHarness.directory.add("wrk_a", client);
+      connectWorker(fleetHarness.workers, "wrk_a", { capacity: saturatedIos() });
+      return { client, fleetHarness };
+    }
+
+    it("queues it, sends it to no worker, waiting", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { state } = lease(fleetHarness, REQUEST);
+      await tick();
+
+      expect(state.state).toBe("pending");
+      expect(fleetHarness.coordinator.queueDepth).toBe(1);
+      expect(leaseRequests(client)).toEqual([]);
+    });
+
+    it("answers NO_CAPACITY at once with --no-wait, and queues nothing", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { noWait: true });
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(leaseRequests(client)).toEqual([]);
+      expect(fleetHarness.coordinator.queueDepth).toBe(0);
+    });
+
+    it("queues it with a timeout, and ends it at the deadline rather than at once", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { timeoutMs: 60_000 });
+      const ended = outcome.catch((error: unknown) => error);
+      await tick();
+      expect(state.state).toBe("pending");
+      expect(fleetHarness.coordinator.queueDepth).toBe(1);
+
+      fleetHarness.clock.advance(60_000);
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toBeInstanceOf(QueueTimeoutError);
+      expect(leaseRequests(client)).toEqual([]);
+    });
+
+    it("answers NO_CAPACITY at once with --no-wait and a timeout", async () => {
+      const { fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { noWait: true, timeoutMs: 60_000 });
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(fleetHarness.coordinator.queueDepth).toBe(0);
+    });
+  });
+
+  it("lets a rejected requester make a new request at once", async () => {
+    const fleetHarness = harness();
+    const { coordinator, directory, workers } = fleetHarness;
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    directory.add("wrk_b", client);
+    connectWorker(workers, "wrk_a");
+    const unknown = { ...REQUEST, model: "iPhone 99" };
+
+    const first = lease(fleetHarness, unknown);
+    await tick();
+    expect(first.state.state).toBe("rejected");
+    await expect(first.outcome).rejects.toMatchObject({ code: "UNKNOWN_MODEL" });
+
+    // The same requester asks again: a second rejection, not REQUESTER_ALREADY_LEASED.
+    const second = lease(fleetHarness, unknown);
+    await tick();
+    expect(second.state.state).toBe("rejected");
+    await expect(second.outcome).rejects.toMatchObject({ code: "UNKNOWN_MODEL" });
+
+    // And once a worker lists the model, the same requester is served.
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_b", { models: ["iPhone 99"] });
+    const third = await coordinator.request(unknown, requestOptions());
+    expect(third.lease.worker?.id).toBe("wrk_b");
+  });
+
+  it("emits no lease.queued and pushes no queued progress for a request it rejects on arrival", async () => {
+    const { coordinator, eventBus, workers } = harness();
+    connectWorker(workers, "wrk_a");
+    const events: string[] = [];
+    eventBus.subscribe("lease.queued", () => events.push("lease.queued"));
+    eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
+    const progress: string[] = [];
+
+    const outcome = coordinator.request(
+      { ...REQUEST, model: "iPhone 99" },
+      requestOptions({ onProgress: (update) => progress.push(update.stage) }),
+    );
+    const state = promiseState(outcome);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    await expect(outcome).rejects.toMatchObject({ code: "UNKNOWN_MODEL" });
+    expect(events).toEqual(["lease.rejected"]);
+    expect(progress).toEqual([]);
+  });
+
+  it.each([
+    ["is drained", (workers: WorkerRegistry) => workers.setDrained("wrk_a", true)],
+    ["disconnects", (workers: WorkerRegistry) => workers.disconnected("wrk_a")],
+  ] as const)(
+    "fails a waiting request with NO_CAPACITY when its only capable worker %s",
+    async (_change, change) => {
+      const fleetHarness = harness();
+      const { coordinator, directory, eventBus, workers } = fleetHarness;
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      directory.add("wrk_b", client);
+      connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+      connectWorker(workers, "wrk_b", { models: ["iPhone 16"] });
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      const { outcome, state } = lease(fleetHarness, REQUEST);
+      await tick();
+      // Control: a busy worker makes it wait.
+      expect(state.state).toBe("pending");
+      expect(coordinator.queueDepth).toBe(1);
+
+      await change(workers);
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(rejected).toEqual([expect.objectContaining({ reason: "no-worker" })]);
+      expect(coordinator.queueDepth).toBe(0);
+      expect(leaseRequests(client)).toEqual([]);
+    },
+  );
+
+  it("answers NO_CAPACITY, not UNKNOWN_MODEL, for a request only a disconnected worker lists while another worker takes requests", async () => {
+    const fleetHarness = harness();
+    const { workers } = fleetHarness;
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { models: ["iPhone 16"] });
+    workers.disconnected("wrk_a");
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+  });
+
+  it("answers NO_CAPACITY, not UNKNOWN_MODEL, while the only worker has connected for the first time and its catalog has not arrived", async () => {
+    const fleetHarness = harness();
+    const { workers } = fleetHarness;
+    workers.connected("wrk_a", undefined, "0.3.0");
+    // Its status has been read; its catalog has not.
+    workers.refresh("wrk_a", { capacity, devices: [], health: "running", leases: [] });
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+  });
+
+  it("still knows a reconnecting worker from its last catalog while its new catalog has not arrived", async () => {
+    const fleetHarness = harness();
+    const { workers } = fleetHarness;
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { models: ["iPhone 16"] });
+    // wrk_a reconnects: its uplink is open again and nothing has been read from it yet.
+    workers.connected("wrk_a", undefined, "0.3.0");
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    // UNKNOWN_MODEL would say no worker has the model, and wrk_a's last catalog says it does.
+    await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+  });
+
+  it("names osVersion default in RUNTIME_MISSING when the request named no runtime", async () => {
+    const fleetHarness = harness();
+    const { workers } = fleetHarness;
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", {
+      capacity,
+      catalog: catalogFixture([
+        {
+          modelRuntimes: { "iPhone 17": [] },
+          models: ["iPhone 17"],
+          platform: "ios",
+          runtimes: ["26.0"],
+        },
+      ]).platforms,
+      devices: [],
+      health: "running",
+      leases: [],
+    });
+    const { osVersion: _named, ...unnamed } = REQUEST;
+
+    const { outcome, state } = lease(fleetHarness, unnamed);
+    await tick();
+
+    expect(state.state).toBe("rejected");
+    await expect(outcome).rejects.toMatchObject({
+      code: "RUNTIME_MISSING",
+      details: { downloadable: false, osVersion: "default", platform: "ios" },
+    });
+  });
+
+  it("queues a request for a capable worker that is busy and grants it when a device frees up", async () => {
+    const fleetHarness = harness();
+    const { coordinator, directory, workers } = fleetHarness;
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+
+    const { outcome, state } = lease(fleetHarness, REQUEST);
+    await tick();
+    expect(state.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(leaseRequests(client)).toEqual([]);
+
+    workers.refresh("wrk_a", { capacity });
+
+    const grant = await outcome;
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+    expect(coordinator.queueDepth).toBe(0);
   });
 });

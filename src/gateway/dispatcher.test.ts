@@ -1106,7 +1106,22 @@ describe("GatewayDispatcher: waiting requests", () => {
 
   it("list.get requests on a gateway returns the fleet queue and each worker's waiting requests with their workerId", async () => {
     const { coordinator, dispatcher, workers } = harness();
-    // No worker is connected, so the fleet request waits in the gateway's own queue.
+    // Two workers that can serve the request and have no free slot, whose own queues hold their
+    // local agents' requests.
+    const capacity = statusFixture().capacity;
+    for (const [workerId, requestId] of [
+      ["wrk_1", "req_w1"],
+      ["wrk_2", "req_w2"],
+    ] as const) {
+      workers.connected(workerId, undefined, "0.3.0");
+      workers.refresh(workerId, {
+        capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } },
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        waiting: [onWorker(requestId, `local-${workerId}`, 1)],
+      });
+    }
+    // Both are busy, so the fleet request waits in the gateway's own queue.
     void dispatcher.dispatch(
       "lease.request",
       { ...SPEC, idempotencyKey: "key-1", requesterId: "fleet-agent" },
@@ -1114,16 +1129,6 @@ describe("GatewayDispatcher: waiting requests", () => {
     );
     await settle();
     expect(coordinator.queueDepth).toBe(1);
-    // Two workers whose own queues hold their local agents' requests. Neither lists a model,
-    // so neither takes the fleet request.
-    for (const [workerId, requestId] of [
-      ["wrk_1", "req_w1"],
-      ["wrk_2", "req_w2"],
-    ] as const) {
-      workers.connected(workerId, undefined, "0.3.0");
-      workers.refresh(workerId, { waiting: [onWorker(requestId, `local-${workerId}`, 1)] });
-    }
-    await settle();
 
     const listed = await listRequests(dispatcher);
 

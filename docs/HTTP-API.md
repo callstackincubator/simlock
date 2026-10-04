@@ -343,8 +343,8 @@ that tag is installed for the API level it fails with `RUNTIME_MISSING`,
 whatever `allowDownload` says. It only reuses an idle device created for the
 same tag, and a request without `imageTag` only one created for none. On iOS
 `imageTag` is `400 BAD_REQUEST`. Through a gateway, a request whose tag no
-worker lists for that API level, an iOS one included, is sent to no worker: it
-waits in the queue, or fails with `NO_CAPACITY` when `noWait` is set.
+worker lists for that API level, an iOS one included, fails at once with
+`422 RUNTIME_MISSING`, with or without `noWait`.
 
 The body is strict: a key this route does not know, a `mode` other than
 `"slim"` or `"full"`, or an `imageTag` that is not 1 to 64 letters, digits,
@@ -380,12 +380,35 @@ and pairs that model with `os` (or, without `os`, with at least one installed
 runtime). With `imageTag`, the worker's catalog must also list an image of that
 tag, for `os` when it is given. The worker is sent its own name for the model.
 
-With `allowDownload: true` the `201` is returned as soon as the request is
-stored — resolving a downloadable runtime can take minutes, so progress and
+A gateway fails a request no worker can serve at once, with or without
+`noWait` and `timeoutMs`, instead of queueing it. A worker *takes requests*
+when it is connected, not drained, and the gateway has read its catalog since
+it connected; the gateway *knows* a worker once it has read a catalog from it
+and the worker is not `incompatible`, so a drained or disconnected worker stays
+known and a reconnecting one stays known from its last catalog.
+
+| Situation | Result |
+|---|---|
+| No worker takes requests | `503 NO_CAPACITY` |
+| A worker takes requests, and no known worker has the platform | `422 NO_DRIVER` |
+| ... and no known worker lists the model | `422 UNKNOWN_MODEL` |
+| ... and no known worker has the runtime, or can pair it with the model | `422 RUNTIME_MISSING`, with `downloadable: false` and `osVersion: "default"` when `os` is absent |
+| A known worker could serve it, but none that takes requests can | `503 NO_CAPACITY` |
+| A worker that takes requests can serve it but is busy | queues; `503 NO_CAPACITY` only with `noWait: true` |
+
+A request that is already waiting is held to the same table: when the only
+worker able to serve it is drained or disconnects, the request ends `failed`
+with `NO_CAPACITY`. After a gateway restart a worker is not known until it
+reconnects.
+
+On a single host, with `allowDownload: true` the `201` is returned as soon as
+the request is stored — resolving a downloadable runtime can take minutes, so progress and
 any later failure surface on the request resource instead of on the `POST`
 itself. A refusal that comes before the request is stored
 (`409 REQUESTER_ALREADY_LEASED`, `400` for a `ttlMs` above `lease.maxTtlMs`)
-still fails the `POST`.
+still fails the `POST`. Through a gateway the flag changes nothing about the
+`POST`: it never downloads, so a request no worker can serve fails it as
+above.
 
 → `201`, `Location: /v1/lease-requests/{id}`:
 
@@ -397,7 +420,9 @@ A rejection that lands before any device work is claimed for the request
 fails the `POST` itself instead of the client having to poll to learn about
 it: `409 REQUESTER_ALREADY_LEASED` (names the existing lease id), `422` for
 an unknown model / missing runtime / no driver, `503 NO_CAPACITY` (with
-`Retry-After`) when `noWait` is set. Anything that fails once device work is
+`Retry-After`) when `noWait` is set. A gateway also answers these at once for
+a request no worker can serve, `503 NO_CAPACITY` included, whatever `noWait`
+says (see the table above). Anything that fails once device work is
 already in flight surfaces as the request resource's terminal `failed` state
 instead — see the state list below.
 
@@ -980,6 +1005,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
       "connection": "connected",
       "drained": false,
       "lastSeenAt": 1790864080506,
+      "catalogReadAt": 1790864071200,
       "health": "running",
       "version": "1.0.0",
       "capacity": {
@@ -1040,6 +1066,11 @@ simulated (hence the thin Android catalog), trimmed to one worker:
   ]
 }
 ```
+
+`catalogReadAt` is when the gateway last read that worker's catalog since the
+worker connected. It is absent until the first read, and again after the
+worker reconnects until its new catalog arrives; a worker without it takes no
+requests (see the table under `POST /v1/lease-requests`).
 
 `downloads.policy` and `downloads.timeoutMs` are that worker's own effective
 config, read when its uplink connects, again on every periodic refresh, and
@@ -1106,8 +1137,9 @@ gateway has already forgotten — the same reading `token.revoke` gives an
 unknown token id.
 
 On a **single host** (a daemon in `worker` mode), `GET /v1/workers` returns
-one view, the host itself, with the same fields a gateway shows for each of
-its workers. `id` is the id the host presents to a gateway, `label` is its
+one view, the host itself, with the fields a gateway shows for each of its
+workers except `catalogReadAt`, which is a gateway's record of reading a
+worker and is always absent here. `id` is the id the host presents to a gateway, `label` is its
 `gateway.label` (absent when unset), `connection` is `connected`, `drained`
 is `false`, and `lastSeenAt` is the time of the request. Every other field
 comes from the host's own status, devices, catalog and config. Status and
@@ -1225,7 +1257,7 @@ Every failure is the same shape the daemon protocol uses:
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
-| 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
+| 503 | `NO_CAPACITY` (with `noWait: true`, or, on a gateway, when no worker that takes requests can serve the request; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
 Four notes on these codes.
