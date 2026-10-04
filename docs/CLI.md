@@ -663,7 +663,7 @@ runtime when `--os` is given. Among the
 workers that can serve it, one that is not healthy or has requests of its own
 waiting is passed over (the request waits for it rather than failing). Of the
 rest, a machine with a matching warm device gets the request first. Otherwise a
-worker with no free running slot is passed over, a worker under its RAM budget
+worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
 is preferred over one at it, and the one with the most free capacity gets the
 request. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.

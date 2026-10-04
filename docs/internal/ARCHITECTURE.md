@@ -652,8 +652,9 @@ The v1 policy (`warm-then-free`) is eight stages:
 5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
    matching the request, compared against the worker's own name for the
    model — a **warm hit**, and a sub-second grant;
-6. `free-slot` (filter): keep a worker with free running capacity above zero
-   for the platform and globally;
+6. `free-slot` (filter): keep a worker with a free running slot for the platform
+   and globally, counting a running device that is not leased as free (the
+   planner evicts it);
 7. `ram-budget` (rank): prefer a worker whose capacity entry for the platform
    has `atRamBudget: false` (ADR 0009 §7). The gateway reads the flag from
    status and imports no capacity module. A rank, so a worker at its budget
