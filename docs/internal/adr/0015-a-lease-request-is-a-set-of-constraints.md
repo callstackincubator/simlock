@@ -4,6 +4,10 @@
 - **Date:** 2026-10-04
 - **Issue:** [#326](https://github.com/callstackincubator/simlock/issues/326)
 - **Supersedes:** nothing. Narrows [ADR
+  0003](0003-one-typed-daemon-contract-behind-every-frontend.md) §1 by one
+  module: the OS-range grammar lives in the contract, which the core and the
+  gateway import, so the contract still imports nothing from the core.
+  Narrows [ADR
   0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md)
   §1 and §9: the catalog gains two fields, and one of them (`classDefaults`)
   is shaped by config. Narrows [ADR
@@ -52,13 +56,15 @@ node-semver subset the feature names: the comparators `>=`, `>`, `<=`, `<`,
 several joined by spaces, and the hyphen range `A - B`. A partial version
 covers its prefix as node-semver reads it.
 
-One module in the core, `os-range`, owns the grammar: it parses a string into
-a constraint, tests whether a version satisfies it, and orders versions. The
-contract schema refines `osVersion` through its parser, so a malformed range
-is `BAD_REQUEST` on the socket, MCP and HTTP, with a message that names the
-accepted forms. Nothing else in the tree parses a range or compares versions
-for this feature; the drivers' own version helpers stay private to them. No
-dependency is added.
+One module, `os-range` in `src/contract/`, owns the grammar: it parses a
+string into a constraint, tests whether a version satisfies it, and orders
+versions. It sits in the contract because the contract schema refines
+`osVersion` through its parser, so a malformed range is `BAD_REQUEST` on the
+socket, MCP and HTTP, with a message that names the accepted forms, and the
+contract imports nothing from the core (ADR 0003 §1). The core and the
+gateway import it from there. Nothing else in the tree parses a range or
+compares versions for this feature; the drivers' own version helpers stay
+private to them. No dependency is added.
 
 ### 3. A model's class is a catalog fact, derived by the driver
 
@@ -70,6 +76,10 @@ how a product family or a tag this record does not know stays leasable. The iOS 
 `android-tv`, `android-wear`, every `android-automotive*` tag and
 `android-desktop`; an untagged Android profile is `phone`. No class is
 derived from a name or a screen size, so on Android `tablet` holds no model.
+
+On a gateway the fleet catalog's `modelClasses` is the union over connected
+workers; when two workers class one name differently, the first worker in id
+order wins, and the worker list shows each worker's own.
 
 A device record stores no class. The class of a device is
 `modelClasses[device.spec.model]` in the catalog of the worker that holds it,
@@ -85,13 +95,16 @@ of the built-in list. The composition root merges the two into one map,
 platform to class to ordered names, and hands it to the core the way it hands
 `defaultModes`. The core never holds a model name of its own.
 
-The effective default for a class on a host is the first name on the list
-that the catalog lists, by name or alias, in any letter case. The catalog
-reports it in a new `classDefaults` record, keyed by class, with no entry for
-a class whose list has nothing on the host. A gateway's catalog carries an
-entry only when every connected worker that reports the class agrees, the
-rule `defaultRuntime` already follows; the worker list shows each worker's
-own.
+A name on the list counts on a host only when the catalog lists it, by name
+or alias in any letter case, classes it as that class in `modelClasses`, and
+pairs it with at least one installed runtime. A configured name that is not
+a model of the class is skipped like any other, so `defaultModels` can never
+make a class create a device of another class. The effective default for a
+class is the first name that counts. The catalog reports it in a new
+`classDefaults` record, keyed by class, with no entry for a class in which
+no name counts. A gateway's catalog carries an entry only when every
+connected worker reports the same one, as `defaultRuntime` does; the worker
+list shows each worker's own.
 
 ### 5. The core resolves a request into a requirement and a create spec
 
@@ -106,14 +119,19 @@ The **create spec** is the `DeviceSpec` a new device would have.
   catalog's `modelRuntimes` for that model that satisfies the range, chosen
   by `os-range`. With none, the request fails at once with
   `RUNTIME_MISSING` and `downloadable: false`, whatever `allowDownload` says.
-- A class: the candidates are the names on the class's list (§4) that the
-  catalog lists, by name or alias, in any letter case. With none, the
-  request fails at once with `UNKNOWN_MODEL`, and the message names the
-  config key for the platform and class. The model is the first candidate
-  that pairs with a runtime satisfying the OS constraint, and the runtime
-  is the newest such pairing; an absent constraint is satisfied by every
-  pairing. With no candidate pairing, the request fails at once with
-  `RUNTIME_MISSING` and `downloadable: false`.
+- A class: the candidates are the names on the class's list that count on
+  this host (§4). With none, the request fails at once with
+  `UNKNOWN_MODEL`, and the message names the config key for the platform
+  and class. The model is the first candidate that pairs with a runtime
+  satisfying the OS constraint, and the runtime is the newest such pairing;
+  an absent constraint is satisfied by every pairing. With no candidate
+  pairing, the request fails at once with `RUNTIME_MISSING` and
+  `downloadable: false`.
+
+A pairing is an entry of `modelRuntimes` for the model. When the request
+names an image tag, only the runtimes for which the catalog's `images` lists
+an image of that tag count, the rule the gateway's `matchRequest` already
+applies.
 
 The core then calls `resolveSpec` with that exact model and version, so a
 driver never sees a class or a range, and ADR 0008 §3 guarantees the pairing
@@ -124,7 +142,7 @@ the model, by the catalog's own name, or the class; the OS constraint; the
 mode; the image tag. The OS constraint is the request's range when it named
 one. When it named none, an exact-model requirement is the create spec's
 version, so an exact request fits what it fits today; a class requirement
-is any version. The mode is the one ADR 0007 §4 decided for this request,
+is any runtime the catalog lists as installed. The mode is the one ADR 0007 §4 decided for this request,
 the create spec's pool mode, so a slim request a driver cannot slim fits
 full devices, and a `full` request fits only full ones (§5 there).
 
@@ -207,10 +225,14 @@ protocol version by one, as ADR 0007 §12 says. Four of the five tasks do.
   `resolveSpec` already makes. Neither driver caches the catalog; a cache is
   a later change if the cost shows.
 - The create pick for a class follows the preference list, so a bad
-  `defaultModels` value is skipped, not fatal. The only way to see that it
-  was skipped is `simlock catalog`, which shows the effective default.
-- Android `tablet` holds no model: a `--class tablet` Android request fails
-  with `UNKNOWN_MODEL` until the tooling tags tablets.
+  `defaultModels` value, unlisted, of another class or unpaired, is skipped,
+  not fatal. The only way to see that it was skipped is `simlock catalog`,
+  which shows the effective default; under an OS range or an image tag the
+  pick can still land further down the list than the catalog shows.
+- Android `tablet` holds no model, and `android.defaultModels.tablet` cannot
+  change that, since a name that is not of the class never counts: a
+  `--class tablet` Android request fails with `UNKNOWN_MODEL` until the
+  tooling tags tablets.
 - The gateway imports the class, range and fit functions from the core and
   keeps one rule of its own, the mode rule of ADR 0009 §6, because status
   carries no pool mode. Task 194 of #173 lands that rule; the gateway task
