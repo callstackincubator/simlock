@@ -1189,7 +1189,8 @@ an all-or-nothing that leaves the operator guessing.
   when it happened on the worker.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`). Each event carries the same `id` as in
-  `GET /v1/events`, and a relayed one the same `timestamp` too.
+  `GET /v1/events`, and a relayed one the same `timestamp` too. A worker event
+  with a `timestamp` beyond 8.64e15 ms either side of the epoch is not relayed.
 - `GET /v1/tokens` — every token this daemon knows (`simlock token list`):
 
   ```json

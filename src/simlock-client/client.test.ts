@@ -787,6 +787,43 @@ describe("event pushes", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     await client.close();
   });
+
+  it("a worker push with a timestamp outside the date range never reaches the gateway's bus", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const listener = vi.fn();
+    const subscribed = client.subscribeEvents(listener);
+    await flushMicrotasks();
+    const subscribe = connection.lastSentOf("events.subscribe");
+    if (subscribe === undefined) throw new Error("the client never sent events.subscribe");
+    connection.reply(subscribe.id, { subscribed: true, subscriptionId: "sub_1" });
+    await subscribed;
+    const push = (timestamp: number) =>
+      connection.push("event", {
+        subscriptionId: "sub_1",
+        event: {
+          event: "lease.expired",
+          id: "evt_ok",
+          module: "leases",
+          payload: {},
+          seq: 1,
+          timestamp,
+        },
+      });
+
+    for (const outside of [8.64e15 + 2, -8.64e15 - 2, 1e300, -1e300]) push(outside);
+    await flushMicrotasks();
+    expect(listener).not.toHaveBeenCalled();
+
+    push(8.64e15);
+    push(-8.64e15);
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
 });
 
 describe("requestLease abort (ADR §10)", () => {

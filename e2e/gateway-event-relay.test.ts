@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
+import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -149,8 +149,11 @@ async function gateReplay(upstreamSocket: string) {
   let held: (() => void) | undefined;
   let released = false;
   const pushed: RecordedEvent[] = [];
+  const open = new Set<Socket>();
   const server = createServer((client) => {
     const upstream = createConnection(upstreamSocket);
+    open.add(client);
+    open.add(upstream);
     let fromClient = "";
     let fromUpstream = "";
     client.on("data", (chunk: Buffer) => {
@@ -191,6 +194,9 @@ async function gateReplay(upstreamSocket: string) {
       held?.();
     },
     async close() {
+      // `server.close` waits for every open connection; destroy them so a failed assertion in
+      // the test body is reported, not replaced by a timeout here.
+      for (const socket of open) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(home, { force: true, recursive: true });
     },

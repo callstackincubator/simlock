@@ -177,7 +177,10 @@ the console's buffer present a replay by `timestamp`, then `seq`;
 `simlock events --follow` prints live pushes, and the pushes buffered during its
 replay, in arrival order, so a relayed event from a worker whose clock is behind
 prints after a later gateway event. A worker's `id` and
-`timestamp` are claims, bounded by the push schema before the relay sees them.
+`timestamp` are claims, bounded by the push schema before the relay sees them: the
+`id` by its pattern, the `timestamp` to the range a JavaScript date holds
+(|t| <= 8.64e15 ms), so no value the console cannot render as a date reaches the
+gateway's bus or event file.
 
 **`device.exec` emits no event, and that is deliberate.** It is the one
 operation here with no fact of its own. Running a command against a device is

@@ -143,7 +143,9 @@ runs ahead or behind the gateway's shows that skew in the gateway's order.
 A replay (`simlock events`, `--since`, `GET /v1/events`, the console's buffer)
 lists events by `timestamp`, then by `seq`; `simlock events --follow` prints
 each live push as it arrives, so a relayed event from a worker whose clock is
-behind prints after a later gateway event.
+behind prints after a later gateway event. A worker event whose `timestamp` is
+not a time a date can hold (beyond 8.64e15 ms either side of the epoch) is not
+relayed.
 
 Relayed events are written to the gateway's own event file
 (`events.jsonl`) along with its own, so `simlock events --since` against a
