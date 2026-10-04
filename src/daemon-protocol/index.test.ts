@@ -19,7 +19,7 @@ describe("daemon protocol", () => {
     // `component.install` and its `component-progress` push, which a gateway relays to its
     // workers, taking it to 9. ADR 0014 gives every event envelope an `id`, taking it to 10. ADR 0009 §7 makes `atRamBudget` a
     // required field of each platform's `status.get` capacity, taking it to 11.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(11);
+    expect(DAEMON_PROTOCOL_VERSION).toBe(12);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 
