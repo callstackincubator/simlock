@@ -37,10 +37,13 @@ routes a request that names no model.
 `lease.request` makes `model` optional and adds `class`, an enum of the seven
 class names. A request with both is `BAD_REQUEST`, decided by the contract
 schema so every transport answers alike. A request with neither means
-`class: "phone"`; that default is applied where the mode's default is (ADR
-0007 §2), not by a transport, so `lease.requested` shows what was asked. The
-HTTP body spells the fields `device` and `class`; the CLI `--device` and
-`--class`; MCP and the client use the contract's names.
+`class: "phone"`. That is a constant of the contract, not a worker setting:
+one function beside the schema answers which class a request means, the
+worker's coordinator reads it where it resolves a request, and the gateway
+reads it where it matches one. No transport fills it in, so
+`lease.requested` shows what was asked. The HTTP body spells the fields
+`device` and `class`; the CLI `--device` and `--class`; MCP and the client
+use the contract's names.
 
 ### 2. The OS constraint is one string, parsed at the boundary
 
@@ -93,49 +96,63 @@ own.
 `LeaseAcquisitionCoordinator` resolves a request, once and before planning,
 into two things.
 
-The **requirement** is what a device must satisfy: platform; the model, by
-the catalog's own name, or the class; the OS constraint; the mode; the image
-tag. The mode is the one ADR 0007 §4 decided for this request: the create
-spec's pool mode, so a slim request a driver cannot slim fits full devices,
-and a `full` request fits only full ones (§5).
+The **create spec** is the `DeviceSpec` a new device would have.
 
-The **create spec** is the `DeviceSpec` a new device would have. For an exact
-model and an exact or absent version it is what `resolveSpec` returns today.
-For a class, the model is the first name on the class's list that the
-catalog lists and that pairs, in `modelRuntimes`, with a runtime satisfying
-the OS constraint; with none, the request fails at once with
-`UNKNOWN_MODEL`, and the message names the config key for the platform and
-class. For a range, the runtime is the newest listed pairing that satisfies
-it, chosen by `os-range` from the catalog; with none, the request fails at
-once with `RUNTIME_MISSING` and `downloadable: false`, whatever
-`allowDownload` says. The core then calls `resolveSpec` with that exact model
-and version, so a driver never sees a class or a range, and ADR 0008 §3
-guarantees the pairing it is asked for is one it accepts.
+- An exact model with an exact or absent version resolves as today: the
+  driver's `resolveSpec` picks the runtime.
+- An exact model with a range: the runtime is the newest entry of the
+  catalog's `modelRuntimes` for that model that satisfies the range, chosen
+  by `os-range`. With none, the request fails at once with
+  `RUNTIME_MISSING` and `downloadable: false`, whatever `allowDownload` says.
+- A class: the candidates are the names on the class's list (§4) that the
+  catalog lists, by name or alias, in any letter case. With none, the
+  request fails at once with `UNKNOWN_MODEL`, and the message names the
+  config key for the platform and class. The model is the first candidate
+  that pairs with a runtime satisfying the OS constraint, and the runtime
+  is the newest such pairing; an absent constraint is satisfied by every
+  pairing. With no candidate pairing, the request fails at once with
+  `RUNTIME_MISSING` and `downloadable: false`.
+
+The core then calls `resolveSpec` with that exact model and version, so a
+driver never sees a class or a range, and ADR 0008 §3 guarantees the pairing
+it is asked for is one the driver accepts.
+
+The **requirement** is what an existing device must satisfy: the platform;
+the model, by the catalog's own name, or the class; the OS constraint; the
+mode; the image tag. The OS constraint is the request's range when it named
+one. When it named none, an exact-model requirement is the create spec's
+version, so an exact request fits what it fits today; a class requirement
+is any version. The mode is the one ADR 0007 §4 decided for this request,
+the create spec's pool mode, so a slim request a driver cannot slim fits
+full devices, and a `full` request fits only full ones (§5 there).
 
 Failing before planning is deliberate: a request the host cannot create is
-refused in one round trip, as an exact request is today, and through a
-gateway ADR 0009 §5 carries that refusal to the next worker.
+refused in one round trip, as an exact request is today, even when an idle
+device of the class fits. The preference list makes that case rare, and
+through a gateway ADR 0009 §5 carries the refusal to the next worker.
 
 ### 6. One function decides whether a device fits, and the planner reads it
 
-`fits(requirement, device, classOf)` lives in the core beside `sameSpec`. It
-holds when the platform is equal; the model is equal, or the class of the
-device's model is the requested class; the device's `osVersion` satisfies the
-constraint; the pool mode is equal; the image tag is equal or both absent.
+`fits(requirement, spec, classOf)` lives in the core beside `sameSpec`. It
+holds when the platform is equal; the model is equal, or `classOf` says the
+device's model is the requested class; the device's `osVersion` satisfies
+the constraint; the image tag is equal or both absent. It does not read the
+mode: the worker's planner compares the device's pool mode with the
+requirement's beside it, and the gateway applies ADR 0009 §6 (§8 below),
+because no status response carries a pool mode (ADR 0007 §9).
 
-`AcquisitionPlanner.plan` looks for a `ready` device that fits, then a
-`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
-still names pool identity everywhere else: the warm pool, reclaim, the
-idempotency check. Among several devices that fit, the first in snapshot
-order is taken; nothing promises which.
+`AcquisitionPlanner.plan` looks for a `ready` device that fits in the
+requirement's mode, then a `shutdown` one, then provisions the create spec.
+`sameSpec` is untouched and still names pool identity everywhere else: the
+warm pool, reclaim, the idempotency check. Among several devices that fit,
+the first in snapshot order is taken; nothing promises which.
 
 ### 7. The grant and the device record do not change
 
 A grant always names the concrete model, OS, mode and image tag of the device
 it hands over, from the record, as today. `device.provisioned` carries the
-create spec. No response, record or event carries a class or a range except
-`lease.requested` and `lease.rejected`, which carry the request as it
-arrived.
+create spec. No response or record carries a class or a range. The events
+that do are the three that describe the request itself (§9).
 
 ### 8. The gateway forwards what it got and matches with the same functions
 
@@ -144,26 +161,35 @@ exact model is replaced by the worker's own name, as ADR 0009 §3 says. The
 worker applies §5 and §6 itself, so a warm device of another model in the
 class is still found there.
 
-`matchRequest` reads `modelClasses` and `os-range` from the core: a request
-can be served by a worker when its catalog lists the model, or any model of
-the class, paired with an installed runtime that satisfies the constraint.
-The ADR 0009 §4 table keeps its rows: row 3 is "no known worker lists the
-model, or any model of the class", row 4 is "none pairs one with a runtime
-satisfying the constraint". The `warm-hit` stage calls the core's `fits`
-over the worker's `ready` devices with that worker's catalog as `classOf`.
-The gateway compares versions only to evaluate a range; ADR 0009 §6's rule
-for an unnamed runtime stands for an exact or absent version.
+`matchRequest` reads the class the request means (§1), `modelClasses`, and
+`os-range` from the core: a worker can serve a request when its catalog
+lists the model, or any model of the class, paired with an installed
+runtime that satisfies the constraint. The ADR 0009 §4 table keeps its rows,
+and each gives the code §5 gives on a worker: row 3 is "no known worker
+lists the model, or any model of the class", row 4 is "none pairs one with
+a runtime satisfying the constraint".
+
+The `warm-hit` stage calls the core's `fits` over the worker's `ready`
+devices, with that worker's catalog as `classOf`, and keeps ADR 0009 §6 for
+the mode: `full` needs `mode: "full"`, `slim` needs `mode: "slim"`, none
+needs `servesDefaultMode`. §6's rule for an unnamed runtime stands for an
+exact model with no version; a class with no version fits any, as on the
+worker. The gateway compares versions only to evaluate a range.
 
 A worker whose class default is misconfigured still passes `can-serve` when
 it lists a model of the class; its `UNKNOWN_MODEL` is a refusal ADR 0009 §5
 already retries elsewhere.
 
-### 9. Events change by addition
+### 9. Events change by one key, and `model` turns optional
 
-`lease.requested` and `lease.rejected` carry `class` and a range in
-`requestSpec` when the request named them, and `model` only when it did.
-`request.dispatched` gains optional `class` and its `model` becomes optional.
-No event is added or removed.
+`lease.requested` and `lease.rejected` carry the request as it arrived, so
+`requestSpec` gains `class` and a range where the request named them, and
+has `model` only when the request did. `request.dispatched` gains optional
+`class`, and its `model` becomes optional for the same reason. Making a
+required key optional is not additive under events rule 6. This record
+takes that exception once, while the package is 0.x, as ADR 0007 §13 did,
+and the note at the top of `EVENTS.md` records it. No event is added or
+removed.
 
 ### 10. The wire changes without a shim
 
@@ -183,8 +209,10 @@ protocol version by one, as ADR 0007 §12 says. Four of the five tasks do.
   was skipped is `simlock catalog`, which shows the effective default.
 - Android `tablet` holds no model: a `--class tablet` Android request fails
   with `UNKNOWN_MODEL` until the tooling tags tablets.
-- The gateway holds a copy of the fit rule's inputs (the catalog, the
-  devices) but not a copy of the rule: both sides import it from the core.
+- The gateway imports the class, range and fit functions from the core and
+  keeps one rule of its own, the mode rule of ADR 0009 §6, because status
+  carries no pool mode. Task 194 of #173 lands that rule; the gateway task
+  of #326 builds on it.
 - A device's class changes if the host's tooling changes what it reports for
   the model. Nothing is stored, so nothing goes stale.
 - Four protocol bumps across five PRs.
