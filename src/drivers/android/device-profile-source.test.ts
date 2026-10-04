@@ -79,7 +79,7 @@ describe("parseAvdmanagerDeviceProfiles", () => {
       `id: 1 or "tv_1080p"\n    Name: Television (1080p)\n    OEM : Google\n    Tag : android-tv\n---------\n` +
       `id: 2 or "wear_round"\n    Name: Wear Round\n    Tag : android-wear\n---------\n` +
       `id: 3 or "tight"\n    Name: Tight\n    Tag:android-desktop\n---------\n` +
-      `id: 4 or "prefixed"\n    Name: Prefixed\n    Subtag : android-tv\n`;
+      `id: 4 or "prefixed"\n    Name: Prefixed\n    SubTag : android-tv\n`;
 
     expect(parseAvdmanagerDeviceProfiles(output)).toEqual([
       { id: "pixel_8", name: "Pixel 8", oem: "Google", tag: undefined },
