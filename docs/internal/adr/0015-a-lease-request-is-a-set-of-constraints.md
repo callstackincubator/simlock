@@ -63,7 +63,9 @@ dependency is added.
 ### 3. A model's class is a catalog fact, derived by the driver
 
 `platformCatalogSchema` gains `modelClasses`, a required record with an entry
-for every name in `models`. The iOS driver reads the device type's
+for every name in `models` whose class the tooling reports. A model without
+an entry belongs to no class and is leased by its exact name only; that is
+how a product family or a tag this record does not know stays leasable. The iOS driver reads the device type's
 `productFamily`; the Android driver reads the profile's `Tag :` line and maps
 `android-tv`, `android-wear`, every `android-automotive*` tag and
 `android-desktop`; an untagged Android profile is `phone`. No class is
