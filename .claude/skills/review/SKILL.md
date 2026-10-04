@@ -37,6 +37,22 @@ For a bug, add the triage report as `$R/triage.md`; the Simplest fix section
 is the agreed approach. Copy all of `docs/internal/agent-rules/` and
 `docs/internal/adr/README.md` into `$R/rules/`.
 
+The final diff hides a spec test that was committed red and then deleted or
+loosened on the way to green. Write what happened to those tests since,
+from the first `test:` commit on the PR's branch (implement's red commit,
+or the triage reproduction):
+
+```bash
+read -r HEAD_REF BASE_REF < <(gh pr view <PR> --json headRefName,baseRefName -q '"\(.headRefName) \(.baseRefName)"')
+git fetch origin "$HEAD_REF" "$BASE_REF"
+red=$(git log --reverse --format='%H %s' "origin/$BASE_REF..origin/$HEAD_REF" | awk '$2 == "test:" { print $1; exit }')
+if [ -n "$red" ]; then
+  git diff "$red" "origin/$HEAD_REF" -- $(git diff-tree --no-commit-id --name-only -r "$red") > "$R/tests-after-red.patch"
+fi
+```
+
+No `test:` commit (an ADR-only diff, a person's PR) means no file.
+
 Do not add the PR body, commit messages, or any note from the implementer.
 The reviewers must not know what anyone believes the diff does.
 
@@ -51,15 +67,18 @@ parallel, and your turn cannot end while they run, so you never hand back
 before the findings are in. On `round 2`, spawn only the review named.
 
 **Spec review.** Read-only. It reads `$R/diff.patch`, `$R/issue.md`,
-`$R/feature.md`, `$R/triage.md` and `$R/spec/`, and nothing under
-`$R/rules/`. Brief, verbatim, with the paths filled in:
+`$R/feature.md`, `$R/triage.md`, `$R/tests-after-red.patch` and `$R/spec/`,
+and nothing under `$R/rules/`. Brief, verbatim, with the paths filled in
+(and the Tests after red sentence left out when there is no such file):
 
 ```markdown
 You are reviewing a diff against a specification. You have not seen the
 specification before and you have no other context. Read only the files
 named here; do not open the repository and do not run anything.
 
-Specification: <paths>. Diff: <path>.
+Specification: <paths>. Diff: <path>. Tests after red: <path>; it shows
+every change made to the specification's tests after they were first
+committed failing.
 
 Answer three questions, and only these:
 
@@ -70,7 +89,9 @@ Answer three questions, and only these:
    This is a note, never blocking, unless it changes behaviour a user sees.
 3. For every test the diff adds or changes: does the title state a claim
    the specification made, and does the body assert that claim? A title
-   that promises more than the body proves is a defect.
+   that promises more than the body proves is a defect. In Tests after
+   red, for every change that deletes a test or removes or loosens an
+   assertion: which line of the specification is no longer proven?
 
 A finding counts only with a concrete failure (this input or state gives
 this wrong result) or a named cost and who pays it. Drop style, naming and
@@ -147,7 +168,9 @@ yourself: read the cited lines, or run the cited command. Then decide:
 
 - **Confirmed**: it goes under Fix in the report, as `path:line what is
 wrong`, written so it makes sense without the PR open.
-- **Rejected**: one line, `<claim> — <why it is wrong>`.
+- **Rejected**: one line, `spec: <claim> — <why it is wrong>` or
+  `code: ...`, named for the review that raised it. The weekly delivery
+  stats count rejections per review from that tag.
 
 Two findings that disagree with each other, one from each review, usually
 mean the spec is missing a line. Resolve it in favour of the rules, reject
@@ -168,7 +191,7 @@ End with exactly this block, nothing after it:
 PR: #M  Round: 1 | 2  Kind: code | adr-only
 Spec review: n findings (b blocking)  Code review: n findings (b blocking) | skipped
 Fix: <one confirmed finding per line, blocking first, as `path:line what is wrong`, or "none">
-Rejected: <one per line, `claim — reason`, or "none">
+Rejected: <one per line, `spec|code: claim — reason`, or "none">
 Spec needs: <the line the spec is missing, or "none">
 Rerun: spec | code | both | none
 ```

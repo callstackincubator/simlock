@@ -199,10 +199,12 @@ is open, done means closed as completed.
     skill pins (never a smaller one chosen for speed), and each blind to the
     implementer and to the other reviewer.
     The *spec review* gets the issue body, its parent feature, the ADRs
-    under Decisions, the files under Rules in play, and the diff — nothing
+    under Decisions, the files under Rules in play, the diff, and every
+    change made to the spec's tests since they were committed red — nothing
     else, and never the PR body. It answers: is every line of Scope and Done
-    when delivered, does the diff do anything the spec did not ask for, and
-    does every test title state a claim the spec made. It reads; it does not
+    when delivered, does the diff do anything the spec did not ask for, does
+    every test title state a claim the spec made, and does any change after
+    red leave a line of the spec unproven. It reads; it does not
     run anything. A diff that only adds or changes ADRs gets this review
     alone, judged as a design record rather than against Completion
     conditions.
@@ -221,7 +223,8 @@ is open, done means closed as completed.
     verified against the code before anyone acts on it. A confirmed finding
     is fixed and the review that raised it runs again on the new diff; a
     rejected finding is listed in the PR body under `## Review`, one line
-    each with the reason, so the maintainer sees what was overruled.
+    each, tagged `spec:` or `code:` for the review that raised it, with the
+    reason, so the maintainer sees what was overruled and by whom.
     Accepted findings are not narrated. Two rounds at most: a blocking
     finding still confirmed after the second round means the agent stops
     and hands off with the finding under Findings (rule 2), leaving the PR

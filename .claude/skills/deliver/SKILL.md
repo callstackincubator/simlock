@@ -81,10 +81,13 @@ build`. A report with `spec needs` under Open: park (step 6).
 
    Rejected:
 
-   - <claim> — <reason>
+   - spec|code: <claim> — <reason>
    ```
 
-   Omit "Rejected:" when nothing was. Rule 12: 200 words plus the checklist
+   Omit "Rejected:" when nothing was. Keep the counts line in exactly this
+   shape (`Code review: skipped.` for an ADR-only diff) and paste the
+   Rejected lines with their tags: `.agents/scripts/delivery-stats.mjs`
+   reads both. Rule 12: 200 words plus the checklist
    and the Review section, ending with `*Written by an agent.*`.
 
 5. **Ready and merge.** `gh pr ready <M>`, then run the gate in the
