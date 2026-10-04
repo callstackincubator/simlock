@@ -771,17 +771,18 @@ describe("event pushes", () => {
     ]) {
       connection.push("event", { subscriptionId: "sub_1", event: bad });
     }
-    // `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit.
-    connection.receiveLine(
+    // `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit; the
+    // same raw channel carries the well-formed twin, which proves the line is delivered at all.
+    const rawPush = (timestamp: string) =>
       JSON.stringify({
-        payload: { subscriptionId: "sub_1", event: { ...valid, timestamp: "__overflow__" } },
+        payload: { subscriptionId: "sub_1", event: { ...valid, timestamp: "__timestamp__" } },
         push: "event",
-      }).replace('"__overflow__"', "1e999"),
-    );
+      }).replace('"__timestamp__"', timestamp);
+    connection.receiveLine(rawPush("1e999"));
     await flushMicrotasks();
     expect(listener).not.toHaveBeenCalled();
 
-    connection.push("event", { subscriptionId: "sub_1", event: valid });
+    connection.receiveLine(rawPush("5"));
     await flushMicrotasks();
     expect(listener).toHaveBeenCalledTimes(1);
     await client.close();
