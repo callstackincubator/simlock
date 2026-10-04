@@ -1,6 +1,6 @@
 # 0014. An event has one id, minted where the fact happened
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-04
 - **Issue:** [#314](https://github.com/callstackincubator/simlock/issues/314)
 - **Supersedes:** nothing. Narrows [ADR
