@@ -7,6 +7,12 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 > Status: **planned catalog** — update the Status column as events are
 > implemented, and add new events here in the same change that introduces them.
 
+> **The event `id` is a one-time exception to additive-only** for the event
+> file, taken by [ADR 0014](adr/0014-an-event-has-one-id-minted-where-the-fact-happened.md)
+> the way ADR 0004's was: every envelope gains a required `id`, and a line in
+> `events.jsonl` without one is not replayed. History from before the upgrade
+> is not shown.
+
 > **The payload removals in the lease rows are a deliberate exception to
 > events rule 6** ("treat payload shape as a public contract: additive
 > changes only"), granted by [ADR
@@ -204,7 +210,11 @@ verbatim off the wire.
 
 ## Conventions recap
 
-- Every event carries: `timestamp`, `event`, `payload`, emitting module.
+- Every event carries: `id` (`evt_` and a unique suffix; it names the event for
+  good and survives a daemon restart), `seq`, `timestamp`, `event`, `payload`,
+  emitting module.
+- The `id` arrived with protocol 10. Lines already in `events.jsonl` from before
+  the upgrade have none and are not shown by `simlock events --since`.
 - Events are appended to an in-memory ring buffer, which `simlock events`
   without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
   one JSON line per event with the same fields. The file survives daemon

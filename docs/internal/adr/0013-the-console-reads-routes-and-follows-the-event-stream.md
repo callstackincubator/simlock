@@ -57,6 +57,9 @@ today. #88's tasks add them. This ADR does not decide their shape.
 
 ### 2. One event stream, read with `fetch`
 
+> ADR 0014 narrows this: two events are the same when their `id` matches, and `seq` and
+> `timestamp` no longer take part.
+
 The console opens one connection to `GET /v1/events/stream`. It reads it
 with `fetch` and a stream reader, so it can send the `Authorization`
 header. It does not use `EventSource` or a WebSocket: a browser can send

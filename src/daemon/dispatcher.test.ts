@@ -1061,7 +1061,14 @@ describe("Dispatcher: lease.release-all", () => {
 describe("Dispatcher: events.replay", () => {
   it("events.replay with sinceTs returns what the event history returns", async () => {
     const fromHistory: EventEnvelope[] = [
-      { seq: 7, timestamp: 50, event: "daemon.stopping", payload: { reason: "x" }, module: "d" },
+      {
+        id: "evt_7",
+        seq: 7,
+        timestamp: 50,
+        event: "daemon.stopping",
+        payload: { reason: "x" },
+        module: "d",
+      },
     ];
     const asked: unknown[] = [];
     const { dispatcher } = await buildDispatcher({

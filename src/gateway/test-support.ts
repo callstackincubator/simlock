@@ -233,6 +233,9 @@ export class ScriptedWorkerClient {
   readonly calls: string[] = [];
   /** Set to reject every call with this error -- e.g. a protocol mismatch. */
   failWith: unknown;
+  /** Set to let `events.subscribe` succeed while every other call still rejects with `failWith`,
+   * so a test can prove the gateway does not listen to a worker it marked incompatible. */
+  subscribeDespiteFailure = false;
   closed = false;
   /**
    * Names of calls (`"status.get"`, `"list.get:devices"`, `"catalog.get"`, `"config.get"`) that
@@ -303,6 +306,7 @@ export class ScriptedWorkerClient {
   pushEvent(envelope: Partial<EventEnvelope> & { readonly event: string }): void {
     this.#eventListener?.({
       event: {
+        id: "evt_test",
         module: "test",
         payload: {},
         seq: 1,
@@ -449,7 +453,7 @@ export class ScriptedWorkerClient {
     listener: (push: { event: EventEnvelope }) => void,
   ): Promise<() => Promise<void>> {
     this.calls.push("events.subscribe");
-    this.#throwIfFailing();
+    if (!this.subscribeDespiteFailure) this.#throwIfFailing();
     this.#eventListener = listener;
     return async () => {
       if (this.hangUnsubscribe) return new Promise<never>(() => {});

@@ -19,8 +19,14 @@ const fakeClock: Clock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-function envelope(seq: number, timestamp: number, event = "lease.granted", payload: unknown = {}) {
-  return { event, module: "lease", payload, seq, timestamp };
+function envelope(
+  seq: number,
+  timestamp: number,
+  event = "lease.granted",
+  payload: unknown = {},
+  id = `evt_${seq}_${timestamp}`,
+) {
+  return { event, id, module: "lease", payload, seq, timestamp };
 }
 
 /** One event as the stream frames it. */
@@ -81,6 +87,10 @@ function openView(first: Replay = []) {
     /** Sets what `GET /v1/events` answers from now on. */
     replayWith(next: Replay) {
       replay = next;
+    },
+    /** The ids of the events the view shows, newest first. */
+    ids(): string[] {
+      return (feed.snapshot().data ?? []).map((event) => event.id);
     },
     /** The events the view shows, as `seq@timestamp`, newest first. */
     shown(): string[] {
@@ -148,6 +158,26 @@ describe("the events view", () => {
     await settle();
 
     expect(view.shown()).toEqual([`7@${T0}`, `6@${T0 - 1_000}`]);
+  });
+
+  it("two events with the same seq and timestamp but different ids are both shown", async () => {
+    const view = openView();
+    view.replayWith([envelope(1, T0, "lease.granted", {}, "evt_a")]);
+    await settle();
+
+    view.daemon.openStream()?.send(frame(envelope(1, T0, "lease.granted", {}, "evt_b")));
+    await settle();
+
+    expect(view.ids().sort()).toEqual(["evt_a", "evt_b"]);
+  });
+
+  it("an envelope without an id is not shown", async () => {
+    const view = openView();
+    const { id: _id, ...withoutId } = envelope(2, T0);
+    view.replayWith([withoutId, { ...envelope(3, T0), id: 3 }, envelope(4, T0)]);
+    await settle();
+
+    expect(view.ids()).toEqual(["evt_4_" + T0]);
   });
 
   it("events with the same seq from before and after a daemon restart are both shown", async () => {
@@ -256,14 +286,15 @@ describe("the events view", () => {
     const events: ConsoleEvent[] = [
       {
         event: "gizmo.frobnicated",
+        id: "evt_3",
         payload: { count: 3, nested: { deep: true }, reason: "because", workerId: "wrk_1" },
         seq: 3,
         timestamp: T0,
       },
       // A payload that is not an object at all.
-      { event: "gizmo.listed", payload: ["a", 1], seq: 2, timestamp: T0 - 1_000 },
+      { event: "gizmo.listed", id: "evt_2", payload: ["a", 1], seq: 2, timestamp: T0 - 1_000 },
       // No payload at all.
-      { event: "gizmo.pinged", payload: undefined, seq: 1, timestamp: T0 - 2_000 },
+      { event: "gizmo.pinged", id: "evt_1", payload: undefined, seq: 1, timestamp: T0 - 2_000 },
     ];
 
     const html = renderToStaticMarkup(
@@ -284,7 +315,13 @@ describe("the events view", () => {
     // Five and a half hours ahead of UTC, so neither the hour nor the minute matches UTC's.
     process.env.TZ = "Asia/Kolkata";
     try {
-      const event: ConsoleEvent = { event: "lease.granted", payload: {}, seq: 1, timestamp: T0 };
+      const event: ConsoleEvent = {
+        event: "lease.granted",
+        id: "evt_1",
+        payload: {},
+        seq: 1,
+        timestamp: T0,
+      };
 
       const html = renderToStaticMarkup(<EventList events={[event]} workers={undefined} />);
 
@@ -298,7 +335,9 @@ describe("the events view", () => {
   });
 
   it("an empty list says why it is empty", () => {
-    const leases: ConsoleEvent[] = [{ event: "lease.granted", payload: {}, seq: 1, timestamp: T0 }];
+    const leases: ConsoleEvent[] = [
+      { event: "lease.granted", id: "evt_1", payload: {}, seq: 1, timestamp: T0 },
+    ];
     const render = (events: ConsoleEvent[], filter: "all" | "device") =>
       text(renderToStaticMarkup(<EventList events={events} workers={undefined} filter={filter} />));
 
@@ -315,7 +354,13 @@ describe("the events view", () => {
       "component.installed",
       "daemon.started",
       "gizmo.frobnicated",
-    ].map((event, index) => ({ event, payload: {}, seq: index, timestamp: T0 - index }));
+    ].map((event, index) => ({
+      event,
+      id: `evt_${index}`,
+      payload: {},
+      seq: index,
+      timestamp: T0 - index,
+    }));
     const names = (filter: "all" | "lease" | "device" | "worker" | "component" | "other") =>
       [
         ...renderToStaticMarkup(
@@ -334,6 +379,7 @@ describe("the events view", () => {
   it("a worker the console does not know, or that has no label, shows as its id", () => {
     const about = (workerId: string, seq: number): ConsoleEvent => ({
       event: "lease.granted",
+      id: `evt_${seq}`,
       payload: { workerId },
       seq,
       timestamp: T0 - seq,
@@ -355,6 +401,7 @@ describe("the events view", () => {
   it("a worker.rejected event names no worker, even one the console knows", () => {
     const rejected: ConsoleEvent = {
       event: "worker.rejected",
+      id: "evt_1",
       payload: { reason: "unauthenticated", workerId: "wrk_1" },
       seq: 1,
       timestamp: T0,
@@ -373,13 +420,14 @@ describe("the events view", () => {
   it("an envelope without a numeric seq, a timestamp that is a date, or a name is not shown", async () => {
     const view = openView();
     view.replayWith([
-      { event: "lease.granted", timestamp: T0 },
-      { event: "lease.granted", seq: 1 },
-      { seq: 2, timestamp: T0 },
-      { event: "lease.granted", seq: 3, timestamp: 1e300 },
+      { event: "lease.granted", id: "evt_a", timestamp: T0 },
+      { event: "lease.granted", id: "evt_b", seq: 1 },
+      { id: "evt_c", seq: 2, timestamp: T0 },
+      { event: "lease.granted", id: "evt_d", seq: 3, timestamp: 1e300 },
       // A date, but as a string: not a timestamp.
-      { event: "lease.granted", seq: 5, timestamp: "2026-10-02T11:30:00Z" },
-      { event: "lease.granted", seq: "6", timestamp: T0 },
+      { event: "lease.granted", id: "evt_e", seq: 5, timestamp: "2026-10-02T11:30:00Z" },
+      { event: "lease.granted", id: "evt_f", seq: "6", timestamp: T0 },
+      { event: 7, id: "evt_g", seq: 7, timestamp: T0 },
       envelope(4, T0),
     ]);
     await settle();

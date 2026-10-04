@@ -3892,8 +3892,8 @@ describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
 describe("CLI: events history", () => {
   const hour = 3_600_000;
 
-  function envelope(seq: number, timestamp: number) {
-    return { seq, timestamp, event: "lease.granted", payload: { seq }, module: "leases" };
+  function envelope(seq: number, timestamp: number, id = `evt_${seq}`) {
+    return { id, seq, timestamp, event: "lease.granted", payload: { seq }, module: "leases" };
   }
 
   function printed(stdout: string): unknown[] {
@@ -3979,7 +3979,7 @@ describe("CLI: events history", () => {
     expect(fileRead).toBe(false);
   });
 
-  it("events --follow prints an event emitted between the subscribe and the replay exactly once", async () => {
+  it("simlock events --follow prints an event pushed during the replay once", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
     let listener: ((push: EventPush) => void) | undefined;
@@ -4001,6 +4001,8 @@ describe("CLI: events history", () => {
               // seq 2, and seq 3 lands just after its snapshot.
               listener?.(push(2));
               listener?.(push(3));
+              // Same seq and timestamp as the replayed event 2, another id: another event.
+              listener?.({ subscriptionId: "sub_1", event: envelope(2, 2, "evt_other") });
               return [envelope(1, 1), envelope(2, 2)];
             },
           }),
@@ -4012,7 +4014,13 @@ describe("CLI: events history", () => {
     signals.emit("SIGINT");
 
     expect(await runPromise).toBe(0);
-    expect(printed(output.stdout)).toEqual([envelope(1, 1), envelope(2, 2), push(3), push(4)]);
+    expect(printed(output.stdout)).toEqual([
+      envelope(1, 1),
+      envelope(2, 2),
+      push(3),
+      { subscriptionId: "sub_1", event: envelope(2, 2, "evt_other") },
+      push(4),
+    ]);
   });
 
   it("events --since --follow prints the history once and then the live events", async () => {

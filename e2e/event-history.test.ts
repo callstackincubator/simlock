@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
 
 interface Envelope {
+  readonly id: string;
   readonly seq: number;
   readonly timestamp: number;
   readonly event: string;
@@ -66,6 +67,24 @@ describe("event history", () => {
 
     expect(history.code).toBe(0);
     expect(grantOf(parseLines(history.stdout), leaseId)).toEqual(before);
+  });
+
+  it("simlock events --since 1h after a daemon restart prints each event with the id it had before the restart", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const leaseId = await leaseDevice(env);
+    const beforeRestart = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+    const granted = grantOf(beforeRestart, leaseId);
+    expect(granted?.id).toMatch(/^evt_[A-Za-z0-9_-]{1,64}$/);
+
+    await env.restartDaemon();
+    const afterRestart = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+
+    for (const before of beforeRestart) {
+      expect(before.id).toMatch(/^evt_/);
+      expect(afterRestart.find((entry) => entry.id === before.id)).toEqual(before);
+    }
+    expect(new Set(afterRestart.map((entry) => entry.id)).size).toBe(afterRestart.length);
   });
 
   it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {

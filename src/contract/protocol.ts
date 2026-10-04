@@ -27,7 +27,8 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * 8). ADR 0010 adds `component.install` and its `component-progress` push (taking it to 9): a
  * gateway's `worker.install-component` (ADR 0010 §7) relays that operation to its
  * workers, so a worker without it must be `incompatible` rather than fail in the middle of a
- * relay. It only ever widens once a second version is actually kept alive side by side with the
+ * relay. ADR 0014 gives every event envelope an `id` (taking it to 10): a worker's pushed events
+ * without one would fail the gateway's schema, so a worker on 9 is `incompatible` instead. It only ever widens once a second version is actually kept alive side by side with the
  * first, which nothing here does.
  *
  * A client from before any of those changes simply does not overlap this daemon, and `hello`
@@ -42,7 +43,7 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10), and so is one on 7
  * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9).
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 9, max: 9 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 10, max: 10 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the

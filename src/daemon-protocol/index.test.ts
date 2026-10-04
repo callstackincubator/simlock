@@ -17,8 +17,8 @@ describe("daemon protocol", () => {
     // taking it to 6, and ADR 0007 makes a device's mode a required `mode`, taking it to 7, then
     // lets a lease request choose it, taking it to 8, each the same way. ADR 0010 adds
     // `component.install` and its `component-progress` push, which a gateway relays to its
-    // workers, taking it to 9.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(9);
+    // workers, taking it to 9. ADR 0014 gives every event envelope an `id`, taking it to 10.
+    expect(DAEMON_PROTOCOL_VERSION).toBe(10);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

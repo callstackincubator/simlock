@@ -590,9 +590,13 @@ export const nukeReportSchema = z.object({
  * for a channel this PR does not change the routing of. Tightening this (e.g. a discriminated
  * union keyed on `event`) is left as follow-up work; flagged in the PR description.
  */
+export const EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{1,64}$/;
+
 export const eventEnvelopeSchema = z.object({
+  /** Wire input is a claim (safety.md): a pushed `id` is bounded, not trusted. */
+  id: z.string().regex(EVENT_ID_PATTERN),
   seq: z.number(),
-  timestamp: z.number(),
+  timestamp: z.number().finite(),
   event: z.string(),
   payload: z.unknown(),
   module: z.string(),

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, type IdGenerator } from "../ports/index.js";
 import { type EventBusLogger, EventBus, type EventMap, type EventName } from "./index.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -83,6 +83,7 @@ describe("EventBus", () => {
     );
 
     const expectedEnvelope = {
+      id: expect.stringMatching(/^evt_/),
       seq: 1,
       timestamp: 1_234,
       event: "lease.expired",
@@ -91,6 +92,18 @@ describe("EventBus", () => {
     };
     expect(eventEnvelopes).toEqual([expectedEnvelope]);
     expect(allEnvelopes).toEqual([expectedEnvelope]);
+  });
+
+  it("emit stamps each envelope with evt_ and the id generator's next value", () => {
+    let next = 0;
+    const idGenerator: IdGenerator = { generate: () => `gen-${++next}` };
+    const bus = new EventBus(new FakeClock(1), 10, undefined, idGenerator);
+
+    const first = bus.emit("daemon.stopping", { reason: "a" }, "daemon");
+    const second = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+
+    expect([first.id, second.id]).toEqual(["evt_gen-1", "evt_gen-2"]);
+    expect(bus.replay().map((entry) => entry.id)).toEqual(["evt_gen-1", "evt_gen-2"]);
   });
 
   it("isolates a throwing handler and continues dispatching", () => {
