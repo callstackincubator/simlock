@@ -1436,3 +1436,160 @@ describe("Registry", () => {
     ).rejects.toThrow(/Invalid lease record/);
   });
 });
+
+/** A clock that moves on every read, so two reads never agree: a field that equals another
+ * must have come from the same read. */
+class TickingClock extends FakeClock {
+  #reads = 0;
+
+  override now(): number {
+    this.#reads += 1;
+    return 1_000 + this.#reads;
+  }
+}
+
+describe("Registry: stateEnteredAt", () => {
+  async function loadTicking(filesystem = new MemoryFilesystem()) {
+    const clock = new TickingClock();
+    const suffixes = ["device", "lease"];
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => suffixes.shift() ?? "unexpected" },
+      statePath,
+    };
+    return { options, registry: await Registry.load(options) };
+  }
+
+  async function registerReady(registry: Registry) {
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    return device;
+  }
+
+  const lease = (deviceId: string) => ({
+    deviceId,
+    ownerId: "agent-1",
+    requesterId: "agent-1",
+    ttlDeadline: 90_000,
+    ttlMs: 60_000,
+  });
+
+  async function loadStored(device: Record<string, unknown>) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          { createdAt: 500, driverData: {}, driverDeviceId: "d", id: "dev_old", spec, ...device },
+        ],
+        leases: [],
+      }),
+    );
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "x" },
+      statePath,
+    });
+    return registry.snapshot.devices[0];
+  }
+
+  it("registerDevice stamps stateEnteredAt equal to createdAt", async () => {
+    const { registry } = await loadTicking();
+
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+
+    expect(device.stateEnteredAt).toBeDefined();
+    expect(device.stateEnteredAt).toBe(device.createdAt);
+  });
+
+  it("a grant, a release and quarantine entry stamp stateEnteredAt equal to grantedAt, lastLeaseEndedAt and quarantinedAt", async () => {
+    const { registry } = await loadTicking();
+    const device = await registerReady(registry);
+
+    const granted = await registry.createLease(lease(device.id));
+    const leasedDevice = registry.snapshot.devices[0];
+    expect(leasedDevice?.stateEnteredAt).toBeDefined();
+    expect(leasedDevice?.stateEnteredAt).toBe(granted.grantedAt);
+
+    const released = await registry.beginRelease(granted.id);
+    expect(released.device.stateEnteredAt).toBeDefined();
+    expect(released.device.stateEnteredAt).toBe(released.device.lastLeaseEndedAt);
+
+    const quarantined = await registry.enterQuarantine(device.id, 50_000);
+    expect(quarantined.stateEnteredAt).toBeDefined();
+    expect(quarantined.stateEnteredAt).toBe(quarantined.quarantinedAt);
+  });
+
+  it("markDeviceMissing stamps stateEnteredAt through transition", async () => {
+    const { registry } = await loadTicking();
+    const device = await registerReady(registry);
+    const before = registry.snapshot.devices[0]?.stateEnteredAt;
+
+    const missing = await registry.markDeviceMissing(device.id, "doctor");
+
+    expect(missing.state).toBe("deleted");
+    expect(missing.stateEnteredAt).toBeDefined();
+    expect(missing.stateEnteredAt).toBeGreaterThan(before ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("a record without stateEnteredAt loads it from createdAt when provisioning, lastLeaseEndedAt when reclaiming and quarantinedAt when quarantined", async () => {
+    expect(await loadStored({ state: "provisioning" })).toMatchObject({ stateEnteredAt: 500 });
+    expect(await loadStored({ lastLeaseEndedAt: 900, state: "reclaiming" })).toMatchObject({
+      stateEnteredAt: 900,
+    });
+    expect(await loadStored({ quarantinedAt: 700, state: "quarantined" })).toMatchObject({
+      stateEnteredAt: 700,
+    });
+  });
+
+  it.each(["ready", "leased", "shutdown", "deleted"])(
+    "a record without stateEnteredAt in ready, leased, shutdown or deleted loads without it (%s)",
+    async (state) => {
+      const device = await loadStored({ lastLeaseEndedAt: 900, quarantinedAt: 700, state });
+
+      expect(device).toBeDefined();
+      expect(device).not.toHaveProperty("stateEnteredAt");
+    },
+  );
+
+  it("a record with stateEnteredAt loads it unchanged", async () => {
+    const device = await loadStored({
+      lastLeaseEndedAt: 900,
+      state: "reclaiming",
+      stateEnteredAt: 950,
+    });
+
+    expect(device?.stateEnteredAt).toBe(950);
+  });
+
+  it("keeps a stateEnteredAt it wrote through a save and a reload", async () => {
+    const { options, registry } = await loadTicking();
+    await registerReady(registry);
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.snapshot.devices[0]?.stateEnteredAt).toBeDefined();
+    expect(reloaded.snapshot.devices[0]?.stateEnteredAt).toBe(
+      registry.snapshot.devices[0]?.stateEnteredAt,
+    );
+  });
+});

@@ -1877,6 +1877,71 @@ describe("DaemonServer decorations", () => {
     await observer.close();
   });
 
+  async function seededHarness(devices: readonly Record<string, unknown>[]) {
+    const stateFilesystem = new MemoryFilesystem();
+    await stateFilesystem.writeFileAtomic(
+      "/state.json",
+      JSON.stringify({
+        devices: devices.map((device) => ({
+          createdAt: 1,
+          driverData: {},
+          driverDeviceId: `driver_${String(device.id)}`,
+          spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+          ...device,
+        })),
+        leases: [],
+      }),
+    );
+    return createHarness({ stateFilesystem });
+  }
+
+  it("transitionAgeMs is now minus stateEnteredAt for a provisioning or reclaiming device and absent in every other state", async () => {
+    const harness = await seededHarness([
+      { id: "dev_prov", state: "provisioning", stateEnteredAt: 400 },
+      { id: "dev_recl", lastLeaseEndedAt: 1, state: "reclaiming", stateEnteredAt: 600 },
+      { id: "dev_ready", state: "ready", stateEnteredAt: 100 },
+      { id: "dev_quar", quarantinedAt: 1, state: "quarantined", stateEnteredAt: 100 },
+      { id: "dev_down", state: "shutdown", stateEnteredAt: 100 },
+    ]);
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+
+    const response = await observer.request("status.get", {});
+
+    const devices = (response.payload as { devices: Record<string, unknown>[] }).devices;
+    const byId = new Map(devices.map((device) => [device.id, device]));
+    expect(byId.get("dev_prov")?.transitionAgeMs).toBe(600);
+    expect(byId.get("dev_recl")?.transitionAgeMs).toBe(400);
+    for (const id of ["dev_ready", "dev_quar", "dev_down"]) {
+      expect(byId.get(id)).toBeDefined();
+      expect(byId.get(id)).not.toHaveProperty("transitionAgeMs");
+    }
+    await observer.close();
+  });
+
+  it("status.get and list.get return stateEnteredAt for a device that has one and omit it for a device that does not", async () => {
+    const harness = await seededHarness([
+      { id: "dev_known", state: "ready", stateEnteredAt: 250 },
+      { id: "dev_unknown", state: "ready" },
+    ]);
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+
+    const status = await observer.request("status.get", {});
+    const list = await observer.request("list.get", { kind: "devices" });
+
+    for (const devices of [
+      (status.payload as { devices: Record<string, unknown>[] }).devices,
+      list.payload as Record<string, unknown>[],
+    ]) {
+      const byId = new Map(devices.map((device) => [device.id, device]));
+      expect(byId.get("dev_known")?.stateEnteredAt).toBe(250);
+      expect(byId.get("dev_unknown")).toBeDefined();
+      expect(byId.get("dev_unknown")).not.toHaveProperty("stateEnteredAt");
+    }
+    await observer.close();
+  });
+
   describe("operational logging", () => {
     function logger(): { logger: Logger; sink: MemoryLogSink } {
       const sink = new MemoryLogSink();
