@@ -82,13 +82,19 @@ reader skips it, the way it skips a line that is not JSON. This is one
 exception to ADR 0006 §5's additive-only rule for the file, taken once and
 recorded in `EVENTS.md` the way ADRs 0004 and 0007 recorded theirs.
 
-### 5. Every reader presents events in `timestamp` order, then `seq`
+### 5. A replay presents events in `timestamp` order, then `seq`
 
 The console already does. `simlock events` and `events.replay` print the
 file's order today, which on a gateway is arrival order. Once a relayed line
 carries the worker's `timestamp`, arrival order and time order differ, and
-two readers of the same data must not disagree. Time order wins, with `seq`
-breaking ties within a millisecond.
+two readers of the same data must not disagree. Time order wins for every
+replay, from the ring or the file, with `seq` breaking ties within a
+millisecond.
+
+A live stream (`simlock events --follow`, `GET /v1/events/stream`) is
+arrival order. A gateway would have to hold events back to sort a relayed
+one among its own, and then the stream is not live. On a worker arrival
+order is time order, since one process stamps and pushes every event.
 
 ### 6. The relay marks a worker's event in exactly one place
 
@@ -161,3 +167,6 @@ gateway on different sides of it do not overlap, and the worker is
   Rejected: a second identity rule kept alive for a version nobody runs.
 - **Readers keep file order on a gateway.** Rejected: the console sorts by
   time, so the CLI and the console would show the same fleet in two orders.
+- **The gateway sorts its live stream too.** Rejected: it would have to hold
+  every event back for some window to let relayed ones catch up, and a
+  stream that is seconds late is not a live stream.
