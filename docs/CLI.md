@@ -1670,7 +1670,9 @@ offer.
 
 ## `simlock events [--follow] [--since <duration>]`
 
-Print business events (see [EVENTS.md](EVENTS.md)) as JSON lines.
+Print business events (see [EVENTS.md](EVENTS.md)) as JSON lines. Every line
+carries an `id` that stays the same for that event across a daemon restart;
+history from before the upgrade that added it is not shown.
 
 - With no flags, prints the recent events the daemon holds in memory
   (`eventBuffer.capacity`, 1000 by default), which start empty after a

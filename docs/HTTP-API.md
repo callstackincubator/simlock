@@ -1181,9 +1181,11 @@ an all-or-nothing that leaves the operator guessing.
   so they include events from before a daemon restart and beyond the 1000
   held in memory, back to the oldest event the file still holds
   (`eventLog.rotateBytes`). Without `since`, the recent events held in
-  memory.
+  memory. Every event carries an `id`, the same one after a daemon restart;
+  events written before the upgrade that added it are not returned.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
-  (`simlock events --follow`).
+  (`simlock events --follow`). Each event carries the same `id` as in
+  `GET /v1/events`.
 - `GET /v1/tokens` — every token this daemon knows (`simlock token list`):
 
   ```json

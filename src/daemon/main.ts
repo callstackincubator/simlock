@@ -151,7 +151,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const hostSystem = await (
     options.hostInfo ?? new NodeHostInfo({ platform: process.platform, processRunner })
   ).read();
-  const eventBus = new EventBus(clock, config.eventBuffer.capacity, eventBusLogger(logger));
+  const eventBus = new EventBus(
+    clock,
+    config.eventBuffer.capacity,
+    eventBusLogger(logger),
+    idGenerator,
+  );
   const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the

@@ -8,6 +8,8 @@ import type { Stat } from "../layout";
 
 /** One business event, as the daemon sent it. */
 export interface ConsoleEvent {
+  /** What names the event for good: survives a daemon restart (ADR 0014). */
+  readonly id: string;
   readonly seq: number;
   readonly timestamp: number;
   readonly event: string;
@@ -26,17 +28,22 @@ export const RECENT = "1h";
 
 /**
  * An envelope off the wire, or `undefined` when it is not one: without a numeric `seq`, a
- * `timestamp` that is a date, and a string `event`, it cannot be placed in time or told apart
+ * `timestamp` that is a date, and a string `event` and `id`, it cannot be placed in time or told apart
  * from another.
  */
 export function readEvent(data: unknown): ConsoleEvent | undefined {
   if (typeof data !== "object" || data === null) return undefined;
-  const { event, payload, seq, timestamp } = data as Record<string, unknown>;
-  if (typeof seq !== "number" || typeof timestamp !== "number" || typeof event !== "string") {
+  const { event, id, payload, seq, timestamp } = data as Record<string, unknown>;
+  if (
+    typeof seq !== "number" ||
+    typeof timestamp !== "number" ||
+    typeof event !== "string" ||
+    typeof id !== "string"
+  ) {
     return undefined;
   }
   if (Number.isNaN(new Date(timestamp).getTime())) return undefined;
-  return { event, payload, seq, timestamp };
+  return { event, id, payload, seq, timestamp };
 }
 
 /**
@@ -49,12 +56,9 @@ export function readReplay(body: unknown): readonly ConsoleEvent[] {
   return events.flatMap((data: unknown) => readEvent(data) ?? []);
 }
 
-/**
- * What makes two events the same: `seq` and `timestamp` both. `seq` alone starts again when the
- * daemon restarts (ADR 0013 §2).
- */
+/** What makes two events the same: their `id`, and nothing else (ADR 0014). */
 export function keyOf(event: ConsoleEvent): string {
-  return `${event.seq}:${event.timestamp}`;
+  return event.id;
 }
 
 /** Newest first: by time, and by `seq` within the same millisecond. */

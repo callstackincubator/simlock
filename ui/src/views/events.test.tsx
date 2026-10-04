@@ -286,14 +286,15 @@ describe("the events view", () => {
     const events: ConsoleEvent[] = [
       {
         event: "gizmo.frobnicated",
+        id: "evt_3",
         payload: { count: 3, nested: { deep: true }, reason: "because", workerId: "wrk_1" },
         seq: 3,
         timestamp: T0,
       },
       // A payload that is not an object at all.
-      { event: "gizmo.listed", payload: ["a", 1], seq: 2, timestamp: T0 - 1_000 },
+      { event: "gizmo.listed", id: "evt_2", payload: ["a", 1], seq: 2, timestamp: T0 - 1_000 },
       // No payload at all.
-      { event: "gizmo.pinged", payload: undefined, seq: 1, timestamp: T0 - 2_000 },
+      { event: "gizmo.pinged", id: "evt_1", payload: undefined, seq: 1, timestamp: T0 - 2_000 },
     ];
 
     const html = renderToStaticMarkup(
@@ -314,7 +315,13 @@ describe("the events view", () => {
     // Five and a half hours ahead of UTC, so neither the hour nor the minute matches UTC's.
     process.env.TZ = "Asia/Kolkata";
     try {
-      const event: ConsoleEvent = { event: "lease.granted", payload: {}, seq: 1, timestamp: T0 };
+      const event: ConsoleEvent = {
+        event: "lease.granted",
+        id: "evt_1",
+        payload: {},
+        seq: 1,
+        timestamp: T0,
+      };
 
       const html = renderToStaticMarkup(<EventList events={[event]} workers={undefined} />);
 
@@ -328,7 +335,9 @@ describe("the events view", () => {
   });
 
   it("an empty list says why it is empty", () => {
-    const leases: ConsoleEvent[] = [{ event: "lease.granted", payload: {}, seq: 1, timestamp: T0 }];
+    const leases: ConsoleEvent[] = [
+      { event: "lease.granted", id: "evt_1", payload: {}, seq: 1, timestamp: T0 },
+    ];
     const render = (events: ConsoleEvent[], filter: "all" | "device") =>
       text(renderToStaticMarkup(<EventList events={events} workers={undefined} filter={filter} />));
 
@@ -345,7 +354,13 @@ describe("the events view", () => {
       "component.installed",
       "daemon.started",
       "gizmo.frobnicated",
-    ].map((event, index) => ({ event, payload: {}, seq: index, timestamp: T0 - index }));
+    ].map((event, index) => ({
+      event,
+      id: `evt_${index}`,
+      payload: {},
+      seq: index,
+      timestamp: T0 - index,
+    }));
     const names = (filter: "all" | "lease" | "device" | "worker" | "component" | "other") =>
       [
         ...renderToStaticMarkup(
@@ -364,6 +379,7 @@ describe("the events view", () => {
   it("a worker the console does not know, or that has no label, shows as its id", () => {
     const about = (workerId: string, seq: number): ConsoleEvent => ({
       event: "lease.granted",
+      id: `evt_${seq}`,
       payload: { workerId },
       seq,
       timestamp: T0 - seq,
@@ -385,6 +401,7 @@ describe("the events view", () => {
   it("a worker.rejected event names no worker, even one the console knows", () => {
     const rejected: ConsoleEvent = {
       event: "worker.rejected",
+      id: "evt_1",
       payload: { reason: "unauthenticated", workerId: "wrk_1" },
       seq: 1,
       timestamp: T0,

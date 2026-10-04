@@ -17,7 +17,7 @@ const CURRENT = Date.parse("2026-10-02T12:00:00Z");
 let seq = 0;
 function event(name: string, timestamp: number): ConsoleEvent {
   seq += 1;
-  return { event: name, payload: {}, seq, timestamp };
+  return { event: name, id: `evt_${seq}`, payload: {}, seq, timestamp };
 }
 
 /** The count of each minute, keyed by how many minutes before the current one it starts. */

@@ -303,6 +303,7 @@ export class ScriptedWorkerClient {
   pushEvent(envelope: Partial<EventEnvelope> & { readonly event: string }): void {
     this.#eventListener?.({
       event: {
+        id: "evt_test",
         module: "test",
         payload: {},
         seq: 1,

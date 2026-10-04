@@ -151,7 +151,11 @@ lease index, rather than trusting the relayed payload's `ownerId` verbatim.
 
 ## Conventions recap
 
-- Every event carries: `timestamp`, `event`, `payload`, emitting module.
+- Every event carries: `id` (`evt_` and a unique suffix; it names the event for
+  good and survives a daemon restart), `seq`, `timestamp`, `event`, `payload`,
+  emitting module.
+- The `id` arrived with protocol 10. Lines already in `events.jsonl` from before
+  the upgrade have none and are not shown by `simlock events --since`.
 - Events are appended to an in-memory ring buffer, which `simlock events`
   without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
   one JSON line per event with the same fields. The file survives daemon

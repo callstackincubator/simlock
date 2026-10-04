@@ -591,8 +591,10 @@ export const nukeReportSchema = z.object({
  * union keyed on `event`) is left as follow-up work; flagged in the PR description.
  */
 export const eventEnvelopeSchema = z.object({
+  /** Wire input is a claim (safety.md): a pushed `id` is bounded, not trusted. */
+  id: z.string().regex(/^evt_[A-Za-z0-9_-]{1,64}$/),
   seq: z.number(),
-  timestamp: z.number(),
+  timestamp: z.number().finite(),
   event: z.string(),
   payload: z.unknown(),
   module: z.string(),
