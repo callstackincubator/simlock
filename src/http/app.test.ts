@@ -553,20 +553,26 @@ describe("POST /v1/lease-requests", () => {
     });
   });
 
-  it("fails the POST with the dispatcher's rejection, allowDownload or not, when the app is told downloads do not answer early", async () => {
-    const { app, dispatcher } = buildHarness({ answerDownloadsEarly: false });
-    const responsePromise = postLeaseRequest(app, { ...defaultBody, allowDownload: true });
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    call.session.onRequestAdmitted?.("req_1", false);
-    call.reject(new DispatchError("UNKNOWN_MODEL", "no worker lists iPhone 17 Pro"));
+  it.each([
+    ["with allowDownload", { allowDownload: true }],
+    ["without allowDownload", {}],
+  ])(
+    "fails the POST with the dispatcher's rejection, allowDownload or not, when the app is told downloads do not answer early (%s)",
+    async (_label, extra) => {
+      const { app, dispatcher } = buildHarness({ answerDownloadsEarly: false });
+      const responsePromise = postLeaseRequest(app, { ...defaultBody, ...extra });
+      const call = await waitForDispatch(dispatcher, "lease.request");
+      call.session.onRequestAdmitted?.("req_1", false);
+      call.reject(new DispatchError("UNKNOWN_MODEL", "no worker lists iPhone 17 Pro"));
 
-    const response = await responsePromise;
+      const response = await responsePromise;
 
-    expect(response.status).toBe(422);
-    expect((await response.json()) as { error: { code: string } }).toMatchObject({
-      error: { code: "UNKNOWN_MODEL" },
-    });
-  });
+      expect(response.status).toBe(422);
+      expect((await response.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: "UNKNOWN_MODEL" },
+      });
+    },
+  );
 
   it("answers 201 as soon as the request is stored with allowDownload, by default", async () => {
     const { app, dispatcher } = buildHarness();
