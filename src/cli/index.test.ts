@@ -2959,13 +2959,13 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(await print(statusWith())).not.toContain("RAM");
   });
 
-  it("prints, per platform, whether the worker is at its RAM budget", async () => {
+  it("prints, per platform, whether the worker is at its RAM budget, after any over-limit mark", async () => {
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
       capacity: {
         ...EMPTY_STATUS.capacity,
         android: { ...EMPTY_STATUS.capacity.android, atRamBudget: false },
-        ios: { ...EMPTY_STATUS.capacity.ios, atRamBudget: true },
+        ios: { ...EMPTY_STATUS.capacity.ios, atRamBudget: true, overLimit: true },
       },
     };
     const output = outputCapture();
@@ -2978,8 +2978,10 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     );
 
     const lines = output.stdout.split("\n");
-    expect(lines.find((line) => line.startsWith("Capacity ios:"))).toContain("at RAM budget");
-    expect(lines.find((line) => line.startsWith("Capacity android:"))).not.toContain("RAM budget");
+    expect(lines).toContain(
+      "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0 (over limit) (at RAM budget)",
+    );
+    expect(lines).toContain("Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0");
   });
 
   it("simlock status marks a stalled device", async () => {

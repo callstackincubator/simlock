@@ -761,6 +761,19 @@ describe("aggregateStatus at-RAM-budget flag", () => {
     expect(status.capacity.android.atRamBudget).toBe(false);
   });
 
+  it("reports false when the first worker has room and a later one is at its budget", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(false, false), id: "wrk_a" }),
+        view({ capacity: withBudget(true, true), id: "wrk_b" }),
+      ],
+      options,
+    );
+
+    expect(status.capacity.ios.atRamBudget).toBe(false);
+    expect(status.capacity.android.atRamBudget).toBe(false);
+  });
+
   it("leaves a disconnected worker out of the flag, and reports false for a fleet with no connected worker", () => {
     const status = aggregateStatus(
       [
