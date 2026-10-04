@@ -4,7 +4,7 @@ import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { hostFixture, leaseFixture } from "./test-support.js";
+import { catalogFixture, hostFixture, leaseFixture } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
@@ -198,6 +198,58 @@ describe("WorkerRegistry", () => {
     workers.connected("wrk_1", undefined, "0.3.0");
 
     expect(workers.grantedDevices()).toEqual([]);
+  });
+
+  describe("when the catalog was read (ADR 0009 §4)", () => {
+    const catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]).platforms;
+
+    it("records the time of a refresh that carries a catalog, and not of one that carries none", () => {
+      const { clock, workers } = registry();
+      workers.connected("wrk_a", undefined, undefined);
+      expect(workers.view("wrk_a")?.catalogReadAt).toBeUndefined();
+
+      clock.advance(5);
+      workers.refresh("wrk_a", { devices: [] });
+      expect(workers.view("wrk_a")?.catalogReadAt).toBeUndefined();
+
+      clock.advance(5);
+      workers.refresh("wrk_a", { catalog });
+      expect(workers.view("wrk_a")?.catalogReadAt).toBe(clock.now());
+
+      const readAt = clock.now();
+      clock.advance(5);
+      workers.refresh("wrk_a", { devices: [] });
+      expect(workers.view("wrk_a")?.catalogReadAt).toBe(readAt);
+    });
+
+    it("clears it when the worker connects again, and keeps the catalog it last read", () => {
+      const { workers } = registry();
+      workers.connected("wrk_a", undefined, undefined);
+      workers.refresh("wrk_a", { catalog });
+
+      workers.disconnected("wrk_a");
+      expect(workers.view("wrk_a")?.catalogReadAt).toBeDefined();
+
+      workers.connected("wrk_a", undefined, undefined);
+      expect(workers.view("wrk_a")?.catalogReadAt).toBeUndefined();
+      expect(workers.view("wrk_a")?.catalog).toEqual(catalog);
+    });
+
+    it("tells a worker whose catalog was read and is empty from one whose catalog never arrived, across a reconnect", () => {
+      const { workers } = registry();
+      workers.connected("wrk_empty", undefined, undefined);
+      workers.connected("wrk_never", undefined, undefined);
+      workers.refresh("wrk_empty", { catalog: [] });
+      workers.refresh("wrk_never", { devices: [] });
+
+      workers.connected("wrk_empty", undefined, undefined);
+      workers.connected("wrk_never", undefined, undefined);
+
+      expect(workers.view("wrk_empty")?.catalogEverRead).toBe(true);
+      expect(workers.view("wrk_never")?.catalogEverRead).toBeUndefined();
+    });
   });
 
   describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {

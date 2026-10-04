@@ -165,6 +165,31 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_a", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_a")?.capacity).toBeDefined());
+    const catalogReads = () => worker.calls.filter((call) => call === "catalog.get").length;
+    expect(catalogReads()).toBe(1);
+
+    // A refresh with no catalog is in flight, held at its first call, when a catalog refresh asks.
+    const release = worker.holdStatus();
+    worker.pushEvent({ event: "device.state-changed" });
+    await vi.waitFor(() => expect(worker.calls.at(-1)).toBe("status.get"));
+    void harness.service.target("wrk_a")?.refresh({ includeCatalog: true });
+    harness.clock.advance(250);
+    release();
+
+    await vi.waitFor(() => expect(catalogReads()).toBe(2));
+    // The view says so too: the catalog was read after the clock moved.
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_a")?.catalogReadAt).toBe(harness.clock.now()),
+    );
+    await harness.service.stop();
+  });
+
   it("the worker view builder gives a gateway the same view it built before this change", async () => {
     // Every field a refresh fills, set to a value that is not a default, and the whole view
     // compared as one literal: the expected value is what the gateway built before the view

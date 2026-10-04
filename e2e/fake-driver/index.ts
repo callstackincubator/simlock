@@ -1,6 +1,6 @@
 import type { Driver, PrerequisiteCheck } from "../../dist/core/driver.js";
 import { OutOfProcessFakeDriver, readPlatformScript, type FakeDriverClock } from "./fake-driver.js";
-import { DEFAULT_LOG_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
+import { DEFAULT_LOG_ENV, DEFAULT_PLATFORMS_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
 
 /**
  * The `SIMLOCK_DRIVERS_MODULE` entry point: substitutes real driver discovery in a
@@ -12,10 +12,15 @@ import { DEFAULT_LOG_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
 export function createDrivers(context: { readonly clock: FakeDriverClock }): Driver[] {
   const scriptPath = process.env[DEFAULT_SCRIPT_ENV];
   const logPath = process.env[DEFAULT_LOG_ENV];
-  return [
-    new OutOfProcessFakeDriver({ clock: context.clock, logPath, platform: "ios", scriptPath }),
-    new OutOfProcessFakeDriver({ clock: context.clock, logPath, platform: "android", scriptPath }),
-  ];
+  // A machine with only some drivers (`SIMLOCK_FAKE_DRIVER_PLATFORMS`), the way a Mac with no
+  // Android SDK has no Android driver.
+  const wanted = process.env[DEFAULT_PLATFORMS_ENV]?.split(",");
+  return (["ios", "android"] as const)
+    .filter((platform) => wanted === undefined || wanted.includes(platform))
+    .map(
+      (platform) =>
+        new OutOfProcessFakeDriver({ clock: context.clock, logPath, platform, scriptPath }),
+    );
 }
 
 /**

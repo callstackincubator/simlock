@@ -14,6 +14,7 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
   return {
     catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
       .platforms,
+    catalogReadAt: 1,
     connection: "connected",
     devices: [],
     drained: false,
