@@ -1,8 +1,8 @@
 # 0015. A device transition is an event, and the record says when it entered its state
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-04
-- **Issue:** none yet; the feature issue that carries this decision follows it.
+- **Issue:** [#314](https://github.com/callstackincubator/simlock/issues/314)
 - **Supersedes:** nothing.
 - **Depends on:** [ADR 0006](0006-events-and-log-are-two-records.md) for the
   event file, [ADR
