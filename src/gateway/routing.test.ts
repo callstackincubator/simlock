@@ -156,6 +156,36 @@ describe("the registered warm-then-free policy", () => {
     });
   });
 
+  it("keeps a worker whose running slots hold only devices that are not leased, and a request no warm device fits is dispatched to it at once", () => {
+    // The ready device is another runtime, so no warm hit: only free-slot can decide. The
+    // planner evicts it, so the slot is free, on the platform and globally.
+    const other = {
+      ...deviceFixture("dev_1", "ready"),
+      spec: { model: "iPhone 17", osVersion: "25.0", platform: "ios" as const },
+    };
+    const capacity = statusFixture().capacity;
+    const platformHeld = view("wrk_a", {
+      capacity: {
+        ...capacity,
+        global: { ...capacity.global, running: 1, warm: 1 },
+        ios: { ...capacity.ios, maxRunning: 1, running: 1, warm: 1 },
+      },
+      devices: [other],
+    });
+    const globalHeld = view("wrk_a", {
+      capacity: {
+        ...capacity,
+        global: { ...capacity.global, maxRunning: 1, running: 1, warm: 1 },
+        ios: { ...capacity.ios, running: 1, warm: 1 },
+      },
+      devices: [other],
+    });
+
+    for (const held of [platformHeld, globalHeld]) {
+      expect(policy.select(REQUEST, [held])).toMatchObject({ workerId: "wrk_a" });
+    }
+  });
+
   it("passes over a worker with no free global slot although its platform has one", () => {
     const capacity = statusFixture().capacity;
     const noGlobal = view("wrk_a", {
