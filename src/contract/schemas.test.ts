@@ -319,12 +319,17 @@ describe("fitPlatformCatalog", () => {
 
   it("drops the class of a model whose name is too long to be a modelClasses key, in an entry the schema accepts", () => {
     const long = "x".repeat(257);
+    const longest = "y".repeat(256);
     const fitted = fitPlatformCatalog({
       ...entry(["Pixel 8"]),
-      modelClasses: { [long]: "phone" as const, "Pixel 8": "phone" as const },
+      modelClasses: {
+        [long]: "phone" as const,
+        [longest]: "tv" as const,
+        "Pixel 8": "phone" as const,
+      },
     });
 
-    expect(fitted.modelClasses).toEqual({ "Pixel 8": "phone" });
+    expect(fitted.modelClasses).toEqual({ [longest]: "tv", "Pixel 8": "phone" });
     expect(() => platformCatalogSchema.parse(fitted)).not.toThrow();
   });
 

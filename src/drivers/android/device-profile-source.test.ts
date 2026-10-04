@@ -77,12 +77,16 @@ describe("parseAvdmanagerDeviceProfiles", () => {
       `Available devices:\n    Tag : android-tv\n` +
       `id: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n---------\n` +
       `id: 1 or "tv_1080p"\n    Name: Television (1080p)\n    OEM : Google\n    Tag : android-tv\n---------\n` +
-      `id: 2 or "wear_round"\n    Name: Wear Round\n    Tag : android-wear\n`;
+      `id: 2 or "wear_round"\n    Name: Wear Round\n    Tag : android-wear\n---------\n` +
+      `id: 3 or "tight"\n    Name: Tight\n    Tag:android-desktop\n---------\n` +
+      `id: 4 or "prefixed"\n    Name: Prefixed\n    Subtag : android-tv\n`;
 
     expect(parseAvdmanagerDeviceProfiles(output)).toEqual([
       { id: "pixel_8", name: "Pixel 8", oem: "Google", tag: undefined },
       { id: "tv_1080p", name: "Television (1080p)", oem: "Google", tag: "android-tv" },
       { id: "wear_round", name: "Wear Round", oem: undefined, tag: "android-wear" },
+      { id: "tight", name: "Tight", oem: undefined, tag: "android-desktop" },
+      { id: "prefixed", name: "Prefixed", oem: undefined, tag: undefined },
     ]);
   });
 });
@@ -153,7 +157,8 @@ describe("device classes in the catalog", () => {
     const catalog = await registry.catalog();
 
     expect(catalog.models).toEqual(["Pixel 8", "Odd Thing", "Car-ish", "Prefix"]);
-    expect(catalog.modelClasses).toEqual({ "Pixel 8": "phone" });
+    // Strict: a model with no class must be absent, not present as undefined.
+    expect(catalog.modelClasses).toStrictEqual({ "Pixel 8": "phone" });
   });
 });
 

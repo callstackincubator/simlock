@@ -1272,7 +1272,7 @@ export class IosSimctlDriver implements Driver {
     const models = catalog.deviceTypes.map((deviceType) => deviceType.name);
     const modelClasses = Object.fromEntries(
       catalog.deviceTypes.flatMap((deviceType) => {
-        const deviceClass = deviceClassOf(deviceType.productFamily);
+        const deviceClass = PRODUCT_FAMILY_CLASSES.get(deviceType.productFamily);
         return deviceClass === undefined ? [] : [[deviceType.name, deviceClass] as const];
       }),
     );
@@ -2007,17 +2007,13 @@ function parseCatalog(value: unknown): SimctlCatalog {
 }
 
 /** simctl's `productFamily` -> class. A family not listed here has no class and stays leasable. */
-const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string, DeviceClass> = new Map([
+const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new Map([
   ["iPhone", "phone"],
   ["iPad", "tablet"],
   ["Apple Watch", "watch"],
   ["Apple TV", "tv"],
   ["Apple Vision", "vision"],
 ]);
-
-function deviceClassOf(productFamily: string | undefined): DeviceClass | undefined {
-  return productFamily === undefined ? undefined : PRODUCT_FAMILY_CLASSES.get(productFamily);
-}
 
 function parseDeviceType(value: unknown): readonly DeviceType[] {
   if (!isRecord(value) || typeof value.identifier !== "string" || typeof value.name !== "string") {

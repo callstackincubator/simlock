@@ -394,13 +394,18 @@ describe("aggregateCatalog", () => {
       modelClasses: { "iPhone 17": deviceClass },
     });
 
-    // The later id is listed first, so listing order alone would pick the wrong class.
-    const catalog = aggregateCatalog([
+    // Listed in either order, so neither first-listed nor last-listed alone picks the class.
+    const laterIdFirst = aggregateCatalog([
       view({ catalog: [classed("tablet")], id: "wrk_b" }),
       view({ catalog: [classed("phone")], id: "wrk_a" }),
     ]);
+    const earlierIdFirst = aggregateCatalog([
+      view({ catalog: [classed("phone")], id: "wrk_a" }),
+      view({ catalog: [classed("tablet")], id: "wrk_b" }),
+    ]);
 
-    expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+    expect(laterIdFirst.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+    expect(earlierIdFirst.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
   });
 
   it("ignores a class a worker gives to a name it does not list, and does not read the prototype", () => {

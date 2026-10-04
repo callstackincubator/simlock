@@ -2066,7 +2066,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   defaultRuntime: "26.0",
-                  modelAliases: { "iPhone 17": ["iphone17"] },
+                  modelAliases: { "iPhone 17": ["iphone17", "iphone-17"] },
                   modelClasses: {
                     "Apple TV 4K": "tv",
                     "Apple Watch Series 11 (46mm)": "watch",
@@ -2107,7 +2107,7 @@ describe("CLI: catalog", () => {
         "  Models:",
         "    phone:",
         "      iPhone 17: 26.0",
-        "        Other names: iphone17",
+        "        Other names: iphone17, iphone-17",
         "      iPhone 16: 26.0",
         "    tablet:",
         "      iPad Pro: 26.0",

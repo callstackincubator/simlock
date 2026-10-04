@@ -1109,7 +1109,8 @@ describe("IosSimctlDriver", () => {
         "Mac Thing",
         "Lower Phone",
       ]);
-      expect(catalog.modelClasses).toEqual({ "iPhone 17": "phone" });
+      // Strict: a model with no class must be absent, not present as undefined.
+      expect(catalog.modelClasses).toStrictEqual({ "iPhone 17": "phone" });
     });
 
     it("ignores a product family that is not a string", async () => {
