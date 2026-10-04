@@ -1919,6 +1919,20 @@ describe("DaemonServer decorations", () => {
     await observer.close();
   });
 
+  it("a mid-transition device with no known entry time has no transitionAgeMs and is not stalled", async () => {
+    const harness = await seededHarness([{ id: "dev_orphan", state: "reclaiming" }]);
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+
+    const response = await observer.request("status.get", {});
+
+    const [device] = (response.payload as { devices: Record<string, unknown>[] }).devices;
+    expect(device?.id).toBe("dev_orphan");
+    expect(device).not.toHaveProperty("transitionAgeMs");
+    expect(device).not.toHaveProperty("stalled");
+    await observer.close();
+  });
+
   it("status.get and list.get return stateEnteredAt for a device that has one and omit it for a device that does not", async () => {
     const harness = await seededHarness([
       { id: "dev_known", state: "ready", stateEnteredAt: 250 },

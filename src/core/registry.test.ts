@@ -1573,6 +1573,19 @@ describe("Registry: stateEnteredAt", () => {
     },
   );
 
+  it("a record whose stateEnteredAt is not a number loads as if it had none", async () => {
+    expect(await loadStored({ state: "provisioning", stateEnteredAt: "soon" })).toMatchObject({
+      stateEnteredAt: 500,
+    });
+    expect(await loadStored({ state: "ready", stateEnteredAt: "soon" })).not.toHaveProperty(
+      "stateEnteredAt",
+    );
+  });
+
+  it("a reclaiming record with no lastLeaseEndedAt loads without stateEnteredAt", async () => {
+    expect(await loadStored({ state: "reclaiming" })).not.toHaveProperty("stateEnteredAt");
+  });
+
   it("a record with stateEnteredAt loads it unchanged", async () => {
     const device = await loadStored({
       lastLeaseEndedAt: 900,

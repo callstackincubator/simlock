@@ -1000,16 +1000,12 @@ function loadStateEnteredAt(
   },
 ): number | undefined {
   if (typeof stored === "number" && Number.isFinite(stored)) return stored;
-  switch (state) {
-    case "provisioning":
-      return known.createdAt;
-    case "reclaiming":
-      return known.lastLeaseEndedAt;
-    case "quarantined":
-      return known.quarantinedAt;
-    default:
-      return undefined;
-  }
+  const exactEntryTime: Partial<Record<DeviceState, number | undefined>> = {
+    provisioning: known.createdAt,
+    quarantined: known.quarantinedAt,
+    reclaiming: known.lastLeaseEndedAt,
+  };
+  return exactEntryTime[state];
 }
 
 /**
