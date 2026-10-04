@@ -1182,10 +1182,15 @@ an all-or-nothing that leaves the operator guessing.
   held in memory, back to the oldest event the file still holds
   (`eventLog.rotateBytes`). Without `since`, the recent events held in
   memory. Every event carries an `id`, the same one after a daemon restart;
-  events written before the upgrade that added it are not returned.
+  events written before the upgrade that added it are not returned. Events
+  come back by `timestamp`, then in the order the daemon recorded them within
+  the same millisecond. On a gateway, a worker's event keeps the `id` and
+  `timestamp` it has on the worker and gains `payload.workerId`; its time is
+  when it happened on the worker.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`). Each event carries the same `id` as in
-  `GET /v1/events`.
+  `GET /v1/events`, and a relayed one the same `timestamp` too. A worker event
+  with a `timestamp` beyond 8.64e15 ms either side of the epoch is not relayed.
 - `GET /v1/tokens` — every token this daemon knows (`simlock token list`):
 
   ```json

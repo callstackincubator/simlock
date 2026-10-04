@@ -739,6 +739,93 @@ describe("pushes", () => {
   });
 });
 
+describe("event pushes", () => {
+  it("a worker push with a malformed id or timestamp never reaches the gateway's bus", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const listener = vi.fn();
+    const subscribed = client.subscribeEvents(listener);
+    await flushMicrotasks();
+    const subscribe = connection.lastSentOf("events.subscribe");
+    if (subscribe === undefined) throw new Error("the client never sent events.subscribe");
+    connection.reply(subscribe.id, { subscribed: true, subscriptionId: "sub_1" });
+    await subscribed;
+    const valid = {
+      event: "lease.expired",
+      id: "evt_ok",
+      module: "leases",
+      payload: {},
+      seq: 1,
+      timestamp: 5,
+    };
+
+    for (const bad of [
+      { ...valid, id: "no-prefix" },
+      { ...valid, id: `evt_${"a".repeat(65)}` },
+      { ...valid, id: 7 },
+      { ...valid, timestamp: null },
+      { ...valid, timestamp: "5" },
+    ]) {
+      connection.push("event", { subscriptionId: "sub_1", event: bad });
+    }
+    // `1e999` is valid JSON that parses to Infinity, a value JSON.stringify cannot emit; the
+    // same raw channel carries the well-formed twin, which proves the line is delivered at all.
+    const rawPush = (timestamp: string) =>
+      JSON.stringify({
+        payload: { subscriptionId: "sub_1", event: { ...valid, timestamp: "__timestamp__" } },
+        push: "event",
+      }).replace('"__timestamp__"', timestamp);
+    connection.receiveLine(rawPush("1e999"));
+    await flushMicrotasks();
+    expect(listener).not.toHaveBeenCalled();
+
+    connection.receiveLine(rawPush("5"));
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it("a worker push with a timestamp outside the date range never reaches the gateway's bus", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const listener = vi.fn();
+    const subscribed = client.subscribeEvents(listener);
+    await flushMicrotasks();
+    const subscribe = connection.lastSentOf("events.subscribe");
+    if (subscribe === undefined) throw new Error("the client never sent events.subscribe");
+    connection.reply(subscribe.id, { subscribed: true, subscriptionId: "sub_1" });
+    await subscribed;
+    const push = (timestamp: number) =>
+      connection.push("event", {
+        subscriptionId: "sub_1",
+        event: {
+          event: "lease.expired",
+          id: "evt_ok",
+          module: "leases",
+          payload: {},
+          seq: 1,
+          timestamp,
+        },
+      });
+
+    for (const outside of [8.64e15 + 2, -8.64e15 - 2, 1e300, -1e300]) push(outside);
+    await flushMicrotasks();
+    expect(listener).not.toHaveBeenCalled();
+
+    push(8.64e15);
+    push(-8.64e15);
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+});
+
 describe("requestLease abort (ADR §10)", () => {
   it("before the request is sent: rejects CANCELLED, nothing sent", async () => {
     const connection = new ScriptedConnection();

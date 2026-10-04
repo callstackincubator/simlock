@@ -457,7 +457,8 @@ export class WorkerLink {
   /**
    * ADR 0005 §22: a worker's business events are republished on the gateway's bus with
    * `workerId` added, so they land in its ring buffer and `simlock events --follow` against a
-   * gateway shows the fleet. The name and the emitting module travel unchanged -- the fact came
+   * gateway shows the fleet. The name, the emitting module, the `id` and the `timestamp` travel
+   * unchanged (ADR 0014 §2: one fact, one id, and the time it happened) -- the fact came
    * from that worker's reaper or lease engine, and rewriting either would make the audit trail
    * lie about where it happened; `workerId` is what says which machine.
    *
@@ -471,6 +472,8 @@ export class WorkerLink {
    * `EventMap` has never heard of (a newer worker's own vocabulary).
    */
   #onWorkerEvent(envelope: {
+    readonly id: string;
+    readonly timestamp: number;
     readonly event: string;
     readonly payload?: unknown;
     readonly module: string;
@@ -489,7 +492,15 @@ export class WorkerLink {
     // `eventEnvelopeSchema`), and a *newer* worker may legitimately send a name this gateway's
     // `EventMap` has never heard of. Forwarding it is better than dropping it -- the envelope
     // is what `events.replay` returns, and a consumer that knows the name gets it either way.
-    this.options.eventBus.emit(envelope.event as EventName, payload as never, envelope.module);
+    // ADR 0014 §2: the worker's `id` and `timestamp` travel with the fact (the wire layer bounded
+    // both); only `seq` is this bus's own.
+    this.options.eventBus.republish({
+      event: envelope.event as EventName,
+      id: envelope.id,
+      module: envelope.module,
+      payload: payload as never,
+      timestamp: envelope.timestamp,
+    });
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
       void this.refresh({

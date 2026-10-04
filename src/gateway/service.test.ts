@@ -395,6 +395,59 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("a worker's event relayed by the gateway keeps the worker's id and timestamp and gains workerId", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    harness.clock.advance(5_000);
+
+    worker.pushEvent({
+      event: "lease.granted",
+      id: "evt_worker-made",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+      timestamp: 777,
+    });
+
+    const relayed = harness.events.find((event) => event.event === "lease.granted");
+    expect(relayed).toMatchObject({
+      id: "evt_worker-made",
+      timestamp: 777,
+      payload: { workerId: "wrk_1" },
+    });
+
+    await harness.service.stop();
+  });
+
+  it("a relayed event differs from the worker's only in seq and payload.workerId", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    const sent = {
+      event: "lease.granted",
+      id: "evt_worker-made",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+      seq: 41,
+      timestamp: 777,
+    };
+
+    worker.pushEvent(sent);
+
+    const relayed = harness.events.find((event) => event.event === "lease.granted");
+    const { seq: relayedSeq, payload: relayedPayload, ...relayedRest } = relayed ?? {};
+    const { seq: sentSeq, payload: sentPayload, ...sentRest } = sent;
+    expect(relayedRest).toEqual(sentRest);
+    expect(relayedPayload).toEqual({ ...sentPayload, workerId: "wrk_1" });
+    expect(relayedSeq).not.toBe(sentSeq);
+
+    await harness.service.stop();
+  });
+
   // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
   // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
   // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking

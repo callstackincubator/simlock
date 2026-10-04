@@ -590,13 +590,17 @@ export const nukeReportSchema = z.object({
  * for a channel this PR does not change the routing of. Tightening this (e.g. a discriminated
  * union keyed on `event`) is left as follow-up work; flagged in the PR description.
  */
+/** The largest magnitude, in ms, a JavaScript `Date` holds. */
+const MAX_DATE_MS = 8.64e15;
+
 export const EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{1,64}$/;
 
 export const eventEnvelopeSchema = z.object({
   /** Wire input is a claim (safety.md): a pushed `id` is bounded, not trusted. */
   id: z.string().regex(EVENT_ID_PATTERN),
   seq: z.number(),
-  timestamp: z.number().finite(),
+  /** A claim, bounded to the range a JavaScript date holds so the console can render it. */
+  timestamp: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS),
   event: z.string(),
   payload: z.unknown(),
   module: z.string(),

@@ -303,6 +303,21 @@ describe("readEventFile", () => {
     expect(read.map((entry) => entry.id)).toEqual(["evt_b", "evt_a"]);
   });
 
+  it("the event file reader returns events by timestamp, then seq, whatever order the lines are in", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        envelope(1, 300, "evt_c"),
+        envelope(3, 100, "evt_a"),
+        envelope(5, 200, "evt_b2"),
+        envelope(4, 200, "evt_b1"),
+      ),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.id)).toEqual(["evt_a", "evt_b1", "evt_b2", "evt_c"]);
+  });
+
   it("skips a line that is not JSON and returns the lines around it", async () => {
     const filesystem = await filesystemWith({
       "/data/events.jsonl": `${lines(envelope(1, 100))}{"seq":2,"times\n${lines(envelope(3, 300))}`,
