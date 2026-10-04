@@ -72,12 +72,18 @@ const modelRuntimesFixture = JSON.stringify({
   ],
 });
 
-function deviceType(id: string, name: string, maxRuntimeVersion = 0xffffff) {
+function deviceType(
+  id: string,
+  name: string,
+  maxRuntimeVersion = 0xffffff,
+  productFamily?: string,
+) {
   return {
     identifier: `com.apple.CoreSimulator.SimDeviceType.${id}`,
     maxRuntimeVersion,
     minRuntimeVersion: 0,
     name,
+    ...(productFamily === undefined ? {} : { productFamily }),
   };
 }
 
@@ -1038,6 +1044,83 @@ describe("IosSimctlDriver", () => {
       },
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
+    });
+  });
+
+  describe("model classes", () => {
+    function classRunner(types: ReturnType<typeof deviceType>[]): ScriptedProcessRunner {
+      return new ScriptedProcessRunner([
+        {
+          match: listInvocation,
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({ devicetypes: types, runtimes: [] }),
+          },
+        },
+      ]);
+    }
+
+    it("classes a device type by its product family: iPhone is phone, iPad is tablet, Apple Watch is watch, Apple TV is tv, Apple Vision is vision", async () => {
+      const driver = await createDriver(
+        classRunner([
+          deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
+          deviceType("iPad-Pro", "iPad Pro", 0xffffff, "iPad"),
+          deviceType("Watch-11", "Apple Watch Series 11 (46mm)", 0xffffff, "Apple Watch"),
+          deviceType("TV-4K", "Apple TV 4K", 0xffffff, "Apple TV"),
+          deviceType("Vision", "Apple Vision Pro", 0xffffff, "Apple Vision"),
+        ]),
+      );
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.modelClasses).toEqual({
+        "Apple TV 4K": "tv",
+        "Apple Vision Pro": "vision",
+        "Apple Watch Series 11 (46mm)": "watch",
+        "iPad Pro": "tablet",
+        "iPhone 17": "phone",
+      });
+    });
+
+    it("keeps a device type with no product family, or one outside those five, in models with no modelClasses entry", async () => {
+      const driver = await createDriver(
+        classRunner([
+          deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
+          deviceType("Old", "Old Device"),
+          deviceType("Pod", "iPod touch", 0xffffff, "iPod"),
+          deviceType("Mac", "Mac Thing", 0xffffff, ""),
+          deviceType("Lower", "Lower Phone", 0xffffff, "iphone"),
+        ]),
+      );
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.models).toEqual([
+        "iPhone 17",
+        "Old Device",
+        "iPod touch",
+        "Mac Thing",
+        "Lower Phone",
+      ]);
+      expect(catalog.modelClasses).toEqual({ "iPhone 17": "phone" });
+    });
+
+    it("ignores a product family that is not a string", async () => {
+      const stdout = JSON.stringify({
+        devicetypes: [{ ...deviceType("iPhone-17", "iPhone 17"), productFamily: 7 }],
+        runtimes: [],
+      });
+      const driver = await createDriver(
+        new ScriptedProcessRunner([
+          { match: listInvocation, result: { code: 0, stderr: "", stdout } },
+        ]),
+      );
+
+      await expect(driver.listCatalog()).resolves.toMatchObject({
+        models: ["iPhone 17"],
+        modelClasses: {},
+      });
     });
   });
 

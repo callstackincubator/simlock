@@ -150,6 +150,20 @@ describe("FakeDriver", () => {
     });
   });
 
+  it("carries the modelClasses its options name, and an empty map without them", async () => {
+    const options = {
+      availableOsVersions: ["35"],
+      clock: new FakeClock(),
+      knownModels: ["Pixel 8", "Television (1080p)"],
+      platform: "android" as const,
+    };
+
+    const scripted = new FakeDriver({ ...options, modelClasses: { "Television (1080p)": "tv" } });
+
+    expect((await scripted.listCatalog()).modelClasses).toEqual({ "Television (1080p)": "tv" });
+    expect((await new FakeDriver(options).listCatalog()).modelClasses).toEqual({});
+  });
+
   it("pairs a model with only the runtimes its modelRuntimes option names", async () => {
     const driver = new FakeDriver({
       availableOsVersions: ["18.4", "26.5"],

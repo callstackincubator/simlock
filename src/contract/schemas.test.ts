@@ -294,6 +294,7 @@ describe("fitPlatformCatalog", () => {
     customModels,
     defaultRuntime: "35",
     modelAliases: {},
+    modelClasses: {},
     modelRuntimes: Object.fromEntries(customModels.map((model) => [model, ["35"]])),
     models: customModels,
     platform: "android" as const,
@@ -314,6 +315,17 @@ describe("fitPlatformCatalog", () => {
 
     expect(fitted).not.toHaveProperty("customModels");
     expect(fitted.models).toEqual(["x".repeat(257)]);
+  });
+
+  it("drops the class of a model whose name is too long to be a modelClasses key, in an entry the schema accepts", () => {
+    const long = "x".repeat(257);
+    const fitted = fitPlatformCatalog({
+      ...entry(["Pixel 8"]),
+      modelClasses: { [long]: "phone" as const, "Pixel 8": "phone" as const },
+    });
+
+    expect(fitted.modelClasses).toEqual({ "Pixel 8": "phone" });
+    expect(() => platformCatalogSchema.parse(fitted)).not.toThrow();
   });
 
   it("leaves an entry that already fits as it is", () => {

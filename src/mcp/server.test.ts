@@ -14,6 +14,21 @@ import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
 
+describe("MCP server list_devices", () => {
+  it("describes modelClasses to an agent choosing a device", async () => {
+    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
+    try {
+      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
+
+      expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
+        "modelClasses",
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("MCP server (smoke)", () => {
   it("advertises exactly the lease, catalog, and status tools, and walks lease -> list -> status -> release", async () => {
     const client = new FakeSimlockClient();

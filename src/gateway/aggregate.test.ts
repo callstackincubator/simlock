@@ -364,6 +364,54 @@ describe("aggregateCatalog", () => {
     });
   });
 
+  it("carries modelClasses as the union over connected workers", () => {
+    const withClasses = (modelClasses: Record<string, "phone" | "tablet" | "watch">) => ({
+      ...iosOnB,
+      modelClasses,
+    });
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, modelClasses: { "iPhone 17": "phone" } }], id: "wrk_a" }),
+      view({ catalog: [withClasses({ "iPad Pro": "tablet" })], id: "wrk_b" }),
+      view({
+        catalog: [withClasses({ "Apple Watch": "watch" })],
+        connection: "disconnected",
+        id: "wrk_c",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({
+      "iPad Pro": "tablet",
+      "iPhone 17": "phone",
+    });
+    expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+  });
+
+  it("keeps the class of the first worker in id order when two workers class a model differently", () => {
+    const classed = (deviceClass: "phone" | "tablet") => ({
+      ...iosOnA,
+      modelClasses: { "iPhone 17": deviceClass },
+    });
+
+    // The later id is listed first, so listing order alone would pick the wrong class.
+    const catalog = aggregateCatalog([
+      view({ catalog: [classed("tablet")], id: "wrk_b" }),
+      view({ catalog: [classed("phone")], id: "wrk_a" }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+  });
+
+  it("ignores a class a worker gives to a name it does not list, and does not read the prototype", () => {
+    const catalog = aggregateCatalog([
+      view({
+        catalog: [{ ...iosOnA, modelClasses: { "Not Listed": "tv", "iPhone 17": "phone" } }],
+        id: "wrk_a",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+  });
+
   it("keeps a default runtime only when every worker agrees on it", () => {
     const agreed = aggregateCatalog([
       view({ catalog: [iosOnA], id: "wrk_a" }),

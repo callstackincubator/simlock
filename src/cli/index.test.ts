@@ -2048,6 +2048,119 @@ describe("CLI: catalog", () => {
     );
   });
 
+  it("prints each model under its class, in the order of the enum, and an unclassed model under (no class)", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  defaultRuntime: "26.0",
+                  modelAliases: { "iPhone 17": ["iphone17"] },
+                  modelClasses: {
+                    "Apple TV 4K": "tv",
+                    "Apple Watch Series 11 (46mm)": "watch",
+                    "iPad Pro": "tablet",
+                    "iPhone 17": "phone",
+                    "iPhone 16": "phone",
+                  },
+                  modelRuntimes: {
+                    "Apple TV 4K": ["26.0"],
+                    "Apple Watch Series 11 (46mm)": ["26.0"],
+                    "Mystery Box": [],
+                    "iPad Pro": ["26.0"],
+                    "iPhone 16": ["26.0"],
+                    "iPhone 17": ["26.0"],
+                  },
+                  models: [
+                    "Apple TV 4K",
+                    "Mystery Box",
+                    "iPhone 17",
+                    "Apple Watch Series 11 (46mm)",
+                    "iPad Pro",
+                    "iPhone 16",
+                  ],
+                  platform: "ios",
+                  runtimes: ["26.0"],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: ios",
+        "  Runtimes: 26.0 (default: 26.0)",
+        "  Models:",
+        "    phone:",
+        "      iPhone 17: 26.0",
+        "        Other names: iphone17",
+        "      iPhone 16: 26.0",
+        "    tablet:",
+        "      iPad Pro: 26.0",
+        "    watch:",
+        "      Apple Watch Series 11 (46mm): 26.0",
+        "    tv:",
+        "      Apple TV 4K: 26.0",
+        "    (no class):",
+        "      Mystery Box: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("does not read a class from the prototype for a model named constructor", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  modelAliases: {},
+                  modelClasses: {},
+                  modelRuntimes: {},
+                  models: ["constructor"],
+                  platform: "ios",
+                  runtimes: [],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["catalog"], environment);
+
+    expect(output.stdout).toContain("    (no class):\n      constructor: (no paired runtime)\n");
+  });
+
+  it("carries modelClasses as received in the --json output", async () => {
+    const output = outputCapture();
+    const platforms = [
+      {
+        modelAliases: {},
+        modelClasses: { "Pixel 8": "phone", "Television (1080p)": "tv" },
+        modelRuntimes: { "Pixel 8": ["35"], "Television (1080p)": ["35"] },
+        models: ["Pixel 8", "Television (1080p)"],
+        platform: "android",
+        runtimes: ["35"],
+      },
+    ];
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getCatalog: () => Promise.resolve({ platforms }) }),
+    });
+
+    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual({ platforms });
+  });
+
   it("prints (custom) after a custom model and not after a built-in one", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

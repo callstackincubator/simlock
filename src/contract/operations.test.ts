@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONS, type Effect, type OperationName } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
 import type { Role } from "./roles.js";
+import { platformCatalogSchema } from "./schemas.js";
 
 /**
  * The ADR §3 operation matrix, name -> role. A table-driven test against this makes
@@ -553,6 +554,35 @@ describe("operation input/output round trips", () => {
     expect(parsed.platforms[0]?.images).toEqual([
       { runtime: "35", tag: "google_apis", abi: "arm64-v8a" },
     ]);
+  });
+
+  it("platformCatalogSchema rejects an entry without modelClasses and one whose class is not one of the seven", () => {
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      modelAliases: {},
+      modelRuntimes: { "iPhone 17": ["26.0"] },
+    };
+    expect(() => platformCatalogSchema.parse(entry)).toThrow(/modelClasses/);
+    for (const deviceClass of ["phone", "tablet", "watch", "tv", "vision", "auto", "desktop"]) {
+      expect(
+        platformCatalogSchema.parse({ ...entry, modelClasses: { "iPhone 17": deviceClass } })
+          .modelClasses,
+      ).toEqual({ "iPhone 17": deviceClass });
+    }
+    for (const bad of ["Phone", "car", "", "wearable"]) {
+      expect(() =>
+        platformCatalogSchema.parse({ ...entry, modelClasses: { "iPhone 17": bad } }),
+      ).toThrow(/modelClasses/);
+    }
+    expect(() =>
+      platformCatalogSchema.parse({ ...entry, modelClasses: { ["x".repeat(257)]: "phone" } }),
+    ).toThrow(/modelClasses/);
+    expect(
+      platformCatalogSchema.parse({ ...entry, modelClasses: { ["x".repeat(256)]: "phone" } })
+        .modelClasses,
+    ).toEqual({ ["x".repeat(256)]: "phone" });
   });
 
   it("catalog.get bounds every string and list in modelAliases, customModels and images", () => {

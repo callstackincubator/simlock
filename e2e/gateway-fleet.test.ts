@@ -25,6 +25,7 @@ interface WorkerView {
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
     readonly modelAliases: Readonly<Record<string, readonly string[]>>;
     readonly customModels?: readonly string[];
+    readonly modelClasses?: Readonly<Record<string, string>>;
     readonly images?: readonly {
       readonly runtime: string;
       readonly tag: string;
@@ -428,6 +429,56 @@ describe("gateway fleet", () => {
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("    My Tablet (custom): 35");
     expect(human.stdout).toContain("    Pixel 8: 35");
+  });
+
+  it("carries the union of the workers' model classes in the gateway catalog, and prints each model under its class", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-a" } },
+      driverScript: {
+        android: {
+          availableOsVersions: ["35"],
+          knownModels: ["Pixel 8"],
+          modelClasses: { "Pixel 8": "phone" },
+        },
+      },
+    });
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-b" } },
+      driverScript: {
+        android: {
+          availableOsVersions: ["35"],
+          knownModels: ["Television (1080p)", "Mystery"],
+          modelClasses: { "Television (1080p)": "tv" },
+        },
+      },
+    });
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+
+    const catalog = await gateway.cli(["catalog", "--json"]);
+    expect(catalog.code).toBe(0);
+    const android = (catalog.json as { platforms: WorkerView["catalog"] }).platforms.find(
+      (entry) => entry.platform === "android",
+    );
+    expect(android?.modelClasses).toEqual({ "Pixel 8": "phone", "Television (1080p)": "tv" });
+
+    const human = await gateway.cli(["catalog"]);
+    expect(human.stdout).toContain(
+      "    phone:\n      Pixel 8: 35\n    tv:\n      Television (1080p): 35\n    (no class):\n      Mystery: 35",
+    );
   });
 
   it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {

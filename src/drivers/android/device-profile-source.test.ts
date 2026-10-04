@@ -4,6 +4,7 @@ import { MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import {
   BuiltinDeviceProfileSource,
   DeviceProfileRegistry,
+  parseAvdmanagerDeviceProfiles,
   parseDevicesXml,
   UserDeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
@@ -65,6 +66,92 @@ describe("BuiltinDeviceProfileSource", () => {
         names: ["tv_1080p"],
       },
     ]);
+  });
+});
+
+describe("parseAvdmanagerDeviceProfiles", () => {
+  it("keeps the Tag line of the entry it belongs to and reads none before the first id", () => {
+    const output =
+      `Available devices:\n    Tag : android-tv\n` +
+      `id: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n---------\n` +
+      `id: 1 or "tv_1080p"\n    Name: Television (1080p)\n    OEM : Google\n    Tag : android-tv\n---------\n` +
+      `id: 2 or "wear_round"\n    Name: Wear Round\n    Tag : android-wear\n`;
+
+    expect(parseAvdmanagerDeviceProfiles(output)).toEqual([
+      { id: "pixel_8", name: "Pixel 8", oem: "Google", tag: undefined },
+      { id: "tv_1080p", name: "Television (1080p)", oem: "Google", tag: "android-tv" },
+      { id: "wear_round", name: "Wear Round", oem: undefined, tag: "android-wear" },
+    ]);
+  });
+});
+
+describe("device classes in the catalog", () => {
+  function registryFor(entries: readonly [name: string, tag: string | undefined][]) {
+    const stdout =
+      "Available devices:\n" +
+      entries
+        .map(
+          ([name, tag], index) =>
+            `id: ${index} or "dev_${index}"\n    Name: ${name}\n    OEM : Google\n` +
+            (tag === undefined ? "" : `    Tag : ${tag}\n`),
+        )
+        .join("---------\n");
+    return new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(stdout)]),
+      ),
+    ]);
+  }
+
+  it("classes a profile by its tag: android-tv is tv, android-wear is watch, android-automotive, android-automotive-playstore and android-automotive-distantdisplay are auto, android-desktop is desktop", async () => {
+    const registry = registryFor([
+      ["Television (1080p)", "android-tv"],
+      ["Wear Round", "android-wear"],
+      ["Car", "android-automotive"],
+      ["Car Play Store", "android-automotive-playstore"],
+      ["Car Distant", "android-automotive-distantdisplay"],
+      ["Desktop (Large)", "android-desktop"],
+    ]);
+
+    await expect(registry.catalog()).resolves.toMatchObject({
+      modelClasses: {
+        Car: "auto",
+        "Car Distant": "auto",
+        "Car Play Store": "auto",
+        "Desktop (Large)": "desktop",
+        "Television (1080p)": "tv",
+        "Wear Round": "watch",
+      },
+    });
+  });
+
+  it("classes an untagged avdmanager profile and a devices.xml profile as phone", async () => {
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(pixelDevices)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
+    ]);
+
+    await expect(registry.catalog()).resolves.toMatchObject({
+      modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
+    });
+  });
+
+  it("lists a profile with any other tag in models and gives it no modelClasses entry", async () => {
+    const registry = registryFor([
+      ["Pixel 8", undefined],
+      ["Odd Thing", "android-xr"],
+      ["Car-ish", "android-automotiv"],
+      ["Prefix", "x-android-tv"],
+    ]);
+
+    const catalog = await registry.catalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Odd Thing", "Car-ish", "Prefix"]);
+    expect(catalog.modelClasses).toEqual({ "Pixel 8": "phone" });
   });
 });
 
