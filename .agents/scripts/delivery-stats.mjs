@@ -4,9 +4,10 @@
 //   node .agents/scripts/delivery-stats.mjs [--weeks N] [--repo owner/name] [--input file.json]
 //
 // One row per week for the last N weeks (default 5), newest last, from the `## Review` section of
-// every PR merged in it (delivery rule 14): findings each review raised and how many were
-// confirmed and fixed, PRs that needed no fix or a second round, mutants left alive, and the
-// `## Handoff` comments posted. Then this week's rejected findings, its handoffs, and the PRs
+// every PR merged in it (delivery rule 14): blocking findings each review raised and how many were
+// confirmed and fixed, the notes both raised, PRs that needed no fix or a second round, mutants
+// left alive, and the `## Handoff` comments posted. A PR from before the blocking/note split says
+// "n findings" instead of "b blocking, k notes"; all its findings count as raised. Then this week's rejected findings, its handoffs, and the PRs
 // waiting on hardware, for someone to read.
 //
 // GitHub is read through REST only: a cloud session's GitHub proxy serves a fixed set of GraphQL
@@ -99,9 +100,9 @@ function reviewOf(body) {
   const next = /^## /m.exec(rest);
   const section = next === null ? rest : rest.slice(0, next.index);
 
-  const spec = /Spec review: (\d+) findings?, (\d+) fixed/.exec(section);
+  const spec = counts(section, "Spec");
   if (spec === null) return null;
-  const code = /Code review: (\d+) findings?, (\d+) fixed/.exec(section);
+  const code = counts(section, "Code");
   const mutate = /Mutate: (\d+) mutants?, (\d+) alive/.exec(section);
 
   const rejected = [];
@@ -114,15 +115,28 @@ function reviewOf(body) {
   }
 
   return {
-    specFound: Number(spec[1]),
-    specFixed: Number(spec[2]),
-    codeFound: code === null ? 0 : Number(code[1]),
-    codeFixed: code === null ? 0 : Number(code[2]),
+    specFound: spec.found,
+    specFixed: spec.fixed,
+    codeFound: code?.found ?? 0,
+    codeFixed: code?.fixed ?? 0,
+    notes: spec.notes + (code?.notes ?? 0),
     mutants: mutate === null ? 0 : Number(mutate[1]),
     alive: mutate === null ? 0 : Number(mutate[2]),
     secondRound: /Review: round 2/.test(body),
     rejected,
   };
+}
+
+/**
+ * One review's counts: "Spec review: 3 blocking, 1 fixed, 4 notes", or before the blocking/note
+ * split "Spec review: 7 findings, 1 fixed". Null when the line is missing or says "skipped".
+ */
+function counts(section, review) {
+  const match = new RegExp(
+    `${review} review: (\\d+) (?:findings?|blocking), (\\d+) fixed(?:, (\\d+) notes?)?`,
+  ).exec(section);
+  if (match === null) return null;
+  return { found: Number(match[1]), fixed: Number(match[2]), notes: Number(match[3] ?? 0) };
 }
 
 /** The first line of a handoff's Blocked on section. */
@@ -151,10 +165,11 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
   const lines = [
     `# Delivery stats, ${weekCount} weeks to ${new Date(end).toISOString().slice(0, 10)}`,
     "",
-    "Spec and code columns are confirmed-and-fixed / raised. Rejected = raised − fixed.",
+    "Spec and code columns are confirmed-and-fixed / blocking raised (every finding raised, on PRs",
+    "from before the blocking/note split). Rejected = raised − fixed. Notes are never verified.",
     "",
-    "| Week from | Merged | Reviewed | Spec review | Code review | No fix | Round 2 | Mutants alive | Handoffs |",
-    "| --- | --: | --: | --: | --: | --: | --: | --: | --: |",
+    "| Week from | Merged | Reviewed | Spec review | Code review | Notes | No fix | Round 2 | Mutants alive | Handoffs |",
+    "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: |",
   ];
   for (const window of windows) {
     const merged = prs.filter((pr) => inWindow(pr.mergedAt, window));
@@ -163,6 +178,7 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
     lines.push(
       `| ${new Date(window.from).toISOString().slice(0, 10)} | ${merged.length} | ${reviews.length}` +
         ` | ${rate(sum("specFixed"), sum("specFound"))} | ${rate(sum("codeFixed"), sum("codeFound"))}` +
+        ` | ${sum("notes")}` +
         ` | ${reviews.filter((r) => r.specFixed + r.codeFixed === 0).length} | ${sum("secondRound")}` +
         ` | ${sum("alive")}/${sum("mutants")}` +
         ` | ${handoffs.filter((h) => inWindow(h.createdAt, window)).length} |`,

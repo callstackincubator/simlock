@@ -79,11 +79,14 @@ request, closed — not from a label. The branch for issue `<n>` is always
    maintainer accepts or rejects each. Then it interviews for the Technical
    spec section. Any decision that constrains more than one future change or
    would be expensive to reverse becomes an ADR at _Proposed_, listed under
-   Decisions. The session ends by editing the body and leaving a one-line
-   "Spec updated" comment.
-5. Once Open questions is empty and every linked ADR is accepted, the
-   maintainer adds `feature:ready`. The ADRs move to _Accepted — not yet
-   implemented_.
+   Decisions. The session edits the body and leaves a one-line "Spec
+   updated" comment. It ends with `check-spec`: a fresh agent reads the
+   body as posted against the rules, the ADRs and the code, and reports
+   contradictions, lines nobody could check, and failure modes no line
+   answers. You and the session fix those in the body.
+5. Once Open questions is empty, every linked ADR is accepted and the spec
+   check has nothing open, the maintainer adds `feature:ready`. The ADRs
+   move to _Accepted — not yet implemented_.
 6. An agent running `deliver` claims it, works on `feature/<n>`, has the
    change reviewed and merged through the gate (below), and the PR body
    walks every completion condition. Merge closes the feature, and its ADRs
@@ -96,17 +99,23 @@ of a Technical spec section on the feature, it produces sub-issues. There
 are two ways in. Attended, you sit through the split and tick each task's
 approval box (steps 5 and 6). Unattended, the second session settles only
 the decisions that need ADRs; you accept those, add `feature:ready`, and
-run `/deliver <feature>`. The run writes each task's technical spec, checks
-the specs for contradictions and overlap, ticks the boxes itself, and then
-delivers the tasks in dependency order, two at a time, merging each through
-the gate. It stops and hands back to you only for a new ADR, a comment that
-would change the spec, a blocking review finding it could not settle, or a
-real-device check it could not run. It ends with one comment on the feature
-listing what merged, what parked and why, and what is still waiting.
+run `/deliver <feature>`. The run writes each task's technical spec, has
+`check-spec` read the tasks as posted and fixes what it finds, ticks the
+boxes itself, and then delivers the tasks in dependency order, two at a
+time, merging each through the gate. A small gap a task leaves open it
+closes the conservative way and lists as an `Assumption:` line in the PR,
+for you to see. It stops and hands back to you only for a new ADR, a
+comment that would change the spec, a choice a user would notice that
+nobody made, a blocking review finding it could not settle, or a
+real-device check it could not run. It ends with one comment on the
+feature listing what merged, what parked and why, and what is still
+waiting.
 
 5. Each task is a native sub-issue of the feature, labelled `task:draft`, with
    a body from [templates/task.md](templates/task.md): Scope, Technical spec,
-   Done when, Out of scope, Depends on, and an approval checkbox. The feature
+   Done when, Out of scope, Depends on, and an approval checkbox. Once the
+   tasks exist, `check-spec` reads them as posted, and the session fixes what
+   it finds, including tasks that overlap without a Depends on. The feature
    becomes `feature:planned` and keeps only its business spec, Decisions and
    the task list.
 6. The maintainer ticks the approval box on each task, once, at planning
@@ -126,46 +135,65 @@ listing what merged, what parked and why, and what is still waiting.
 ## Review, verification and merge
 
 `deliver` never writes code itself. It hands each stage to a forked skill
-that runs on the model its frontmatter pins — `implement` on Sonnet,
-`review` and `triage-bug` on Opus — and reasons only over the fixed report
-each one returns. `implement` commits the spec's tests red first and opens
-a draft PR, so CI runs from the first push; it then turns them green in
-commits that each lower the failing count, and runs `pnpm mutate` so every
-changed line is shown to matter before anyone reviews it.
+that runs on the model its frontmatter pins — `implement` and `review` on
+Sonnet, `triage-bug` and `check-spec` on Opus — and reasons only over the
+fixed report each one returns. `implement` commits the spec's tests red
+first and opens a draft PR, so CI runs from the first push; it then turns
+them green in commits that each lower the failing count, and runs `pnpm
+mutate` so every changed line is shown to matter before anyone reviews it.
+
+A spec never answers every question. What any change includes without
+asking — docs it makes false, both `EVENTS.md` files, a test for every new
+path, Fallow entries — is listed once, in
+[agent-rules/always-in-scope.md](agent-rules/always-in-scope.md). A smaller
+gap the body, the rules and the ADRs all leave open, `implement` closes the
+conservative way and records as an `Assumption:` line in the PR body. An
+assumption is a proposal you can see and reject, not a change to the spec.
+The run parks only for a contradiction with the body, a rule or an accepted
+ADR, or a choice a user would notice that nobody made.
 
 A PR leaves draft reviewed; it is not reviewed on arrival. The `review`
-skill spawns two reviewers on Opus. Neither has seen the delivering session,
+skill builds the reviewers' inputs with `.agents/scripts/review-inputs.sh`
+and spawns two reviewers on Opus. Neither has seen the delivering session,
 and neither sees what the other sees. The spec reviewer gets the issue, its
-parent, its ADRs and the diff, and answers whether every line of the spec
-is delivered, whether the diff does anything the spec did not ask for, and
-whether each test proves the claim in its title. It also gets every change
-made to the spec's tests after they were committed red, because the final
-diff cannot show a red test that was deleted or loosened on the way to
-green. The code reviewer gets the agent rules, the ADR index and the diff,
-never the issue, and answers what input or interleaving makes each changed
-function wrong and whether a rule is broken; it works in its own worktree
-and may break code to see what the suite catches. The two are blind to each other on purpose: a reviewer
+parent, its ADRs, `always-in-scope.md`, the PR's `Assumption:` lines and
+the diff, and answers whether every line of the spec is delivered, whether
+the diff does anything the spec did not ask for, whether each test proves
+the claim in its title, and whether each assumption is the conservative
+one. It also gets every change made to the spec's tests after they were
+committed red, because the final diff cannot show a red test that was
+deleted or loosened on the way to green. The code reviewer gets the agent
+rules, the ADR index and the diff, never the issue, and answers what input
+or interleaving makes each changed function wrong and whether a rule is
+broken. It works in its own worktree and proves claims with the affected
+test file only, breaking code at most three times on its riskiest claims;
+`pnpm check`, `pnpm mutate` and the browser and slow lanes are left to the
+implementer and CI. The two are blind to each other on purpose: a reviewer
 holding both the spec and the rules resolves a conflict between them
 silently, and the maintainer wants to see that conflict, because it usually
 means the spec is missing a line.
 
-Findings are claims. The agent verifies each against the code, fixes what
-it confirms, and lists what it rejects in the PR body under `## Review`, one
+Every finding is blocking — it breaks behaviour, leaves wrong state, or
+breaches a rule, an ADR or the spec — or a note. Only blocking findings are
+verified: the agent reproduces each against the code, fixes what it
+confirms, and lists what it rejects in the PR body under `## Review`, one
 line each, tagged `spec:` or `code:`, with the reason. A confirmed fix
 re-runs the review that raised it, once. A blocking finding still open
 after that is a contested change: the agent hands off with it and leaves
-the PR in draft. An ADR-only PR gets
-the spec review alone.
+the PR in draft. Notes are not verified and never start a round; they
+reach you once, as one "Review notes" comment on the PR. An ADR-only PR
+gets the spec review alone.
 
 A Done when line that needs a real simulator or emulator runs through the
-`verify-hardware` skill and `scripts/slow-e2e.sh`, one lane per machine. A
-PR whose hardware check could not run gets `needs-hardware` and waits for
-you. Everything else that passes is merged by the agent through
-`.agents/scripts/merge-pr.sh`, which refuses a draft, a `needs-hardware`
-label, a missing Review section, a "spec needs" line, red CI, or a
-conflict. The same two reviews
-run on a person's PR when the maintainer asks; there the agent posts the
-findings as a comment and pushes nothing.
+`verify-hardware` skill and `scripts/slow-e2e.sh`, one lane per machine, in
+parallel with the reviews and on the same commit. A hardware failure joins
+the review's fixes in one fix run. A PR whose hardware check could not run
+gets `needs-hardware` and waits for you. Everything else that passes is
+merged by the agent through `.agents/scripts/merge-pr.sh`, which refuses a
+draft, a `needs-hardware` label, a missing Review section, a "spec needs"
+line, red CI, or a conflict. The same two reviews run on a person's PR when
+the maintainer asks; there the agent posts the findings as a comment and
+pushes nothing.
 
 ## Handoffs between agents
 
@@ -214,13 +242,15 @@ fourth, except for the tasks of a `feature:ready` feature, where your
 ## Watching the pipeline
 
 `node .agents/scripts/delivery-stats.mjs` turns the PRs merged in the last
-five weeks into one row per week: for each review, how many findings it
-raised and how many were confirmed and fixed; how many PRs needed no fix,
-or a second round; mutants left alive; handoffs. Below the table it lists
+five weeks into one row per week: for each review, how many blocking
+findings it raised and how many were confirmed and fixed; the notes both
+raised; how many PRs needed no fix, or a second round; mutants left alive;
+handoffs. PRs from before the blocking/note split count every finding they
+raised. Below the table it lists
 this week's rejected findings, handoffs and PRs waiting on hardware. A
 weekly routine runs it and suggests at most one change. A review whose
-findings are mostly rejected costs a verification each and changes
-nothing: tune its brief. A rejection that keeps coming back for the same
+blocking findings are mostly rejected costs a verification each and
+changes nothing: tune its brief, or what `always-in-scope.md` lists. A rejection that keeps coming back for the same
 reason is a missing rule or a missing spec line.
 
 ## `main` and releases
@@ -248,7 +278,8 @@ when it closes. See [adr/README.md](adr/README.md).
 
 ## Pointers
 
-- Rules: [agent-rules/delivery.md](agent-rules/delivery.md)
+- Rules: [agent-rules/delivery.md](agent-rules/delivery.md),
+  [agent-rules/always-in-scope.md](agent-rules/always-in-scope.md)
 - Templates: [templates/feature.md](templates/feature.md),
   [templates/task.md](templates/task.md)
 - Reporter forms: `.github/ISSUE_TEMPLATE/`
@@ -256,11 +287,12 @@ when it closes. See [adr/README.md](adr/README.md).
 - Automation: `.github/workflows/issue-state.yml`
 - Skills: `.claude/skills/spec-session`, `.claude/skills/triage-bug`,
   `.claude/skills/deliver` (orchestrator), and the forked stages
-  `.claude/skills/implement`, `.claude/skills/review`,
-  `.claude/skills/verify-hardware`
+  `.claude/skills/check-spec`, `.claude/skills/implement`,
+  `.claude/skills/review`, `.claude/skills/verify-hardware`
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
   `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
   hook; installs the pinned pnpm into a cache when PATH lacks it),
-  `.agents/scripts/merge-pr.sh`, `.agents/scripts/delivery-stats.mjs`,
+  `.agents/scripts/review-inputs.sh`, `.agents/scripts/merge-pr.sh`,
+  `.agents/scripts/delivery-stats.mjs`,
   `scripts/slow-e2e.sh`, `scripts/mutate.mjs` (`pnpm mutate`)
 - Releases: `.github/workflows/release.yml`

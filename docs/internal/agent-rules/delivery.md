@@ -80,21 +80,32 @@ is open, done means closed as completed.
    *Findings* (what was learned that is not in the spec and the next agent
    would otherwise rediscover), *Blocked on* (who or what, or "nothing").
    A handoff is state, never spec: if the work revealed that the body is
-   wrong or incomplete, the handoff says "spec needs: ..." and the agent
-   stops; it does not amend the spec in the comment. One handoff per stop,
+   wrong, or leaves open something rule 3 does not let an agent close as an
+   assumption, the handoff says "spec needs: ..." and the agent stops; it
+   does not amend the spec in the comment. One handoff per stop,
    no progress log — an agent comments when it stops, not while it works.
    If Blocked on is anything but "nothing", the agent also moves the issue
    to `<kind>:blocked`, so the next agent does not walk into the same wall;
    the maintainer clears it by re-adding the label it came from.
 
-3. **The body is the spec. Comments are discussion.** Whoever implements an
-   issue reads its body, the documents it links, the latest `## Handoff`
+3. **The body is the spec. Comments are discussion. Assumptions are
+   proposals.** Whoever implements an issue reads its body, the documents it
+   links, [always-in-scope.md](always-in-scope.md), the latest `## Handoff`
    comment if there is one, and for a bug the triage report — never the rest
    of the comment thread.
    A comment changes nothing until a spec session folds it into the body. The
    body is cumulative: sections are added and amended in place, never
    restated in comments, and GitHub's edit history is the record of what
    changed.
+   A small gap that the body, the rules in this directory, the accepted ADRs
+   and `always-in-scope.md` all leave open — a wording, an order, a bound
+   the spec implies — is closed by the implementer the conservative way and
+   recorded as one `Assumption:` line under `## Assumptions` in the PR body.
+   An assumption is a visible proposal that the spec review checks and the
+   maintainer may reject, never a change to the spec: the body stays the
+   spec. Delivery stops for a person only when building would contradict the
+   body, a rule or an accepted ADR, or would change behaviour a user sees in
+   a way nobody decided.
 
 4. **Every spec session starts by reconciling.** Before writing anything, the
    session fetches every comment created after the body's `lastEditedAt`, on
@@ -122,8 +133,13 @@ is open, done means closed as completed.
    outcome it delivers; its Technical spec is what a delivery agent needs to
    build it without asking: modules touched, contract and event changes,
    which rules in this directory are in play, and the tests to write phrased
-   as claims. A task with an empty technical section is `task:draft` no
-   matter what anyone says in a comment.
+   as claims. It need not repeat what `always-in-scope.md` lists, and a small
+   gap it leaves is an assumption, not a question (rule 3). A task with an
+   empty technical section is `task:draft` no matter what anyone says in a
+   comment. Before a task's approval box is ticked, or a feature delivered as
+   one PR gets `feature:ready`, the spec session has the `check-spec` skill
+   read the body as posted, with a fresh context, and fixes in the body what
+   it reports.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
    reproduces the bug as a failing test whose title states the claim the
@@ -173,8 +189,9 @@ is open, done means closed as completed.
     narration of what the agent did or considered. Evidence goes in a code
     block or a link, never in prose. Cut anything that does not change the
     reader's next decision. Budgets, counted outside code blocks: a triage
-    report 300 words, a handoff 150, a PR body 200 plus its checklist and
-    its Review section, a "Spec updated" comment one line. Text over budget is cut before it is
+    report 300 words, a handoff 150, a PR body 200 plus its checklist, its
+    Assumptions and its Review section, a "Spec updated" comment one line,
+    the review notes comment one line per note. Text over budget is cut before it is
     posted, not excused after. Do not restate the issue body: confirm or
     correct what it says, then add only what is new. Every comment, issue
     body, and PR body an agent writes ends with the line
@@ -190,46 +207,57 @@ is open, done means closed as completed.
     `origin/<branch>` rather than switching to it. Nothing depends on which
     worktree a branch was made in.
 
-14. **A PR is marked ready only after two reviews, and every finding is
-    answered.** Review is part of delivery in the same way verification is
-    (rule 9). The PR opens as a draft as soon as the spec's tests are
-    committed red, so CI runs from the first push and the PR body can carry
-    the work's status. It leaves draft only after two reviews of the diff
-    against `main`, each by a fresh sub-agent on the model the `review`
-    skill pins (never a smaller one chosen for speed), and each blind to the
-    implementer and to the other reviewer.
-    The *spec review* gets the issue body, its parent feature, the ADRs
-    under Decisions, the files under Rules in play, the diff, and every
+14. **A PR is marked ready only after two reviews, and every blocking
+    finding is answered.** Review is part of delivery in the same way
+    verification is (rule 9). The PR opens as a draft as soon as the spec's
+    tests are committed red, so CI runs from the first push and the PR body
+    can carry the work's status. It leaves draft only after two reviews of
+    the diff against `main`, each by a fresh sub-agent on Opus (never a
+    smaller model chosen for speed), and each blind to the implementer and to
+    the other reviewer. `.agents/scripts/review-inputs.sh` builds what each
+    one reads.
+    The *spec review* gets the issue body, its parent feature, the ADRs it
+    names, the files under Rules in play, `always-in-scope.md`, a bug's
+    triage report, the PR body's `Assumption:` lines, the diff, and every
     change made to the spec's tests since they were committed red — nothing
-    else, and never the PR body. It answers: is every line of Scope and Done
-    when delivered, does the diff do anything the spec did not ask for, does
-    every test title state a claim the spec made, and does any change after
-    red leave a line of the spec unproven. It reads; it does not
-    run anything. A diff that only adds or changes ADRs gets this review
-    alone, judged as a design record rather than against Completion
-    conditions.
+    else, and never the rest of the PR body. It answers: is every line of
+    Scope and Done when delivered, does the diff do anything the spec did not
+    ask for (what `always-in-scope.md` lists counts as asked for), does every
+    test title state a claim the spec made, does any change after red leave
+    a line of the spec unproven, and is every assumption conservative and
+    consistent with the spec. It reads; it does not run anything. A diff
+    that only adds or changes ADRs gets this review alone, judged as a design
+    record rather than against Completion conditions.
     The *code review* gets every file under this directory, the ADR index,
     and the diff — never the issue. It answers, in this order: for each
     changed function, what input, state, or interleaving makes it wrong; and
     does the diff break a rule in this directory. It works in its own
-    worktree and may run the suite, delete a changed path, or break a branch
-    to see what stays green (testing rules 2 and 3), restoring the tree
-    afterwards.
+    worktree and proves a claim with the affected test file only. It may
+    break code to see what stays green (testing rules 2 and 3) at most three
+    times, on its riskiest claims, and restores the tree afterwards. It does
+    not run `pnpm check`, `pnpm mutate`, the whole fast e2e suite, the
+    console lane or the slow lane: the implementer and CI run those.
     Each review returns findings, one per defect: a claim, the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
+    finding is blocking when it breaks behaviour, leaves wrong state, or
+    breaches a rule, an accepted ADR or the spec; anything else is a note. A
     finding needs a concrete failure or a named cost and who pays it; a diff
-    touching a file the spec did not list is a note, never blocking, unless
-    a user would see the difference. A finding is a claim, not a fact: it is
-    verified against the code before anyone acts on it. A confirmed finding
-    is fixed and the review that raised it runs again on the new diff; a
-    rejected finding is listed in the PR body under `## Review`, one line
-    each, tagged `spec:` or `code:` for the review that raised it, with the
-    reason, so the maintainer sees what was overruled and by whom.
-    Accepted findings are not narrated. Two rounds at most: a blocking
-    finding still confirmed after the second round means the agent stops
-    and hands off with the finding under Findings (rule 2), leaving the PR
-    in draft. A PR from a person gets the same two reviews when the
-    maintainer asks for them.
+    touching a file the spec did not list is a note unless a user would see
+    the difference. Whether CI is green is never a finding: CI proves it, and
+    the gate checks it (rule 15).
+    A blocking finding is a claim, not a fact: it is verified against the
+    code before anyone acts on it. A confirmed one is fixed and the review
+    that raised it runs again on the new diff; a rejected one is listed in
+    the PR body under `## Review`, one line each, tagged `spec:` or `code:`
+    for the review that raised it, with the reason, so the maintainer sees
+    what was overruled and by whom. Accepted findings are not narrated.
+    Notes are not verified and never start a round: after the last round
+    they go out once, as one comment on the PR, or as a `bug:new` issue when
+    one is a separate piece of work. Two rounds at most: a blocking finding
+    still confirmed after the second round means the agent stops and hands
+    off with the finding under Findings (rule 2), leaving the PR in draft. A
+    PR from a person gets the same two reviews when the maintainer asks for
+    them.
 
 15. **An agent merges only through the gate.** `.agents/scripts/merge-pr.sh`
     is the one place a delivery PR is merged from; agents may not run
@@ -246,10 +274,13 @@ is open, done means closed as completed.
     two lanes at once produce timeouts that look like bugs. Agents run it
     only through `scripts/slow-e2e.sh`, which holds a machine-wide lock,
     runs detached so no tool time limit kills it halfway, and logs to a
-    file. With a person present the agent asks before starting it.
-    Unattended, it runs when the lock is free; when the lock stays busy or
-    the machine has no devices, the PR gets `needs-hardware` and waits for
-    the maintainer.
+    file. It runs beside the two reviews, on the commit they review, not
+    after them. A failure joins the review's fixes in one fix run, and when
+    that run changed more than docs, the lane runs again beside the second
+    round. With a person present the agent
+    asks before starting it. Unattended, it runs when the lock is free; when
+    the lock stays busy or the machine has no devices, the PR gets
+    `needs-hardware` and waits for the maintainer.
 
 ## Procedures
 
@@ -282,7 +313,8 @@ The repo's own skills encode these procedures; use them rather than
 retyping the steps. `deliver` is the orchestrator: it claims, then hands
 each stage to a forked skill — `implement`, `review`, `verify-hardware` —
 that runs on the model its frontmatter pins and returns a fixed report.
-`spec-session` and `triage-bug` cover the rest.
+`spec-session` and `triage-bug` cover the rest; `spec-session` ends its
+technical and split modes with the forked `check-spec` (rule 7).
 
 ## Automation
 

@@ -33,6 +33,10 @@ changes in this repo:
   gets a spec review and a code review before it leaves draft, agents merge
   only through `.agents/scripts/merge-pr.sh`, and real devices run only
   through `scripts/slow-e2e.sh`.
+- [always-in-scope.md](docs/internal/agent-rules/always-in-scope.md) — what
+  every change includes without its spec asking (docs and strings it makes
+  false, both `EVENTS.md` files, a test for every new path, Fallow entries),
+  each item cited from the rules above; CI proves `pnpm check`.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ is binding as a target while the code has not
