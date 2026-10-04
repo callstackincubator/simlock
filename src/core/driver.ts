@@ -1,7 +1,13 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
-import type { DeviceMode, DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
+import type {
+  DeviceClass,
+  DeviceMode,
+  DeviceSpec,
+  DeviceTransitionUpdate,
+  Platform,
+} from "./domain.js";
 
 export interface DeviceRequest {
   readonly platform: Platform;
@@ -136,6 +142,10 @@ export type DriverEstimate =
  * the same matcher `resolveSpec` uses; a model with no other name has no entry. `images` is
  * present only for a driver whose runtimes come as installed images, one entry per image.
  *
+ * `modelClasses` maps a name in `models` to its device class, for every model the driver's tooling
+ * reports one for; a model it reports none for, or one it does not recognise, has no entry. The
+ * core carries it and reads nothing from it.
+ *
  * `customModels` names the values from `models` that exist because of something on this
  * machine, not because of the platform's tools. The core carries it and never reads it; a
  * driver with no such models omits the field.
@@ -146,6 +156,7 @@ export interface DriverCatalogEntry {
   readonly defaultRuntime: string | undefined;
   readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+  readonly modelClasses: Readonly<Record<string, DeviceClass>>;
   readonly images?: readonly DriverCatalogImage[];
   readonly customModels?: readonly string[];
 }

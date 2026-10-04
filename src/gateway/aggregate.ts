@@ -9,6 +9,7 @@ import {
   CATALOG_LIST_LIMITS,
   INSTALL_LIST_LIMIT,
   OPERATIONS,
+  type DeviceClass,
   type Platform,
 } from "../contract/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
@@ -189,7 +190,8 @@ function sumRamBudget(
  * §4). It is never built from the fleet's `models` and `runtimes`: one worker having a model and
  * another having a runtime does not make the pair leasable anywhere.
  *
- * `customModels` lists a model when any worker that lists it marks it custom, and is absent when
+ * `modelClasses` is the union over workers, the lowest worker id winning a model two of them class
+ * differently. `customModels` lists a model when any worker that lists it marks it custom, and is absent when
  * none does. `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
  * runtime, tag, and ABI, and is absent when no worker reports the field at all. Each worker's
  * lists fit the contract's bounds but their union may not, so both are cut to those bounds after
@@ -221,6 +223,11 @@ interface CatalogBucket {
   images: Map<string, CatalogImage> | undefined;
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
+  /** Each model's class, with the worker it came from: the lowest worker id that classes it wins. */
+  readonly modelClasses: Map<
+    string,
+    { readonly deviceClass: DeviceClass; readonly workerId: string }
+  >;
   readonly defaults: Set<string | undefined>;
 }
 
@@ -251,6 +258,7 @@ function addCatalogEntry(
     defaults: new Set<string | undefined>(),
     images: undefined,
     modelAliases: new Map<string, Map<string, string>>(),
+    modelClasses: new Map(),
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
@@ -261,6 +269,7 @@ function addCatalogEntry(
   for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
   for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
   addCustomModels(bucket.customModels, entry);
+  addModelClasses(bucket.modelClasses, entry, workerId);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
 }
@@ -279,6 +288,28 @@ function addAliases(
     if (key !== model.toLocaleLowerCase() && !aliases.has(key)) aliases.set(key, alias);
   }
   if (aliases.size > 0) index.set(model, aliases);
+}
+
+/**
+ * Folds one worker's classes into the fleet's. A name two workers class differently keeps the
+ * class of the lower worker id, whatever order the workers were folded in; a name the worker
+ * does not list itself is dropped.
+ */
+function addModelClasses(
+  index: CatalogBucket["modelClasses"],
+  entry: PlatformCatalog,
+  workerId: string,
+): void {
+  for (const model of entry.models) {
+    const deviceClass = Object.hasOwn(entry.modelClasses, model)
+      ? entry.modelClasses[model]
+      : undefined;
+    if (deviceClass === undefined) continue;
+    const current = index.get(model);
+    if (current === undefined || workerId < current.workerId) {
+      index.set(model, { deviceClass, workerId });
+    }
+  }
 }
 
 /** Folds one worker's custom models into the fleet's; a name the worker does not list itself is dropped. */
@@ -338,6 +369,9 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
           model,
           [...aliases.values()].sort().slice(0, CATALOG_LIST_LIMITS.aliasesPerModel),
         ]),
+    ),
+    modelClasses: Object.fromEntries(
+      [...bucket.modelClasses].map(([model, { deviceClass }]) => [model, deviceClass]),
     ),
     modelRuntimes: Object.fromEntries(
       [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),

@@ -471,6 +471,7 @@ export class OutOfProcessFakeDriver implements Driver {
       ...(script.images === undefined ? {} : { images: [...script.images] }),
       ...(script.customModels === undefined ? {} : { customModels: [...script.customModels] }),
       modelAliases: { ...script.modelAliases },
+      modelClasses: { ...script.modelClasses },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(script.modelRuntimes?.[model] ?? runtimes)]]),
       ),

@@ -332,6 +332,7 @@ describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    modelClasses: {},
     modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
     platform: "ios" as const,
@@ -341,6 +342,7 @@ describe("aggregateCatalog", () => {
   const iosOnB = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    modelClasses: {},
     modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
     platform: "ios" as const,
@@ -445,6 +447,7 @@ describe("aggregateCatalog", () => {
   it("pairs a model with a runtime when at least one connected worker pairs them", () => {
     const iosOnC = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -475,6 +478,7 @@ describe("aggregateCatalog", () => {
   it("ignores the pairings of disconnected and incompatible workers", () => {
     const pairsOld = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -492,6 +496,7 @@ describe("aggregateCatalog", () => {
   it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
     const unpaired = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone XS": [] },
       models: ["iPhone XS"],
       platform: "ios" as const,
@@ -516,6 +521,7 @@ describe("aggregateCatalog", () => {
       platforms: [
         {
           modelAliases: {},
+          modelClasses: {},
           modelRuntimes: {},
           models: ["constructor"],
           platform: "ios",
@@ -532,6 +538,7 @@ describe("aggregateCatalog", () => {
   it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
     const claimsMore = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -554,6 +561,7 @@ describe("aggregateCatalog", () => {
             iosOnA,
             {
               modelAliases: {},
+              modelClasses: {},
               modelRuntimes: { "Pixel 9": ["35"] },
               models: ["Pixel 9"],
               platform: "android",
@@ -585,6 +593,7 @@ describe("aggregateCatalog", () => {
         ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
+        modelClasses: {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
         models,
         platform: "android" as const,

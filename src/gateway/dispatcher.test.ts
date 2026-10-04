@@ -347,6 +347,7 @@ describe("GatewayDispatcher", () => {
       catalog: [
         {
           modelAliases: {},
+          modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           models: ["iPhone 17"],
           platform: "ios",

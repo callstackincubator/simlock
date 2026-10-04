@@ -7,6 +7,15 @@
 
 export type FakeDriverPlatform = "ios" | "android";
 
+export type FakeDriverDeviceClass =
+  | "phone"
+  | "tablet"
+  | "watch"
+  | "tv"
+  | "vision"
+  | "auto"
+  | "desktop";
+
 export type FakeDriverOperation =
   | "resolveSpec"
   | "findComponent"
@@ -78,6 +87,8 @@ export interface FakeDriverPlatformScript {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless set. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as each model's class; none unless set. */
+  readonly modelClasses?: Readonly<Record<string, FakeDriverDeviceClass>>;
   /** What `listCatalog` reports as custom models; the field is absent unless set. */
   readonly customModels?: readonly string[];
   /**

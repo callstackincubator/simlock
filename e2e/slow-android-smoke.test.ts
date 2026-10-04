@@ -45,6 +45,7 @@ interface AndroidCatalogOutput {
     readonly models: readonly string[];
     readonly runtimes: readonly string[];
     readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly modelClasses: Readonly<Record<string, string>>;
     readonly images?: readonly { runtime: string; tag: string; abi: string }[];
   }[];
 }
@@ -73,6 +74,12 @@ function avdIdFromCatalog(output: AndroidCatalogOutput): string {
       image.abi,
     );
     expect(existsSync(path), `listed image ${JSON.stringify(image)} is not installed`).toBe(true);
+  }
+
+  // avdmanager's tag classes the models: a stock Pixel is a phone, the stock TV profile a tv.
+  if (android.models.includes("Pixel 8")) expect(android.modelClasses["Pixel 8"]).toBe("phone");
+  if (android.models.includes("Television (1080p)")) {
+    expect(android.modelClasses["Television (1080p)"]).toBe("tv");
   }
 
   const aliases = android.models.flatMap((name) => android.modelAliases[name] ?? []);

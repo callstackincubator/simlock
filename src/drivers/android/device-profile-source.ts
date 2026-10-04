@@ -1,3 +1,4 @@
+import type { DeviceClass } from "../../core/domain.js";
 import { DriverCrashError, UnknownModelError } from "../../core/driver.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 
@@ -12,6 +13,9 @@ import type { Filesystem, ProcessRunner } from "../../ports/index.js";
  * A `builtin` profile is `custom` when `avdmanager` lists it with `OEM : User`: that is how it
  * prints a profile from Android Studio's `devices.xml`, which it reads itself.
  *
+ * A `properties` profile is a phone. A `builtin` one has the class its `Tag :` line gives it
+ * (`deviceClassOfTag`), or none for a tag the table does not know.
+ *
  * `names` is every name the profile answers to, `name` first, no two equal ignoring case.
  * `DeviceProfileRegistry` matches a requested model against it and lists the rest as the
  * model's other names, so the two can never disagree.
@@ -23,6 +27,8 @@ export type DeviceProfile =
       readonly names: readonly string[];
       readonly avdmanagerId: string;
       readonly custom: boolean;
+      /** From the entry's `Tag :` line; undefined when the tag is one no class is known for. */
+      readonly deviceClass: DeviceClass | undefined;
     }
   | {
       readonly kind: "properties";
@@ -63,6 +69,8 @@ export interface DeviceProfileCatalog {
    * one: a custom profile from this machine rather than one the SDK ships. In `models` order.
    */
   readonly customModels: readonly string[];
+  /** The class of each listed model that has one, keyed by its spelling in `models`. */
+  readonly modelClasses: Readonly<Record<string, DeviceClass>>;
 }
 
 /**
@@ -110,7 +118,13 @@ export class DeviceProfileRegistry {
       const profile = matchProfile(profiles, model);
       return profile !== undefined && isCustom(profile);
     });
-    return { customModels, modelAliases, models };
+    const modelClasses = Object.fromEntries(
+      [...listed.values()].flatMap((profile) => {
+        const deviceClass = profile.kind === "properties" ? "phone" : profile.deviceClass;
+        return deviceClass === undefined ? [] : [[profile.name, deviceClass] as const];
+      }),
+    );
+    return { customModels, modelAliases, modelClasses, models };
   }
 
   /**
@@ -185,6 +199,7 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
       (profile): DeviceProfile => ({
         avdmanagerId: profile.id,
         custom: profile.oem === "User",
+        deviceClass: deviceClassOfTag(profile.tag),
         kind: "builtin",
         name: profile.name,
         names:
@@ -214,23 +229,41 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
   }
 }
 
+/**
+ * `avdmanager`'s `Tag :` -> class. No tag is a phone; a tag not listed here has no class, and
+ * its profile stays leasable.
+ */
+function deviceClassOfTag(tag: string | undefined): DeviceClass | undefined {
+  if (tag === undefined) return "phone";
+  if (tag === "android-tv") return "tv";
+  if (tag === "android-wear") return "watch";
+  if (tag.startsWith("android-automotive")) return "auto";
+  if (tag === "android-desktop") return "desktop";
+  return undefined;
+}
+
 interface AvdmanagerDeviceProfile {
   readonly id: string;
   readonly name: string;
   /** The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */
   readonly oem: string | undefined;
+  /** The entry's `Tag :` line, or undefined without one. */
+  readonly tag: string | undefined;
 }
 
 /**
- * One profile per `id:` entry that has a `Name:` line. `OEM :` comes after `Name:`, so an
- * entry is complete only at the next `id:` line or the end of the output.
+ * One profile per `id:` entry that has a `Name:` line. `OEM :` and `Tag :` come after `Name:`,
+ * so an entry is complete only at the next `id:` line or the end of the output; a `Tag :` line
+ * before the first `id:` belongs to no entry.
  */
 export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceProfile[] {
   const profiles: AvdmanagerDeviceProfile[] = [];
-  let entry: { id: string; name: string | undefined; oem: string | undefined } | undefined;
+  let entry:
+    | { id: string; name: string | undefined; oem: string | undefined; tag: string | undefined }
+    | undefined;
   const flush = (): void => {
     if (entry?.name !== undefined) {
-      profiles.push({ id: entry.id, name: entry.name, oem: entry.oem });
+      profiles.push({ id: entry.id, name: entry.name, oem: entry.oem, tag: entry.tag });
     }
   };
   for (const line of output.split(/\r?\n/)) {
@@ -238,7 +271,7 @@ export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceP
     const idMatch = /^id:\s*\d+\s+or\s+"([^"]+)"/.exec(trimmed);
     if (idMatch?.[1] !== undefined) {
       flush();
-      entry = { id: idMatch[1], name: undefined, oem: undefined };
+      entry = { id: idMatch[1], name: undefined, oem: undefined, tag: undefined };
       continue;
     }
     if (entry === undefined) {
@@ -252,6 +285,11 @@ export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceP
     const oemMatch = /^OEM\s*:\s*(.+)$/.exec(trimmed);
     if (oemMatch?.[1] !== undefined) {
       entry.oem = oemMatch[1];
+      continue;
+    }
+    const tagMatch = /^Tag\s*:\s*(.+)$/.exec(trimmed);
+    if (tagMatch?.[1] !== undefined) {
+      entry.tag = tagMatch[1];
     }
   }
   flush();

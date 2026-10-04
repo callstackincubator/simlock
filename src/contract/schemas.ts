@@ -22,6 +22,21 @@ import { z } from "zod";
 export const platformSchema = z.enum(["ios", "android"]);
 export type Platform = z.infer<typeof platformSchema>;
 
+/**
+ * ADR 0015 §3: the class of a device model, in the order a catalog lists them. Which product
+ * family or tag is which class is each driver's knowledge; the names live here.
+ */
+export const deviceClassSchema = z.enum([
+  "phone",
+  "tablet",
+  "watch",
+  "tv",
+  "vision",
+  "auto",
+  "desktop",
+]);
+export type DeviceClass = z.infer<typeof deviceClassSchema>;
+
 const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
@@ -468,6 +483,12 @@ export const platformCatalogSchema = z.object({
       message: `modelAliases lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
     }),
   /**
+   * ADR 0015 §3: for a name in `models` whose tooling reports one, its device class. A model
+   * the tooling gives no recognised class has no entry. On a gateway it is the union over
+   * workers; when two class a model differently, the first worker in id order wins.
+   */
+  modelClasses: z.record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema),
+  /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
    * natively is listed too. On a gateway it is the union by runtime, tag, and ABI.
@@ -498,15 +519,30 @@ export const platformCatalogSchema = z.object({
  * answer. A name that does not fit loses its mark and stays in `models`; the list stops at its
  * maximum, and an empty list is left out. Lives beside the schema so the bounds are written once.
  */
-export function fitPlatformCatalog<Entry extends { readonly customModels?: readonly string[] }>(
-  entry: Entry,
-): Entry {
-  if (entry.customModels === undefined) return entry;
-  const { customModels, ...rest } = entry;
+export function fitPlatformCatalog<
+  Entry extends {
+    readonly customModels?: readonly string[];
+    readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
+  },
+>(entry: Entry): Entry {
+  const { customModels, modelClasses, ...rest } = entry;
+  // A class keyed by a name too long to be a `modelClasses` key loses its entry, not the answer.
+  // An entry with no `modelClasses` at all is left for the schema to refuse.
+  const fitted = {
+    ...rest,
+    ...(modelClasses === undefined
+      ? {}
+      : {
+          modelClasses: Object.fromEntries(
+            Object.entries(modelClasses).filter(([model]) => model.length <= CATALOG_NAME_MAX),
+          ),
+        }),
+  };
+  if (customModels === undefined) return fitted as unknown as Entry;
   const fitting = customModels
     .filter((model) => model.length <= CATALOG_NAME_MAX)
     .slice(0, CATALOG_CUSTOM_MODELS_MAX);
-  return (fitting.length === 0 ? rest : { ...rest, customModels: fitting }) as Entry;
+  return (fitting.length === 0 ? fitted : { ...fitted, customModels: fitting }) as unknown as Entry;
 }
 
 export const proposalSchema = z.object({

@@ -191,8 +191,10 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
   the connected workers' catalogs, each model and runtime annotated with the
   workers that have it, `modelRuntimes` per model the union of each
-  worker's own pairings, `modelAliases` the union per model, and `images`
-  the union by runtime, tag, and ABI (ADR 0008 §4). Worker events are republished on the gateway's bus
+  worker's own pairings, `modelAliases` the union per model, `modelClasses`
+  the union with the first worker in id order winning a model two classify
+  differently (ADR 0015 §3), and `images` the union by runtime, tag, and ABI
+  (ADR 0008 §4). Worker events are republished on the gateway's bus
   with `workerId` added, so `simlock events --follow` against a gateway shows
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
@@ -267,8 +269,9 @@ gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
-required capacity field, taking it to 11. So the range both
-sides advertise is `{min: 11, max: 11}`, an older client and a current daemon simply
+required capacity field, taking it to 11, and ADR 0015 §3 makes the catalog's
+`modelClasses` required, taking it to 12. So the range both
+sides advertise is `{min: 12, max: 12}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -829,7 +832,9 @@ annotated with the workers that have it. A model's `modelRuntimes` is the
 union of what each connected worker pairs it with, never the cross product
 of fleet models and fleet runtimes: one worker with the model and another
 with the runtime is not a leasable pair. `modelAliases` is the union per
-model, deduplicated ignoring case, and `images` the union by runtime, tag,
+model, deduplicated ignoring case, `modelClasses` the union per model with
+the first worker in id order winning a disagreement (a class a worker gives a
+name it does not list is dropped), and `images` the union by runtime, tag,
 and ABI, absent when no worker reports the field. `customModels` lists a
 model when any worker that lists it marks it custom; a name a worker marks
 but does not list is dropped. Each worker's lists are
@@ -852,7 +857,12 @@ back to that profile. A listed model is in `customModels` when the profile
 the matcher sends its name to is a `devices.xml` one (parsed by Simlock, or
 listed by `avdmanager` with `OEM : User`), so the mark and the resolution
 cannot disagree. The iOS driver matches a device type's name
-only. `DriverCatalog.listCatalog` leaves out and logs a driver whose catalog
+only. Each driver also classes the models it lists (ADR 0015 §3): the iOS driver
+from the device type's `productFamily`, the Android driver from the profile's
+`Tag :` line (a `devices.xml` profile is a phone), each in one table inside its
+own module; the core and the contract carry the class names and read nothing
+from them, and a family or tag a table does not know lists no class and stays
+leasable. `DriverCatalog.listCatalog` leaves out and logs a driver whose catalog
 rejects when no platform is named, and fails with that driver's error when
 its platform is named.
 
@@ -903,7 +913,8 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
   `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
-  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required; a
+  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
+  ADR 0015 to `{min: 12, max: 12}`, because `modelClasses` is required; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

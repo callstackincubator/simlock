@@ -4,19 +4,22 @@
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
       "name": "iPhone 17 Pro",
       "minRuntimeVersion": 0,
-      "maxRuntimeVersion": 16777215
+      "maxRuntimeVersion": 16777215,
+      "productFamily": "iPhone"
     },
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
       "name": "iPhone 16",
       "minRuntimeVersion": 0,
-      "maxRuntimeVersion": 16777215
+      "maxRuntimeVersion": 16777215,
+      "productFamily": "iPhone"
     },
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
       "name": "iPhone 15 Pro",
       "minRuntimeVersion": 0,
-      "maxRuntimeVersion": 16777215
+      "maxRuntimeVersion": 16777215,
+      "productFamily": "iPhone"
     }
   ],
   "runtimes": [

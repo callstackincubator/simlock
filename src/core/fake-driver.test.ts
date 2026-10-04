@@ -144,6 +144,7 @@ describe("FakeDriver", () => {
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17 Pro": ["18.4", "26.5"] },
       models: ["iPhone 16", "iPhone 17 Pro"],
       runtimes: ["18.4", "26.5"],

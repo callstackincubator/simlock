@@ -33,7 +33,7 @@ import {
   UnsupportedRequestOptionError,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
-import type { DeviceMode, DeviceSpec } from "../../core/index.js";
+import type { DeviceClass, DeviceMode, DeviceSpec } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -262,6 +262,8 @@ interface DeviceType {
   readonly minRuntimeVersion: number;
   /** Same encoding; `UNBOUNDED_VERSION` means "no upper bound". */
   readonly maxRuntimeVersion: number;
+  /** simctl's `productFamily` ("iPhone", "iPad", ...), or undefined when it is absent or not a string. */
+  readonly productFamily: string | undefined;
 }
 
 interface Runtime {
@@ -1268,12 +1270,19 @@ export class IosSimctlDriver implements Driver {
     const catalog = await this.#loadCatalog();
     const installedRuntimes = catalog.runtimes.filter((runtime) => runtime.isAvailable);
     const models = catalog.deviceTypes.map((deviceType) => deviceType.name);
+    const modelClasses = Object.fromEntries(
+      catalog.deviceTypes.flatMap((deviceType) => {
+        const deviceClass = deviceClassOf(deviceType.productFamily);
+        return deviceClass === undefined ? [] : [[deviceType.name, deviceClass] as const];
+      }),
+    );
     return {
       defaultRuntime: newestRuntime(installedRuntimes)?.version,
       // Keyed by name and paired through the device type `resolveSpec` would pick for that name,
       // so two device types that differ only in letter case both list the first one's runtimes.
       // A device type answers to its name only, in any letter case (`findDeviceType`).
       modelAliases: {},
+      modelClasses,
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, pairedVersions(catalog, findDeviceType(catalog, model))]),
       ),
@@ -1997,6 +2006,19 @@ function parseCatalog(value: unknown): SimctlCatalog {
   return { deviceTypes, runtimes };
 }
 
+/** simctl's `productFamily` -> class. A family not listed here has no class and stays leasable. */
+const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string, DeviceClass> = new Map([
+  ["iPhone", "phone"],
+  ["iPad", "tablet"],
+  ["Apple Watch", "watch"],
+  ["Apple TV", "tv"],
+  ["Apple Vision", "vision"],
+]);
+
+function deviceClassOf(productFamily: string | undefined): DeviceClass | undefined {
+  return productFamily === undefined ? undefined : PRODUCT_FAMILY_CLASSES.get(productFamily);
+}
+
 function parseDeviceType(value: unknown): readonly DeviceType[] {
   if (!isRecord(value) || typeof value.identifier !== "string" || typeof value.name !== "string") {
     return [];
@@ -2008,6 +2030,7 @@ function parseDeviceType(value: unknown): readonly DeviceType[] {
       maxRuntimeVersion: versionIntOr(value.maxRuntimeVersion, UNBOUNDED_VERSION),
       minRuntimeVersion: versionIntOr(value.minRuntimeVersion, 0),
       name: value.name,
+      productFamily: typeof value.productFamily === "string" ? value.productFamily : undefined,
     },
   ];
 }

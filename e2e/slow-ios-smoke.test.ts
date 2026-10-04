@@ -47,6 +47,18 @@ async function expectSimctlPassthrough(env: TestEnv, udid: string): Promise<void
   expect(refused.error).toMatchObject({ code: "USAGE" });
 }
 
+/** simctl's product family classes the models: every iPhone is a phone, every Apple Watch a watch. */
+function expectProductFamilyClasses(
+  catalog: { readonly modelClasses: Readonly<Record<string, string>> } | undefined,
+): void {
+  const classes = Object.entries(catalog?.modelClasses ?? {});
+  expect(classes.length, "simlock catalog classed no iOS model").toBeGreaterThan(0);
+  for (const [name, deviceClass] of classes) {
+    if (name.startsWith("iPhone ")) expect(deviceClass, name).toBe("phone");
+    if (name.startsWith("Apple Watch ")) expect(deviceClass, name).toBe("watch");
+  }
+}
+
 describe.skipIf(process.platform !== "darwin")(
   "iOS smoke (real simctl)",
   { tags: ["slow", "ios"] },
@@ -67,7 +79,12 @@ describe.skipIf(process.platform !== "darwin")(
         expect(catalog.code).toBe(0);
         const platforms = (
           catalog.json as {
-            platforms: { platform: string; models: string[]; runtimes: string[] }[];
+            platforms: {
+              platform: string;
+              models: string[];
+              runtimes: string[];
+              modelClasses: Record<string, string>;
+            }[];
           }
         ).platforms;
         const iosCatalog = platforms.find((platform) => platform.platform === "ios");
@@ -82,6 +99,7 @@ describe.skipIf(process.platform !== "darwin")(
             "simlock catalog's runtimes must agree with real simctl",
           ).toContain(runtime);
         }
+        expectProductFamilyClasses(iosCatalog);
         const model = iosCatalog?.models[0] as string;
 
         const lease = await env.cli(

@@ -1,5 +1,5 @@
 import type { Clock } from "../ports/index.js";
-import type { DeviceMode, DeviceSpec, Platform } from "./domain.js";
+import type { DeviceClass, DeviceMode, DeviceSpec, Platform } from "./domain.js";
 import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
@@ -91,6 +91,8 @@ export interface FakeDriverOptions {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as each model's class; none unless set. */
+  readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
   /**
    * What `listCatalog` reports as installed images; the field is absent unless set. A request
    * naming an image tag resolves only to a runtime listed here with that tag.
@@ -164,6 +166,7 @@ export class FakeDriver implements Driver {
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
+  readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
@@ -193,6 +196,7 @@ export class FakeDriver implements Driver {
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#modelRuntimes = options.modelRuntimes;
     this.#modelAliases = options.modelAliases;
+    this.#modelClasses = options.modelClasses;
     this.#images = options.images;
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
@@ -514,6 +518,7 @@ export class FakeDriver implements Driver {
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
       ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
       modelAliases: { ...this.#modelAliases },
+      modelClasses: { ...this.#modelClasses },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(this.#modelRuntimes?.[model] ?? runtimes)]]),
       ),

@@ -144,7 +144,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "List devices",
       description:
-        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). modelRuntimes gives, for each model, the installed runtimes it pairs with; pick a model and os from it, since a listed model and a listed runtime do not always pair. modelAliases gives other names a model answers to (on Android, the device profile id); images lists Android's installed system images with API level, tag, and ABI. Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
+        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). modelRuntimes gives, for each model, the installed runtimes it pairs with; pick a model and os from it, since a listed model and a listed runtime do not always pair. modelAliases gives other names a model answers to (on Android, the device profile id); modelClasses gives a model's class (phone, tablet, watch, tv, vision, auto or desktop) where the platform's tools report one, and a model with no entry has none; images lists Android's installed system images with API level, tag, and ABI. Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
       inputSchema: listDevicesInputSchema,
       outputSchema: listDevicesOutputSchema,
     },

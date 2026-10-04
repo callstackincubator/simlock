@@ -432,6 +432,7 @@ describe("IosSimctlDriver", () => {
       await expect(driver.listCatalog()).resolves.toEqual({
         defaultRuntime: undefined,
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: { "iPhone 16": [] },
         models: ["iPhone 16"],
         runtimes: [],
@@ -1037,6 +1038,11 @@ describe("IosSimctlDriver", () => {
     await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "26.5",
       modelAliases: {},
+      modelClasses: {
+        "iPhone 15 Pro": "phone",
+        "iPhone 16": "phone",
+        "iPhone 17 Pro": "phone",
+      },
       modelRuntimes: {
         "iPhone 15 Pro": ["18.4", "26.5"],
         "iPhone 16": ["18.4", "26.5"],

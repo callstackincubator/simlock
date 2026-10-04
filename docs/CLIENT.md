@@ -242,7 +242,8 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 //    runtimes: ["18.4", "26.0"],
 //    defaultRuntime: "26.0",
 //    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
-//    modelAliases: {} }]
+//    modelAliases: {},
+//    modelClasses: { "iPhone 16": "phone", "iPhone XS": "phone" } }]
 ```
 
 - `models` and `runtimes` are what is installed. A model and a runtime that
@@ -255,6 +256,11 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
   it, in any letter case. Only models with another name appear. On Android
   a built-in profile's AVD id is one (`{ "Pixel 8": ["pixel_8"] }`); iOS
   has none.
+- `modelClasses` maps a model to its class: `phone`, `tablet`, `watch`, `tv`,
+  `vision`, `auto` or `desktop`. On iOS it comes from the device type's
+  product family, on Android from the profile's tag, and a custom Android
+  profile is a `phone`. A model whose tools report no class, or one this list
+  does not name, has no entry; it is still listed and still leasable.
 - `images` is on Android entries only: every installed system image as
   `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
   image whose ABI the host cannot run natively is listed too.
@@ -274,8 +280,9 @@ Against a gateway the catalog is the union of the connected workers'. A
 model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
 runtime. The gateway sends a request only to a worker that pairs the model
-with the runtime. `modelAliases` and `images` are the unions of each
-worker's own. A model is in `customModels` when any worker that lists it
+with the runtime. `modelAliases`, `modelClasses` and `images` are the unions
+of each worker's own; when two workers class a model differently, the first
+worker in id order wins. A model is in `customModels` when any worker that lists it
 marks it custom; each worker's own list is in its catalog on
 `listWorkers()` from the admin client. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.

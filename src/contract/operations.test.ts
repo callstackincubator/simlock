@@ -481,6 +481,7 @@ describe("operation input/output round trips", () => {
               models: ["iPhone 17"],
               runtimes: ["26.0"],
               modelAliases: {},
+              modelClasses: {},
               modelRuntimes: { "iPhone 17": ["26.0"] },
             },
           ],
@@ -511,6 +512,7 @@ describe("operation input/output round trips", () => {
           models: ["iPhone 17"],
           runtimes: ["26.0"],
           modelAliases: {},
+          modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
           runtimeWorkers: { "26.0": ["wrk_1"] },
@@ -521,7 +523,13 @@ describe("operation input/output round trips", () => {
   });
 
   it("catalog.get rejects a platform entry without modelRuntimes", () => {
-    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"], modelAliases: {} };
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      modelAliases: {},
+      modelClasses: {},
+    };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
       /modelRuntimes/,
     );
@@ -547,6 +555,7 @@ describe("operation input/output round trips", () => {
         {
           ...entry,
           modelAliases: { "Pixel 8": ["pixel_8"] },
+          modelClasses: {},
           images: [{ runtime: "35", tag: "google_apis", abi: "arm64-v8a" }],
         },
       ],
@@ -592,6 +601,7 @@ describe("operation input/output round trips", () => {
       runtimes: ["35"],
       modelRuntimes: { "Pixel 8": ["35"] },
       modelAliases: {},
+      modelClasses: {},
     };
     const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
     const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);

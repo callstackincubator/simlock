@@ -278,6 +278,15 @@ for that platform has an `images` field. A gateway accepts any name a worker
 lists for a model, in any letter case, and sends that worker its own name for
 it.
 
+Each entry also carries `modelClasses`: for a name in `models` whose tooling
+reports one, its class, one of `phone`, `tablet`, `watch`, `tv`, `vision`,
+`auto` or `desktop`. On iOS it comes from the device type's product family,
+on Android from the device profile's tag, and a custom Android profile is a
+`phone`. A model whose tools report no class, or one this API does not name,
+is still listed and still leasable, and has no entry. On a gateway it is the
+union over the connected workers; when two workers class a model differently,
+the first worker in id order wins.
+
 An entry may also carry `customModels`: the names from `models` that exist
 because of something on that machine rather than the platform's tools. On
 Android that is a profile made with Android Studio's device manager, read
@@ -294,7 +303,8 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "runtimes": ["18.4", "26.0"],
     "defaultRuntime": "26.0",
     "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
-    "modelAliases": {}
+    "modelAliases": {},
+    "modelClasses": { "iPhone 16": "phone", "iPhone XS": "phone" }
   }, {
     "platform": "android",
     "models": ["My Tablet", "Pixel 8"],
@@ -302,6 +312,7 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "defaultRuntime": "35",
     "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
     "modelAliases": { "Pixel 8": ["pixel_8"] },
+    "modelClasses": { "My Tablet": "tablet", "Pixel 8": "phone" },
     "customModels": ["My Tablet"],
     "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
                 { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]
@@ -1053,7 +1064,8 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "runtimes": ["18.4", "26.0"],
           "defaultRuntime": "26.0",
           "modelRuntimes": {"iPhone 16": ["18.4"]},
-          "modelAliases": {}
+          "modelAliases": {},
+          "modelClasses": {"iPhone 16": "phone"}
         },
         {
           "platform": "android",
@@ -1062,6 +1074,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "defaultRuntime": "18.0",
           "modelRuntimes": {},
           "modelAliases": {},
+          "modelClasses": {},
           "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],

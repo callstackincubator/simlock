@@ -2,6 +2,9 @@ import type { DeviceRequest } from "./driver.js";
 
 export type Platform = "ios" | "android";
 
+/** ADR 0015 §3: the class of a device model. Which family or tag is which is each driver's own. */
+export type DeviceClass = "phone" | "tablet" | "watch" | "tv" | "vision" | "auto" | "desktop";
+
 /** The mode a device actually has: slimmed by its driver, or not. */
 export type DeviceMode = "slim" | "full";
 
