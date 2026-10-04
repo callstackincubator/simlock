@@ -1,0 +1,64 @@
+name: Release
+
+# Cuts a release from main. release-it (configured in package.json) runs `pnpm check`, bumps the
+# version from the conventional commits since the last tag, writes CHANGELOG.md, pushes the
+# release commit and tag, and creates the GitHub release.
+#
+# It runs here rather than on a laptop because main's ruleset accepts no direct push from a
+# person, and agents push with a maintainer's account. GitHub Actions is the ruleset's only
+# bypass, and agents may not start this workflow (`gh workflow run` is denied in
+# .claude/settings.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: "Version bump. auto reads it from the commits since the last release."
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions: {}
+
+env:
+  COREPACK_ENABLE_PROJECT_SPEC: "0"
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      # Full history and tags: release-it reads the commits since the last tag. The token is kept
+      # so the release commit and tag can be pushed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INCREMENT: ${{ inputs.increment }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$INCREMENT" = auto ]; then
+            pnpm release --ci
+          else
+            pnpm release "$INCREMENT" --ci
+          fi

@@ -138,20 +138,23 @@ skill spawns two reviewers on Opus. Neither has seen the delivering session,
 and neither sees what the other sees. The spec reviewer gets the issue, its
 parent, its ADRs and the diff, and answers whether every line of the spec
 is delivered, whether the diff does anything the spec did not ask for, and
-whether each test proves the claim in its title. The code reviewer gets the
-agent rules, the ADR index and the diff, never the issue, and answers what
-input or interleaving makes each changed function wrong and whether a rule
-is broken; it works in its own worktree and may break code to see what the
-suite catches. The two are blind to each other on purpose: a reviewer
+whether each test proves the claim in its title. It also gets every change
+made to the spec's tests after they were committed red, because the final
+diff cannot show a red test that was deleted or loosened on the way to
+green. The code reviewer gets the agent rules, the ADR index and the diff,
+never the issue, and answers what input or interleaving makes each changed
+function wrong and whether a rule is broken; it works in its own worktree
+and may break code to see what the suite catches. The two are blind to each other on purpose: a reviewer
 holding both the spec and the rules resolves a conflict between them
 silently, and the maintainer wants to see that conflict, because it usually
 means the spec is missing a line.
 
 Findings are claims. The agent verifies each against the code, fixes what
 it confirms, and lists what it rejects in the PR body under `## Review`, one
-line each with the reason. A confirmed fix re-runs the review that raised
-it, once. A blocking finding still open after that is a contested change:
-the agent hands off with it and leaves the PR in draft. An ADR-only PR gets
+line each, tagged `spec:` or `code:`, with the reason. A confirmed fix
+re-runs the review that raised it, once. A blocking finding still open
+after that is a contested change: the agent hands off with it and leaves
+the PR in draft. An ADR-only PR gets
 the spec review alone.
 
 A Done when line that needs a real simulator or emulator runs through the
@@ -208,6 +211,31 @@ Three transitions are judgments and stay manual on purpose: `bug:new` to
 fourth, except for the tasks of a `feature:ready` feature, where your
 `feature:ready` was the approval.
 
+## Watching the pipeline
+
+`node .agents/scripts/delivery-stats.mjs` turns the PRs merged in the last
+five weeks into one row per week: for each review, how many findings it
+raised and how many were confirmed and fixed; how many PRs needed no fix,
+or a second round; mutants left alive; handoffs. Below the table it lists
+this week's rejected findings, handoffs and PRs waiting on hardware. A
+weekly routine runs it and suggests at most one change. A review whose
+findings are mostly rejected costs a verification each and changes
+nothing: tune its brief. A rejection that keeps coming back for the same
+reason is a missing rule or a missing spec line.
+
+## `main` and releases
+
+`main` takes changes only through a pull request whose Quality, Fallow and
+Console checks passed. That is a ruleset on GitHub, not a convention: agents
+push with a maintainer's account, so anything that binds them binds you too,
+and nobody bypasses it. Releases therefore run in the Release workflow
+(`.github/workflows/release.yml`), started by hand from the Actions tab on
+`main`. It runs `release-it`, which bumps the version from the commits since
+the last tag, writes `CHANGELOG.md`, pushes the release commit and tag, and
+creates the GitHub release; the ruleset lets only GitHub Actions push it.
+Agents cannot start it: `gh workflow run` is denied in
+`.claude/settings.json`.
+
 ## Where ADRs fit
 
 A feature answers _what_ and _why_ in business terms. An ADR answers _how_,
@@ -233,5 +261,6 @@ when it closes. See [adr/README.md](adr/README.md).
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
   `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
   hook; installs the pinned pnpm into a cache when PATH lacks it),
-  `.agents/scripts/merge-pr.sh`,
+  `.agents/scripts/merge-pr.sh`, `.agents/scripts/delivery-stats.mjs`,
   `scripts/slow-e2e.sh`, `scripts/mutate.mjs` (`pnpm mutate`)
+- Releases: `.github/workflows/release.yml`
