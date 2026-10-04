@@ -78,8 +78,10 @@ how a product family or a tag this record does not know stays leasable. The iOS 
 derived from a name or a screen size, so on Android `tablet` holds no model.
 
 On a gateway the fleet catalog's `modelClasses` is the union over connected
-workers; when two workers class one name differently, the first worker in id
-order wins, and the worker list shows each worker's own.
+workers, one class per name as on a worker. When two workers class one name
+differently, the fleet entry keeps the class of the first worker in id
+order, so that name is listed under one class only; the worker list shows
+each worker's own. Routing matches per worker and is not affected.
 
 A device record stores no class. The class of a device is
 `modelClasses[device.spec.model]` in the catalog of the worker that holds it,
@@ -96,11 +98,12 @@ platform to class to ordered names, and hands it to the core the way it hands
 `defaultModes`. The core never holds a model name of its own.
 
 A name on the list counts on a host only when the catalog lists it, by name
-or alias in any letter case, classes it as that class in `modelClasses`, and
-pairs it with at least one installed runtime. A configured name that is not
-a model of the class is skipped like any other, so `defaultModels` can never
-make a class create a device of another class. The effective default for a
-class is the first name that counts. The catalog reports it in a new
+or alias in any letter case, and classes it as that class in
+`modelClasses`. A configured name that is not a model of the class is
+skipped like any other, so `defaultModels` can never make a class create a
+device of another class. The effective default for a class is the first
+counting name that pairs with at least one installed runtime, or, when none
+pairs, the first counting name. The catalog reports it in a new
 `classDefaults` record, keyed by class, with no entry for a class in which
 no name counts. A gateway's catalog carries an entry only when every
 connected worker reports the same one, as `defaultRuntime` does; the worker
@@ -115,9 +118,11 @@ The **create spec** is the `DeviceSpec` a new device would have.
 
 - An exact model with an exact or absent version resolves as today: the
   driver's `resolveSpec` picks the runtime.
-- An exact model with a range: the runtime is the newest entry of the
-  catalog's `modelRuntimes` for that model that satisfies the range, chosen
-  by `os-range`. With none, the request fails at once with
+- An exact model with a range: the model must be one the catalog lists, by
+  name or alias in any letter case, or the request fails at once with
+  `UNKNOWN_MODEL`, as it would on a worker today. The runtime is the newest
+  entry of the catalog's `modelRuntimes` for that model that satisfies the
+  range, chosen by `os-range`. With none, the request fails at once with
   `RUNTIME_MISSING` and `downloadable: false`, whatever `allowDownload` says.
 - A class: the candidates are the names on the class's list that count on
   this host (§4). With none, the request fails at once with
@@ -181,8 +186,8 @@ exact model is replaced by the worker's own name, as ADR 0009 §3 says. The
 worker applies §5 and §6 itself, so a warm device of another model in the
 class is still found there.
 
-`matchRequest` reads the class the request means (§1), `modelClasses`, and
-`os-range` from the core: a worker can serve a request when its catalog
+`matchRequest` reads the class the request means (§1) and `os-range` from
+the contract, `modelClasses` from the view, and the fit from the core: a worker can serve a request when its catalog
 lists the model, or any model of the class, paired with an installed
 runtime that satisfies the constraint. The ADR 0009 §4 table keeps its rows,
 and each gives the code §5 gives on a worker: row 3 is "no known worker
@@ -233,8 +238,8 @@ protocol version by one, as ADR 0007 §12 says. Four of the five tasks do.
   change that, since a name that is not of the class never counts: a
   `--class tablet` Android request fails with `UNKNOWN_MODEL` until the
   tooling tags tablets.
-- The gateway imports the class, range and fit functions from the core and
-  keeps one rule of its own, the mode rule of ADR 0009 §6, because status
+- The gateway imports the fit and catalog-match functions from the core, the
+  class and range functions from the contract, and keeps one rule of its own, the mode rule of ADR 0009 §6, because status
   carries no pool mode. Task 194 of #173 lands that rule; the gateway task
   of #326 builds on it.
 - A device's class changes if the host's tooling changes what it reports for
