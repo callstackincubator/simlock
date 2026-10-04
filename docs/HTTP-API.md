@@ -312,7 +312,7 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "defaultRuntime": "35",
     "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
     "modelAliases": { "Pixel 8": ["pixel_8"] },
-    "modelClasses": { "My Tablet": "tablet", "Pixel 8": "phone" },
+    "modelClasses": { "My Tablet": "phone", "Pixel 8": "phone" },
     "customModels": ["My Tablet"],
     "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
                 { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]

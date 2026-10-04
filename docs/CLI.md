@@ -1278,10 +1278,9 @@ Platform: android
   Runtimes: 34, 35 (default: 35)
   Models:
     phone:
+      My Tablet (custom): 34, 35
       Pixel 8: 34, 35
         Other names: pixel_8
-    tablet:
-      My Tablet (custom): 34, 35
   Images (runtime, tag, ABI):
     34 default x86_64
     35 google_apis arm64-v8a
@@ -1293,7 +1292,7 @@ Platform: android
 {"platforms":[{"platform":"android","models":["My Tablet","Pixel 8"],"runtimes":["34","35"],"defaultRuntime":"35",
   "modelRuntimes":{"My Tablet":["34","35"],"Pixel 8":["34","35"]},
   "modelAliases":{"Pixel 8":["pixel_8"]},
-  "modelClasses":{"My Tablet":"tablet","Pixel 8":"phone"},
+  "modelClasses":{"My Tablet":"phone","Pixel 8":"phone"},
   "customModels":["My Tablet"],
   "images":[{"runtime":"34","tag":"default","abi":"x86_64"},{"runtime":"35","tag":"google_apis","abi":"arm64-v8a"}]}]}
 ```
