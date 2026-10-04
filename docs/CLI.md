@@ -1090,6 +1090,11 @@ threshold (see `simlock doctor` below): it stays visible in `status` and
 `list --devices` with that state while `QuarantineCoordinator` retries it in
 the background, and is never handed to a new requester.
 
+A device in `status --json` and `list --devices` carries `stateEnteredAt`,
+the moment it entered its current state, in milliseconds since the epoch. It
+is absent when unknown: a `ready`, `leased` or `shutdown` device recorded by an
+older daemon has none until its next change of state.
+
 A device currently `provisioning` or `reclaiming` carries a derived
 `transitionAgeMs` — how long it has been in that state — visible in `status`
 and `list --devices` well before it crosses the threshold that would make

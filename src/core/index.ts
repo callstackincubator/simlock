@@ -18,7 +18,6 @@ export {
   type LeaseRequestFailure,
   IllegalTransition,
   transition,
-  transitionEnteredAt,
 } from "./domain.js";
 export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";

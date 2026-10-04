@@ -215,8 +215,9 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     provisionDuration,
     spec,
   }: RegisterDeviceInput): Promise<DeviceRecord> {
+    const createdAt = this.options.clock.now();
     const record: DeviceRecord = {
-      createdAt: this.options.clock.now(),
+      createdAt,
       driverData,
       driverDeviceId,
       id: `dev_${this.options.idGenerator.generate()}`,
@@ -224,6 +225,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       mode: "full",
       spec: { ...spec },
       state: "provisioning",
+      stateEnteredAt: createdAt,
     };
     const devices = [...this.#devices, record];
 
@@ -264,7 +266,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
     }
 
-    const updated = transition(device, to, update);
+    const updated = transition(device, to, this.options.clock.now(), update);
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -287,7 +289,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state !== "reclaiming") {
       throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
     }
-    const updated = transition(device, "shutdown");
+    const updated = transition(device, "shutdown", this.options.clock.now());
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -313,11 +315,12 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         `Device is not reclaiming, provisioning, or shutdown: ${deviceId}`,
       );
     }
+    const now = this.options.clock.now();
     const updated: DeviceRecord = {
-      ...transition(device, "quarantined"),
+      ...transition(device, "quarantined", now),
       quarantineAttempts: 0,
       quarantineNextRetryAt: nextRetryAt,
-      quarantinedAt: this.options.clock.now(),
+      quarantinedAt: now,
     };
     const devices = [...this.#devices];
     devices[index] = updated;
@@ -359,7 +362,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineNextRetryAt: _quarantineNextRetryAt,
       quarantinedAt: _quarantinedAt,
       ...updated
-    } = transition(device, to);
+    } = transition(device, to, this.options.clock.now());
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
@@ -403,7 +406,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineNextRetryAt: _quarantineNextRetryAt,
       quarantinedAt: _quarantinedAt,
       ...updated
-    } = transition(device, "deleted");
+    } = transition(device, "deleted", this.options.clock.now());
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
@@ -496,7 +499,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state === "deleted") {
       return cloneDevice(device);
     }
-    const updated = { ...device, state: "deleted" as const };
+    const updated = transition(device, "deleted", this.options.clock.now());
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -524,8 +527,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device already has an active lease: ${deviceId}`);
     }
 
-    const leasedDevice = transition(device, "leased");
     const grantedAt = this.options.clock.now();
+    const leasedDevice = transition(device, "leased", grantedAt);
     const lease: LeaseRecord = {
       deviceId,
       grantedAt,
@@ -562,9 +565,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       recoveryAttempts: _recoveryAttempts,
       ...withoutRecoveryMarkers
     } = device;
+    const endedAt = this.options.clock.now();
     const reclaiming = {
-      ...transition(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
-      lastLeaseEndedAt: this.options.clock.now(),
+      ...transition(withoutRecoveryMarkers as DeviceRecord, "reclaiming", endedAt),
+      lastLeaseEndedAt: endedAt,
     };
     const devices = [...this.#devices];
     devices[deviceIndex] = reclaiming;
@@ -782,6 +786,7 @@ const deviceRecordKeys = [
   "state",
   "driverData",
   "createdAt",
+  "stateEnteredAt",
   "lastLeaseEndedAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
@@ -956,8 +961,15 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
+  const optionalNumbers = parseOptionalDeviceNumbers(value);
+  const loadedState: DeviceState = state === "warm" ? "reclaiming" : state;
+  const stateEnteredAt = loadStateEnteredAt(value.stateEnteredAt, loadedState, {
+    createdAt,
+    ...optionalNumbers,
+  });
+
   return {
-    ...parseOptionalDeviceNumbers(value),
+    ...optionalNumbers,
     ...(address === undefined ? {} : { address }),
     createdAt,
     driverData,
@@ -966,8 +978,38 @@ function parseDevice(value: unknown): DeviceRecord {
     leaseIdentity: parseLeaseIdentity(value.leaseIdentity),
     mode: parseDeviceMode(value.mode),
     spec: parseDeviceSpec(spec),
-    state: state === "warm" ? "reclaiming" : state,
+    state: loadedState,
+    ...(stateEnteredAt === undefined ? {} : { stateEnteredAt }),
   };
+}
+
+/**
+ * When a loaded device entered its state (ADR 0015 §5): the stored value when it is a finite
+ * number, else the one existing timestamp that is exactly that moment -- `createdAt` for
+ * `provisioning`, `lastLeaseEndedAt` for `reclaiming`, `quarantinedAt` for `quarantined` -- and
+ * nothing for every other state. Absent means unknown; nothing here guesses, and the next
+ * transition sets it.
+ */
+function loadStateEnteredAt(
+  stored: unknown,
+  state: DeviceState,
+  known: {
+    readonly createdAt: number;
+    readonly lastLeaseEndedAt?: number;
+    readonly quarantinedAt?: number;
+  },
+): number | undefined {
+  if (typeof stored === "number" && Number.isFinite(stored)) return stored;
+  switch (state) {
+    case "provisioning":
+      return known.createdAt;
+    case "reclaiming":
+      return known.lastLeaseEndedAt;
+    case "quarantined":
+      return known.quarantinedAt;
+    default:
+      return undefined;
+  }
 }
 
 /**

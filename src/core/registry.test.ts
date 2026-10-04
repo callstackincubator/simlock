@@ -147,6 +147,7 @@ describe("Registry", () => {
         spec,
         mode: "full",
         state: "provisioning",
+        stateEnteredAt: 1_000,
       },
     ]);
   });
@@ -683,6 +684,7 @@ describe("Registry", () => {
       spec,
       mode: "full",
       state: "ready",
+      stateEnteredAt: 1_000,
     });
     await expect(registry.recoverFromQuarantine(device.id, "ready")).rejects.toThrow(
       RegistryEventError,
