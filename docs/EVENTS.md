@@ -134,6 +134,15 @@ documented above arrives with an extra field: additive, and only ever on a
 gateway. The events in this section's own table are the gateway's own, and
 carry no `workerId` beyond the worker they are about.
 
+A relayed event keeps the worker's `id` and `timestamp`. Its `payload.workerId`
+is the only mark that it was relayed, and `seq` is the gateway's own. So the
+same fact has the same `id` in the worker's `events.jsonl` and the gateway's,
+and you can join the two files by it. A relayed line's time is when the fact
+happened on the worker, not when the gateway heard it: a worker whose clock
+runs ahead or behind the gateway's shows that skew in the gateway's order.
+`simlock events`, `GET /v1/events` and the console list events by `timestamp`,
+then by `seq`.
+
 Relayed events are written to the gateway's own event file
 (`events.jsonl`) along with its own, so `simlock events --since` against a
 gateway reaches back across a gateway restart. Two consequences of relaying

@@ -1,4 +1,5 @@
 import { type Clock, CryptoIdGenerator, type IdGenerator } from "../ports/index.js";
+import { byTimeThenSeq } from "./order.js";
 
 export interface EventMap {
   "lease.requested": {
@@ -308,6 +309,15 @@ export type EventEnvelope<Event extends EventName = EventName> = Event extends E
     }
   : never;
 
+/** An envelope before a bus gives it a `seq`: everything the place the fact happened stamped. */
+export interface StampedEnvelope<Event extends EventName = EventName> {
+  readonly id: string;
+  readonly timestamp: number;
+  readonly event: Event;
+  readonly payload: EventMap[Event];
+  readonly module: string;
+}
+
 export type EventHandler<Event extends EventName> = (envelope: EventEnvelope<Event>) => void;
 export type AllEventHandler = (envelope: EventEnvelope) => void;
 
@@ -349,18 +359,31 @@ export class EventBus {
     payload: EventMap[Event],
     module: string,
   ): EventEnvelope<Event> {
-    const envelope = {
+    return this.#publish({
       id: `evt_${this.idGenerator.generate()}`,
-      seq: this.#nextSequence,
       timestamp: this.clock.now(),
       event,
       payload,
       module,
-    } as EventEnvelope<Event>;
+    });
+  }
+
+  /**
+   * Publishes an envelope whose fact happened elsewhere (ADR 0014 §2): it keeps the `id` and
+   * `timestamp` it was stamped with and gets only this bus's next `seq`. Reaches the ring and
+   * every subscriber exactly as `emit` does. Not a second way to state a fact -- the gateway's
+   * worker link is its one caller, relaying what a worker already stated.
+   */
+  republish<Event extends EventName>(envelope: StampedEnvelope<Event>): EventEnvelope<Event> {
+    return this.#publish(envelope);
+  }
+
+  #publish<Event extends EventName>(stamped: StampedEnvelope<Event>): EventEnvelope<Event> {
+    const envelope = { ...stamped, seq: this.#nextSequence } as EventEnvelope<Event>;
     this.#nextSequence += 1;
     this.#append(envelope);
 
-    const subscribers = [...(this.#subscribers.get(event) ?? [])];
+    const subscribers = [...(this.#subscribers.get(envelope.event) ?? [])];
     const allSubscribers = [...this.#allSubscribers];
     for (const subscriber of subscribers) {
       this.#dispatch(subscriber, envelope);
@@ -394,11 +417,13 @@ export class EventBus {
     sinceSeq,
     sinceTs,
   }: { readonly sinceSeq?: number; readonly sinceTs?: number } = {}): EventEnvelope[] {
-    return this.#retainedEvents().filter(
-      (event) =>
-        (sinceSeq === undefined || event.seq > sinceSeq) &&
-        (sinceTs === undefined || event.timestamp > sinceTs),
-    );
+    return this.#retainedEvents()
+      .filter(
+        (event) =>
+          (sinceSeq === undefined || event.seq > sinceSeq) &&
+          (sinceTs === undefined || event.timestamp > sinceTs),
+      )
+      .sort(byTimeThenSeq);
   }
 
   #append(envelope: EventEnvelope): void {

@@ -1,12 +1,13 @@
 import { type Filesystem, isMissingPathError, type Logger, type LogSink } from "../ports/index.js";
 import { EVENT_ID_PATTERN } from "../contract/schemas.js";
 import type { EventBus, EventEnvelope } from "./index.js";
+import { byTimeThenSeq } from "./order.js";
 
 /** The durable record of every business event, in the data directory (ADR 0006). */
 export const EVENT_FILE_NAME = "events.jsonl";
 
 /**
- * Every envelope in the event file newer than `sinceTs`, oldest first. The current file is
+ * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5). The current file is
  * read before its rotated generation (`<path>.1`), so a rotation landing between the two reads
  * can only make one generation show up twice -- never make one go missing -- and the repeat is
  * dropped by `id`. A line that is not JSON (a write cut short by a crash), or has no `id` of the shape
@@ -29,7 +30,7 @@ export async function readEventFile(
     seen.add(key);
     envelopes.push(envelope);
   }
-  return envelopes;
+  return envelopes.sort(byTimeThenSeq);
 }
 
 /** What identifies one event across the ring, the file and a live push: its `id` and nothing

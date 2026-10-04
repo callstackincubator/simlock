@@ -1701,6 +1701,13 @@ own `events.jsonl` along with its own, so `--since` reaches back across a
 gateway restart. It holds only what arrived while the gateway was up — a
 worker's events from before its uplink connected are not backfilled.
 
+A relayed event keeps the `id` and `timestamp` it has in the worker's own
+`simlock events`, so you can join the two by `id`; `workerId` in the payload is
+the only difference. Its time is when it happened on the worker, so a worker
+whose clock is off shows up out of place in the gateway's order. Events are
+printed by `timestamp`, then in the order the daemon recorded them within the
+same millisecond.
+
 ## `simlock daemon <start|stop|status|logs [--follow]>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`

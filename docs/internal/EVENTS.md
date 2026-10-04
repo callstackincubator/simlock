@@ -164,6 +164,18 @@ nothing usable connected. That is also why `incompatible` is not one of
 `worker.disconnected`'s reasons: an incompatible worker was never a connected
 worker to lose.
 
+**A relayed event keeps the worker's `id` and `timestamp`** (ADR 0014 §2, §5,
+§6). A gateway republishes a worker's business events through the bus's
+`republish`, whose only caller is the worker link: it mints `seq` and nothing
+else, so one fact has one `id` in the worker's event file, the gateway's, both
+rings and both streams, and the two files can be joined by it.
+`payload.workerId` is the only mark of a relay; nothing is added to the
+envelope. A relayed line's time is when the fact happened on the worker, so a
+worker's clock skew shows in the gateway's order, and `--since` on the gateway
+filters by that time. `simlock events`, `events.replay`, `GET /v1/events` and
+the console present events by `timestamp`, then `seq`. A worker's `id` and
+`timestamp` are claims, bounded by the push schema before the relay sees them.
+
 **`device.exec` emits no event, and that is deliberate.** It is the one
 operation here with no fact of its own. Running a command against a device is
 not a state change simlock owns — the lease that authorizes it already
