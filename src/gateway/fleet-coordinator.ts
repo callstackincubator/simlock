@@ -84,6 +84,14 @@ import {
 import type { Rejection } from "./routing/serviceability.js";
 import { viewLoadKey } from "./routing/view-state.js";
 
+/** The only worker error codes that mean "this worker cannot serve this request" and so send it to
+ * another worker (ADR 0009 §5). Any other code is final. */
+const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
+  "UNKNOWN_MODEL",
+  "RUNTIME_MISSING",
+  "NO_DRIVER",
+]);
+
 export interface FleetExecInput {
   readonly leaseId: string;
   readonly tool: string;
@@ -152,6 +160,11 @@ export class FleetLeaseCoordinator {
    * worker's `viewLoadKey` at the time. The worker is not picked again for that waiter while its
    * key is unchanged. A `WeakMap` so the memo dies with the waiter. */
   readonly #refusals = new WeakMap<FleetWaiter, Map<string, string>>();
+  /** ADR 0009 §5: per waiter, each worker that answered it `UNKNOWN_MODEL`, `RUNTIME_MISSING` or
+   * `NO_DRIVER` before any progress push, with that answer. Unlike `#refusals` the exclusion does
+   * not lift when the worker's view changes: the worker is not asked again for that request. The
+   * map's last entry is the most recent refusal. A `WeakMap` so the memo dies with the waiter. */
+  readonly #cannotServe = new WeakMap<FleetWaiter, Map<string, DispatchError>>();
   /** C1 (round 3 review): re-entrancy guard for `#dispatch` -- see its own doc comment. */
   #dispatchDepth = 0;
   /** Set when a pass is requested while one is already running; the running pass then repeats
@@ -727,14 +740,18 @@ export class FleetLeaseCoordinator {
   /** One waiter's turn in the walk. Whether it was sent to a worker; a waiter the table rejects
    * is terminal by then, and `#admit` finds both of its follow-ups no-ops on it. */
   #walkWaiter(waiter: FleetWaiter, claimedThisPass: Set<string>): boolean {
-    const views = this.options.views.views();
+    const refusals = this.#cannotServe.get(waiter);
+    // ADR 0009 §5: a worker that told this waiter it cannot serve it is out of every view below,
+    // the table's included. A worker claimed this pass or one that answered `NO_CAPACITY` is
+    // busy, not unable, so it stays in the table's view.
+    const views = this.options.views.views().filter((worker) => refusals?.has(worker.id) !== true);
     const request = routable(waiter);
     // ADR 0009 §4: the table runs before the stages, over every view -- a worker claimed this
     // pass or that refused this waiter is busy, not unable, so it still makes a request
     // servable. A request on rows 1 to 5 never reaches `select`, and never enters the queue.
     const verdict = this.options.routing.assess(request, views);
     if (verdict.kind === "reject") {
-      this.#rejectUnservable(waiter, verdict);
+      this.#rejectUnservable(waiter, verdict, refusals);
       return false;
     }
     const eligibleWorkers = views.filter(
@@ -748,8 +765,19 @@ export class FleetLeaseCoordinator {
   }
 
   /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
-   * details a worker gives the same request. */
-  #rejectUnservable(waiter: FleetWaiter, verdict: Rejection): void {
+   * details a worker gives the same request. A request that holds a worker's "cannot serve"
+   * refusal ends with the last one instead, as that worker's own fact (ADR 0009 §5); the worker
+   * already emitted its own `lease.rejected`, so the gateway emits none. */
+  #rejectUnservable(
+    waiter: FleetWaiter,
+    verdict: Rejection,
+    refusals: ReadonlyMap<string, DispatchError> | undefined,
+  ): void {
+    const last = refusals === undefined ? undefined : [...refusals.values()].at(-1);
+    if (last !== undefined) {
+      this.#queue.reject(waiter, last);
+      return;
+    }
     this.#reject(
       waiter,
       new DispatchError(verdict.code, verdict.message, verdict.details),
@@ -773,7 +801,8 @@ export class FleetLeaseCoordinator {
   /**
    * Every exit from this method leaves `waiter` either terminal (`resolve`/`reject`, inside
    * `#settleGrant`/the catch below), back in `queued` (`#staleView`'s `#enqueue`), or -- a
-   * `noWait` waiter refused with `NO_CAPACITY` -- handed back to `#admit`, which leaves it
+   * `noWait` waiter refused with `NO_CAPACITY`, or any waiter refused with a cannot-serve code
+   * before progress (ADR 0009 §5) -- handed back to `#admit`, which leaves it
    * terminal or `processing` in a new attempt that these same rules govern -- never
    * stuck `processing` with nothing left to drive it, and never in two places disagreeing about
    * which. C1 (round 2 review): the first early return used to skip straight to `#staleView`
@@ -901,6 +930,15 @@ export class FleetLeaseCoordinator {
         this.#staleView(waiter, workerId);
         return;
       }
+      // ADR 0009 §5: the worker says it cannot serve this request at all, before any device work.
+      // Another worker may, so the request goes back to the walk without this one. After a
+      // progress push the failure falls through to the terminal branch below, as today.
+      if (isSimlockError(error) && CANNOT_SERVE_CODES.has(error.code) && !announced) {
+        this.#rememberCannotServe(waiter, workerId, this.#classifyRelayedError(error, workerId));
+        this.#refreshView(workerId, { includeCatalog: true });
+        this.#admit(waiter);
+        return;
+      }
       // C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
       // up (or never actually reached) may still be free for whoever else is queued behind it --
       // and unlike `#staleView`'s branch above, nothing else here schedules another look at them.
@@ -958,14 +996,20 @@ export class FleetLeaseCoordinator {
     this.#refreshView(workerId);
   }
 
-  #refreshView(workerId: string): void {
+  #refreshView(workerId: string, options?: { readonly includeCatalog: true }): void {
     const target = this.options.directory.target(workerId);
-    void target?.refresh().catch((error: unknown) => {
-      this.#logger.debug("Failed to refresh a worker's view after a stale-view NO_CAPACITY", {
+    void target?.refresh(options).catch((error: unknown) => {
+      this.#logger.debug("Failed to refresh a worker's view after a worker's refusal", {
         workerId,
         message: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  #rememberCannotServe(waiter: FleetWaiter, workerId: string, refusal: DispatchError): void {
+    const refusals = this.#cannotServe.get(waiter) ?? new Map<string, DispatchError>();
+    refusals.set(workerId, refusal);
+    this.#cannotServe.set(waiter, refusals);
   }
 
   #rememberRefusal(waiter: FleetWaiter, workerId: string): void {

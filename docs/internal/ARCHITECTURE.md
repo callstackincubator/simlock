@@ -600,6 +600,16 @@ gateway sends it `lease.request` with **`noWait: true`**:
   and fails with `NO_CAPACITY` if no worker is picked in it. A failure
   *after* work has begun is the request's own terminal failure, not a return
   to the queue;
+- a worker's own **cannot-serve refusal** (`UNKNOWN_MODEL`,
+  `RUNTIME_MISSING`, `NO_DRIVER`) before any progress push is retried on
+  another worker: the gateway keeps that worker out of every view the walk
+  uses for that request (the table's included, for good, not until its view
+  changes), re-reads its catalog, and returns the request to the walk. The
+  queue deadline is not reset. When the table over the remaining views no
+  longer says route or wait, the request is rejected with the last such
+  refusal, the worker's own code and message, and the gateway emits no
+  `lease.rejected` of its own. After a progress push, and for any other
+  code, a failure is final (ADR 0009 §5);
 - a request a busy fleet cannot take yet is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
   capacity frees. A request **no worker can serve at all** is not passed
