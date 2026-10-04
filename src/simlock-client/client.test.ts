@@ -739,6 +739,48 @@ describe("pushes", () => {
   });
 });
 
+describe("event pushes", () => {
+  it("a worker push with a malformed id or timestamp never reaches the gateway's bus", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const listener = vi.fn();
+    const subscribed = client.subscribeEvents(listener);
+    await flushMicrotasks();
+    const subscribe = connection.lastSentOf("events.subscribe");
+    if (subscribe === undefined) throw new Error("the client never sent events.subscribe");
+    connection.reply(subscribe.id, { subscribed: true, subscriptionId: "sub_1" });
+    await subscribed;
+    const valid = {
+      event: "lease.expired",
+      id: "evt_ok",
+      module: "leases",
+      payload: {},
+      seq: 1,
+      timestamp: 5,
+    };
+
+    for (const bad of [
+      { ...valid, id: "no-prefix" },
+      { ...valid, id: `evt_${"a".repeat(65)}` },
+      { ...valid, id: 7 },
+      { ...valid, timestamp: Number.POSITIVE_INFINITY },
+      { ...valid, timestamp: "5" },
+    ]) {
+      connection.push("event", { subscriptionId: "sub_1", event: bad });
+    }
+    await flushMicrotasks();
+    expect(listener).not.toHaveBeenCalled();
+
+    connection.push("event", { subscriptionId: "sub_1", event: valid });
+    await flushMicrotasks();
+    expect(listener).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+});
+
 describe("requestLease abort (ADR §10)", () => {
   it("before the request is sent: rejects CANCELLED, nothing sent", async () => {
     const connection = new ScriptedConnection();

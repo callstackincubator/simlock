@@ -2,6 +2,7 @@ import { cli } from "./cli.js";
 import { waitFor } from "./wait.js";
 
 export interface RecordedEvent {
+  readonly id: string;
   readonly timestamp: number;
   readonly event: string;
   readonly payload: unknown;

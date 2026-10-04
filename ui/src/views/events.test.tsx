@@ -171,6 +171,14 @@ describe("the events view", () => {
     expect(view.ids().sort()).toEqual(["evt_a", "evt_b"]);
   });
 
+  it("events with the same timestamp are listed by seq, newest first", async () => {
+    const view = openView();
+    view.replayWith([envelope(2, T0), envelope(9, T0), envelope(5, T0)]);
+    await settle();
+
+    expect(view.shown()).toEqual([`9@${T0}`, `5@${T0}`, `2@${T0}`]);
+  });
+
   it("an envelope without an id is not shown", async () => {
     const view = openView();
     const { id: _id, ...withoutId } = envelope(2, T0);

@@ -106,6 +106,82 @@ describe("EventBus", () => {
     expect(bus.replay().map((entry) => entry.id)).toEqual(["evt_gen-1", "evt_gen-2"]);
   });
 
+  it("republish keeps the envelope's id and timestamp and mints the next seq", () => {
+    const bus = new EventBus(new FakeClock(5_000));
+    bus.emit("daemon.stopping", { reason: "own" }, "daemon");
+
+    const republished = (
+      bus as unknown as {
+        republish(envelope: {
+          id: string;
+          timestamp: number;
+          event: string;
+          payload: unknown;
+          module: string;
+        }): unknown;
+      }
+    ).republish({
+      id: "evt_from-worker",
+      timestamp: 123,
+      event: "lease.expired",
+      payload: { leaseId: "l", deviceId: "d", ownerId: "o" },
+      module: "leases",
+    });
+
+    expect(republished).toEqual({
+      id: "evt_from-worker",
+      seq: 2,
+      timestamp: 123,
+      event: "lease.expired",
+      payload: { leaseId: "l", deviceId: "d", ownerId: "o" },
+      module: "leases",
+    });
+  });
+
+  it("a republished event is in the ring and reaches every subscriber", () => {
+    const bus = new EventBus(new FakeClock(5_000));
+    const named: unknown[] = [];
+    const all: unknown[] = [];
+    bus.subscribe("lease.expired", (envelope) => named.push(envelope));
+    bus.subscribeAll((envelope) => all.push(envelope));
+
+    const republished = (bus as unknown as { republish(envelope: unknown): unknown }).republish({
+      id: "evt_from-worker",
+      timestamp: 123,
+      event: "lease.expired",
+      payload: { leaseId: "l", deviceId: "d", ownerId: "o" },
+      module: "leases",
+    });
+
+    expect(bus.replay()).toEqual([republished]);
+    expect(named).toEqual([republished]);
+    expect(all).toEqual([republished]);
+  });
+
+  it("events.replay returns ring events by timestamp, then seq, whatever order they arrived in", () => {
+    const bus = new EventBus(new FakeClock(500));
+    const relay = (id: string, timestamp: number) =>
+      (bus as unknown as { republish(envelope: unknown): unknown }).republish({
+        id,
+        timestamp,
+        event: "daemon.stopping",
+        payload: { reason: id },
+        module: "daemon",
+      });
+
+    relay("evt_late", 300);
+    relay("evt_early", 100);
+    relay("evt_tie-first", 200);
+    relay("evt_tie-second", 200);
+
+    expect(bus.replay().map((entry) => entry.id)).toEqual([
+      "evt_early",
+      "evt_tie-first",
+      "evt_tie-second",
+      "evt_late",
+    ]);
+  });
+
   it("isolates a throwing handler and continues dispatching", () => {
     const logger: EventBusLogger = { error: vi.fn() };
     const bus = new EventBus(new FakeClock(), 1_000, logger);

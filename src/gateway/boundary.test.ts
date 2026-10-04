@@ -1,4 +1,5 @@
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import {
   normalizeSpecifier,
   sourceFilesRecursive,
   srcDir,
+  stripComments,
 } from "../test-support/imports.js";
 
 const gatewayDir = dirname(fileURLToPath(import.meta.url));
@@ -171,5 +173,17 @@ describe("gateway module boundary regression fixtures", () => {
 
     expect(isUnder(normalized, "daemon")).toBe(true);
     expect(ALLOWED_DAEMON_IMPORTS).not.toContain(normalized);
+  });
+});
+
+describe("the relay is the bus's only republisher", () => {
+  // ADR 0014 §2: `republish` carries a worker's id and timestamp, so it is not a second way to
+  // state a fact. Counted over every non-test source file, `src/bus` included.
+  it("only the gateway's worker link calls republish", () => {
+    const callers = sourceFilesRecursive(srcDir)
+      .filter((file) => /\.republish\s*[<(]/.test(stripComments(readFileSync(file, "utf8"))))
+      .map((file) => relative(srcDir, file));
+
+    expect(callers).toEqual(["gateway/worker-link.ts"]);
   });
 });
