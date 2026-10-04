@@ -2658,15 +2658,32 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
   }
 
   /** Two workers that both list the request; `wrk_a` is scripted first, `wrk_b` second. */
-  function twoWorkers() {
-    const fleetHarness = harness();
+  function twoWorkers(options: { readonly busyB?: boolean; readonly logger?: Logger } = {}) {
+    const fleetHarness = harness(options.logger === undefined ? {} : { logger: options.logger });
     const a = new ScriptedWorkerClient();
     const b = new ScriptedWorkerClient();
     fleetHarness.directory.add("wrk_a", a);
     fleetHarness.directory.add("wrk_b", b);
     connectWorker(fleetHarness.workers, "wrk_a");
-    connectWorker(fleetHarness.workers, "wrk_b");
+    connectWorker(
+      fleetHarness.workers,
+      "wrk_b",
+      options.busyB === true ? { capacity: saturatedIos() } : {},
+    );
     return { a, b, ...fleetHarness };
+  }
+
+  /** Starts the request and lets it settle as far as it will without the clock moving, so each
+   * test asserts where it stands instead of waiting for an outcome that may never come. */
+  async function start(
+    coordinator: FleetLeaseCoordinator,
+    options: Parameters<typeof requestOptions>[0] = {},
+  ) {
+    const outcome = coordinator.request(REQUEST, requestOptions(options));
+    const ended = outcome.catch((error: unknown) => error);
+    const state = promiseState(outcome);
+    await tick();
+    return { ended, outcome, state };
   }
 
   it("grants from another worker after one answers RUNTIME_MISSING", async () => {
@@ -2674,10 +2691,11 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    const grant = await coordinator.request(REQUEST, requestOptions());
+    const { outcome, state } = await start(coordinator);
 
+    expect(state.state).toBe("fulfilled");
     expect(leaseRequests(a)).toHaveLength(1);
-    expect(grant.lease.worker?.id).toBe("wrk_b");
+    expect((await outcome).lease.worker?.id).toBe("wrk_b");
   });
 
   it.each(["UNKNOWN_MODEL", "NO_DRIVER"] as const)(
@@ -2690,10 +2708,11 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       });
       b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-      const grant = await coordinator.request(REQUEST, requestOptions());
+      const { outcome, state } = await start(coordinator);
 
+      expect(state.state).toBe("fulfilled");
       expect(leaseRequests(a)).toHaveLength(1);
-      expect(grant.lease.worker?.id).toBe("wrk_b");
+      expect((await outcome).lease.worker?.id).toBe("wrk_b");
     },
   );
 
@@ -2704,15 +2723,18 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    const outcome = coordinator.request(REQUEST, requestOptions());
-    await tick();
+    const { outcome, state } = await start(coordinator);
+    expect(state.state).toBe("pending");
+    expect(leaseRequests(a)).toHaveLength(1);
     // Every later view change re-walks the waiter; wrk_a must stay out of it.
     workers.refresh("wrk_a", { queueDepth: 1 });
     workers.refresh("wrk_b", { queueDepth: 1 });
     workers.refresh("wrk_b", { queueDepth: 0 });
-    await outcome;
+    await tick();
 
     expect(leaseRequests(a)).toHaveLength(1);
+    expect(state.state).toBe("fulfilled");
+    expect((await outcome).lease.worker?.id).toBe("wrk_b");
   });
 
   it("gives the client the worker's own code and message when no worker is left", async () => {
@@ -2726,11 +2748,11 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       kind: "error",
     });
 
-    const rejection = await coordinator
-      .request(REQUEST, requestOptions())
-      .catch((error: unknown) => error);
+    const { ended, state } = await start(coordinator);
 
+    expect(state.state).toBe("rejected");
     // The most recent refusal, not the first and not the table's own.
+    const rejection = await ended;
     expect(rejection).toBeInstanceOf(DispatchError);
     expect(rejection).toMatchObject({
       code: "UNKNOWN_MODEL",
@@ -2749,29 +2771,40 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
-      code: "RUNTIME_MISSING",
-    });
+    const { ended, state } = await start(coordinator);
+
+    expect(state.state).toBe("rejected");
+    expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(leaseRequests(b)).toEqual([]);
   });
 
   it("does not reset the queue deadline when it retries", async () => {
-    const { a, b, clock, coordinator } = twoWorkers();
+    // wrk_b is busy, so the only worker the retry can reach is wrk_a.
+    const { a, clock, coordinator, workers } = twoWorkers({ busyB: true });
+    a.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
-    // wrk_b is busy: the retry has nowhere to go and the request waits for its original deadline.
-    b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+    // wrk_a's second answer takes 60 000 ms, all of the request's budget: the deadline passes
+    // while the attempt is in flight, which is not itself a rejection.
+    let calls = 0;
+    const answer = a.requestLease.bind(a);
+    a.requestLease = async (input, options) => {
+      calls += 1;
+      if (calls === 2) clock.advance(60_000);
+      return answer(input, options);
+    };
 
-    const outcome = coordinator.request(REQUEST, requestOptions({ timeoutMs: 60_000 }));
-    const ended = outcome.catch((error: unknown) => error);
-    await tick();
-    clock.advance(59_999);
-    await tick();
+    const { ended, state } = await start(coordinator, { timeoutMs: 60_000 });
     expect(coordinator.queueDepth).toBe(1);
-
-    clock.advance(1);
+    expect(state.state).toBe("pending");
+    // wrk_a's view changed, so it is asked again and refuses for good. The retry goes back to
+    // the queue, and the original deadline has already passed.
+    workers.refresh("wrk_a", { queueDepth: 1 });
     await tick();
 
+    expect(calls).toBe(2);
+    expect(state.state).toBe("rejected");
     expect(await ended).toBeInstanceOf(QueueTimeoutError);
+    expect(coordinator.queueDepth).toBe(0);
   });
 
   it("keeps any other error code final", async () => {
@@ -2782,9 +2815,10 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-    });
+    const { ended, state } = await start(coordinator);
+
+    expect(state.state).toBe("rejected");
+    expect(await ended).toMatchObject({ code: "BAD_REQUEST" });
     expect(leaseRequests(b)).toEqual([]);
   });
 
@@ -2793,32 +2827,86 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    await coordinator.request(REQUEST, requestOptions());
+    await start(coordinator);
 
     expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
   });
 
   it("still retries when the refusing worker's catalog refresh fails, and logs it", async () => {
     const logger = new RecordingLogger();
-    const fleetHarness = harness({ logger });
-    const a = new ScriptedWorkerClient();
-    const b = new ScriptedWorkerClient();
-    fleetHarness.directory.add("wrk_a", a);
-    fleetHarness.directory.add("wrk_b", b);
-    fleetHarness.directory.failingRefresh.add("wrk_a");
-    connectWorker(fleetHarness.workers, "wrk_a");
-    connectWorker(fleetHarness.workers, "wrk_b");
+    const { a, b, coordinator, directory } = twoWorkers({ logger });
+    directory.failingRefresh.add("wrk_a");
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    const grant = await fleetHarness.coordinator.request(REQUEST, requestOptions());
+    const { outcome, state } = await start(coordinator);
 
-    expect(grant.lease.worker?.id).toBe("wrk_b");
+    expect(state.state).toBe("fulfilled");
+    expect((await outcome).lease.worker?.id).toBe("wrk_b");
     expect(logger.debugs).toEqual([
       {
         fields: { message: "refresh failed", workerId: "wrk_a" },
         message: "Failed to refresh a worker's view after a worker's refusal",
       },
     ]);
+  });
+
+  it("still retries when the refusing worker's link closed right after it refused", async () => {
+    const { a, b, coordinator, directory } = twoWorkers();
+    const answer = a.requestLease.bind(a);
+    a.requestLease = async (input, options) => {
+      directory.clients.delete("wrk_a");
+      return answer(input, options);
+    };
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { outcome, state } = await start(coordinator);
+
+    expect(state.state).toBe("fulfilled");
+    expect((await outcome).lease.worker?.id).toBe("wrk_b");
+  });
+
+  describe("gateway events when no worker is left", () => {
+    function recordEvents(eventBus: EventBus) {
+      const events: Array<{ name: string; payload: unknown }> = [];
+      for (const name of ["lease.queued", "lease.rejected"] as const) {
+        eventBus.subscribe(name, (envelope) => events.push({ name, payload: envelope.payload }));
+      }
+      return events;
+    }
+
+    it("emits lease.rejected with reason unresolvable-spec after lease.queued when the request had entered the gateway queue", async () => {
+      const { a, b, coordinator, eventBus, workers } = twoWorkers();
+      const events = recordEvents(eventBus);
+      a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+      b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+      const { ended, state } = await start(coordinator);
+      expect(state.state).toBe("pending");
+
+      // The only worker left goes away: the table ends the request with wrk_a's stored refusal.
+      workers.disconnected("wrk_b");
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
+      expect(events.map((event) => event.name)).toEqual(["lease.queued", "lease.rejected"]);
+      expect(events[1]?.payload).toMatchObject({ reason: "unresolvable-spec" });
+    });
+
+    it("emits no gateway lease.rejected for a request the stored refusal ends before it entered the gateway queue", async () => {
+      const fleetHarness = harness();
+      const a = new ScriptedWorkerClient();
+      fleetHarness.directory.add("wrk_a", a);
+      connectWorker(fleetHarness.workers, "wrk_a");
+      const events = recordEvents(fleetHarness.eventBus);
+      a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+
+      const { ended, state } = await start(fleetHarness.coordinator);
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
+      expect(events).toEqual([]);
+    });
   });
 });

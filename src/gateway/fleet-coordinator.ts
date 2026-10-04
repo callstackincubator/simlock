@@ -746,9 +746,10 @@ export class FleetLeaseCoordinator {
     // busy, not unable, so it stays in the table's view.
     const views = this.options.views.views().filter((worker) => refusals?.has(worker.id) !== true);
     const request = routable(waiter);
-    // ADR 0009 §4: the table runs before the stages, over every view -- a worker claimed this
-    // pass or that refused this waiter is busy, not unable, so it still makes a request
-    // servable. A request on rows 1 to 5 never reaches `select`, and never enters the queue.
+    // ADR 0009 §4: the table runs before the stages, over the views left above -- a worker
+    // claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it still makes
+    // a request servable; a worker with a cannot-serve refusal is out of them (architecture rule
+    // 13). A request on rows 1 to 5 never reaches `select`, and never enters the queue.
     const verdict = this.options.routing.assess(request, views);
     if (verdict.kind === "reject") {
       this.#rejectUnservable(waiter, verdict, refusals);
@@ -767,7 +768,9 @@ export class FleetLeaseCoordinator {
   /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
    * details a worker gives the same request. A request that holds a worker's "cannot serve"
    * refusal ends with the last one instead, as that worker's own fact (ADR 0009 §5); the worker
-   * already emitted its own `lease.rejected`, so the gateway emits none. */
+   * already emitted its own `lease.rejected`, so the gateway emits none -- unless the request had
+   * entered the gateway queue, whose `lease.queued` needs a gateway terminal fact of its own:
+   * `lease.rejected` with reason `unresolvable-spec`. */
   #rejectUnservable(
     waiter: FleetWaiter,
     verdict: Rejection,
@@ -775,7 +778,10 @@ export class FleetLeaseCoordinator {
   ): void {
     const last = refusals === undefined ? undefined : [...refusals.values()].at(-1);
     if (last !== undefined) {
-      this.#queue.reject(waiter, last);
+      const wasQueued = this.#queue.isQueued(waiter);
+      if (this.#queue.reject(waiter, last) && wasQueued) {
+        this.#emit("lease.rejected", { requestSpec: waiter.request, reason: "unresolvable-spec" });
+      }
       return;
     }
     this.#reject(
