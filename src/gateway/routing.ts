@@ -7,16 +7,13 @@
  */
 import { type RoutableRequest, type RoutingStage, runStages } from "./routing/pipeline.js";
 import { canServe } from "./routing/stages/can-serve.js";
-import { eligible } from "./routing/stages/eligible.js";
 import { freeCapacity } from "./routing/stages/free-capacity.js";
 import { takesRequests } from "./routing/stages/takes-requests.js";
 import { warmHit } from "./routing/stages/warm-hit.js";
 import type { WorkerView } from "./worker-registry.js";
 
-export type { FilterStage, RoutableRequest, RoutingStage } from "./routing/pipeline.js";
+export type { RoutableRequest } from "./routing/pipeline.js";
 export { matchRequest } from "./routing/request-match.js";
-// `eligible` is exported for the conformance tests only; no registered policy lists it.
-export { eligible, freeCapacity, warmHit };
 
 export type RoutingReason = "warm-hit" | "free-capacity";
 
@@ -38,7 +35,7 @@ export interface RoutingPolicy {
   select(request: RoutableRequest, workers: readonly WorkerView[]): RoutingDecision | undefined;
 }
 
-export function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPolicy {
+function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPolicy {
   return {
     select(request, workers) {
       const pick = runStages(stages, request, workers);
@@ -53,7 +50,8 @@ export function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPo
 }
 
 /**
- * The registry: adding a policy means adding one entry here, nothing else.
+ * The registry: adding a policy means adding one entry here, and its name to the lists
+ * `core/config.ts` and the contract's config schema accept.
  *
  * `warm-then-free` is ADR 0005 §13's v1 policy: keep the workers that take requests and whose
  * catalog can serve this one (ADR 0009 §2, §3), prefer a warm hit, otherwise the worker with the
@@ -64,14 +62,6 @@ const routingPolicies = {
 } as const satisfies Record<string, readonly RoutingStage[]>;
 
 export type RoutingPolicyName = keyof typeof routingPolicies;
-
-export const routingPolicyNames = Object.keys(routingPolicies) as readonly RoutingPolicyName[];
-
-export const DEFAULT_ROUTING_POLICY: RoutingPolicyName = "warm-then-free";
-
-export function isRoutingPolicyName(value: unknown): value is RoutingPolicyName {
-  return typeof value === "string" && value in routingPolicies;
-}
 
 export function createRoutingPolicy(name: RoutingPolicyName): RoutingPolicy {
   return composeRoutingPolicy(routingPolicies[name]);

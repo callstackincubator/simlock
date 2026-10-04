@@ -77,7 +77,6 @@ import {
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
   GatewayService,
-  isRoutingPolicyName,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
 import {
@@ -606,13 +605,9 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // `FleetLeaseIndex` recognizes its own leases by when rebuilding from a worker's view.
   const gatewayRequesterPrefix = `gw:${instanceId}:`;
   const leaseIndex = new FleetLeaseIndex(gatewayRequesterPrefix, logger.child("lease-index"));
-  if (!isRoutingPolicyName(config.gateway.routing)) {
-    // Unreachable in production: `loadConfig` already validates `gateway.routing` against this
-    // same registry's names before a daemon ever starts. Guards the cast below rather than
-    // trusting `Config`'s own `string` typing (ADR §33: `src/gateway` cannot see `core`'s
-    // `Config` type, so the contract this value already satisfies cannot be expressed there).
-    throw new Error(`Unknown gateway.routing policy: ${config.gateway.routing}`);
-  }
+  // `src/gateway` cannot see `core`'s `Config` (ADR 0005 §33), so the two lists of policy names
+  // are separate declarations. This call is where they meet: a name `loadConfig` accepts that
+  // the gateway's registry lacks fails `pnpm typecheck` here, not a daemon start.
   const routing = createRoutingPolicy(config.gateway.routing);
 
   const uplinks = new WebSocketUplinkListenerFactory();

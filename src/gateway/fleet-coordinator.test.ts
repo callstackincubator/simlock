@@ -9,12 +9,7 @@ import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
-import {
-  composeRoutingPolicy,
-  createRoutingPolicy,
-  eligible,
-  type RoutingPolicy,
-} from "./routing.js";
+import { createRoutingPolicy, type RoutingPolicy } from "./routing.js";
 import {
   catalogFixture,
   deviceFixture,
@@ -1066,15 +1061,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
   });
 
-  it("request.dispatched carries the deciding stage's name", async () => {
-    // A rank no shipped policy has, so the payload's `stage` can only have come from the stage
-    // that decided -- `reason` stays `free-capacity` for any stage other than `warm-hit`.
+  it("request.dispatched carries the routing decision's stage name and reason", async () => {
+    // A stage name no shipped policy has, and a reason that does not follow from it, so both
+    // payload fields can only have come from the decision itself.
     const { coordinator, directory, eventBus, workers } = harness({
-      routing: () =>
-        composeRoutingPolicy([
-          eligible,
-          { kind: "rank", name: "test-rank", score: () => 1, settles: false },
-        ]),
+      routing: () => ({
+        select: (_request, views) =>
+          views[0] === undefined
+            ? undefined
+            : { reason: "warm-hit", stage: "test-rank", workerId: views[0].id },
+      }),
     });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -1086,7 +1082,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await coordinator.request(REQUEST, requestOptions());
 
     expect(dispatched).toEqual([
-      expect.objectContaining({ reason: "free-capacity", stage: "test-rank", workerId: "wrk_a" }),
+      expect.objectContaining({ reason: "warm-hit", stage: "test-rank", workerId: "wrk_a" }),
     ]);
   });
 

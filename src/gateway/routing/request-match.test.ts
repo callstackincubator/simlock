@@ -27,25 +27,19 @@ describe("matchRequest", () => {
   it("matches a model name in another letter case and returns the worker's own name", () => {
     const view = worker({ models: ["iPhone 16 Pro"], platform: "ios", runtimes: ["26.0"] });
 
-    expect(
-      matchRequest(view, { allowDownload: false, model: "iphone 16 PRO", platform: "ios" }),
-    ).toBe("iPhone 16 Pro");
+    expect(matchRequest(view, { model: "iphone 16 PRO", platform: "ios" })).toBe("iPhone 16 Pro");
   });
 
   it("matches a name the catalog lists as an alias, in any letter case", () => {
     const view = worker({ ...PIXELS, models: ["Pixel 7"] });
 
-    expect(
-      matchRequest(view, { allowDownload: false, model: "PIXEL_7", platform: "android" }),
-    ).toBe("Pixel 7");
-    expect(
-      matchRequest(view, { allowDownload: false, model: "pixel_8", platform: "android" }),
-    ).toBeUndefined();
+    expect(matchRequest(view, { model: "PIXEL_7", platform: "android" })).toBe("Pixel 7");
+    expect(matchRequest(view, { model: "pixel_8", platform: "android" })).toBeUndefined();
   });
 
   it("when two models answer to a name, the first in models wins", () => {
     // "pixel 7" is the name of one model and an alias of the other.
-    const request = { allowDownload: false, model: "pixel 7", platform: "android" as const };
+    const request = { model: "pixel 7", platform: "android" as const };
 
     expect(
       matchRequest(worker({ ...PIXELS, models: ["Pixel 7", "Pixel 7 Legacy"] }), request),
@@ -62,14 +56,14 @@ describe("matchRequest", () => {
       platform: "ios",
       runtimes: ["18.0", "26.0"],
     });
-    const request = { allowDownload: false, model: "iPhone 17", platform: "ios" as const };
+    const request = { model: "iPhone 17", platform: "ios" as const };
 
     expect(matchRequest(view, { ...request, osVersion: "26.0" })).toBeUndefined();
     expect(matchRequest(view, { ...request, osVersion: "18.0" })).toBe("iPhone 17");
   });
 
   it("with no runtime named, needs the model to pair with at least one", () => {
-    const request = { allowDownload: false, model: "iPhone 17", platform: "ios" as const };
+    const request = { model: "iPhone 17", platform: "ios" as const };
     const unpaired = worker({
       modelRuntimes: { "iPhone 17": [] },
       models: ["iPhone 17"],
@@ -85,9 +79,7 @@ describe("matchRequest", () => {
   it("does not match on another platform's catalog", () => {
     const view = worker({ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] });
 
-    expect(
-      matchRequest(view, { allowDownload: false, model: "iPhone 17", platform: "android" }),
-    ).toBeUndefined();
+    expect(matchRequest(view, { model: "iPhone 17", platform: "android" })).toBeUndefined();
   });
 
   it("reads no inherited key as a pairing or an alias", () => {
@@ -100,9 +92,7 @@ describe("matchRequest", () => {
     });
 
     // No pairing: `modelRuntimes.constructor` is inherited, not a list of runtimes.
-    expect(
-      matchRequest(view, { allowDownload: false, model: "constructor", platform: "ios" }),
-    ).toBeUndefined();
+    expect(matchRequest(view, { model: "constructor", platform: "ios" })).toBeUndefined();
     // No alias: `modelAliases.constructor` is inherited, so asking for another name reads no
     // alias list for the model and moves on to the next one.
     const withNext = worker({
@@ -111,9 +101,7 @@ describe("matchRequest", () => {
       platform: "ios",
       runtimes: ["26.0"],
     });
-    expect(
-      matchRequest(withNext, { allowDownload: false, model: "iPhone 17", platform: "ios" }),
-    ).toBe("iPhone 17");
+    expect(matchRequest(withNext, { model: "iPhone 17", platform: "ios" })).toBe("iPhone 17");
   });
 
   describe("with an image tag", () => {
@@ -127,7 +115,6 @@ describe("matchRequest", () => {
       runtimes: ["34", "35"],
     };
     const tagged = {
-      allowDownload: false,
       imageTag: "google_apis_playstore",
       model: "Pixel 8",
       platform: "android" as const,
@@ -159,18 +146,5 @@ describe("matchRequest", () => {
         matchRequest(view, { ...tagged, model: "iPhone 17", platform: "ios" }),
       ).toBeUndefined();
     });
-  });
-
-  it("matches no download: allowDownload does not make an unlisted runtime pair", () => {
-    const view = worker({ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] });
-
-    expect(
-      matchRequest(view, {
-        allowDownload: true,
-        model: "iPhone 17",
-        osVersion: "18.0",
-        platform: "ios",
-      }),
-    ).toBeUndefined();
   });
 });

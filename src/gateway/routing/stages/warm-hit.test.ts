@@ -5,6 +5,50 @@ import type { WorkerView } from "../../worker-registry.js";
 import { warmHit } from "./warm-hit.js";
 
 describe("warm-hit", () => {
+  it("does not count a leased device as warm, only a ready one", () => {
+    const view = (state: "ready" | "leased"): WorkerView => ({
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      devices: [deviceFixture("dev_1", state)],
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+      leases: [],
+    });
+    const request = {
+      model: "iPhone 17",
+      osVersion: "26.0",
+      platform: "ios" as const,
+    };
+
+    expect(warmHit.score(view("leased"), request)).toBe(0);
+    expect(warmHit.score(view("ready"), request)).toBe(1);
+  });
+
+  it("counts a ready device as warm only on the request's platform and, when it names one, its OS version", () => {
+    const ready = deviceFixture("dev_1", "ready");
+    const view = (spec: Partial<WorkerView["devices"][number]["spec"]>): WorkerView => ({
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([
+        { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0", "18.0"] },
+      ]).platforms,
+      connection: "connected",
+      devices: [{ ...ready, spec: { ...ready.spec, ...spec } }],
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+      leases: [],
+    });
+    const request = { model: "iPhone 17", platform: "ios" as const };
+
+    expect(warmHit.score(view({ platform: "android" }), request)).toBe(0);
+    expect(warmHit.score(view({ osVersion: "18.0" }), { ...request, osVersion: "26.0" })).toBe(0);
+    expect(warmHit.score(view({ osVersion: "18.0" }), request)).toBe(1);
+    expect(warmHit.score(view({}), { ...request, osVersion: "26.0" })).toBe(1);
+  });
+
   it("counts a ready device as warm when the request names its model by an alias in another letter case", () => {
     const view: WorkerView = {
       capacity: statusFixture().capacity,
@@ -23,7 +67,7 @@ describe("warm-hit", () => {
       lastSeenAt: 1,
       leases: [],
     };
-    const request = { allowDownload: false, osVersion: "26.0", platform: "ios" as const };
+    const request = { osVersion: "26.0", platform: "ios" as const };
 
     expect(warmHit.score(view, { ...request, model: "IPHONE-17" })).toBe(1);
     expect(warmHit.score(view, { ...request, model: "iphone 17" })).toBe(1);
@@ -54,7 +98,6 @@ describe("warm-hit", () => {
       leases: [],
     });
     const request = {
-      allowDownload: false,
       model: "iPhone 17",
       osVersion: "26.0",
       platform: "ios" as const,

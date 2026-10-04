@@ -61,7 +61,8 @@ function agentSession(overrides: Partial<DispatchSession> = {}): DispatchSession
  * usable. `WorkerLink#start` (`worker-link.ts`) calls `registry.connected(...)` *before*
  * `events.subscribe` and before the first `refresh({ includeCatalog: true })` lands, so there is
  * a real window in which a worker reports `connected` while its view still carries an empty
- * `catalog` and an `undefined` `capacity` -- both of which make the `eligible` routing stage drop it.
+ * `catalog` and an `undefined` `capacity` -- either of which makes routing drop it (`can-serve` for
+ * the catalog, `takes-requests` for the capacity).
  * Reproduced 7/10 under load (8 `yes` processes on a 4-core box). Gate on the view actually
  * being able to serve `model`, not merely on the connection flag, so a `lease.request` right
  * after this wait never races that window into a spurious `No worker in the fleet can currently

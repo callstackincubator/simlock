@@ -1,19 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  composeRoutingPolicy,
-  DEFAULT_ROUTING_POLICY,
-  eligible,
-  freeCapacity,
-  isRoutingPolicyName,
-  routingPolicyNames,
-  warmHit,
-} from "./routing.js";
+import { createRoutingPolicy } from "./routing.js";
 import { catalogFixture, deviceFixture, statusFixture } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
 const REQUEST = {
-  allowDownload: false,
   model: "iPhone 17",
   osVersion: "26.0",
   platform: "ios" as const,
@@ -34,57 +25,23 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
   };
 }
 
-describe("routing registry", () => {
-  it("names exactly the policies it registers, warm-then-free among them", () => {
-    expect(routingPolicyNames).toContain("warm-then-free");
-    expect(DEFAULT_ROUTING_POLICY).toBe("warm-then-free");
-  });
+describe("the registered warm-then-free policy", () => {
+  const policy = createRoutingPolicy("warm-then-free");
 
-  it("recognizes only registered names", () => {
-    expect(isRoutingPolicyName("warm-then-free")).toBe(true);
-    expect(isRoutingPolicyName("round-robin")).toBe(false);
-    expect(isRoutingPolicyName(42)).toBe(false);
-  });
-});
+  function withIos(slots: { maxRunning: number; running?: number; reserved?: number }) {
+    return {
+      ...statusFixture().capacity,
+      ios: { ...statusFixture().capacity.ios, ...slots },
+    };
+  }
 
-describe("warm-then-free policy", () => {
-  const policy = composeRoutingPolicy([eligible, warmHit, freeCapacity]);
-
-  it("prefers a worker with a matching device already in the ready state (a warm hit)", () => {
-    const cold = view("wrk_cold");
-    const warm = view("wrk_warm", { devices: [deviceFixture("dev_1", "ready")] });
-
-    expect(policy.select(REQUEST, [cold, warm])).toEqual({
-      reason: "warm-hit",
-      stage: "warm-hit",
-      workerId: "wrk_warm",
-    });
-  });
-
-  // H10 (round 2 review): `deviceStateSchema` makes `ready`/`leased` mutually exclusive, so this
-  // (and the title above) prove the state filter -- "warm-hit" requires `ready` specifically --
-  // not some separate "is this device free to hand out" check a device already in `leased`
-  // state could otherwise still pass.
-  it("does not treat a device already in the leased state as a warm hit", () => {
-    const leased = view("wrk_1", { devices: [deviceFixture("dev_1", "leased")] });
-
-    expect(policy.select(REQUEST, [leased])?.reason).toBe("free-capacity");
-  });
-
-  it("falls back to the worker with the most free running capacity", () => {
-    // The roomy worker sorts last by id, so the id tie-break alone would pick the tight one.
+  it("picks the worker with the most free running capacity, even when it sorts last by id", () => {
+    // wrk_a_tight has the higher maxRunning, but its running and reserved slots leave it 2 free
+    // against wrk_z_roomy's 5. The ascending-id tie-break alone would pick wrk_a_tight.
     const tight = view("wrk_a_tight", {
-      capacity: {
-        ...statusFixture().capacity,
-        ios: { ...statusFixture().capacity.ios, running: 1 },
-      },
+      capacity: withIos({ maxRunning: 10, reserved: 4, running: 4 }),
     });
-    const roomy = view("wrk_z_roomy", {
-      capacity: {
-        ...statusFixture().capacity,
-        ios: { ...statusFixture().capacity.ios, maxRunning: 10 },
-      },
-    });
+    const roomy = view("wrk_z_roomy", { capacity: withIos({ maxRunning: 5 }) });
 
     expect(policy.select(REQUEST, [tight, roomy])).toEqual({
       reason: "free-capacity",
@@ -93,62 +50,18 @@ describe("warm-then-free policy", () => {
     });
   });
 
-  it("drops a disconnected, incompatible, or drained worker", () => {
-    expect(policy.select(REQUEST, [view("wrk_1", { connection: "disconnected" })])).toBeUndefined();
-    expect(policy.select(REQUEST, [view("wrk_1", { connection: "incompatible" })])).toBeUndefined();
-    expect(policy.select(REQUEST, [view("wrk_1", { drained: true })])).toBeUndefined();
-  });
-
-  it("drops a worker whose capacity was never read, rather than guessing it has some", () => {
-    const { capacity: _capacity, ...withoutCapacity } = view("wrk_1");
-    expect(policy.select(REQUEST, [withoutCapacity])).toBeUndefined();
-  });
-
-  it("drops a worker lacking the requested model, and one lacking the requested osVersion", () => {
-    const noModel = view("wrk_1", {
-      catalog: catalogFixture([{ models: ["iPhone 15"], platform: "ios", runtimes: ["26.0"] }])
-        .platforms,
-    });
-    const noRuntime = view("wrk_2", {
-      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["18.0"] }])
-        .platforms,
+  it("picks a worker with a warm device over a cold one with more free running capacity", () => {
+    // The warm worker sorts last by id and has less room, so only warm-hit can pick it.
+    const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });
+    const warm = view("wrk_z_warm", {
+      capacity: withIos({ maxRunning: 1 }),
+      devices: [deviceFixture("dev_1", "ready")],
     });
 
-    expect(policy.select(REQUEST, [noModel])).toBeUndefined();
-    expect(policy.select(REQUEST, [noRuntime])).toBeUndefined();
-  });
-
-  it("drops a worker lacking the platform in its catalog at all", () => {
-    const androidOnly = view("wrk_1", {
-      catalog: catalogFixture([{ models: ["Pixel 9"], platform: "android", runtimes: ["15"] }])
-        .platforms,
+    expect(policy.select(REQUEST, [cold, warm])).toEqual({
+      reason: "warm-hit",
+      stage: "warm-hit",
+      workerId: "wrk_z_warm",
     });
-    expect(policy.select(REQUEST, [androidOnly])).toBeUndefined();
-  });
-
-  it("only counts a missing model/runtime as fillable by a download when the request allows one and the worker's own policy permits it", () => {
-    const noModel = view("wrk_1", {
-      catalog: catalogFixture([{ models: ["iPhone 15"], platform: "ios", runtimes: ["26.0"] }])
-        .platforms,
-      downloads: { policy: "on-request" },
-    });
-
-    expect(policy.select(REQUEST, [noModel])).toBeUndefined();
-    expect(policy.select({ ...REQUEST, allowDownload: true }, [noModel])).toEqual({
-      reason: "free-capacity",
-      stage: "free-capacity",
-      workerId: "wrk_1",
-    });
-
-    const refusesDownloads = view("wrk_2", {
-      catalog: catalogFixture([{ models: ["iPhone 15"], platform: "ios", runtimes: ["26.0"] }])
-        .platforms,
-      downloads: { policy: "never" },
-    });
-    expect(policy.select({ ...REQUEST, allowDownload: true }, [refusesDownloads])).toBeUndefined();
-  });
-
-  it("names no worker when none is eligible", () => {
-    expect(policy.select(REQUEST, [])).toBeUndefined();
   });
 });

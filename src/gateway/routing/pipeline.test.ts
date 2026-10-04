@@ -4,7 +4,7 @@ import { catalogFixture, statusFixture } from "../test-support.js";
 import type { WorkerView } from "../worker-registry.js";
 import { type FilterStage, type RankStage, runStages } from "./pipeline.js";
 
-const REQUEST = { allowDownload: false, model: "iPhone 17", platform: "ios" as const };
+const REQUEST = { model: "iPhone 17", platform: "ios" as const };
 
 function view(id: string): WorkerView {
   return {
