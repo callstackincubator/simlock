@@ -269,10 +269,10 @@ describe("readEventFile", () => {
   });
 
   it("the event file reader skips a line whose id the envelope schema refuses", async () => {
-    const refused = ["evt_", "evt_has space", `evt_${"a".repeat(65)}`, "nope_1"];
+    const refused = ["evt_", "evt_has space", `evt_${"a".repeat(65)}`, "nope_1", ["evt_array"]];
     const filesystem = await filesystemWith({
       "/data/events.jsonl": `${lines(envelope(1, 100))}${refused
-        .map((id, index) => `${JSON.stringify(envelope(10 + index, 200 + index, id))}\n`)
+        .map((id, index) => `${JSON.stringify({ ...envelope(10 + index, 200 + index), id })}\n`)
         .join("")}${lines(envelope(3, 300))}`,
     });
 
