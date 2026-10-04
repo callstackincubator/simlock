@@ -1,6 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,6 +11,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
+import { sourceFilesRecursive, srcDir, stripComments } from "../test-support/imports.js";
 import { type CapacityReservation } from "./capacity/index.js";
 import { ComponentBeingRemovedError, ComponentInstaller } from "./component-installer.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -358,20 +358,31 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
   });
 
   it("is the only code in src that asks a driver to provision or registers a device", () => {
-    const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-    const sources = (readdirSync(srcRoot, { recursive: true }) as string[])
-      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
-      .map((file) => join(srcRoot, file));
+    const sources = sourceFilesRecursive(srcDir);
     // Every production source file is read, not a chosen few (testing rule 4).
     expect(sources.length).toBeGreaterThan(100);
 
-    const creators = (pattern: RegExp) =>
-      sources
-        .filter((file) => pattern.test(readFileSync(file, "utf8")))
-        .map((file) => relative(srcRoot, file));
+    // Call sites per file, comments stripped, whatever the receiver is called: a driver reached as
+    // `catalog.get(platform).provision(...)` is as much a second creator as `driver.provision(...)`.
+    const callSites = (pattern: RegExp) =>
+      Object.fromEntries(
+        sources
+          .map((file) => [
+            relative(srcDir, file),
+            stripComments(readFileSync(file, "utf8")).match(pattern)?.length ?? 0,
+          ])
+          .filter(([, count]) => count !== 0),
+      );
 
-    expect(creators(/\.registerDevice\(/)).toEqual([join("core", "device-provisioner.ts")]);
-    expect(creators(/driver\.provision\(/)).toEqual([join("core", "device-provisioner.ts")]);
+    expect(callSites(/\.registerDevice\(/g)).toEqual({
+      [join("core", "device-provisioner.ts")]: 1,
+    });
+    expect(callSites(/\.provision\(/g)).toEqual({
+      // The driver call itself.
+      [join("core", "device-provisioner.ts")]: 1,
+      // `provisioner.provision(...)`: the lease path asking this module, not a driver.
+      [join("core", "lease-acquisition-coordinator.ts")]: 1,
+    });
   });
 
   it("takes its claim inside the decision gate, so the driver creates nothing while another decision holds it", async () => {

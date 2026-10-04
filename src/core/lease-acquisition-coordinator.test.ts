@@ -9,6 +9,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
@@ -693,24 +694,37 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
 });
 
 describe("LeaseAcquisitionCoordinator", () => {
-  it("admits one requester and rejects an active or pending duplicate", async () => {
-    const harness = await createHarness();
-    const granted = await harness.coordinator.request(request, {
+  it("rejects a second request from a requester whose first is still pending, with lease.rejected already-leased", async () => {
+    // The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
+    // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a
+    // lease is lease-engine's "enforces one active request or lease per requester" case.
+    const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
+    await harness.coordinator.request(request, { ownerId: "holder", requesterId: "holder" });
+    const pending = harness.coordinator.request(request, {
       ownerId: "agent",
       requesterId: "agent",
     });
+    pending.catch(() => undefined);
+    await flush();
+    expect(harness.queue.hasPendingRequester("agent")).toBe(true);
+    const rejections: unknown[] = [];
+    harness.bus.subscribe("lease.rejected", (envelope) => rejections.push(envelope.payload));
 
-    await expect(
-      harness.coordinator.request(request, {
-        ownerId: "agent",
-        requesterId: "agent",
-      }),
-    ).rejects.toMatchObject({
-      existingLeaseId: granted.lease.id,
-      message: expect.stringContaining(granted.lease.id),
-      name: "RequesterAlreadyLeasedError",
+    const duplicate = harness.coordinator.request(request, {
+      ownerId: "agent",
+      requesterId: "agent",
     });
-    expect(granted.lease.requesterId).toBe("agent");
+    const duplicateState = promiseState(duplicate);
+    await flush();
+
+    expect(duplicateState.state).toBe("rejected");
+    await expect(duplicate).rejects.toMatchObject({
+      existingLeaseId: undefined,
+      name: "RequesterAlreadyLeasedError",
+      requesterId: "agent",
+    });
+    expect(rejections).toEqual([{ reason: "already-leased", requestSpec: request }]);
+    expect(harness.queue.depth).toBe(1);
   });
 
   it.each([["provisioned"], ["ready"]] as const)(
@@ -1544,9 +1558,12 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     void harness.coordinator.request(request, keyed).catch(() => undefined);
     await flush();
 
-    await expect(
-      harness.coordinator.request(request, { ...keyed, idempotencyKey: "key-2" }),
-    ).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
+    const second = harness.coordinator.request(request, { ...keyed, idempotencyKey: "key-2" });
+    const secondState = promiseState(second);
+    await flush();
+
+    expect(secondState.state).toBe("rejected");
+    await expect(second).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
   });
 
   it("refuses the same key naming a different device as an idempotency conflict", async () => {

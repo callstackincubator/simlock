@@ -191,12 +191,13 @@ export class WaitQueue {
   /**
    * `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
    * the waiter and its record share one name; omitted, the queue mints its own.
+   *
+   * One pending request per requester is the owner's rule, not the queue's: the owner asks
+   * `hasPendingRequester` inside its admission decision, before it stores the request and calls
+   * this, and answers a duplicate with its own `lease.rejected`. Checking again here would be a
+   * second copy of that rule, firing only after the request was already stored.
    */
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {
-    if (this.hasPendingRequester(requestOptions.requesterId)) {
-      throw new RequesterAlreadyLeasedError(requestOptions.requesterId);
-    }
-
     let resolvePromise!: (grant: LeaseGrant) => void;
     let rejectPromise!: (error: Error) => void;
     const promise = new Promise<LeaseGrant>((resolve, reject) => {

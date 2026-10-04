@@ -72,13 +72,14 @@ describe("warm-then-free policy", () => {
   });
 
   it("falls back to the worker with the most free running capacity", () => {
-    const tight = view("wrk_tight", {
+    // The roomy worker sorts last by id, so the id tie-break alone would pick the tight one.
+    const tight = view("wrk_a_tight", {
       capacity: {
         ...statusFixture().capacity,
         ios: { ...statusFixture().capacity.ios, running: 1 },
       },
     });
-    const roomy = view("wrk_roomy", {
+    const roomy = view("wrk_z_roomy", {
       capacity: {
         ...statusFixture().capacity,
         ios: { ...statusFixture().capacity.ios, maxRunning: 10 },
@@ -88,7 +89,7 @@ describe("warm-then-free policy", () => {
     expect(policy.select(REQUEST, [tight, roomy])).toEqual({
       reason: "free-capacity",
       stage: "free-capacity",
-      workerId: "wrk_roomy",
+      workerId: "wrk_z_roomy",
     });
   });
 

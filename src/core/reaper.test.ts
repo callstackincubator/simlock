@@ -214,6 +214,28 @@ async function seedLeased(harness: Awaited<ReturnType<typeof createHarness>>) {
   return device;
 }
 
+/** A device whose lease has just ended, left `ready` or shut down, so the idle rules time it from
+ * now. */
+async function seedReleased(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  state: "ready" | "shutdown",
+) {
+  const device = await seedLeased(harness);
+  const lease = harness.registry.snapshot.leases.find((entry) => entry.deviceId === device.id);
+  await harness.registry.beginRelease(lease?.id ?? "");
+  await harness.registry.transitionDevice(device.id, "ready", {
+    event: "device.reclaimed",
+    payload: { deviceId: device.id, duration: 0, strategy: "erase" },
+  });
+  if (state === "shutdown") {
+    await harness.registry.transitionDevice(device.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: device.id, initiator: "test" },
+    });
+  }
+  return device;
+}
+
 async function seedShutdown(harness: Awaited<ReturnType<typeof createHarness>>) {
   const device = await seedReady(harness);
   await harness.driver.shutdown({
@@ -301,14 +323,40 @@ describe("CleanupReaper", () => {
     expect(harness.registry.snapshot).toEqual(before);
   });
 
-  it("selects --rule by name across the rules that actually exist", async () => {
+  it("runs only the rule --rule names, and no rule at all for a name that is not registered", async () => {
     const harness = await createHarness(automaticCleanupRules);
+    // One device each rule acts on, both released at the same moment: a ready one idle-shutdown
+    // shuts down once idle past T1, and a shut-down one idle-destroy destroys once idle past T2.
+    const idleReady = await seedReleased(harness, "ready");
+    const idleShutdown = await seedReleased(harness, "shutdown");
+    harness.clock.advance(31_000);
+    const shutdownProposal = {
+      action: "shutdown",
+      reason: "idle 31s > T1=10s",
+      rule: "idle-shutdown",
+      target: idleReady.id,
+    };
+    const destroyProposal = {
+      action: "destroy",
+      reason: "idle 31s > T2=30s",
+      rule: "idle-destroy",
+      target: idleShutdown.id,
+    };
 
     expect(harness.reaper.rules.map((rule) => rule.name)).toEqual([
       "idle-shutdown",
       "idle-destroy",
     ]);
-    await expect(harness.reaper.run({ dryRun: true, rule: "idle-shutdown" })).resolves.toEqual([]);
+    await expect(harness.reaper.run({ dryRun: true })).resolves.toEqual([
+      shutdownProposal,
+      destroyProposal,
+    ]);
+    await expect(harness.reaper.run({ dryRun: true, rule: "idle-shutdown" })).resolves.toEqual([
+      shutdownProposal,
+    ]);
+    await expect(harness.reaper.run({ dryRun: true, rule: "idle-destroy" })).resolves.toEqual([
+      destroyProposal,
+    ]);
     await expect(harness.reaper.run({ dryRun: true, rule: "unknown-rule" })).resolves.toEqual([]);
     harness.reaper.dispose();
   });

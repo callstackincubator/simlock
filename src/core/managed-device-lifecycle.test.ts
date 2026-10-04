@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError } from "./driver.js";
@@ -47,7 +48,7 @@ async function createHarness() {
 }
 
 async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
-  await harness.driver.makeReady(
+  const booted = await harness.driver.makeReady(
     {
       address: harness.device.address ?? "",
       deviceId: harness.device.driverDeviceId,
@@ -55,9 +56,29 @@ async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
     },
     { mode: "full", purpose: "prepare" },
   );
-  return harness.registry.transitionDevice(harness.device.id, "ready", {
-    event: "device.ready",
-    payload: { bootDuration: 0, deviceId: harness.device.id },
+  return harness.registry.transitionDevice(
+    harness.device.id,
+    "ready",
+    {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: harness.device.id },
+    },
+    { address: booted.address },
+  );
+}
+
+async function shutdownDevice(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  ready: Awaited<ReturnType<typeof readyDevice>>,
+) {
+  await harness.driver.shutdown({
+    address: ready.address ?? "",
+    deviceId: ready.driverDeviceId,
+    driverData: ready.driverData,
+  });
+  return harness.registry.transitionDevice(ready.id, "shutdown", {
+    event: "device.shutdown",
+    payload: { deviceId: ready.id, initiator: "test" },
   });
 }
 
@@ -85,31 +106,28 @@ describe("ManagedDeviceLifecycle", () => {
     expect(stateAtEvent).toBe("ready");
   });
 
-  it("replaces the stored address with the one makeReady re-read on the new boot", async () => {
+  it("replaces the stored address with the one makeReady re-read when booting a device for a lease", async () => {
     // The address a device is reachable at is a property of its current boot, not of the device:
     // an Android console port is assigned per boot, so a serial captured at provision goes stale
     // exactly in the warm-pool path (shutdown -> boot -> lease) that matters most. FakeDriver
-    // returns a fresh address per boot for this reason; the registry must follow it.
+    // returns a fresh address per boot for this reason; the registry must follow it. Driven
+    // through `bootForLease`, the boot every lease grant of a shut-down device takes.
     const harness = await createHarness();
     const ready = await readyDevice(harness);
-    const firstAddress = harness.registry.snapshot.devices[0]?.address;
-    await harness.driver.shutdown({
-      address: ready.address ?? "",
-      deviceId: ready.driverDeviceId,
-      driverData: ready.driverData,
-    });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
-      event: "device.shutdown",
-      payload: { deviceId: ready.id, initiator: "test" },
-    });
+    const firstAddress = ready.address;
+    const shutdown = await shutdownDevice(harness, ready);
+    const claim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (claim === undefined) throw new Error("expected boot claim");
 
-    const booted = await harness.lifecycle.boot(shutdown);
+    const handoff = await harness.lifecycle.bootForLease(shutdown, claim);
+    handoff?.claim.release();
 
-    expect(booted?.address).toBeDefined();
-    expect(booted?.address).not.toBe(firstAddress);
-    expect(harness.registry.snapshot.devices[0]?.address).toBe(booted?.address);
+    expect(firstAddress).toBeDefined();
+    expect(handoff?.device.address).toBeDefined();
+    expect(handoff?.device.address).not.toBe(firstAddress);
+    expect(harness.registry.snapshot.devices[0]?.address).toBe(handoff?.device.address);
     // The ownership identity is not a per-boot fact and must not drift with the address.
-    expect(booted?.driverDeviceId).toBe(ready.driverDeviceId);
+    expect(handoff?.device.driverDeviceId).toBe(ready.driverDeviceId);
   });
 
   it("shuts down and destroys only registry-owned, unleased devices in expected states", async () => {
@@ -156,28 +174,28 @@ describe("ManagedDeviceLifecycle", () => {
     });
   });
 
-  it("holds an exclusive claim while a boot driver call is in flight", async () => {
+  it("holds an exclusive claim while readying a provisioned device for a lease is in flight", async () => {
+    // `readyProvisionedForLease` takes its own claim (no caller hands it one): a second readying of
+    // the same device, or any other operation on it, must find the device claimed until the first
+    // has committed `ready`.
     const harness = await createHarness();
-    const ready = await readyDevice(harness);
-    await harness.driver.shutdown({
-      address: ready.address ?? "",
-      deviceId: ready.driverDeviceId,
-      driverData: ready.driverData,
-    });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
-      event: "device.shutdown",
-      payload: { deviceId: ready.id, initiator: "test" },
-    });
     harness.driver.hangMakeReady();
 
-    const booting = harness.lifecycle.boot(shutdown);
+    const readying = harness.lifecycle.readyProvisionedForLease(harness.device);
+    const readyingState = promiseState(readying);
     await vi.waitFor(() =>
-      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1),
     );
-    await expect(harness.lifecycle.boot(shutdown)).resolves.toBeUndefined();
+    expect(harness.claims.isClaimed(harness.device.id)).toBe(true);
+    await expect(
+      harness.lifecycle.readyProvisionedForLease(harness.device),
+    ).resolves.toBeUndefined();
+    // Both checks above ran with the driver call still in flight, not after it had returned.
+    expect(readyingState.state).toBe("pending");
 
     harness.driver.releaseMakeReady();
-    await expect(booting).resolves.toMatchObject({ state: "ready" });
+    await expect(readying).resolves.toMatchObject({ device: { state: "ready" } });
+    expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
   });
 
   it("retains a boot claim after readiness for the immediate lease handoff", async () => {

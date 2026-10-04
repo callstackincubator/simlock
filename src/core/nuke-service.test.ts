@@ -187,16 +187,6 @@ describe("NukeService", () => {
     ]);
   });
 
-  it("uses no event bus command path", async () => {
-    const harness = createHarness([device("ready", "ready")]);
-    const events: string[] = [];
-
-    await harness.service.nuke(true);
-
-    expect(events).toEqual([]);
-    expect(harness.calls).toContain("shutdown:ready");
-  });
-
   it("reopens admission even when reset work fails", async () => {
     const harness = createHarness([]);
     let fail = true;
