@@ -84,6 +84,9 @@ post-commit emission. Promoting a log line onto the bus, or adding an
 
 ### 5. The contract follows the record
 
+> ADR 0014 narrows this once: every envelope gains a required `id`, and a line without
+> one is not replayed.
+
 A line in `events.jsonl` is the event envelope, so it is under the event
 payload contract: additive changes only. A line in `daemon.log` is under no
 contract. Its message and fields may change in any release.

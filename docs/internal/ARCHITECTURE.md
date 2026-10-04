@@ -265,8 +265,10 @@ mode with `mode` in place of `full`, taking it to 8. ADR 0010 adds
 `component.install` and its `component-progress` push, taking it to 9: a
 gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
-`incompatible` rather than fail in the middle of a relay. So the range both
-sides advertise is `{min: 10, max: 10}`, an older client and a current daemon simply
+`incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
+event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
+required capacity field, taking it to 11. So the range both
+sides advertise is `{min: 11, max: 11}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -600,6 +602,18 @@ gateway sends it `lease.request` with **`noWait: true`**:
   and fails with `NO_CAPACITY` if no worker is picked in it. A failure
   *after* work has begun is the request's own terminal failure, not a return
   to the queue;
+- a worker's own **cannot-serve refusal** (`UNKNOWN_MODEL`,
+  `RUNTIME_MISSING`, `NO_DRIVER`) before any progress push is retried on
+  another worker: the gateway keeps that worker out of every view the walk
+  uses for that request (the table's included, for good, not until its view
+  changes), re-reads its catalog, and returns the request to the walk. The
+  queue deadline is not reset. When the table over the remaining views no
+  longer says route or wait, the request is rejected with the last such
+  refusal, the worker's own code and message. The worker already emitted its
+  own `lease.rejected`, so the gateway emits none, unless the request had
+  entered the gateway queue: its `lease.queued` needs a terminal fact, so the
+  gateway emits `lease.rejected` with reason `unresolvable-spec`. After a progress push, and for any other
+  code, a failure is final (ADR 0009 §5);
 - a request a busy fleet cannot take yet is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
   capacity frees. A request **no worker can serve at all** is not passed
@@ -888,7 +902,8 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `{min: 7, max: 7}`, because a device's `mode` is required, then to
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
   `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
-  ADR 0009 to `{min: 10, max: 10}`, because `atRamBudget` is required; a
+  ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
+  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
@@ -1889,7 +1904,7 @@ that cannot be opened, or a write that fails, costs the history and never the
 daemon or the emitter: one error line, writing stops, and replay falls back
 to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
 `sinceTs` it answers from the ring, with `sinceTs` from the file (current
-file, then its rotated generation, deduplicated by `seq` and `timestamp`).
+file, then its rotated generation, deduplicated by `id`).
 The CLI reads the file itself only for `simlock events --since` when no
 daemon answers; `--follow` subscribes first, replays, and drops replayed
 pushes, so the join neither loses nor repeats an event.

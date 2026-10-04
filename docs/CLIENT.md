@@ -15,7 +15,7 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
-`getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents`,
+`getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`),
 `createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from

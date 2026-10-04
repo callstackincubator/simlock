@@ -403,6 +403,7 @@ function events(count: number): unknown[] {
   const newest = Date.now() - 1_000;
   return Array.from({ length: count }, (_, index) => ({
     event: "load.generated",
+    id: `evt_load_${count - index}`,
     module: "load",
     payload: { n: count - index },
     seq: count - index,

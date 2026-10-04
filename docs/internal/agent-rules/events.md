@@ -23,8 +23,8 @@ Rules for defining and emitting events on the daemon's event bus.
    consumer needs (lease id, device id, reason, durations) so handlers don't
    have to query state that may have moved on. Treat payload shape as a
    public contract: additive changes only.
-7. **Every event carries** `timestamp`, `event`, `payload`, and the emitting
-   module, and is appended to the ring buffer and to the event file
+7. **Every event carries** `id`, `timestamp`, `event`, `payload`, and the
+   emitting module (and `seq`, which orders events within one daemon run), and is appended to the ring buffer and to the event file
    (`events.jsonl`, ADR 0006). The ring powers `simlock events`; the file
    powers `simlock events --since` and is the audit trail.
 8. **New events are documented in the same change.** Adding or modifying an

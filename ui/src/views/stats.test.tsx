@@ -157,12 +157,14 @@ describe("the stat cards", () => {
 
     const newest: ConsoleEvent = {
       event: "lease.granted",
+      id: "evt_2",
       payload: {},
       seq: 2,
       timestamp: NOW - 5_000,
     };
     const older: ConsoleEvent = {
       event: "device.ready",
+      id: "evt_1",
       payload: {},
       seq: 1,
       timestamp: NOW - 9_000,

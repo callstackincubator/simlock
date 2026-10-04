@@ -1,4 +1,4 @@
-import type { Clock } from "../ports/index.js";
+import { type Clock, CryptoIdGenerator, type IdGenerator } from "../ports/index.js";
 
 export interface EventMap {
   "lease.requested": {
@@ -297,6 +297,9 @@ export type EventName = keyof EventMap;
 
 export type EventEnvelope<Event extends EventName = EventName> = Event extends EventName
   ? {
+      /** Names this event for good: minted once where it happened, it survives a restart and is
+       * what every reader tells events apart by (ADR 0014). `seq` only orders within one run. */
+      readonly id: string;
       readonly seq: number;
       readonly timestamp: number;
       readonly event: Event;
@@ -333,6 +336,7 @@ export class EventBus {
     private readonly clock: Clock,
     private readonly capacity = 1_000,
     private readonly logger: EventBusLogger = defaultLogger,
+    private readonly idGenerator: IdGenerator = new CryptoIdGenerator(),
   ) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new Error("Event bus capacity must be a positive integer");
@@ -346,6 +350,7 @@ export class EventBus {
     module: string,
   ): EventEnvelope<Event> {
     const envelope = {
+      id: `evt_${this.idGenerator.generate()}`,
       seq: this.#nextSequence,
       timestamp: this.clock.now(),
       event,

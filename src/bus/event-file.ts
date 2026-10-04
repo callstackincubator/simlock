@@ -1,4 +1,5 @@
 import { type Filesystem, isMissingPathError, type Logger, type LogSink } from "../ports/index.js";
+import { EVENT_ID_PATTERN } from "../contract/schemas.js";
 import type { EventBus, EventEnvelope } from "./index.js";
 
 /** The durable record of every business event, in the data directory (ADR 0006). */
@@ -8,8 +9,8 @@ export const EVENT_FILE_NAME = "events.jsonl";
  * Every envelope in the event file newer than `sinceTs`, oldest first. The current file is
  * read before its rotated generation (`<path>.1`), so a rotation landing between the two reads
  * can only make one generation show up twice -- never make one go missing -- and the repeat is
- * dropped by `seq` and `timestamp`. A line that is not JSON (a write cut short by a crash) is
- * skipped; a file that is not there is empty.
+ * dropped by `id`. A line that is not JSON (a write cut short by a crash), or has no `id` of the shape
+ * the envelope contract accepts (written before events had one, ADR 0014), is skipped; a file that is not there is empty.
  */
 export async function readEventFile(
   filesystem: Filesystem,
@@ -31,10 +32,10 @@ export async function readEventFile(
   return envelopes;
 }
 
-/** What identifies one event across the ring, the file and a live push: `seq` restarts with
- * every daemon, so it is paired with the timestamp. */
-export function eventKey(event: { readonly seq: number; readonly timestamp: number }): string {
-  return `${event.seq}:${event.timestamp}`;
+/** What identifies one event across the ring, the file and a live push: its `id` and nothing
+ * else (ADR 0014). `seq` restarts with every daemon, so it never could. */
+export function eventKey(event: { readonly id: string }): string {
+  return event.id;
 }
 
 async function readLines(filesystem: Filesystem, path: string): Promise<string[]> {
@@ -58,7 +59,9 @@ function parseEnvelope(line: string): EventEnvelope | undefined {
     typeof value !== "object" ||
     value === null ||
     typeof (value as { seq?: unknown }).seq !== "number" ||
-    typeof (value as { timestamp?: unknown }).timestamp !== "number"
+    typeof (value as { timestamp?: unknown }).timestamp !== "number" ||
+    typeof (value as { id?: unknown }).id !== "string" ||
+    !EVENT_ID_PATTERN.test((value as { id: string }).id)
   ) {
     return undefined;
   }

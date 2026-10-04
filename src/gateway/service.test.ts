@@ -843,6 +843,31 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("a worker advertising protocol 10 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
+    const worker10 = { min: 10, max: 10 };
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker10)).toBeUndefined();
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError(worker10);
+    // A gateway that subscribed anyway would get a live listener, so the push below could reach it.
+    worker.subscribeDespiteFailure = true;
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    worker.pushEvent({ event: "lease.granted", payload: { leaseId: "l1" } });
+
+    expect(worker.subscribed).toBe(false);
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: worker10 },
+    });
+    expect(eventNames(harness.events)).not.toContain("lease.granted");
+
+    await harness.service.stop();
+  });
+
   it("marks a worker incompatible when hello finds no overlapping range, and asks it nothing else", async () => {
     const harness = fleet();
     await harness.service.start();
