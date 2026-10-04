@@ -100,6 +100,13 @@ describe("the registered warm-then-free policy", () => {
     const full = view("wrk_b", { capacity: atBudget(5) });
 
     expect(policy.select(REQUEST, [full, roomy])).toMatchObject({ workerId: "wrk_a" });
+    // Equal free capacity: only the RAM rank removes a worker, so it is the deciding stage.
+    const equal = view("wrk_b", { capacity: atBudget(1) });
+    expect(policy.select(REQUEST, [equal, roomy])).toEqual({
+      reason: "free-capacity",
+      stage: "ram-budget",
+      workerId: "wrk_a",
+    });
     expect(policy.select(REQUEST, [full])).toMatchObject({ workerId: "wrk_b" });
   });
 
