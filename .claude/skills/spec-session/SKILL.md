@@ -177,7 +177,8 @@ split). It is forked: it reads with a fresh context and hands back only its
 report block.
 
 Fix each finding in the body it names, then run the check once more if you
-changed anything. Attended, walk the findings with the maintainer one at a
+changed anything. There is no third run: what the second one reports is
+fixed or stopped on as below. Attended, walk the findings with the maintainer one at a
 time, each with your recommended fix, and fold in the accepted ones. A
 finding the maintainer decides to accept stays as it is. Tell the
 maintainer to tick an approval box or add `feature:ready` only once the

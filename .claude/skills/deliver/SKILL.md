@@ -35,7 +35,8 @@ reason to stop: implement closes it the conservative way and lists it as
 an `Assumption:` line in the PR body, and the spec review checks it (rule
 3). Park only for a contradiction with the body, a rule or an accepted ADR;
 for behaviour a user would see that nobody decided; for a real-device check
-that cannot run; or for a blocking finding still confirmed after round 2.
+that cannot run; for a blocking finding still confirmed after round 2; or
+for what the gate refuses (step 3).
 
 ## 1. Take stock
 
