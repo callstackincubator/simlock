@@ -11,8 +11,9 @@
 #                          else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line
 #   triage.md              a bug's triage report: the last comment with a Simplest fix section
-#   spec/                  every ADR that issue.md, feature.md or triage.md names, every rule file
-#                          they list under Rules in play, and always always-in-scope.md
+#   spec/                  every ADR that issue.md, feature.md, triage.md or the diff's ADR hunks
+#                          name, as the base has it; every rule file listed under Rules in play;
+#                          and, when there is an issue, always-in-scope.md
 #   rules/                 every file in docs/internal/agent-rules/, and the ADR index as
 #                          adr-index.md
 #   tests-after-red.patch  what changed in the files of the branch's first `test:` commit (the
@@ -20,9 +21,8 @@
 #   assumptions.md         the PR body's `Assumption:` lines (delivery rule 3)
 #
 # Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules and
-# ADRs come from the base branch, so a PR cannot rewrite what it is judged by; only an ADR the
-# base lacks (one this PR adds) comes from the PR head. Whatever it cannot find, it says on
-# stderr, with one summary line at the end.
+# ADRs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
+# for and cannot find, it says on stderr, with one summary line at the end.
 set -eu
 
 pr=${1:-}
@@ -99,25 +99,6 @@ if [ -n "$issue" ]; then
     fi
   fi
 
-  # ADRs by number, wherever the spec names them: "ADR 0014", "ADR-0014", "ADRs 0004 and 0005",
-  # or a link to adr/0014-....md.
-  adrs=$(cat "$out/issue.md" "$out/feature.md" "$out/triage.md" 2>/dev/null \
-    | grep -oE 'ADRs?[ -]?[0-9]{4}((,? and |, | & |/)[0-9]{4})*|adr/[0-9]{4}-' \
-    | grep -oE '[0-9]{4}' | sort -u || true)
-  for n in $adrs; do
-    path=$(git ls-tree --name-only "$base" docs/internal/adr/ | grep "/$n-" | head -n 1 || true)
-    if [ -n "$path" ]; then
-      git show "$base:$path" >"$out/spec/$(basename "$path")"
-      continue
-    fi
-    path=$(git ls-tree --name-only "$head" docs/internal/adr/ | grep "/$n-" | head -n 1 || true)
-    if [ -n "$path" ]; then
-      git show "$head:$path" >"$out/spec/$(basename "$path")"
-    else
-      say "ADR $n is named by the spec but is on neither $base nor the PR head"
-    fi
-  done
-
   # Rule files under a "Rules in play" heading of the issue or its parent, up to the next
   # heading: `events.md`, or "architecture rule 13".
   for f in "$out/issue.md" "$out/feature.md"; do
@@ -155,8 +136,30 @@ if [ -n "$issue" ]; then
     rm -f "$out/assumptions.md"
   fi
 else
-  say "PR #$pr closes no issue (branch $head_ref, no 'Closes #n' in the body): no spec to review"
+  say "PR #$pr closes no issue (branch $head_ref, no 'Closes #n' in the body)"
 fi
+
+# ADRs by number, wherever the spec names them, or wherever the record an ADR diff adds or edits
+# names them: "ADR 0014", "ADR-0014", "ADRs 0004 and 0005", or a link to adr/0014-....md. Each
+# comes as the base has it; one this diff adds is in diff.patch alone.
+changed_adrs=$(git diff --name-only "$fork" "$head" -- docs/internal/adr/ \
+  | grep -oE 'adr/[0-9]{4}-' | grep -oE '[0-9]{4}' || true)
+adrs=$({
+  cat "$out/issue.md" "$out/feature.md" "$out/triage.md" 2>/dev/null || true
+  awk '
+    /^diff --git / { adr = ($4 ~ /^b\/docs\/internal\/adr\/[0-9]/); next }
+    adr && /^\+/ && !/^\+\+\+/ { print }
+  ' "$out/diff.patch"
+} | grep -oE 'ADRs?[ -]?[0-9]{4}((,? and |, | & |/)[0-9]{4})*|adr/[0-9]{4}-' \
+  | grep -oE '[0-9]{4}' | sort -u || true)
+for n in $adrs; do
+  path=$(git ls-tree --name-only "$base" docs/internal/adr/ | grep "/$n-" | head -n 1 || true)
+  if [ -n "$path" ]; then
+    git show "$base:$path" >"$out/spec/$(basename "$path")"
+  elif ! printf '%s\n' "$changed_adrs" | grep -qx "$n"; then
+    say "ADR $n is named but is on neither $base nor this diff"
+  fi
+done
 
 # The final diff hides a red test that was deleted or loosened on the way to green.
 red=$(git log --reverse --format='%H %s' "$base..$head" | awk '$2 == "test:" { print $1; exit }')

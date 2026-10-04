@@ -123,8 +123,8 @@ Each finding line is a defect someone verified. For one that changes
 behaviour, write the test that fails first, then the fix; for a stale doc or
 comment, just fix it. A line ending in `(record as Assumption: ...)` also
 adds that assumption to the PR body. A hardware Evidence line is a failing
-slow-lane test: fix the code, not the test. One commit per finding or per closely related group. Then step 5
-again.
+slow-lane test: fix the code, not the test. One commit per finding or per
+closely related group. Then step 5 again.
 
 ## Report
 

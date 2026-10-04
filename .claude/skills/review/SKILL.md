@@ -38,18 +38,19 @@ in play, and always `always-in-scope.md`); `rules/` (every agent rule and
 the ADR index); `tests-after-red.patch` (what happened to the spec's tests
 after they were committed red); and `assumptions.md` (the PR body's
 `Assumption:` lines). A file with nothing to hold is left out, and stderr
-names anything the script looked for and could not find. Rules and ADRs come from `main`, so a PR cannot rewrite what it
-is judged by.
+names anything the script looked for and could not find. Rules and ADRs
+come from `main`, so a PR cannot rewrite what it is judged by.
 
 Add nothing to that directory: not the rest of the PR body, not commit
 messages, not a note from the implementer. The reviewers must not know what
 anyone believes the diff does.
 
-- **No `issue.md`** (the PR closes no issue): the code review alone; the
-  spec review is skipped.
 - **An ADR-only diff** (every changed path is under `docs/internal/adr/`;
   `grep '^diff --git' "$R/diff.patch"` shows the paths): the spec review
-  alone, with the ADR brief in step 2. No code review.
+  alone, with the ADR brief in step 2, whether or not there is an
+  `issue.md`. `spec/` then holds the ADRs the record names. No code review.
+- **Otherwise, no `issue.md`** (the PR closes no issue): the code review
+  alone; the spec review is skipped.
 
 ## 2. Spawn both reviews, in the foreground
 

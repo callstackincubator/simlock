@@ -145,10 +145,11 @@ mutate` so every changed line is shown to matter before anyone reviews it.
 A spec never answers every question. What any change includes without
 asking — docs it makes false, both `EVENTS.md` files, a test for every new
 path, Fallow entries — is listed once, in
-[agent-rules/always-in-scope.md](agent-rules/always-in-scope.md). A smaller
-gap the body, the rules and the ADRs all leave open, `implement` closes the
-conservative way and records as an `Assumption:` line in the PR body. An
-assumption is a proposal you can see and reject, not a change to the spec.
+[agent-rules/always-in-scope.md](agent-rules/always-in-scope.md). When the
+body, the rules and the ADRs all leave a smaller gap open, `implement`
+closes it the conservative way and records it as an `Assumption:` line in
+the PR body. An assumption is a proposal you can see and reject, not a
+change to the spec.
 The run parks only for a contradiction with the body, a rule or an accepted
 ADR, or a choice a user would notice that nobody made.
 
