@@ -1190,7 +1190,9 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    await expect(driver.listCatalog()).resolves.toEqual({
+    // Strict: with no custom device profile there is no `customModels` key at all, not one
+    // present as undefined.
+    await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "35",
       images: [
         { abi: "x86_64", runtime: "34", tag: "google_apis" },
@@ -1367,18 +1369,6 @@ describe("AndroidDriver", () => {
 
     expect(catalog.models).toEqual(["Pixel 8", "Pixel 9", "My Tablet"]);
     expect(catalog.customModels).toEqual(["My Tablet"]);
-  });
-
-  it("has no customModels field when there is no custom profile", async () => {
-    const runner = new ScriptedProcessRunner([
-      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
-    ]);
-    const driver = await createDriver(await androidFilesystem(), runner);
-
-    const catalog = await driver.listCatalog();
-
-    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9"]);
-    expect(catalog).not.toHaveProperty("customModels");
   });
 
   it("lists the built-in models and no customModels field when devices.xml cannot be parsed", async () => {

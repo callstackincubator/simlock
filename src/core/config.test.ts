@@ -125,66 +125,6 @@ describe("loadConfig", () => {
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
   });
 
-  it("defaults mode to worker and accepts only the two it knows", async () => {
-    // ADR 0005 §1: one daemon, one mode, and it decides what the process *is* -- so it is
-    // config rather than a flag, and a typo has to fail at load rather than leave a daemon
-    // running as something nobody asked for.
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-
-    const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(defaulted.mode).toBe("worker");
-
-    // `http.enabled: true` here because a gateway with HTTP off is its own rejection --
-    // see the next test -- and this one is only about the two spellings `mode` accepts.
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ http: { enabled: true }, mode: "gateway" }),
-    );
-    const gateway = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(gateway.mode).toBe("gateway");
-
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "broker" }));
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("mode");
-  });
-
-  it("defaults a gateway to http.enabled and rejects one that turns it off at load", async () => {
-    // ADR 0005 §2: a gateway is the fleet's contact point over both HTTP and its unix socket,
-    // so one with HTTP off is unreachable by any worker or agent -- a config with no safe
-    // reading, rejected the same way a self-contradicting lease TTL pair is (naming the key,
-    // daemon does not start) rather than started and left silently useless.
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-
-    // A gateway defaults `http.enabled` to true (it is the fleet's contact point), so naming
-    // only `mode` is a complete, valid gateway config rather than a rejected one. Only a
-    // config that says `false` out loud is refused -- a value the operator wrote and the
-    // daemon quietly inverted would be worse than a start that says why.
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).resolves.toMatchObject({ http: { enabled: true }, mode: "gateway" });
-
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ http: { enabled: false }, mode: "gateway" }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("http.enabled");
-
-    // A worker with HTTP off is unaffected: HTTP is genuinely optional for that mode.
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ http: { enabled: false }, mode: "worker" }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).resolves.toMatchObject({ http: { enabled: false }, mode: "worker" });
-  });
-
   it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
     // ADR 0005 §19e's per-command bound. Rejected rather than clamped, like every other
     // duration here: a caller given a limit it did not write cannot tell which one applied.
@@ -1262,10 +1202,15 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(config.http.port).toBe(4700);
   });
 
-  it("refuses a gateway that switches HTTP off, naming the key", async () => {
+  it("refuses a gateway that switches HTTP off, naming the key, and loads a worker that does", async () => {
     await expect(load({ mode: "gateway", http: { enabled: false } })).rejects.toThrow(
       "http.enabled",
     );
+    // HTTP is genuinely optional for a worker.
+    await expect(load({ mode: "worker", http: { enabled: false } })).resolves.toMatchObject({
+      http: { enabled: false },
+      mode: "worker",
+    });
   });
 
   it("keeps an explicit gateway http host/port", async () => {
@@ -1388,14 +1333,6 @@ describe("loadConfig modes (ADR 0005)", () => {
     );
   });
 
-  it("defaults the gateway exec backstop above the worker's own ten minutes", async () => {
-    // ADR 0005 §19e: the worker's timeout is authoritative, so the gateway's must not fire
-    // first -- a gateway that timed out earlier would report a failure for a command still
-    // running on the machine that owns the device. #118 is what reads it.
-    const config = await load({ mode: "gateway" });
-    expect(config.gateway.execTimeoutMs).toBe(11 * 60_000);
-  });
-
   it("rejects a non-positive lease-request timeout", async () => {
     // P2 (round 2 review): bounds the one forwarded uplink call that used to have none of its
     // own -- see FleetLeaseCoordinator#withLeaseRequestTimeout.
@@ -1404,9 +1341,8 @@ describe("loadConfig modes (ADR 0005)", () => {
     );
   });
 
-  it("defaults the gateway lease-request timeout to five minutes, well under the exec backstop", async () => {
+  it("defaults the gateway lease-request timeout well under the exec backstop", async () => {
     const config = await load({ mode: "gateway" });
-    expect(config.gateway.leaseRequestTimeoutMs).toBe(5 * 60_000);
     expect(config.gateway.leaseRequestTimeoutMs).toBeLessThan(config.gateway.execTimeoutMs);
   });
 

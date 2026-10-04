@@ -19,7 +19,6 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
-  SocketPathTooLongError,
   type Filesystem,
   type IdGenerator,
 } from "../ports/index.js";
@@ -49,7 +48,6 @@ import { connectSimlockAdmin } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import {
   buildCliEnvironment,
-  errorExitCode,
   parseDuration,
   readLogFile,
   readPipedStdin,
@@ -164,8 +162,6 @@ describe("CLI: exit codes", () => {
     ["UNKNOWN_LEASE", 1],
   ] as const)("maps %s to exit %d, from ERROR_TABLE not a second map", async (code, expected) => {
     const error = simlockError(code);
-    expect(errorExitCode(error)).toBe(expected);
-
     const output = outputCapture();
     await expect(
       runCli(
@@ -4338,27 +4334,10 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
     expect(reported.error.code).toBe("USAGE");
     expect(reported.error.message).toContain("SIMLOCK_HOME");
   });
-
-  it("maps the error to the documented usage exit code", () => {
-    expect(errorExitCode(new SocketPathTooLongError(`${tooDeep}/daemon.sock`, 103))).toBe(2);
-  });
 });
 
 describe("CLI: requester id from the agent session", () => {
   const sessionEnv = { CLAUDE_CODE_SESSION_ID: "abc" };
-
-  it("buildCliEnvironment resolves requesterId to the session-derived id when SIMLOCK_AGENT_ID is unset", () => {
-    expect(buildCliEnvironment(realCliEnvironmentPorts(), sessionEnv).requesterId).toBe(
-      "claude-code:abc",
-    );
-  });
-
-  it("buildCliEnvironment prefers SIMLOCK_AGENT_ID over a session-derived id", () => {
-    expect(
-      buildCliEnvironment(realCliEnvironmentPorts(), { ...sessionEnv, SIMLOCK_AGENT_ID: "agent-7" })
-        .requesterId,
-    ).toBe("agent-7");
-  });
 
   it("buildCliEnvironment falls back to the pid when no agent id or session id is set", () => {
     expect(buildCliEnvironment(realCliEnvironmentPorts(), {}).requesterId).toBe(

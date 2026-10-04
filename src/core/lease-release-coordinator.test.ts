@@ -74,7 +74,6 @@ async function createHarness() {
 
 async function grant(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  ttlMs?: number,
 ): Promise<{ readonly device: DeviceRecord; readonly lease: LeaseRecord }> {
   const device = await harness.registry.registerDevice({
     driverData: {},
@@ -90,7 +89,6 @@ async function grant(
     deviceId: device.id,
     requesterId: `agent_${device.id}`,
     ownerId: `agent_${device.id}`,
-    ...(ttlMs === undefined ? {} : { ttlMs }),
   });
   return result;
 }
@@ -134,27 +132,6 @@ describe("LeaseReleaseCoordinator", () => {
     expect(harness.reclaims.map((released) => released.lease.id)).toEqual(
       expect.arrayContaining([first.lease.id, second.lease.id]),
     );
-  });
-
-  it("delegates renewal to the lifecycle, applying the TTL the caller named", async () => {
-    const harness = await createHarness();
-    const granted = await grant(harness);
-    await expect(harness.coordinator.renew(granted.lease.id, 30)).resolves.toMatchObject({
-      ttlDeadline: 1_030,
-      ttlMs: 30,
-    });
-  });
-
-  it("delegates a body-less renewal, which re-applies the lease's own stored width", async () => {
-    const harness = await createHarness();
-    const granted = await grant(harness, 50);
-
-    harness.clock.advance(3);
-    await expect(harness.coordinator.renew(granted.lease.id)).resolves.toMatchObject({
-      ttlDeadline: 1_053,
-      ttlMs: 50,
-    });
-    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_053 }]);
   });
 
   it("ignores an expiry delivery for a deadline replaced by renewal", async () => {

@@ -102,7 +102,7 @@ describe("JsonLinesLogger", () => {
 });
 
 describe("NoopLogger", () => {
-  it("discards every record and returns itself for child()", () => {
+  it("accepts a record at every level without throwing, and returns itself for child()", () => {
     const logger = new NoopLogger();
     expect(() => {
       logger.debug("x");

@@ -885,7 +885,7 @@ async function resolveRemoteLeaseId(
 /** ADR §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
  * second mappings" -- driven from `ERROR_TABLE`'s `cliExitCode` column rather than a second,
  * CLI-maintained map. */
-export function errorExitCode(error: unknown): number {
+function errorExitCode(error: unknown): number {
   if (error instanceof UsageError || error instanceof SocketPathTooLongError) return 2;
   if (isSimlockError(error)) return ERROR_TABLE[error.code].cliExitCode;
   return 1;

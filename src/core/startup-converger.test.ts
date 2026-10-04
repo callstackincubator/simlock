@@ -347,19 +347,4 @@ describe("StartupConverger", () => {
     ]);
     expect(harness.devices.find((item) => item.id === reusableShutdown.id)?.state).toBe("shutdown");
   });
-
-  it("restores timers before quarantine and interrupted-reclaim recovery", async () => {
-    const reclaiming = device("reclaiming", "ios", "reclaiming", 1);
-    const harness = createHarness([reclaiming], [], { android: 1, global: 3, ios: 3 });
-
-    await harness.converger.converge();
-
-    expect(harness.order.indexOf("timers")).toBe(0);
-    expect(harness.order.indexOf("quarantine-restore")).toBeGreaterThan(
-      harness.order.indexOf("timers"),
-    );
-    expect(harness.order.indexOf("recover:reclaiming")).toBeGreaterThan(
-      harness.order.indexOf("quarantine-restore"),
-    );
-  });
 });

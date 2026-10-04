@@ -332,9 +332,9 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
 describe("Dispatcher: parsing", () => {
   it("rejects a malformed input with BAD_REQUEST before the handler runs", async () => {
     const { dispatcher } = await buildDispatcher();
-    await expect(
-      dispatcher.dispatch("lease.request", { platform: "ios" }, session()),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const rejection = dispatcher.dispatch("lease.request", { platform: "ios" }, session());
+    await expect(rejection).rejects.toBeInstanceOf(DispatchError);
+    await expect(rejection).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it.each([
@@ -355,11 +355,11 @@ describe("Dispatcher: parsing", () => {
     },
   );
 
-  it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it", async () => {
+  it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it, and creates no lease", async () => {
     // ADR 0004 §4: the cap is enforced here rather than in the contract schema, because
     // `lease.maxTtlMs` is a daemon config value the contract module cannot see -- and every
     // transport reaches leases through this one dispatcher, so HTTP inherits the same answer.
-    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    const { dispatcher, registry } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
     await expect(
       dispatcher.dispatch(
         "lease.request",
@@ -367,13 +367,23 @@ describe("Dispatcher: parsing", () => {
         session(),
       ),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(registry.snapshot.leases).toEqual([]);
   });
 
-  it("rejects a ttlMs above lease.maxTtlMs on a renew too", async () => {
-    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+  it("rejects a ttlMs above lease.maxTtlMs on a renew too, leaving the lease's deadline as it was", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 },
+      session(),
+    );
+    // Time has passed, so a renew that went through would have moved the deadline.
+    clock.advance(10);
+
     await expect(
-      dispatcher.dispatch("lease.renew", { leaseId: "lse_1", ttlMs: 1_001 }, session()),
+      dispatcher.dispatch("lease.renew", { leaseId: grant.lease.id, ttlMs: 1_001 }, session()),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(registry.snapshot.leases).toMatchObject([{ ttlDeadline: grant.lease.ttlDeadline }]);
   });
 
   it("accepts a ttlMs at the cap on a request (ADR 0004 §4)", async () => {
@@ -1291,17 +1301,6 @@ describe("Dispatcher: #parseOutput", () => {
 });
 
 describe("Dispatcher: error codes", () => {
-  it("wraps a malformed request as DispatchError with the BAD_REQUEST code", async () => {
-    const { dispatcher } = await buildDispatcher();
-    try {
-      await dispatcher.dispatch("lease.request", {}, session());
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(DispatchError);
-      expect((error as DispatchError).code).toBe("BAD_REQUEST");
-    }
-  });
-
   it("lets a domain error (e.g. RUNTIME_MISSING) propagate untouched from the handler", async () => {
     const { dispatcher } = await buildDispatcher();
     await expect(

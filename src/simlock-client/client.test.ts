@@ -98,7 +98,13 @@ describe("connectSimlock: handshake", () => {
 
     await expect(client.getStatus()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
-      details: { daemon: { max: 2, min: 2 }, daemonVersion: "unknown" },
+      details: {
+        // The range this client offered at hello; the legacy daemon's is the one that predates
+        // ranges.
+        client: (hello.payload as { protocolRange: unknown }).protocolRange,
+        daemon: { max: 2, min: 2 },
+        daemonVersion: "unknown",
+      },
     });
     expect(connection.sent).toHaveLength(1);
   });

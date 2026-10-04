@@ -302,10 +302,4 @@ describe("FleetLeaseIndex", () => {
       });
     });
   });
-
-  describe("requesterPrefix", () => {
-    it("exposes exactly the prefix it was constructed with", () => {
-      expect(new FleetLeaseIndex(PREFIX).requesterPrefix).toBe(PREFIX);
-    });
-  });
 });

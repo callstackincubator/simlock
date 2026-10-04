@@ -64,21 +64,9 @@ describe("labelsFor", () => {
   it("returns an empty array for no categories", () => {
     expect(labelsFor([])).toEqual([]);
   });
-
-  it("is deterministic across calls", () => {
-    const first = labelsFor(SLIM_CATEGORIES);
-    const second = labelsFor(SLIM_CATEGORIES);
-    expect(first).toEqual(second);
-  });
 });
 
 describe("slimSignature", () => {
-  it("is stable for the same input", () => {
-    const a = slimSignature(SLIM_CATEGORIES);
-    const b = slimSignature(SLIM_CATEGORIES);
-    expect(a).toBe(b);
-  });
-
   it("is stable regardless of input category order", () => {
     const forward = slimSignature(SLIM_CATEGORIES);
     const reversed = slimSignature([...SLIM_CATEGORIES].reverse());
@@ -101,9 +89,5 @@ describe("slimSignature", () => {
     const before = slimSignature([original]);
     const after = slimSignature([mutated]);
     expect(before).not.toBe(after);
-  });
-
-  it("returns the same signature for an empty category list regardless of call site", () => {
-    expect(slimSignature([])).toBe(slimSignature([]));
   });
 });

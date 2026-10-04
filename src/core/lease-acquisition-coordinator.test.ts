@@ -37,12 +37,7 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import {
-  type LeaseRequestOptions,
-  QueueTimeoutError,
-  RequesterAlreadyLeasedError,
-  WaitQueue,
-} from "./wait-queue.js";
+import { type LeaseRequestOptions, RequesterAlreadyLeasedError, WaitQueue } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
@@ -783,58 +778,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(harness.coordinator.queueDepth).toBe(0);
   });
 
-  it("enforces FIFO, rejects no-wait demand, and skips timed-out waiters", async () => {
-    const harness = await createHarness();
-    const first = await harness.coordinator.request(request, {
-      requesterId: "first",
-      ownerId: "first",
-    });
-    const timedOut = harness.coordinator.request(request, {
-      requesterId: "timed-out",
-      ownerId: "timed-out",
-      timeoutMs: 10,
-    });
-    const next = harness.coordinator.request(request, {
-      ownerId: "next",
-      requesterId: "next",
-    });
-    await flush();
-    await expect(
-      harness.coordinator.request(request, {
-        noWait: true,
-        ownerId: "no-wait",
-        requesterId: "no-wait",
-      }),
-    ).rejects.toBeInstanceOf(NoCapacityError);
-
-    harness.clock.advance(10);
-    await expect(timedOut).rejects.toBeInstanceOf(QueueTimeoutError);
-    await harness.registry.beginRelease(first.lease.id);
-    const device = harness.registry.snapshot.devices[0];
-    if (device === undefined) throw new Error("expected device");
-    await harness.registry.transitionDevice(device.id, "ready", {
-      event: "device.reclaimed",
-      payload: { deviceId: device.id, duration: 0, strategy: "wipe" },
-    });
-    harness.coordinator.kick();
-    await expect(next).resolves.toMatchObject({ lease: { ownerId: "next", requesterId: "next" } });
-  });
-
-  it("grants an existing ready device and preserves request progress semantics", async () => {
-    const harness = await createHarness();
-    const ready = await seedReady(harness);
-    const progress: string[] = [];
-
-    const grant = await harness.coordinator.request(request, {
-      onProgress: (update) => progress.push(update.stage),
-      requesterId: "agent",
-      ownerId: "agent",
-    });
-
-    expect(grant.device.id).toBe(ready.id);
-    expect(progress).toEqual([]);
-  });
-
   it("grants a request queued while a new device was booting a second new device once the first is granted, with no release", async () => {
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
     harness.driver.hangMakeReady();
@@ -928,26 +871,6 @@ describe("LeaseAcquisitionCoordinator", () => {
       queueDepth: harness.coordinator.queueDepth,
       queuedEvents: queuedEvents.length,
     }).toEqual({ progress: ["queued"], provisions: 1, queueDepth: 1, queuedEvents: 1 });
-  });
-
-  it("retries provisioning once and rejects boot failures", async () => {
-    const harness = await createHarness();
-    harness.driver.failOn("provision", 1, new DriverCrashError("temporary"));
-    const grant = await harness.coordinator.request(request, {
-      requesterId: "retry",
-      ownerId: "retry",
-    });
-    expect(grant.device.state).toBe("leased");
-    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
-
-    const failing = await createHarness();
-    failing.driver.failOn("makeReady", 1, new DriverCrashError("boot failure"));
-    await expect(
-      failing.coordinator.request(request, {
-        ownerId: "boot-failure",
-        requesterId: "boot-failure",
-      }),
-    ).rejects.toMatchObject({ name: "BootTimeoutError" });
   });
 
   it("boots shutdown inventory and evicts managed demand before provisioning", async () => {

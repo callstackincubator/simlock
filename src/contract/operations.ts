@@ -59,7 +59,7 @@ export interface OperationDefinition<
   readonly authorize?: (input: z.infer<InputSchema>, context: AuthorizeContext) => boolean;
 }
 
-export function defineOperation<
+function defineOperation<
   Name extends string,
   InputSchema extends z.ZodTypeAny,
   OutputSchema extends z.ZodTypeAny,

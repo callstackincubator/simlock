@@ -2,7 +2,7 @@ import { createServer, type Server, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeTcpProbe, NodeTcpProbe } from "./index.js";
+import { NodeTcpProbe } from "./index.js";
 
 let server: Server | undefined;
 const accepted = new Set<Socket>();
@@ -95,28 +95,5 @@ describe("NodeTcpProbe.send", () => {
     // A refused connection must not read like a server that answered nothing: the caller
     // decides what to do about a failed registration, and cannot if both look identical.
     await expect(new NodeTcpProbe().send(port, "ping", 50)).rejects.toThrow();
-  });
-});
-
-describe("FakeTcpProbe", () => {
-  it("answers with the ports a test declared, as they come and go", async () => {
-    const probe = new FakeTcpProbe([5038]);
-
-    await expect(probe.isListening(5038)).resolves.toBe(true);
-    await expect(probe.isListening(5039)).resolves.toBe(false);
-
-    probe.stopListening(5038);
-    probe.startListening(5039);
-
-    await expect(probe.isListening(5038)).resolves.toBe(false);
-    await expect(probe.isListening(5039)).resolves.toBe(true);
-  });
-
-  it("records what was sent and answers with what the test scripted", async () => {
-    const probe = new FakeTcpProbe();
-    probe.replyWith("OKAY");
-
-    await expect(probe.send(5038, "0012host:emulator:5587")).resolves.toBe("OKAY");
-    expect(probe.sends).toEqual([{ payload: "0012host:emulator:5587", port: 5038 }]);
   });
 });

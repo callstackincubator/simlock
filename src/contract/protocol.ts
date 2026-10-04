@@ -51,7 +51,7 @@ export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 9, max: 9 };
  * in this repository to negotiate with; this constant documents the historical fact the ADR's
  * compatibility note depends on.
  */
-export const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
+const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
 /** Highest version present in both ranges, or `undefined` if they do not overlap at all. */
 export function negotiateProtocolVersion(

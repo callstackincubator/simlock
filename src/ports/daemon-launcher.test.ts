@@ -3,19 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
-
-describe("FakeDaemonLauncher", () => {
-  it("records launches and delegates to its deterministic callback", async () => {
-    let started = false;
-    const launcher = new FakeDaemonLauncher(() => {
-      started = true;
-    });
-    await launcher.launch();
-    expect(launcher.launches).toBe(1);
-    expect(started).toBe(true);
-  });
-});
+import { NodeDaemonLauncher } from "./daemon-launcher.js";
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {

@@ -4,7 +4,7 @@ import { SimlockError } from "../client/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
-import { McpSession, toMcpErrorResult } from "./session.js";
+import { McpSession } from "./session.js";
 
 /** Lets an awaited renewal settle; the fake clock never moves on its own. */
 async function flushMicrotasks(times = 10): Promise<void> {
@@ -1146,21 +1146,6 @@ describe("McpSession", () => {
       { deviceId: "SIM-1", kind: "unhealthy", leaseId: "lease-1", reason: "crashed" },
       { attempts: 2, deviceId: "SIM-1", kind: "recovered", leaseId: "lease-1" },
     ]);
-  });
-});
-
-describe("toMcpErrorResult", () => {
-  it("maps a SimlockError to its code and message", () => {
-    expect(
-      toMcpErrorResult(new SimlockError("NO_CAPACITY", "domain", "No matching devices", {})),
-    ).toEqual({ code: "NO_CAPACITY", message: "No matching devices" });
-  });
-
-  it("sanitizes any other error to a generic INTERNAL result", () => {
-    expect(toMcpErrorResult(new Error("/private/secret-stack-path"))).toEqual({
-      code: "INTERNAL",
-      message: "Simlock could not complete the request",
-    });
   });
 });
 

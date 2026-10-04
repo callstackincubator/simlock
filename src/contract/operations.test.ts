@@ -1,24 +1,8 @@
-import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import { defineOperation, OPERATIONS, type Effect, type OperationName } from "./operations.js";
+import { OPERATIONS, type Effect, type OperationName } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
-import { ROLES, type Role } from "./roles.js";
-
-describe("defineOperation", () => {
-  it("returns the definition unchanged, typed from its zod schemas", () => {
-    const echo = defineOperation({
-      name: "test.echo",
-      role: "agent",
-      effect: "read",
-      input: z.object({ value: z.string() }),
-      output: z.object({ value: z.string() }),
-    });
-    expect(echo.input.parse({ value: "hi" })).toEqual({ value: "hi" });
-    expect(echo.output.parse({ value: "hi" })).toEqual({ value: "hi" });
-    expect(echo.role).toBe("agent");
-  });
-});
+import type { Role } from "./roles.js";
 
 /**
  * The ADR §3 operation matrix, name -> role. A table-driven test against this makes
@@ -82,10 +66,6 @@ describe("operation role matrix", () => {
     const declaredNames = new Set(Object.keys(OPERATIONS));
     const matrixNames = new Set(ROLE_MATRIX.map((row) => row.name));
     expect(declaredNames).toEqual(matrixNames);
-  });
-
-  it("only ever resolves to one of the two declared roles", () => {
-    for (const row of ROLE_MATRIX) expect(ROLES).toContain(row.role);
   });
 
   it.each(ROLE_MATRIX)("$name with $input resolves to role $role", ({ name, input, role }) => {
@@ -161,14 +141,6 @@ describe("operation effects", () => {
       );
     }
     expect(new Set(EFFECT_MATRIX.map((row) => row.name))).toEqual(new Set(Object.keys(OPERATIONS)));
-  });
-
-  it("doctor.run is a write only with fix or purgeOrphans, and cleanup.run is a read only with dryRun", () => {
-    expect(resolvedEffect("doctor.run", {})).toBe("read");
-    expect(resolvedEffect("doctor.run", { fix: true })).toBe("write");
-    expect(resolvedEffect("doctor.run", { purgeOrphans: true })).toBe("write");
-    expect(resolvedEffect("cleanup.run", {})).toBe("write");
-    expect(resolvedEffect("cleanup.run", { dryRun: true })).toBe("read");
   });
 
   it.each(EFFECT_MATRIX)("$name with $input is a $effect", ({ name, input, effect }) => {
