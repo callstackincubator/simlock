@@ -1,6 +1,6 @@
 ---
 name: spec-session
-description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks".
+description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
 ---
 
 # Spec session
@@ -11,8 +11,22 @@ that matter most here are 3 (the body is the spec), 4 (reconcile first), 5
 (never rewrite a reporter's issue) and 6 (outcomes, not implementation).
 
 Argument: an issue number, optionally followed by a mode: `business`,
-`technical`, `split`, or `revise`. Without a mode, infer it from the state
-of the body and confirm with the user before writing.
+`technical`, `split`, or `revise`, and optionally `unattended`. Without a
+mode, infer it from the state of the body and confirm with the user before
+writing.
+
+**Unattended** is only for `split` on a `feature:ready` feature, run by the
+`deliver` skill. The maintainer's `feature:ready` already accepted the
+business sections and every linked ADR (delivery rule 1), so nobody is
+asked anything. Where an attended session would ask, decide from the
+business sections, the ADRs and the codebase. Stop instead, and report why,
+when:
+
+- reconciling finds a comment that would change the spec: the maintainer
+  must accept it first;
+- a decision needs a new ADR (constrains more than one task, or is
+  expensive to reverse): the maintainer must accept it first;
+- a question only the maintainer can answer remains.
 
 ## 1. Load the issue
 
@@ -45,6 +59,7 @@ as a list, one item per proposed change, each naming the comment's author and
 URL and the section it touches. Comments that change nothing are not listed.
 
 Ask the maintainer to accept or reject each item, one question at a time.
+Unattended, any item stops the session (see above).
 Accepted items are folded into the relevant section when you write the body
 in step 4. Do not proceed to step 3 until every item has an answer.
 
@@ -82,7 +97,28 @@ add its line to Decisions. Tell the maintainer the feature cannot leave
 **`split`**: interview for the task list — vertical slices, each one a PR a
 single agent can land, ordered so every task depends only on earlier ones.
 For each task, write a body from `docs/internal/templates/task.md` with Scope,
-Technical spec, Done when, Out of scope and Depends on filled in, then:
+Technical spec, Done when, Out of scope and Depends on filled in.
+
+Before creating anything, check every task body for these, and fix the body
+when one holds:
+
+- **Contradictions.** A Done when line that the task's own Tests or Scope
+  make false. "`routing.test.ts` is unchanged" next to a test that must
+  assert a new payload field is one; "only added tests" next to a changed
+  payload that existing `toEqual` assertions pin is another. Run the grep
+  or read the file the line names; do not judge it from the wording.
+- **Unverifiable lines.** A Done when line no reviewer could check from the
+  diff, the suite, or a named command.
+- **Overlap.** Two tasks that touch the same file, or that both change a
+  contract shape (each shape change bumps `DAEMON_PROTOCOL_VERSION` by
+  one), run one after the other: the later one lists the earlier one under
+  Depends on. Two agents editing the same lines in parallel is a merge
+  conflict the second one resolves blind.
+- **Hardware.** A Done when line that needs a real simulator or emulator
+  says so in its own words ("on a Mac with an iOS runtime: ..."), so the
+  delivery run knows to verify it on hardware.
+
+Then create each task:
 
 ```bash
 gh issue create --title "<title>" --label task:draft --body-file <file>
@@ -99,7 +135,14 @@ sub-issues in order, and change the label:
 gh issue edit <feature> --add-label feature:planned --remove-label feature:spec
 ```
 
-Do not tick any task's approval box. That is the maintainer's click.
+Unattended, the feature comes from `feature:ready`; remove that label
+instead of `feature:spec`.
+
+Attended, do not tick any task's approval box: that is the maintainer's
+click. Unattended, the feature's `feature:ready` is the approval, so tick
+each box yourself, in a second body edit after the task exists: the
+issue-state workflow promotes a task on body edits only, so a box ticked at
+creation would leave the task in `task:draft`.
 
 **`revise`**: only the reconcile step plus whatever amendments it produced.
 
@@ -111,7 +154,8 @@ build is a sentence to cut.
 ## 4. Write back and leave a marker
 
 If a person is present in this session, show the new body first and wait for a
-yes before posting. Running unattended, post directly.
+yes before posting. Running unattended, post directly, and end with one line
+for the caller: the tasks created with their Depends on, or why you stopped.
 
 Edit the body in place, keeping every section that already existed:
 

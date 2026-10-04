@@ -2676,6 +2676,9 @@ describe("Dispatcher: device.exec", () => {
     function realCommand(script: string): PassthroughResolver {
       return { passthrough: () => ({ args: ["-e", script], command: process.execPath, env: {} }) };
     }
+    // The 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
+    // case waits out the real 5 s `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` by design, and a 10 s guard
+    // left one slow child-process spawn on a busy machine between it and a false failure.
 
     it("delivers every chunk in full, in order, even when one delivery stalls past the exit grace window", async () => {
       const seen: string[] = [];
@@ -2719,7 +2722,7 @@ describe("Dispatcher: device.exec", () => {
       releaseFirst();
       await expect(pending).resolves.toEqual({ exitCode: 0 });
       expect(seen).toEqual(["before-exit-A", "before-exit-B"]);
-    }, 10_000);
+    }, 30_000);
 
     it("fails device.exec loudly, rather than answering a truncated exit code, when a chunk's delivery never resolves", async () => {
       const { dispatcher, leaseId } = await withLease({
@@ -2741,7 +2744,7 @@ describe("Dispatcher: device.exec", () => {
       );
 
       await expect(pending).rejects.toThrow(ExecOutputDeliveryStalledError);
-    }, 10_000);
+    }, 30_000);
 
     it("reports EXEC_TIMEOUT, not the stalled-delivery error it provokes, when a consumer that stopped reading is why the command outran its timeout", async () => {
       // The common path, not an exotic one: a consumer that stops reading is *why* a
@@ -2775,7 +2778,7 @@ describe("Dispatcher: device.exec", () => {
       clock.advance(50);
 
       await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
-    }, 10_000);
+    }, 30_000);
   });
 });
 

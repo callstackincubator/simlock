@@ -7,12 +7,14 @@
   // fallow's static reachability graph without being declared explicitly.
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
+  // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
     "e2e/**/*.test.ts",
     "ui/src/main.tsx",
-    "e2e/console/*.spec.ts"
+    "e2e/console/*.spec.ts",
+    "vitest.mutate.config.ts"
   ],
   "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
   // The web console's libraries are bundled into dist/ui at build time and ship as files, so

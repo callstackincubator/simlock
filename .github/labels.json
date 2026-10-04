@@ -32,7 +32,7 @@
   {
     "name": "bug:blocked",
     "color": "d73a4a",
-    "description": "Agent stopped on a blocker named in its handoff. Maintainer clears it by re-adding the label it came from."
+    "description": "Agent stopped on a blocker in its handoff. Maintainer re-adds the label it came from."
   },
   {
     "name": "feature:spec",
@@ -52,7 +52,7 @@
   {
     "name": "feature:blocked",
     "color": "0e8a16",
-    "description": "Agent stopped on a blocker named in its handoff. Maintainer clears it by re-adding feature:ready."
+    "description": "Agent stopped on a blocker in its handoff. Maintainer re-adds the label it came from."
   },
   {
     "name": "task:draft",
@@ -67,7 +67,7 @@
   {
     "name": "task:blocked",
     "color": "5319e7",
-    "description": "Agent stopped on a blocker named in its handoff. Maintainer clears it by re-adding task:ready."
+    "description": "Agent stopped on a blocker in its handoff. Maintainer re-adds the label it came from."
   },
   {
     "name": "documentation",
@@ -83,5 +83,15 @@
     "name": "github_actions",
     "color": "000000",
     "description": "Pull requests that update GitHub Actions code"
+  },
+  {
+    "name": "flaky-test",
+    "color": "fbca04",
+    "description": "Names a test that fails without a code change. Delivery skips its base-commit check."
+  },
+  {
+    "name": "needs-hardware",
+    "color": "5319e7",
+    "description": "PR parked: a Done when line needs a real simulator or emulator run."
   }
 ]

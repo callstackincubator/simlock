@@ -28,7 +28,7 @@ request, closed — not from a label. The branch for issue `<n>` is always
 | `bug:ready`       | An agent may fix it.                                     |
 | `bug:blocked`     | Waiting on the maintainer to clear a blocker.            |
 | `feature:spec`    | Business or technical spec in progress.                  |
-| `feature:ready`   | No sub-issues; one PR delivers the whole feature.        |
+| `feature:ready`   | Business sections and ADRs accepted; agents do the rest. |
 | `feature:planned` | Split into tasks. Never picked up itself.                |
 | `feature:blocked` | Waiting on the maintainer to clear a blocker.            |
 | `task:draft`      | Scope written; technical spec, approval or deps missing. |
@@ -55,10 +55,10 @@ request, closed — not from a label. The branch for issue `<n>` is always
    `bug:ready` also accepts the shape the report proposes — the advisory
    code, the message, the field. To reject the shape but keep the
    reproduction, reply and re-add `bug:triage`.
-6. An agent running `deliver` claims the `bug:ready` issue, creates `bug/<n>`
-   from the repro branch, has the change reviewed (below), and opens a PR
-   that closes the issue. The triage test is now the regression test. Merge
-   closes the bug.
+6. An agent running `deliver` claims the `bug:ready` issue and has the
+   `implement` skill build it on `bug/<n>`, starting from the repro branch.
+   The change is reviewed and merged through the gate (below). The triage
+   test is now the regression test. Merge closes the bug.
 
 ## A feature, delivered as one PR
 
@@ -85,13 +85,24 @@ request, closed — not from a label. The branch for issue `<n>` is always
    maintainer adds `feature:ready`. The ADRs move to _Accepted — not yet
    implemented_.
 6. An agent running `deliver` claims it, works on `feature/<n>`, has the
-   change reviewed (below), and opens a PR whose body walks every completion
-   condition. Merge closes the feature, and its ADRs flip to _Accepted_.
+   change reviewed and merged through the gate (below), and the PR body
+   walks every completion condition. Merge closes the feature, and its ADRs
+   flip to _Accepted_.
 
 ## A feature, split into tasks
 
 Steps 1 to 4 are the same, but the second session ends differently: instead
-of a Technical spec section on the feature, it produces sub-issues.
+of a Technical spec section on the feature, it produces sub-issues. There
+are two ways in. Attended, you sit through the split and tick each task's
+approval box (steps 5 and 6). Unattended, the second session settles only
+the decisions that need ADRs; you accept those, add `feature:ready`, and
+run `/deliver <feature>`. The run writes each task's technical spec, checks
+the specs for contradictions and overlap, ticks the boxes itself, and then
+delivers the tasks in dependency order, two at a time, merging each through
+the gate. It stops and hands back to you only for a new ADR, a comment that
+would change the spec, a blocking review finding it could not settle, or a
+real-device check it could not run. It ends with one comment on the feature
+listing what merged, what parked and why, and what is still waiting.
 
 5. Each task is a native sub-issue of the feature, labelled `task:draft`, with
    a body from [templates/task.md](templates/task.md): Scope, Technical spec,
@@ -103,8 +114,8 @@ of a Technical spec section on the feature, it produces sub-issues.
    moment its box is ticked, its Technical spec has content, and every issue
    under Depends on is closed. Nobody re-reads the dependency graph by hand.
 7. Agents claim `task:ready` issues one PR each, on `task/<n>`, each PR
-   reviewed before it opens (below). As tasks close, the ones they unblocked
-   become ready on their own.
+   reviewed before it leaves draft (below). As tasks close, the ones they
+   unblocked become ready on their own.
 8. Verification is part of delivery. Every task PR walks its Done when, and
    the PR that closes the last open sub-issue also walks the feature's
    Completion conditions. When that last sub-issue closes, the automation
@@ -112,11 +123,18 @@ of a Technical spec section on the feature, it produces sub-issues.
    came from a request, the request closes on its own with a pointer to the
    feature.
 
-## Review before the PR
+## Review, verification and merge
 
-A PR arrives reviewed; it is not reviewed on arrival. Before opening one,
-the delivering agent runs the `review` skill, which spawns two reviewers on
-the most capable model available. Neither has seen the delivering session,
+`deliver` never writes code itself. It hands each stage to a forked skill
+that runs on the model its frontmatter pins — `implement` on Sonnet,
+`review` and `triage-bug` on Opus — and reasons only over the fixed report
+each one returns. `implement` commits the spec's tests red first and opens
+a draft PR, so CI runs from the first push; it then turns them green in
+commits that each lower the failing count, and runs `pnpm mutate` so every
+changed line is shown to matter before anyone reviews it.
+
+A PR leaves draft reviewed; it is not reviewed on arrival. The `review`
+skill spawns two reviewers on Opus. Neither has seen the delivering session,
 and neither sees what the other sees. The spec reviewer gets the issue, its
 parent, its ADRs and the diff, and answers whether every line of the spec
 is delivered, whether the diff does anything the spec did not ask for, and
@@ -133,7 +151,16 @@ Findings are claims. The agent verifies each against the code, fixes what
 it confirms, and lists what it rejects in the PR body under `## Review`, one
 line each with the reason. A confirmed fix re-runs the review that raised
 it, once. A blocking finding still open after that is a contested change:
-the agent hands off with it instead of opening the PR. The same two reviews
+the agent hands off with it and leaves the PR in draft. An ADR-only PR gets
+the spec review alone.
+
+A Done when line that needs a real simulator or emulator runs through the
+`verify-hardware` skill and `scripts/slow-e2e.sh`, one lane per machine. A
+PR whose hardware check could not run gets `needs-hardware` and waits for
+you. Everything else that passes is merged by the agent through
+`.agents/scripts/merge-pr.sh`, which refuses a draft, a `needs-hardware`
+label, a missing Review section, a "spec needs" line, red CI, or a
+conflict. The same two reviews
 run on a person's PR when the maintainer asks; there the agent posts the
 findings as a comment and pushes nothing.
 
@@ -175,9 +202,11 @@ and nothing else. The repo's skills — `spec-session`, `triage-bug`,
 `deliver`, `review` — handle the transitions an agent makes as part of its
 own procedure, and the reviews are the delivering agent's job, not CI's.
 
-Four transitions are judgments and stay manual on purpose: `bug:new` to
-`bug:triage`, `bug:triage` to `bug:ready`, `feature:spec` to
-`feature:ready`, and the approval box on each task. Each is one click.
+Three transitions are judgments and stay manual on purpose: `bug:new` to
+`bug:triage`, `bug:triage` to `bug:ready`, and `feature:spec` to
+`feature:ready`. Each is one click. The approval box on each task is a
+fourth, except for the tasks of a `feature:ready` feature, where your
+`feature:ready` was the approval.
 
 ## Where ADRs fit
 
@@ -198,4 +227,11 @@ when it closes. See [adr/README.md](adr/README.md).
 - Labels: `.github/labels.json`, synced by `.github/workflows/labels.yml`
 - Automation: `.github/workflows/issue-state.yml`
 - Skills: `.claude/skills/spec-session`, `.claude/skills/triage-bug`,
-  `.claude/skills/deliver`, `.claude/skills/review`
+  `.claude/skills/deliver` (orchestrator), and the forked stages
+  `.claude/skills/implement`, `.claude/skills/review`,
+  `.claude/skills/verify-hardware`
+- Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
+  `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
+  hook; installs the pinned pnpm into a cache when PATH lacks it),
+  `.agents/scripts/merge-pr.sh`,
+  `scripts/slow-e2e.sh`, `scripts/mutate.mjs` (`pnpm mutate`)

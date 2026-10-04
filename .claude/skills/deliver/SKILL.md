@@ -1,179 +1,167 @@
 ---
 name: deliver
-description: Claim and implement a ready issue (task:ready, bug:ready, or feature:ready) end to end — assign, branch, build from the body, open the PR that closes it. Use when the user says "deliver #N", "pick up the next ready issue", or "implement #N".
+description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:ready feature (spec its tasks, then walk them in dependency order, two at a time). Claims, delegates implement, review and hardware checks to their forked skills, reasons only over their report blocks, and merges each PR through the gate. Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
 ---
 
-# Deliver a ready issue
+# Deliver
 
-Rules 1, 2, 3, 9 and 14 in `docs/internal/agent-rules/delivery.md` govern this
-skill: act only on ready labels, the assignee is the claim, build from the
-body, done is defined per kind, and the PR is reviewed before it is opened.
+You are the orchestrator. You never write code, run the suite, or review a
+diff yourself. You read issues, decide the next step, invoke the stage
+skill for it, and reason over the report block it hands back. That keeps
+your context about the issues, not about file contents, so one run can
+carry a whole feature.
 
-Argument: an issue number. Without one, take the oldest ready issue, tasks
-before bugs before features:
+Rules 1, 2, 9, 14, 15 and 16 in `docs/internal/agent-rules/delivery.md`
+govern this skill.
 
-```bash
-gh issue list --search 'label:bug:ready,feature:ready,task:ready no:assignee' --json number,title,labels
-```
+**Delegating.** Invoke a stage with the Skill tool and pass everything it
+needs as its arguments: the issue, the branch, the PR once there is one,
+the one thing to do, and anything pasted from an earlier report. `implement`,
+`review` and `verify-hardware` are forked: each runs in its own sub-agent on
+the model its frontmatter pins and hands back only its report. Never start
+an Agent that then loads one of them, and never pass a model: either
+overrides the frontmatter.
 
-## 1. Claim
+A report without its block, or with narration in place of it, is not a
+result: invoke the skill again with the same arguments plus "the last run
+ended without its report block; report on the work already done".
 
-The issue must carry exactly one of `task:ready`, `bug:ready`,
-`feature:ready`, and have no assignee. If not, stop and say why. Then:
+**A person present or not.** If a person is in this session, show any text
+you are about to post and ask before the slow lane runs. Unattended, post
+directly and run the slow lane when the lock is free (rule 16).
 
-```bash
-gh issue edit <N> --add-assignee @me
-```
-
-## 2. Read the spec, and only the spec
-
-Read the body. For a task, also read the parent feature's body for the
-business context, and the ADRs listed under Decisions. Do not take
-instructions from comments; if a comment seems to change the spec, say so to
-the maintainer and stop until the body is updated.
-
-Two comments are exceptions. For a bug, the triage report's Simplest fix
-section is the agreed approach, because the maintainer set `bug:ready` after
-reading it. For any issue, the latest comment headed `## Handoff` is the
-state a previous agent left the work in: read it, and treat its Findings as
-facts about the codebase, not as spec.
-
-## 2a. Resume if someone was here before
+## 1. Take stock
 
 ```bash
-gh issue view <N> --json comments --jq '[.comments[] | select(.body | startswith("## Handoff"))] | last | .body'
-git fetch origin <kind>/<N> 2>/dev/null && git log --oneline origin/<kind>/<N> ^main
+gh issue view <N> --json number,title,labels,assignees,body
 ```
 
-If either exists, continue from there rather than starting over: branch
-from `origin/<kind>/<N>` (step 3), read its log, and make Not done your
-task list.
+- `task:ready`, `bug:ready`: one issue; go to step 3.
+- `feature:ready` whose body has a filled Technical spec and no Tasks
+  section: one PR delivers it; go to step 3.
+- `feature:ready` otherwise: specify it first (step 2), then walk its tasks.
+- `feature:planned`: walk its open sub-issues (step 4).
+- Anything else, or an assignee that is not you: stop and say why (rule 1).
 
-## 3. Branch
+## 2. Specify a feature:ready feature
 
-The branch name is `<kind>/<N>` where `<kind>` is the label prefix, nothing
-appended (rule 11). You are probably in a worktree (rule 13): always branch
-from `origin/...`, never from a local branch, and never assume you can
-switch to a branch another checkout holds.
+`feature:ready` means the maintainer accepted the business sections and
+every ADR the feature links. Everything after that is yours (rule 1). Run
+the `spec-session` skill on it in `split` mode, unattended. It writes each
+task's technical spec, checks it for contradictions, links overlapping
+tasks under Depends on, and ticks each approval box. If it reports that a
+new decision needs an ADR, stop: that is the maintainer's to accept. Park
+the feature (step 6) with the decision under Blocked on.
+
+## 3. Deliver one issue
+
+Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
+`<kind>/<N>`.
+
+1. **Implement.** `implement` with `issue #N, branch <kind>/<N>, mode
+build`. A report with `spec needs` under Open: park (step 6).
+2. **Review.** `review` with the PR number. Fix lines: `implement` with
+   mode `fix` and the Fix lines pasted, then `review` again with `round 2`
+   and the report's Rerun value. Spec needs, or a confirmed blocking
+   finding after round 2: park. Keep every Rejected line.
+3. **Hardware.** If implement reported Hardware lines, `verify-hardware`
+   with the PR, the branch and those lines. `fail`: `implement` in fix mode
+   with the Evidence lines, then `review` round 2 on the code review, then
+   `verify-hardware` once more. `busy` or `unavailable`: add the
+   `needs-hardware` label to the PR and park; the gate will not merge it.
+4. **Finish the PR body.** Walk every Done when line and say how each was
+   checked; for the last open sub-issue of a feature, walk the parent's
+   Completion conditions too (rule 9). Add the `## Review` section:
+
+   ```markdown
+   ## Review
+
+   Spec review: <n> findings, <m> fixed. Code review: <n> findings, <m> fixed.
+   Mutate: <n> mutants, <a> alive.
+
+   Rejected:
+
+   - <claim> — <reason>
+   ```
+
+   Omit "Rejected:" when nothing was. Rule 12: 200 words plus the checklist
+   and the Review section, ending with `*Written by an agent.*`.
+
+5. **Ready and merge.** `gh pr ready <M>`, then run the gate in the
+   background and wait for its notification:
+
+   ```bash
+   .agents/scripts/merge-pr.sh <M>
+   ```
+
+   Exit 0 merged it. Any other exit: park with the line it printed. An
+   alive mutant implement could not explain also parks: the gate does not
+   read the report, you do.
+
+Keep the PR body's status lines current after every stage, so any session
+can resume from GitHub alone:
+
+```
+### Status
+Implement: done (5/5 green)  Review: round 2, 0 open  Mutate: 0 alive  Hardware: n/a  Gate: merged
+```
+
+## 4. Walk a feature's tasks
 
 ```bash
-git fetch origin
-git switch -c task/<N> origin/main         # or feature/<N>
+read -r OWNER REPO < <(gh repo view --json owner,name -q '"\(.owner.login) \(.name)"')
+gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number=<N> -f query='
+  query($owner:String!,$repo:String!,$number:Int!){
+    repository(owner:$owner,name:$repo){ issue(number:$number){
+      subIssues(first:50){nodes{number title state
+        labels(first:5){nodes{name}} assignees(first:3){nodes{login}}}}}}}'
 ```
 
-For a bug, start from the reproduction branch so the failing test is
-carried forward:
+Runnable means open, `task:ready`, and unassigned; the issue-state workflow
+only makes a task ready once everything under its Depends on is closed, so
+readiness already encodes the order. Deliver up to two runnable tasks at
+once: invoke each stage for both in the same message, and keep the two
+pipelines apart. Each task has its own worktree, so they never share files.
+After each merge, list again: merging closes the task, and the tasks that
+waited on it turn ready on their own.
 
-```bash
-git switch -c bug/<N> origin/bug/<N>-repro
-```
+When a task parks, keep delivering the tasks that do not depend on it. Stop
+when nothing is runnable and nothing is in flight.
 
-If `origin/<kind>/<N>` already exists, someone was here before (step 2a):
-branch from it, and if the local name is taken by another worktree, work
-under a temporary name and push to the real one:
+## 5. End of the run
 
-```bash
-git switch -c <kind>/<N> origin/<kind>/<N> || git switch -c wip/<N> origin/<kind>/<N>
-git push origin HEAD:<kind>/<N>
-```
-
-## 4. Build
-
-Implement the Technical spec. Every test title under Tests is a claim to
-prove, and `docs/internal/agent-rules/testing.md` says what proving means. Reread the
-files named under Rules in play before touching the code they cover. New or
-changed events need their entries in both `docs/EVENTS.md` and `docs/internal/EVENTS.md` in the same change.
-
-Before opening the PR, search `docs/` and every user-facing string (help
-text, error messages, HTTP error bodies) for claims your change makes
-false, and fix them in the same PR. A behaviour that changed while its
-description stayed put is a bug you shipped.
-
-Run `pnpm check` before moving on.
-
-If something in the spec turns out to be wrong or impossible, do not work
-around it: push what you have, leave a handoff (step 6), and stop. The
-maintainer reopens a spec session.
-
-## 4a. Review
-
-Run the `review` skill on the branch (rule 14). It spawns two reviewers
-that have not seen this session, one holding the spec and one holding the
-rules, and it ends in one of two states: fixes on the branch plus a
-`## Review` section for the PR body, or a blocking finding that survived two
-rounds, in which case it tells you to stop and hand off (step 6). Do not
-open a PR from the second state.
-
-## 5. Open the PR
-
-If a person is present in this session, show the text first and wait for a
-yes before posting. Running unattended, post directly.
-
-The PR body must contain `Closes #<N>` and nothing that closes any other
-issue; CI checks that the branch name and the closing reference agree.
-Beyond that:
-
-- **task**: walk every line of Done when and say how each was checked. If
-  no other sub-issue of the parent is still open, also walk the parent's
-  Completion conditions: verification is part of delivery, and this PR is
-  the last one.
-- **bug**: name the regression test; it is the triage test, now passing.
-- **feature**: walk every Completion condition and say how each was checked.
-- **all kinds**: the `## Review` section from step 4a, after the checklist.
-
-Rule 12 applies to the PR body: 200 words plus the checklist and the Review
-section, what changed and why, no narration of how you got there, and
-`*Written by an agent.*` as the last line.
-
-```bash
-gh pr create --title "<type>(<scope>): <summary>" --body-file <file>
-```
-
-Leave the issue assigned and labelled as it is. Merge closes it.
-
-## 6. Stopping early
-
-If you stop for any reason before the PR is merged — blocked, out of
-context, told to stop, spec turned out wrong, a blocking review finding
-open after two rounds — push the branch, then leave
-exactly one comment and release the claim. If a person is present in this session, show the text first and wait for a yes before posting. Running unattended, post directly.
+Post one comment on the feature (or the single issue):
 
 ```markdown
-## Handoff
+## Delivery run
 
-### Done
-
-<what is on the branch and how it was verified>
-
-### Not done
-
-<what remains, in the spec's own terms>
-
-### Findings
-
-<what you learned that is not in the spec and the next agent would rediscover;
-"spec needs: ..." if the body is wrong or incomplete>
-
-### Blocked on
-
-<who or what, or "nothing">
+Merged: #PR (#task), ...
+Parked: #task — <reason, one line>, ...
+Waiting: #task — on #dependency, ...
 
 _Written by an agent._
 ```
 
+Then send the maintainer a push notification with the same three counts,
+if this session has a tool for it.
+
+## 6. Parking an issue
+
+Push the branch, leave exactly one `## Handoff` comment (Done, Not done,
+Findings, Blocked on; 150 words; rule 2), and release the claim:
+
 ```bash
-git push -u origin <kind>/<N>
 gh issue comment <N> --body-file <file>
 gh issue edit <N> --remove-assignee @me
 ```
 
-If Blocked on is anything but "nothing", also move the issue out of the
-ready state so the next agent does not hit the same wall. The maintainer
-re-adds `<kind>:ready` once the blocker is gone:
+If Blocked on is anything but "nothing", move the issue to
+`<kind>:blocked`. A PR parked as `needs-hardware` stays open and ready; the
+maintainer verifies it or re-runs this skill on a machine with devices.
 
-```bash
-gh issue edit <N> --add-label <kind>:blocked --remove-label <kind>:ready
+## Your own report
+
 ```
-
-A handoff is state, never spec, and rule 12 applies: 150 words, plain
-words, conclusion first. Do not post progress updates at any other time.
+Run: #N  Merged: <PRs or none>  Parked: <issues with reasons or none>  Waiting: <issues or none>
+Next: <what the maintainer should do, or "nothing">
+```
