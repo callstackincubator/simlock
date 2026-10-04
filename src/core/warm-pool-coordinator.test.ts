@@ -136,7 +136,6 @@ function capacity(): CapacityCoordinator {
       config.capacity,
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     ),
@@ -342,7 +341,6 @@ describe("WarmPoolCoordinator", () => {
           },
           new FakeSystemStats({
             cpuCount: 8,
-            freeRamBytes: 12 * gibibyte,
             totalRamBytes: 12 * gibibyte,
           }),
         ),

@@ -152,15 +152,11 @@ async function createHarness(
     registry,
     systemStats: new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     }),
   });
   const executor = options.useLeaseEngineExecutor
-    ? {
-        execute: (proposal: Parameters<LeaseEngine["executeCleanup"]>[0]) =>
-          engine.executeCleanup(proposal),
-      }
+    ? engine.cleanup
     : (() => {
         const claims = new DeviceOperationClaims();
         const decisions = new SerializedDecision();

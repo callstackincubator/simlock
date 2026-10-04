@@ -161,7 +161,7 @@ async function createHarness(
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
-    systemStats: new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
+    systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
 
   return { bus, clock, driver, engine, filesystem, registry };
@@ -1401,7 +1401,7 @@ describe("LeaseEngine RAM budget by mode", () => {
       await before.engine.release(grant.lease.id, "explicit");
     }
     await before.engine.settle();
-    await before.engine.executeCleanup({
+    await before.engine.cleanup.execute({
       action: "shutdown",
       reason: "test",
       rule: "test",
@@ -1459,7 +1459,7 @@ describe("LeaseEngine RAM budget by mode", () => {
       ["shutdown", idle.device.id],
       ["destroy", idle.device.id],
     ] as const) {
-      await after.engine.executeCleanup({ action, reason: "test", rule: "test", target });
+      await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
@@ -1637,7 +1637,6 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     const systemStats = () =>
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       });
     // The physical device survives a daemon restart even though the daemon's
@@ -1897,7 +1896,6 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const systemStats = new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     });
     const beforeRegistry = await Registry.load({
@@ -2047,7 +2045,6 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       registry,
       systemStats: new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     });

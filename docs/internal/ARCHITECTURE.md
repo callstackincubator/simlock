@@ -1702,7 +1702,7 @@ stats (CPU/RAM/disk), and watching another process for exit:
 Filesystem   — read/write/delete/stat/disk-free
 ProcessRunner — spawn/exec/kill, capture stdout/stderr
 Clock        — now(), timers (no direct Date/setTimeout in logic)
-SystemStats  — cpu count, total/free RAM, disk free
+SystemStats  — cpu count, total RAM
 HostInfo     — operating system, its version, CPU architecture (`sw_vers` on macOS)
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs

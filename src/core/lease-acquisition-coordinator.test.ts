@@ -142,7 +142,6 @@ async function createHarness(
       config(options.maxDevices, options.maxRunning).capacity,
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     ),

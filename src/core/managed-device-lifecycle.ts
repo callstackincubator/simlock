@@ -65,18 +65,6 @@ export class ManagedDeviceLifecycle {
     private readonly clock: Clock,
   ) {}
 
-  // fallow-ignore-next-line unused-class-member -- no production caller: superseded by bootForLease, still covered by its own tests.
-  async boot(
-    target: DeviceRecord,
-    claim?: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
-    return this.#makeReady(target, "shutdown", claim);
-  }
-
-  async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
-    return this.#makeReady(target, "provisioning");
-  }
-
   /** Makes a device ready while retaining its claim for an immediate lease handoff. */
   // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's lifecycle port.
   async bootForLease(
@@ -223,40 +211,6 @@ export class ManagedDeviceLifecycle {
     }
   }
 
-  async #makeReady(
-    target: DeviceRecord,
-    expectedState: "provisioning" | "shutdown",
-    existingClaim?: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
-    const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
-    if (claimed === undefined) return undefined;
-    const startedAt = this.clock.now();
-
-    let ready: DriverDevice;
-    try {
-      ready = await this.catalog
-        .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device), {
-          mode: specMode(claimed.device.spec),
-          purpose: "prepare",
-        });
-    } catch (error: unknown) {
-      await this.#release(claimed);
-      throw error;
-    }
-
-    return this.#commit(
-      claimed,
-      [expectedState],
-      "ready",
-      {
-        event: "device.ready",
-        payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
-      },
-      readyTransitionUpdate(ready),
-    );
-  }
-
   async #makeReadyForLease(
     target: DeviceRecord,
     expectedState: "provisioning" | "shutdown",
@@ -338,13 +292,12 @@ export class ManagedDeviceLifecycle {
     expectedStates: readonly DeviceState[],
     to: DeviceState,
     event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
-    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord | undefined> {
     return this.decisions.run(async () => {
       try {
         const device = this.#registeredTarget(claimed.device, expectedStates);
         if (device === undefined) return undefined;
-        return await this.registry.transitionDevice(device.id, to, event, update);
+        return await this.registry.transitionDevice(device.id, to, event);
       } finally {
         claimed.release();
       }

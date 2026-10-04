@@ -6,7 +6,6 @@ import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
-import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type {
@@ -401,15 +400,6 @@ export class LeaseEngine {
   // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer, which structural typing hides from the analyzer.
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);
-  }
-
-  /**
-   * Runs one cleanup action through the same decision queue as leasing. The
-   * reservation prevents a concurrent lease decision from selecting the
-   * device while its driver operation is in progress.
-   */
-  async executeCleanup(proposal: Proposal): Promise<boolean> {
-    return this.cleanup.execute(proposal);
   }
 
   #capacityDevices(): readonly CapacityDevice[] {

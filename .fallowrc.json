@@ -8,7 +8,6 @@
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
   "entry": [
-    "src/index.ts",
     "src/cli/main.ts",
     "src/daemon/main.ts",
     "e2e/**/*.test.ts",

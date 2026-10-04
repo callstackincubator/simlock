@@ -101,7 +101,7 @@ export interface Waiter {
 }
 
 interface MutableWaiter extends Waiter {
-  onProgress: ((progress: LeaseProgress) => void) | undefined;
+  readonly onProgress: ((progress: LeaseProgress) => void) | undefined;
   rejectPromise: (error: Error) => void;
   resolvePromise: (grant: LeaseGrant) => void;
   state: WaiterState;
@@ -178,8 +178,7 @@ export class WaitQueue {
   /**
    * Finds a requester's waiter across every non-terminal state, not just the FIFO list -- a
    * waiter driven straight to `processing` on its first attempt never gets enqueued at all, so
-   * a caller deciding cancellability needs this broader membership, unlike `detachProgress`
-   * which only ever needs to reach an already-queued entry.
+   * a caller deciding cancellability needs this broader membership.
    */
   findPendingWaiter(requesterId: string): Waiter | undefined {
     for (const waiter of this.#pendingWaiters) {
@@ -271,20 +270,6 @@ export class WaitQueue {
 
   isQueued(waiter: Waiter): boolean {
     return this.#waiters.includes(this.#mutable(waiter));
-  }
-
-  detachProgress(requesterId: string): boolean {
-    const waiter = this.#waiters.find((candidate) => candidate.options.requesterId === requesterId);
-    if (waiter === undefined) return false;
-    waiter.onProgress = undefined;
-    return true;
-  }
-
-  attachProgress(waiter: Waiter, onProgress: (progress: LeaseProgress) => void): boolean {
-    const mutable = this.#mutable(waiter);
-    if (isTerminal(mutable.state)) return false;
-    mutable.onProgress = onProgress;
-    return true;
   }
 
   /**

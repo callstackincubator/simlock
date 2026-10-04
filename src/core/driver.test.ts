@@ -1,39 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "../ports/index.js";
-import {
-  assertDiskSpace,
-  DiskSpaceGuard,
-  InsufficientDiskSpaceError,
-  sameReceipt,
-} from "./driver.js";
+import { DiskSpaceGuard, InsufficientDiskSpaceError, sameReceipt } from "./driver.js";
 
 const gibibyte = 1024 ** 3;
-
-describe("assertDiskSpace", () => {
-  it("resolves when free space covers the requirement", async () => {
-    const filesystem = new MemoryFilesystem(10 * gibibyte);
-
-    await expect(
-      assertDiskSpace(filesystem, "ios", 6 * gibibyte, "/volume"),
-    ).resolves.toBeUndefined();
-  });
-
-  it("throws InsufficientDiskSpaceError naming required and available bytes when it doesn't", async () => {
-    const filesystem = new MemoryFilesystem(4 * gibibyte);
-
-    const error = await assertDiskSpace(filesystem, "android", 6 * gibibyte, "/volume").catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
-    expect(error).toMatchObject({
-      availableBytes: 4 * gibibyte,
-      platform: "android",
-      requiredBytes: 6 * gibibyte,
-    });
-  });
-});
 
 describe("DiskSpaceGuard", () => {
   it("lets a single reservation through when it fits free space", async () => {
@@ -45,13 +15,20 @@ describe("DiskSpaceGuard", () => {
     );
   });
 
-  it("rejects a reservation that alone exceeds free space, with InsufficientDiskSpaceError", async () => {
+  it("rejects a reservation that alone exceeds free space with InsufficientDiskSpaceError naming required and available bytes", async () => {
     const filesystem = new MemoryFilesystem(4 * gibibyte);
     const guard = new DiskSpaceGuard();
 
-    await expect(guard.reserve(filesystem, "ios", 6 * gibibyte, "/volume")).rejects.toBeInstanceOf(
-      InsufficientDiskSpaceError,
-    );
+    const error = await guard
+      .reserve(filesystem, "android", 6 * gibibyte, "/volume")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
+    expect(error).toMatchObject({
+      availableBytes: 4 * gibibyte,
+      platform: "android",
+      requiredBytes: 6 * gibibyte,
+    });
   });
 
   it("rejects a second concurrent reservation that would overfill the volume alongside the first", async () => {

@@ -22,7 +22,6 @@ function coordinator(): CapacityCoordinator {
       },
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     ),
@@ -47,7 +46,6 @@ function sizedCoordinator(): CapacityCoordinator {
       },
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 12 * gibibyte,
         totalRamBytes: 12 * gibibyte,
       }),
     ),
@@ -160,7 +158,6 @@ describe("CapacityCoordinator", () => {
         },
         new FakeSystemStats({
           cpuCount: 8,
-          freeRamBytes: 12 * gibibyte,
           totalRamBytes: 12 * gibibyte,
         }),
       ),

@@ -2997,7 +2997,6 @@ async function createHarness(
     registry,
     systemStats: new FakeSystemStats({
       cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
       totalRamBytes: 32 * gibibyte,
     }),
   });

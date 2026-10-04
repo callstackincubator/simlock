@@ -230,7 +230,7 @@ describe("MCP stdio lifecycle", () => {
           filesystem: new MemoryFilesystem(),
           ipc: new MemoryIpcTransport(),
           launcher: new FakeDaemonLauncher(),
-          systemStats: new FakeSystemStats({ cpuCount: 1, freeRamBytes: 1, totalRamBytes: 1 }),
+          systemStats: new FakeSystemStats({ cpuCount: 1, totalRamBytes: 1 }),
         },
         env,
       );

@@ -16,10 +16,7 @@ const options: ResourceStrategyOptions = {
 };
 
 function withRam(totalRamBytes: number): CapacityStrategy {
-  return resourceStrategy.create(
-    options,
-    new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
-  );
+  return resourceStrategy.create(options, new FakeSystemStats({ cpuCount: 8, totalRamBytes }));
 }
 
 describe("resource strategy defaults", () => {
@@ -27,7 +24,6 @@ describe("resource strategy defaults", () => {
     const defaults = resourceStrategy.defaults(
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 16 * gibibyte,
         totalRamBytes: 32 * gibibyte,
       }),
     );
@@ -45,7 +41,7 @@ describe("resource strategy defaults", () => {
 
   it("keeps at least one device per platform on a small machine", () => {
     const defaults = resourceStrategy.defaults(
-      new FakeSystemStats({ cpuCount: 1, freeRamBytes: gibibyte, totalRamBytes: 2 * gibibyte }),
+      new FakeSystemStats({ cpuCount: 1, totalRamBytes: 2 * gibibyte }),
     );
 
     expect(defaults.limits.ios.maxDevices).toBe(1);
@@ -172,7 +168,6 @@ describe("resource strategy RAM budget by mode", () => {
       { limits: roomy, ramBudget },
       new FakeSystemStats({
         cpuCount: 8,
-        freeRamBytes: 12 * gibibyte,
         totalRamBytes: 12 * gibibyte,
       }),
     );
