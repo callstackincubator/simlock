@@ -177,6 +177,12 @@ export interface LeaseRequestTrackerOptions {
   readonly dispatch: HttpDispatch;
   readonly requests: LeaseRequestReader;
   readonly clock: Clock;
+  /**
+   * Whether `allowDownload` answers the `POST` as soon as the request is stored (the default).
+   * A gateway sets it `false`: it never downloads, so there is nothing slow to outlast the
+   * `POST`, and a request it rejects as unservable must fail the `POST` instead.
+   */
+  readonly answerDownloadsEarly?: boolean;
 }
 
 /**
@@ -243,7 +249,12 @@ export class LeaseRequestTracker {
         onRequestAdmitted: (id, replayed) => {
           requestId = id;
           // A repeat names a request that already exists: answer with it, whatever its state.
-          if (replayed || body.allowDownload === true) settleCreated();
+          if (
+            replayed ||
+            (body.allowDownload === true && this.options.answerDownloadsEarly !== false)
+          ) {
+            settleCreated();
+          }
         },
       });
 

@@ -280,6 +280,26 @@ describe("LeaseRequestTracker.submit with allowDownload", () => {
   });
 });
 
+describe("LeaseRequestTracker.submit with allowDownload on a gateway", () => {
+  it("fails the POST when the dispatch rejects the request, instead of answering 'created' first", async () => {
+    const clock = new FakeClock(1_000);
+    const dispatcher = new FakeDispatcher(clock);
+    const tracker = new LeaseRequestTracker({
+      answerDownloadsEarly: false,
+      clock,
+      dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
+      requests: dispatcher.requests,
+    });
+    const outcomePromise = tracker.submit(identity, { ...body, allowDownload: true });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.session.onRequestAdmitted?.("req_1", false);
+    call.reject(new Error("no worker can serve this"));
+
+    const outcome = await outcomePromise;
+    expect(outcome.kind).toBe("rejected");
+  });
+});
+
 describe("LeaseRequestTracker.submit with a mode", () => {
   it("passes mode through onto the dispatch input, and omits it when the body names none", async () => {
     const { dispatcher, tracker } = buildTracker();

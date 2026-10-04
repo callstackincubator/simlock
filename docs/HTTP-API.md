@@ -401,12 +401,14 @@ worker able to serve it is drained or disconnects, the request ends `failed`
 with `NO_CAPACITY`. After a gateway restart a worker is not known until it
 reconnects.
 
-With `allowDownload: true` the `201` is returned as soon as the request is
-stored — resolving a downloadable runtime can take minutes, so progress and
+On a single host, with `allowDownload: true` the `201` is returned as soon as
+the request is stored — resolving a downloadable runtime can take minutes, so progress and
 any later failure surface on the request resource instead of on the `POST`
 itself. A refusal that comes before the request is stored
 (`409 REQUESTER_ALREADY_LEASED`, `400` for a `ttlMs` above `lease.maxTtlMs`)
-still fails the `POST`.
+still fails the `POST`. Through a gateway the flag changes nothing about the
+`POST`: it never downloads, so a request no worker can serve fails it as
+above.
 
 → `201`, `Location: /v1/lease-requests/{id}`:
 
@@ -1003,6 +1005,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
       "connection": "connected",
       "drained": false,
       "lastSeenAt": 1790864080506,
+      "catalogReadAt": 1790864071200,
       "health": "running",
       "version": "1.0.0",
       "capacity": {
@@ -1063,6 +1066,11 @@ simulated (hence the thin Android catalog), trimmed to one worker:
   ]
 }
 ```
+
+`catalogReadAt` is when the gateway last read that worker's catalog since the
+worker connected. It is absent until the first read, and again after the
+worker reconnects until its new catalog arrives; a worker without it takes no
+requests (see the table under `POST /v1/lease-requests`).
 
 `downloads.policy` and `downloads.timeoutMs` are that worker's own effective
 config, read when its uplink connects, again on every periodic refresh, and
@@ -1129,8 +1137,9 @@ gateway has already forgotten — the same reading `token.revoke` gives an
 unknown token id.
 
 On a **single host** (a daemon in `worker` mode), `GET /v1/workers` returns
-one view, the host itself, with the same fields a gateway shows for each of
-its workers. `id` is the id the host presents to a gateway, `label` is its
+one view, the host itself, with the fields a gateway shows for each of its
+workers except `catalogReadAt`, which is a gateway's record of reading a
+worker and is always absent here. `id` is the id the host presents to a gateway, `label` is its
 `gateway.label` (absent when unset), `connection` is `connected`, `drained`
 is `false`, and `lastSeenAt` is the time of the request. Every other field
 comes from the host's own status, devices, catalog and config. Status and

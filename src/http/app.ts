@@ -69,6 +69,9 @@ export interface HttpGatewayDeps {
   readonly logger: Logger;
   readonly config: Config;
   readonly tokens: { verify(secret: string): Promise<TokenIdentity | undefined> };
+  /** `false` on a gateway, which never downloads: `allowDownload` then does not answer the lease
+   * request `POST` early. Default `true`. */
+  readonly answerDownloadsEarly?: boolean;
 }
 
 type Env = AuthEnv;
@@ -184,6 +187,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     clock: deps.clock,
     dispatch: deps.dispatch,
     requests: deps.leaseRequests,
+    ...(deps.answerDownloadsEarly === undefined
+      ? {}
+      : { answerDownloadsEarly: deps.answerDownloadsEarly }),
   });
   const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
 

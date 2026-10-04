@@ -769,6 +769,9 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
           return { devices: gatewayService.workers.grantedDevices() };
         },
       },
+      // A gateway never downloads, so `allowDownload` has nothing slow to outlast the `POST`:
+      // a request no worker can serve fails it, as without the flag.
+      answerDownloadsEarly: false,
       tokens,
     });
     const gateway = new HttpGateway(app, {

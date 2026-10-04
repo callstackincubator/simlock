@@ -113,7 +113,14 @@ function expectFailure(result: CliResult, code: string, exit: number): void {
 describe("a gateway fails a request no worker can serve at once", () => {
   it("fails a request for a model, a runtime, or a platform no worker has, and lets the same requester ask again", async () => {
     const { gateway, join } = await startGateway();
-    await join("worker-a", { ios: IPHONE_17 });
+    // 27.0 is installed, but iPhone 17 pairs with 26.0 only.
+    await join("worker-a", {
+      ios: {
+        ...IPHONE_17,
+        availableOsVersions: ["26.0", "27.0"],
+        modelRuntimes: { "iPhone 17": ["26.0"] },
+      },
+    });
     await waitForWorkers(gateway, ["worker-a"]);
 
     // A model no worker lists.
@@ -144,6 +151,24 @@ describe("a gateway fails a request no worker can serve at once", () => {
     expectFailure(missing, "RUNTIME_MISSING", EXIT_UNSERVABLE);
     const download = await gateway.cli(["lease", ...runtime, "--detach", "--allow-download"], FAST);
     expectFailure(download, "RUNTIME_MISSING", EXIT_UNSERVABLE);
+
+    // A runtime a worker has, that no worker pairs with the model asked for.
+    const unpaired = await gateway.cli(
+      [
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 17",
+        "--os",
+        "27.0",
+        "--agent-id",
+        "agent-1",
+        "--detach",
+      ],
+      FAST,
+    );
+    expectFailure(unpaired, "RUNTIME_MISSING", EXIT_UNSERVABLE);
 
     // A platform no worker has a driver for.
     const android = await gateway.cli(

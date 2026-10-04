@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
+import { QueueTimeoutError } from "../core/wait-queue.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
@@ -2394,6 +2395,67 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
       expect(fleetHarness.coordinator.queueDepth).toBe(0);
     },
   );
+
+  describe("row 6: a worker that takes requests can serve it but is busy", () => {
+    function busyFleet() {
+      const fleetHarness = harness();
+      const client = new ScriptedWorkerClient();
+      fleetHarness.directory.add("wrk_a", client);
+      connectWorker(fleetHarness.workers, "wrk_a", { capacity: saturatedIos() });
+      return { client, fleetHarness };
+    }
+
+    it("queues it, sends it to no worker, waiting", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { state } = lease(fleetHarness, REQUEST);
+      await tick();
+
+      expect(state.state).toBe("pending");
+      expect(fleetHarness.coordinator.queueDepth).toBe(1);
+      expect(leaseRequests(client)).toEqual([]);
+    });
+
+    it("answers NO_CAPACITY at once with --no-wait, and queues nothing", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { noWait: true });
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(leaseRequests(client)).toEqual([]);
+      expect(fleetHarness.coordinator.queueDepth).toBe(0);
+    });
+
+    it("queues it with a timeout, and ends it at the deadline rather than at once", async () => {
+      const { client, fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { timeoutMs: 60_000 });
+      const ended = outcome.catch((error: unknown) => error);
+      await tick();
+      expect(state.state).toBe("pending");
+      expect(fleetHarness.coordinator.queueDepth).toBe(1);
+
+      fleetHarness.clock.advance(60_000);
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toBeInstanceOf(QueueTimeoutError);
+      expect(leaseRequests(client)).toEqual([]);
+    });
+
+    it("answers NO_CAPACITY at once with --no-wait and a timeout", async () => {
+      const { fleetHarness } = busyFleet();
+
+      const { outcome, state } = lease(fleetHarness, REQUEST, { noWait: true, timeoutMs: 60_000 });
+      await tick();
+
+      expect(state.state).toBe("rejected");
+      await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      expect(fleetHarness.coordinator.queueDepth).toBe(0);
+    });
+  });
 
   it("lets a rejected requester make a new request at once", async () => {
     const fleetHarness = harness();
