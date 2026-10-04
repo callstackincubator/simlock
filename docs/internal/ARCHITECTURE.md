@@ -267,8 +267,9 @@ gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
-required capacity field, taking it to 11. So the range both
-sides advertise is `{min: 11, max: 11}`, an older client and a current daemon simply
+required capacity field, taking it to 11, and a device's `servesDefaultMode`, required
+too, takes it to 12. So the range both
+sides advertise is `{min: 12, max: 12}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -665,7 +666,15 @@ The v1 policy (`warm-then-free`) is eight stages:
    worker that is busy, not unable: its requests wait;
 5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
    matching the request, compared against the worker's own name for the
-   model — a **warm hit**, and a sub-second grant;
+   model — a **warm hit**, and a sub-second grant. The runtime must be the
+   one requested or, with none requested, the one the worker would pick (the
+   catalog's `defaultRuntime` when the model pairs with it, otherwise its only
+   paired runtime; none when several pair and no default does). The mode must
+   fit (ADR 0009 §6): `full` needs a device reporting `mode: "full"`, `slim` one
+   reporting `slim`, and a request naming none a device reporting
+   `servesDefaultMode`, which the worker computes in
+   `LeaseAcquisitionCoordinator#servesDefaultMode`, where it resolves the
+   default;
 6. `free-slot` (filter): keep a worker with a free running slot for the platform
    and globally, counting a running device that is not leased as free (the
    planner evicts it);
@@ -903,7 +912,8 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
   `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
-  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required; a
+  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, then to
+  `{min: 12, max: 12}`, because a device's `servesDefaultMode` is; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

@@ -1116,3 +1116,28 @@ consume. Docs and code comments should describe §19e's backpressure
 guarantee as holding for a worker reached directly, not (yet) end to end
 through a gateway — this entry is that correction; nothing in
 `src/gateway/` should claim otherwise.
+
+## Two gaps in gateway warm hits (ADR 0009 §6)
+
+A warm hit through a gateway reads each device's reported `mode` and
+`servesDefaultMode`, and the gateway never stores the mode of the request that
+created a device. Two cases follow, both accepted because a miss costs a cold
+boot on the worker and never a wrong device: the worker still applies its own
+rules.
+
+**A slim-pool device whose slim pass failed reports `full`.** Slim is best
+effort (ADR 0007 §6). A device planned into the slim pool whose driver could
+not slim it reports `mode: "full"`, so the gateway counts it as a warm hit for a
+`full` request, and the worker, whose pools differ, boots a device for it
+anyway. The false hit costs the cold boot the hit was meant to avoid, and the
+request may go to a worker that was busier than another.
+
+**On a default-slim worker, a full device on a runtime that cannot be slimmed
+is not a hit for a request with no mode.** Its pool is full, so it does not
+serve the default mode, but the worker would hand that request a full device
+because the default runtime cannot be slimmed. The gateway reads the pool and
+skips it: the request still reaches the worker through the stages after
+`warm-hit`, and costs the boot a hit would have saved.
+
+Closing either needs the mode of the request that created each device stored on
+the device (ADR 0009, Alternatives considered), which no one has asked for yet.

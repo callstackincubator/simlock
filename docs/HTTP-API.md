@@ -223,8 +223,14 @@ past its threshold with nothing working on it also carries
 `stalledTransition.*` in [CONFIGURATION.md](CONFIGURATION.md)). Every other
 device has no `stalled` field, and an older daemon sends none.
 
+Every device in `devices` carries **`servesDefaultMode`**, a boolean: whether
+its pool is the one a lease request with no `mode` draws from on this daemon
+(the default mode of the device's platform). `mode` says what the device is;
+`servesDefaultMode` says whether a request naming no mode would get it. An
+older daemon does not send it.
+
 ```json
-{ "id": "dev_7", "state": "provisioning", "mode": "full", "transitionAgeMs": 412000, "stalled": true,
+{ "id": "dev_7", "state": "provisioning", "mode": "full", "servesDefaultMode": true, "transitionAgeMs": 412000, "stalled": true,
   "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" } }
 ```
 
