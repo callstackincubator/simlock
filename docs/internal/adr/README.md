@@ -44,3 +44,4 @@ the status is stale.
 | [0011](0011-the-console-is-a-built-app-the-daemon-serves.md) | The console is a built app the daemon serves at `/` | Accepted — not yet implemented |
 | [0012](0012-a-worker-answers-the-fleet-operations-as-a-fleet-of-one.md) | A worker answers the fleet operations as a fleet of one | Accepted — not yet implemented |
 | [0013](0013-the-console-reads-routes-and-follows-the-event-stream.md) | The console reads the routes and follows the event stream | Accepted — not yet implemented |
+| [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Proposed |
