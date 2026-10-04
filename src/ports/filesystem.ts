@@ -1,5 +1,6 @@
 import {
   chmod,
+  link,
   lstat,
   mkdir,
   open,
@@ -57,7 +58,8 @@ export interface Filesystem {
   /**
    * Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
    * decides who wins, which is the only way two processes racing to write one file both
-   * end up agreeing about what it says.
+   * end up agreeing about what it says. The file appears with its full contents, never
+   * empty, so a loser that reads it straight away reads what the winner wrote.
    */
   writeFileExclusive(path: string, contents: string): Promise<void>;
   mkdirp(path: string): Promise<void>;
@@ -134,7 +136,20 @@ export class NodeFilesystem implements Filesystem {
   }
 
   async writeFileExclusive(path: string, contents: string): Promise<void> {
-    await writeFile(path, contents, { encoding: "utf8", flag: "wx" });
+    // `writeFile` with the `wx` flag creates the file empty and fills it a moment later, so a
+    // racer that loses the create can read it in between and find nothing. Write the contents
+    // aside first and hard-link them into place: `link` fails `EEXIST` like `wx` does, but the
+    // file it creates is already complete.
+    const temporaryPath = join(
+      dirname(path),
+      `.${basename(path)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+    );
+    await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+    try {
+      await link(temporaryPath, path);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
   }
 
   async mkdirp(path: string): Promise<void> {
