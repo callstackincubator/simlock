@@ -203,6 +203,33 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
 
 describe("FleetLeaseCoordinator device mode", () => {
   it.each([
+    ["full", "wrk_a_cold", "free-capacity"],
+    ["slim", "wrk_z_slim", "warm-hit"],
+  ] as const)(
+    "routes a %s request to %s by the %s stage when the only warm device is slim and another worker has more room",
+    async (mode, expectedWorker, expectedStage) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      for (const id of ["wrk_a_cold", "wrk_z_slim"]) {
+        const client = new ScriptedWorkerClient();
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+        directory.add(id, client);
+      }
+      connectWorker(workers, "wrk_a_cold", { capacity: roomierIos() });
+      connectWorker(workers, "wrk_z_slim", {
+        devices: [deviceFixture("dev_slim", "ready", "slim")],
+      });
+      const dispatched: { workerId: string; stage: string }[] = [];
+      eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+      await coordinator.request({ ...REQUEST, mode }, requestOptions());
+
+      expect(dispatched).toEqual([
+        expect.objectContaining({ stage: expectedStage, workerId: expectedWorker }),
+      ]);
+    },
+  );
+
+  it.each([
     ["slim", { mode: "slim" as const }],
     ["full", { mode: "full" as const }],
   ])("forwards a request's mode %s to the worker unchanged", async (_label, mode) => {

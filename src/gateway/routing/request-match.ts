@@ -40,10 +40,8 @@ export function pickedRuntime(worker: WorkerView, request: RoutableRequest): str
   const model = findModel(catalog, request);
   if (model === undefined) return undefined;
   const runtimes = pairedRuntimes(catalog, model, request);
-  if (catalog.defaultRuntime !== undefined && runtimes.includes(catalog.defaultRuntime)) {
-    return catalog.defaultRuntime;
-  }
-  return runtimes.length === 1 ? runtimes[0] : undefined;
+  const paired = runtimes.find((runtime) => runtime === catalog.defaultRuntime);
+  return paired ?? (runtimes.length === 1 ? runtimes[0] : undefined);
 }
 
 /**

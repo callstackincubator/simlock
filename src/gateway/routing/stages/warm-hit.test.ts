@@ -182,6 +182,28 @@ describe("warm-hit", () => {
       expect(warmHit.score(view(catalog, "26.0"), request)).toBe(1);
     });
 
+    it("counts a warm device on the runtime a request names even when it is not the worker's default", () => {
+      const catalog = {
+        defaultRuntime: "26.0",
+        models: ["iPhone 17"],
+        platform: "ios" as const,
+        runtimes: ["26.0", "18.0"],
+      };
+
+      expect(warmHit.score(view(catalog, "18.0"), { ...request, osVersion: "18.0" })).toBe(1);
+      expect(warmHit.score(view(catalog, "26.0"), { ...request, osVersion: "18.0" })).toBe(0);
+    });
+
+    it("gives no warm hit on a platform the worker's catalog does not list", () => {
+      const catalog = {
+        models: ["Pixel 8"],
+        platform: "android" as const,
+        runtimes: ["35"],
+      };
+
+      expect(warmHit.score(view(catalog, "26.0"), request)).toBe(0);
+    });
+
     it("picks the model's only paired runtime when the default runtime does not pair with the model", () => {
       const catalog = {
         defaultRuntime: "26.0",

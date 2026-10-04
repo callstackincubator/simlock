@@ -92,7 +92,7 @@ export function deviceFixture(
   id: string,
   state: "ready" | "leased" = "ready",
   mode: "slim" | "full" = "full",
-  servesDefaultMode: boolean = mode === "full",
+  servesDefaultMode: boolean = true,
 ) {
   return {
     id,
