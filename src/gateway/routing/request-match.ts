@@ -20,18 +20,47 @@ export function matchRequest(worker: WorkerView, request: RoutableRequest): stri
   if (catalog === undefined) return undefined;
   const model = findModel(catalog, request);
   if (model === undefined) return undefined;
-  const { imageTag } = request;
-  const runtimes =
-    imageTag === undefined
-      ? ownList(catalog.modelRuntimes, model)
-      : ownList(catalog.modelRuntimes, model).filter((runtime) =>
-          (catalog.images ?? []).some(
-            (image) => image.tag === imageTag && image.runtime === runtime,
-          ),
-        );
+  const runtimes = pairedRuntimes(catalog, model, request);
   const pairs =
     request.osVersion === undefined ? runtimes.length > 0 : runtimes.includes(request.osVersion);
   return pairs ? model : undefined;
+}
+
+/**
+ * The runtime the worker would pick for the request, or `undefined` when the gateway cannot say
+ * (ADR 0009 §6). The one the request names, when it names one. With none named: the catalog's
+ * `defaultRuntime` when the model pairs with it, otherwise the model's only paired runtime.
+ * A model with several paired runtimes and no paired default has no answer: the worker's choice
+ * then depends on what it would boot, and the gateway compares no versions.
+ */
+export function pickedRuntime(worker: WorkerView, request: RoutableRequest): string | undefined {
+  if (request.osVersion !== undefined) return request.osVersion;
+  const catalog = catalogOf(worker, request);
+  if (catalog === undefined) return undefined;
+  const model = findModel(catalog, request);
+  if (model === undefined) return undefined;
+  const runtimes = pairedRuntimes(catalog, model, request);
+  if (catalog.defaultRuntime !== undefined && runtimes.includes(catalog.defaultRuntime)) {
+    return catalog.defaultRuntime;
+  }
+  return runtimes.length === 1 ? runtimes[0] : undefined;
+}
+
+/**
+ * The runtimes the model pairs with. A request naming an image tag counts only the runtimes for
+ * which the catalog's `images` lists an image of that tag.
+ */
+function pairedRuntimes(
+  catalog: PlatformEntry,
+  model: string,
+  request: RoutableRequest,
+): readonly string[] {
+  const { imageTag } = request;
+  const runtimes = ownList(catalog.modelRuntimes, model);
+  if (imageTag === undefined) return runtimes;
+  return runtimes.filter((runtime) =>
+    (catalog.images ?? []).some((image) => image.tag === imageTag && image.runtime === runtime),
+  );
 }
 
 /** Whether the worker's catalog has an entry for the request's platform. */

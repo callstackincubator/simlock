@@ -163,6 +163,7 @@ describe("statusDeviceSchema's device projection", () => {
       mode: "slim",
       leaseIdentity: "fresh",
       transitionAgeMs: 70,
+      servesDefaultMode: false,
     };
   }
 
@@ -187,6 +188,7 @@ describe("statusDeviceSchema's device projection", () => {
       spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
       state: "quarantined",
       mode: "slim",
+      servesDefaultMode: false,
       foreignStateDetectedAt: 20,
       foreignProvenanceDetectedAt: 30,
       quarantineAttempts: 3,
@@ -197,6 +199,20 @@ describe("statusDeviceSchema's device projection", () => {
 
   it("rejects a device object that is missing the fields status.get must keep", () => {
     expect(() => statusDeviceSchema.parse({ id: "device-1" })).toThrow();
+  });
+
+  it("rejects a status device without servesDefaultMode, or with one that is not a boolean", () => {
+    const device = {
+      id: "device-1",
+      mode: "full",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "ready",
+    };
+    expect(() => statusDeviceSchema.parse(device)).toThrow();
+    expect(() => statusDeviceSchema.parse({ ...device, servesDefaultMode: "yes" })).toThrow();
+    expect(statusDeviceSchema.parse({ ...device, servesDefaultMode: true })).toMatchObject({
+      servesDefaultMode: true,
+    });
   });
 
   it("rejects a status device without a mode, or with a mode other than slim or full", () => {

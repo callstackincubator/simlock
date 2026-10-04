@@ -2329,7 +2329,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
-    return `Device ${device.id}${where}: ${device.state}, mode ${device.mode}${suffix}`;
+    return `Device ${device.id}${where}: ${device.state}, mode ${device.mode}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}${suffix}`;
   });
   // ADR 0004: `lastRenewedAt` is a stored field written at grant and on every renew, so unlike
   // the derived `lastHeartbeatAt` it replaces, every lease has one to render.

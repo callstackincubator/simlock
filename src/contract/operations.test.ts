@@ -446,6 +446,7 @@ describe("operation input/output round trips", () => {
           id: "dev_1",
           spec: { platform: "ios", model: "iPhone 17", osVersion: "26.0" },
           mode: "full",
+          servesDefaultMode: true,
           state: "leased",
           workerId: "wrk_1",
         },

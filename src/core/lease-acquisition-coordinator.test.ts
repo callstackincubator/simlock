@@ -1134,16 +1134,15 @@ describe("LeaseAcquisitionCoordinator", () => {
     );
 
     it.each([
-      ["slim", undefined, true],
-      ["slim", "slim" as const, true],
-      ["slim", "full" as const, false],
-      ["full", undefined, true],
-      ["full", "slim" as const, false],
-    ])(
+      ["slim", "slim", true],
+      ["slim", "full", false],
+      ["full", "full", true],
+      ["full", "slim", false],
+    ] as const)(
       "on a worker whose default is %s, a device whose pool mode is %s reports servesDefaultMode %s",
       async (defaultMode, poolMode, served) => {
         const harness = await createHarness({
-          defaultModes: { ios: defaultMode as DeviceMode },
+          defaultModes: { ios: defaultMode },
           drivers: [slimmingDriver()],
         });
         const spec = {

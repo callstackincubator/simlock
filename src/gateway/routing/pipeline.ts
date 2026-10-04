@@ -13,6 +13,8 @@ export interface RoutableRequest {
   readonly osVersion?: string;
   /** The image tag the request names, matched against the catalog's `images`; absent for none. */
   readonly imageTag?: string;
+  /** The mode the request names; absent for none, which the worker answers with its default. */
+  readonly mode?: "slim" | "full";
 }
 
 /** Drops every worker `keeps` answers `false` for. Never decides a pick on its own. */
