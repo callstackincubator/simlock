@@ -88,6 +88,7 @@ function createHarness(
   };
   const converger = new StartupConverger({
     capacity: {
+      atRamBudget: () => false,
       deviceLimit: () => limits.ios + limits.android,
       ramBudget: undefined,
       get runningCapacity() {

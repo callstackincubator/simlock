@@ -803,6 +803,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -826,6 +828,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([
           {
             images: [{ abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" }],
@@ -854,6 +858,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -895,6 +901,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -934,6 +942,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -972,6 +982,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -997,6 +1009,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -1021,6 +1035,8 @@ describe("GatewayDispatcher", () => {
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
         catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
           .platforms,
         downloads: { policy: "on-request" },
@@ -1163,6 +1179,8 @@ describe("GatewayDispatcher: waiting requests", () => {
         ...statusFixture().capacity,
         ios: { ...statusFixture().capacity.ios, limit: 4, maxRunning: 4 },
       },
+      health: "running",
+      queueDepth: 0,
       catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
         .platforms,
     });

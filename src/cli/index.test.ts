@@ -2409,6 +2409,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   const connectedWorker = {
     capacity: {
       android: {
+        atRamBudget: false,
         limit: 2,
         maxRunning: 2,
         overLimit: false,
@@ -2418,7 +2419,16 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
         warm: 0,
       },
       global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 1 },
-      ios: { limit: 2, maxRunning: 2, overLimit: false, reserved: 0, running: 1, used: 1, warm: 1 },
+      ios: {
+        atRamBudget: false,
+        limit: 2,
+        maxRunning: 2,
+        overLimit: false,
+        reserved: 0,
+        running: 1,
+        used: 1,
+        warm: 1,
+      },
     },
     catalog: [],
     connection: "connected" as const,
@@ -2670,6 +2680,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const status = {
       capacity: {
         android: {
+          atRamBudget: false,
           limit: 0,
           maxRunning: 0,
           overLimit: false,
@@ -2680,6 +2691,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         },
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 1, warm: 0 },
         ios: {
+          atRamBudget: false,
           limit: 2,
           maxRunning: 2,
           overLimit: false,
@@ -4503,8 +4515,18 @@ const EMPTY_STATUS: StatusGetOutput = {
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
   capacity: {
-    ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
+    ios: {
+      atRamBudget: false,
+      limit: 1,
+      running: 0,
+      maxRunning: 1,
+      reserved: 0,
+      overLimit: false,
+      warm: 0,
+      used: 0,
+    },
     android: {
+      atRamBudget: false,
       limit: 1,
       running: 0,
       maxRunning: 1,

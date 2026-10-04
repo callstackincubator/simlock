@@ -328,6 +328,7 @@ describe("operation input/output round trips", () => {
       leases: [],
       capacity: {
         ios: {
+          atRamBudget: false,
           running: 0,
           maxRunning: 1,
           reserved: 0,
@@ -337,6 +338,7 @@ describe("operation input/output round trips", () => {
           used: 0,
         },
         android: {
+          atRamBudget: false,
           running: 0,
           maxRunning: 1,
           reserved: 0,
@@ -371,6 +373,7 @@ describe("operation input/output round trips", () => {
       .slice(0, 16)
       .map((install) => ({ ...install, component: install.component.slice(0, 64) }));
     const capacityEntry = {
+      atRamBudget: false,
       running: 0,
       maxRunning: 1,
       reserved: 0,
@@ -412,6 +415,7 @@ describe("operation input/output round trips", () => {
 
   it("status.get: round-trips a gateway's aggregate, workers and all (ADR 0005 §20)", () => {
     const capacityEntry = {
+      atRamBudget: false,
       running: 1,
       maxRunning: 2,
       reserved: 0,

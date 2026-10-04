@@ -128,4 +128,29 @@ describe("the registered warm-then-free policy", () => {
     expect(policy.select(REQUEST, [noGlobal, view("wrk_b")])?.workerId).toBe("wrk_b");
     expect(policy.select(REQUEST, [noGlobal])).toBeUndefined();
   });
+
+  it("counts a reserved slot as taken, on the platform and globally, when it looks for a free one", () => {
+    const capacity = statusFixture().capacity;
+    const platformReserved = view("wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 1, reserved: 1 } },
+    });
+    const globalReserved = view("wrk_a", {
+      capacity: { ...capacity, global: { ...capacity.global, maxRunning: 1, reserved: 1 } },
+    });
+
+    for (const full of [platformReserved, globalReserved]) {
+      expect(policy.select(REQUEST, [full, view("wrk_b")])?.workerId).toBe("wrk_b");
+      expect(policy.select(REQUEST, [full])).toBeUndefined();
+    }
+  });
+
+  it("looks at the request's platform only when it asks about the RAM budget", () => {
+    const capacity = statusFixture().capacity;
+    // wrk_a is at its budget for android only: for an iOS request it is as good as wrk_b.
+    const androidFull = view("wrk_a", {
+      capacity: { ...capacity, android: { ...capacity.android, atRamBudget: true } },
+    });
+
+    expect(policy.select(REQUEST, [androidFull, view("wrk_b")])?.workerId).toBe("wrk_a");
+  });
 });

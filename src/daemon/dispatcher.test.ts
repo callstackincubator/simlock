@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NoCapacityError } from "../core/lease-acquisition-coordinator.js";
 import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
@@ -2256,7 +2257,7 @@ describe("Dispatcher: status.get RAM budget", () => {
           driverData: {},
           driverDeviceId: `driver-${index}`,
           provisionDuration: 0,
-          spec: { mode: "full", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+          spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         });
       }
       return built;
@@ -2279,7 +2280,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       expect(fullStatus.capacity.ios.atRamBudget).toBe(true);
       await expect(
         full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
-      ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+      ).rejects.toBeInstanceOf(NoCapacityError);
     });
 
     it("is false under the fixed strategy, which keeps no budget", async () => {

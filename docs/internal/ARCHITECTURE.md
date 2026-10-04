@@ -631,7 +631,7 @@ that removed a worker, or the last that decided when none removed any — is
 reported on `request.dispatched`. `gateway.routing` names a whole list; the
 lists are code, and no config key lists or orders stages.
 
-The v1 policy (`warm-then-free`) is four stages:
+The v1 policy (`warm-then-free`) is eight stages:
 
 1. `takes-requests` (filter): drop workers that are disconnected,
    incompatible, drained, or whose capacity or catalog has not been read
@@ -643,11 +643,28 @@ The v1 policy (`warm-then-free`) is four stages:
    model's `modelRuntimes`; with none named the list must be non-empty. Only
    installed runtimes count, so a download never makes a worker able to
    serve;
-3. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
+3. `healthy` (filter): keep a worker whose health is `running`;
+4. `idle-queue` (filter): keep a worker whose own `queueDepth` is zero, since a
+   worker with a local waiter refuses every `noWait` request (ADR 0005
+   requirement 12). A worker that has not reported health or queue depth is
+   not known to be healthy or idle, so it is dropped. Stages 3 and 4 drop a
+   worker that is busy, not unable: its requests wait;
+5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
    matching the request, compared against the worker's own name for the
    model — a **warm hit**, and a sub-second grant;
-4. `free-capacity` (rank): otherwise the worker with the **most free running
+6. `free-slot` (filter): keep a worker with free running capacity above zero
+   for the platform and globally;
+7. `ram-budget` (rank): prefer a worker whose capacity entry for the platform
+   has `atRamBudget: false` (ADR 0009 §7). The gateway reads the flag from
+   status and imports no capacity module. A rank, so a worker at its budget
+   is still asked when it is the only one left;
+8. `free-capacity` (rank): otherwise the worker with the **most free running
    capacity** for that platform.
+
+`atRamBudget` is computed on the worker by `CapacityCoordinator#atRamBudget`,
+which asks `canProvision` for one more full device of the platform: the
+same function `tryReserveProvisioning` calls, so status and the planner cannot
+disagree.
 
 The same matcher gives the name the gateway forwards: the worker is sent its
 own name for the model, so it resolves exactly what routing matched, and

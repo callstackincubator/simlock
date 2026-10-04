@@ -2303,7 +2303,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
-    return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}`;
+    return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}${usage.atRamBudget ? " (at RAM budget)" : ""}`;
   });
   const ramBudget = capacity.ramBudget;
   const ramLines =

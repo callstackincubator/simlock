@@ -9,6 +9,10 @@ import { type RoutableRequest, type RoutingStage, runStages } from "./routing/pi
 import { type Assessment, assess } from "./routing/serviceability.js";
 import { canServe } from "./routing/stages/can-serve.js";
 import { freeCapacity } from "./routing/stages/free-capacity.js";
+import { freeSlot } from "./routing/stages/free-slot.js";
+import { healthy } from "./routing/stages/healthy.js";
+import { idleQueue } from "./routing/stages/idle-queue.js";
+import { ramBudget } from "./routing/stages/ram-budget.js";
 import { takesRequests } from "./routing/stages/takes-requests.js";
 import { warmHit } from "./routing/stages/warm-hit.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -61,11 +65,22 @@ function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPolicy {
  * `core/config.ts` and the contract's config schema accept.
  *
  * `warm-then-free` is ADR 0005 §13's v1 policy: keep the workers that take requests and whose
- * catalog can serve this one (ADR 0009 §2, §3), prefer a warm hit, otherwise the worker with the
- * most free running capacity, ties broken by ascending worker id.
+ * catalog can serve this one (ADR 0009 §2, §3), drop the ones that are unhealthy or have waiters
+ * of their own, prefer a warm hit, otherwise keep those with a free running slot, prefer one under
+ * its RAM budget, then the one with the most free running capacity, ties broken by ascending
+ * worker id.
  */
 const routingPolicies = {
-  "warm-then-free": [takesRequests, canServe, warmHit, freeCapacity],
+  "warm-then-free": [
+    takesRequests,
+    canServe,
+    healthy,
+    idleQueue,
+    warmHit,
+    freeSlot,
+    ramBudget,
+    freeCapacity,
+  ],
 } as const satisfies Record<string, readonly RoutingStage[]>;
 
 export type RoutingPolicyName = keyof typeof routingPolicies;

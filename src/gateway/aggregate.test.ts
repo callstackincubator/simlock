@@ -9,6 +9,7 @@ import type { WorkerView } from "./worker-registry.js";
 function capacity(running: number, limit: number) {
   return {
     android: {
+      atRamBudget: false,
       limit,
       maxRunning: limit,
       overLimit: false,
@@ -19,6 +20,7 @@ function capacity(running: number, limit: number) {
     },
     global: { maxRunning: limit * 2, overLimit: false, reserved: 0, running, warm: 1 },
     ios: {
+      atRamBudget: false,
       limit,
       maxRunning: limit,
       overLimit: false,

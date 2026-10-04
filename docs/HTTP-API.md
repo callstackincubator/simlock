@@ -185,6 +185,12 @@ when the use exceeds the limit, for example after a restart with larger
 per-device sizes; until a device is deleted, none is created, and no
 shut-down slim device boots if its slim size is smaller than the full size.
 
+Each platform's capacity entry (`capacity.ios`, `capacity.android`) also
+carries **`atRamBudget`**, always present: `true` when creating one more full
+device of that platform would be refused for RAM. It is `false` under `fixed`,
+which keeps no budget. A gateway reads it to prefer a worker that still has
+room.
+
 **`installs`** lists the component installs waiting or running on the
 machine, whoever started them (a lease request that allowed a download, for
 example), oldest first and at most 16:
@@ -224,7 +230,8 @@ device has no `stalled` field, and an older daemon sends none.
 
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of
-them is, absent when none does), every gateway-issued and local lease, every device, the
+them is, absent when none does, and a platform's `atRamBudget` only when every
+connected worker's is), every gateway-issued and local lease, every device, the
 connected workers' installs (the 16 oldest across the fleet), the gateway
 queue's depth and the requests waiting in it — every lease, device and install
 carries the **`workerId`** it lives on, and an additive **`workers`** array
@@ -1014,6 +1021,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "maxRunning": 8,
           "reserved": 0,
           "overLimit": false,
+          "atRamBudget": false,
           "limit": 8,
           "warm": 0,
           "used": 0
@@ -1023,6 +1031,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "maxRunning": 8,
           "reserved": 0,
           "overLimit": false,
+          "atRamBudget": false,
           "limit": 8,
           "warm": 0,
           "used": 0
