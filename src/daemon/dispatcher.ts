@@ -338,6 +338,7 @@ export class Dispatcher {
         {
           limit: this.options.capacity.deviceLimit(platform),
           ...running[platform],
+          atRamBudget: this.options.capacity.atRamBudget(platform),
           warm: warmDevices.filter((device) => device.spec.platform === platform).length,
           used: snapshot.devices.filter(
             (device) => device.spec.platform === platform && device.state !== "deleted",

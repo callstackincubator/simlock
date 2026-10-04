@@ -9,6 +9,7 @@ import type { WorkerView } from "./worker-registry.js";
 function capacity(running: number, limit: number) {
   return {
     android: {
+      atRamBudget: false,
       limit,
       maxRunning: limit,
       overLimit: false,
@@ -19,6 +20,7 @@ function capacity(running: number, limit: number) {
     },
     global: { maxRunning: limit * 2, overLimit: false, reserved: 0, running, warm: 1 },
     ios: {
+      atRamBudget: false,
       limit,
       maxRunning: limit,
       overLimit: false,
@@ -732,5 +734,57 @@ describe("aggregateCatalog", () => {
         { abi: "x86_64", runtime: "34", tag: "default" },
       ]);
     });
+  });
+});
+
+describe("aggregateStatus at-RAM-budget flag", () => {
+  const withBudget = (ios: boolean, android: boolean) => {
+    const base = capacity(1, 2);
+    return {
+      ...base,
+      android: { ...base.android, atRamBudget: android },
+      ios: { ...base.ios, atRamBudget: ios },
+    };
+  };
+  const options = { health: "running", host: GATEWAY_HOST, queueDepth: 0 } as const;
+
+  it("reports atRamBudget for a platform only when every connected worker does", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(true, true), id: "wrk_a" }),
+        view({ capacity: withBudget(true, false), id: "wrk_b" }),
+      ],
+      options,
+    );
+
+    expect(status.capacity.ios.atRamBudget).toBe(true);
+    expect(status.capacity.android.atRamBudget).toBe(false);
+  });
+
+  it("reports false when the first worker has room and a later one is at its budget", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(false, false), id: "wrk_a" }),
+        view({ capacity: withBudget(true, true), id: "wrk_b" }),
+      ],
+      options,
+    );
+
+    expect(status.capacity.ios.atRamBudget).toBe(false);
+    expect(status.capacity.android.atRamBudget).toBe(false);
+  });
+
+  it("leaves a disconnected worker out of the flag, and reports false for a fleet with no connected worker", () => {
+    const status = aggregateStatus(
+      [
+        view({ capacity: withBudget(true, true), id: "wrk_a" }),
+        view({ capacity: withBudget(false, false), connection: "disconnected", id: "wrk_b" }),
+      ],
+      options,
+    );
+    const empty = aggregateStatus([], options);
+
+    expect(status.capacity.ios.atRamBudget).toBe(true);
+    expect(empty.capacity.ios.atRamBudget).toBe(false);
   });
 });

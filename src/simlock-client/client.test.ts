@@ -244,6 +244,7 @@ describe("connectSimlock: handshake", () => {
     const status = {
       capacity: {
         android: {
+          atRamBudget: false,
           limit: 1,
           maxRunning: 1,
           overLimit: false,
@@ -254,6 +255,7 @@ describe("connectSimlock: handshake", () => {
         },
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: {
+          atRamBudget: false,
           limit: 1,
           maxRunning: 1,
           overLimit: false,

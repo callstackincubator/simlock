@@ -38,8 +38,8 @@ workers that have joined it. Workers dial _out_ to the
 gateway over a single WebSocket uplink, so a Mac behind NAT joins a fleet
 with a URL and a join token and never needs an inbound port; the gateway
 keeps one fleet-wide queue and sends each request to the worker best placed
-to serve it — a warm device if one is free, otherwise the machine with the
-most free capacity. Agents and the console point at **one URL** and stop
+to serve it — a warm device if one is free, otherwise the healthy, unqueued
+machine with the most free capacity. Agents and the console point at **one URL** and stop
 caring which machine a device lives on, because a gateway speaks the same
 contract a worker does: the same `lease`, `renew`, `release`, and `status`,
 with `simlock simctl` / `simlock adb` proxied through to the worker that owns

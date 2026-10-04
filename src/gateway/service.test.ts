@@ -896,13 +896,13 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("a worker advertising protocol 9 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
-    const worker9 = { min: 9, max: 9 };
-    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker9)).toBeUndefined();
+  it("a worker advertising protocol 10 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
+    const worker10 = { min: 10, max: 10 };
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker10)).toBeUndefined();
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
-    worker.failWith = protocolMismatchError(worker9);
+    worker.failWith = protocolMismatchError(worker10);
     // A gateway that subscribed anyway would get a live listener, so the push below could reach it.
     worker.subscribeDespiteFailure = true;
 
@@ -914,7 +914,7 @@ describe("GatewayService", () => {
 
     expect(worker.subscribed).toBe(false);
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
-      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: worker9 },
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: worker10 },
     });
     expect(eventNames(harness.events)).not.toContain("lease.granted");
 

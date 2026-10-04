@@ -107,8 +107,8 @@ called.
 
 ## Richer routing: label selectors and requester affinity
 
-The v1 routing policy is warm hit, then most free capacity, and nothing else
-— no requester affinity, no label selectors, no per-worker platform
+The v1 routing policy is health, queue, warm hit, free slot, RAM budget, then most
+free capacity, and nothing else — no requester affinity, no label selectors, no per-worker platform
 exclusions (`label` is display-only). Each is a future policy behind
 `gateway.routing`, which is a pure function over worker views with one entry
 point, so adding one is a new module rather than a change to the request

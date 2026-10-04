@@ -660,8 +660,12 @@ it, the model must pair with at least one installed runtime. A worker that
 has the model and the runtime but cannot pair them is passed over. With
 `--image-tag`, the worker's catalog must list an image of that tag, for that
 runtime when `--os` is given. Among the
-workers that can serve it, the request goes to a machine with a matching warm
-device first, otherwise the one with the most free capacity. You do not name a machine and there is no flag to; where
+workers that can serve it, one that is not healthy or has requests of its own
+waiting is passed over (the request waits for it rather than failing). Of the
+rest, a machine with a matching warm device gets the request first. Otherwise a
+worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
+is preferred over one at it, and the one with the most free capacity gets the
+request. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
 
 ### A request no worker can serve
@@ -876,6 +880,7 @@ why its Android catalog looks thin, trimmed to one worker:
           "maxRunning": 8,
           "reserved": 0,
           "overLimit": false,
+          "atRamBudget": false,
           "limit": 8,
           "warm": 0,
           "used": 0
@@ -885,6 +890,7 @@ why its Android catalog looks thin, trimmed to one worker:
           "maxRunning": 8,
           "reserved": 0,
           "overLimit": false,
+          "atRamBudget": false,
           "limit": 8,
           "warm": 0,
           "used": 0
@@ -1114,6 +1120,12 @@ the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
 
+Each platform's capacity line ends in `(at RAM budget)` when creating one more
+full device of that platform would be refused for RAM. In `--json` it is
+`capacity.ios.atRamBudget` and `capacity.android.atRamBudget`, always present,
+and always `false` under the `fixed` strategy, which keeps no RAM budget. A
+gateway uses it to prefer a worker that still has room.
+
 Each install in progress gets one line: platform, component, state, how long
 since it was first asked for, and how many requests wait on it
 (`Install ios 26.4: downloading for 42s, 2 waiters`). Every install is
@@ -1139,7 +1151,8 @@ size is smaller than the full size.
 Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
 `running (gateway)`, capacity is summed across the connected workers (the RAM
-budget over those that report one, over its limit when any worker is), one line
+budget over those that report one, over its limit when any worker is; a
+platform is `at RAM budget` only when every connected worker is), one line
 per worker precedes the devices, and every device, lease and install names the
 worker it lives on (`Device dev_7 on wrk_a: leased, mode full`,
 `Install ios 26.4 on wrk_a: waiting for 3s, 1 waiter`). Installs are listed

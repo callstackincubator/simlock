@@ -71,12 +71,19 @@ time.
 | 3 | `healthy` | filter | health is `running` |
 | 4 | `idle-queue` | filter | the worker's own queue is empty |
 | 5 | `warm-hit` | rank, settles | a `ready` device fits the request (§6) |
-| 6 | `free-slot` | filter | free running capacity above zero, platform and global |
+| 6 | `free-slot` | filter | a free running slot, platform and global; a running device that is not leased counts as free |
 | 7 | `ram-budget` | rank | not at its RAM budget |
 | 8 | `free-capacity` | rank | most free running capacity |
 
 A worker dropped by stages 3 to 8 is busy, not unable. Its requests wait.
 Only stages 1 and 2 decide whether a request can be served at all (§4).
+
+`free-slot` counts a running device that is not leased as free, on the platform
+and globally: the planner evicts such a device when a running limit blocks a
+request no warm device fits, so the worker serves it at once. A slot held by a
+lease or a reservation is taken. `free-capacity` still ranks by
+`maxRunning - running - reserved`, so among kept workers one with idle devices
+ranks below an empty one.
 
 `idle-queue` is a filter because a worker with a local waiter refuses every
 `noWait` request, warm device or not.

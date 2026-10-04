@@ -13,9 +13,11 @@ function view(id: string, overrides: Partial<WorkerView> = {}): WorkerView {
     connection: "connected",
     devices: [],
     drained: false,
+    health: "running",
     id,
     lastSeenAt: 1,
     leases: [],
+    queueDepth: 0,
     ...overrides,
   };
 }

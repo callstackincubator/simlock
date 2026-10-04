@@ -40,6 +40,9 @@ export interface CapacityReader {
   deviceLimit(platform: CapacityPlatform): number;
   /** The live strategy's RAM budget over the registered devices; `undefined` when it keeps none. */
   readonly ramBudget: RamBudget | undefined;
+  /** Whether creating one more full device of `platform` would be refused for RAM, by the same
+   * check the planner makes. */
+  atRamBudget(platform: CapacityPlatform): boolean;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */

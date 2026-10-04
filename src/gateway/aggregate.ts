@@ -23,6 +23,7 @@ type CatalogImage = NonNullable<PlatformCatalog["images"]>[number];
 const PLATFORMS: readonly Platform[] = ["ios", "android"];
 
 const EMPTY_PLATFORM_CAPACITY = {
+  atRamBudget: false,
   limit: 0,
   maxRunning: 0,
   overLimit: false,
@@ -117,11 +118,17 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
     global: { ...EMPTY_GLOBAL_CAPACITY },
     ios: { ...EMPTY_PLATFORM_CAPACITY },
   };
+  let counted = false;
   for (const view of views) {
     const reported = view.capacity;
     if (reported === undefined) continue;
     for (const platform of PLATFORMS) {
       capacity[platform] = {
+        // True only when *every* reporting worker is at its budget: while one has room, the fleet
+        // does. The first reporter sets it, so an empty fleet stays false.
+        atRamBudget: counted
+          ? capacity[platform].atRamBudget && reported[platform].atRamBudget
+          : reported[platform].atRamBudget,
         limit: capacity[platform].limit + reported[platform].limit,
         maxRunning: capacity[platform].maxRunning + reported[platform].maxRunning,
         // True if *any* worker is over its own limit: the fleet has a machine in trouble, and
@@ -140,6 +147,7 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
       running: capacity.global.running + reported.global.running,
       warm: capacity.global.warm + reported.global.warm,
     };
+    counted = true;
     const ramBudget = sumRamBudget(capacity.ramBudget, reported.ramBudget);
     if (ramBudget !== undefined) capacity.ramBudget = ramBudget;
   }

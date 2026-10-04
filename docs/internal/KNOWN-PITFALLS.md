@@ -835,6 +835,16 @@ refused on the RAM budget because the freed slim size is smaller than the
 full size it needs. The request waits with one fewer warm device. Evicting
 for RAM is out of scope for #174.
 
+**`atRamBudget` reads false for a platform at its device limit, even when RAM
+is also full (#195).** The flag is "the planner would refuse one more full
+device for `ram-budget`", asked through `CapacityCoordinator#canProvision`,
+which checks the device limit first. A worker at both limits reports the
+device limit's refusal, so the gateway's RAM rank sees room it does not have.
+The planner deletes an idle managed device on `device-limit`, which frees
+its RAM too, and then provisions, so the cost is a deleted idle device that
+a worker with room would not have lost. Fix by reporting RAM alone, bypassing the
+device limit, if it shows up in practice.
+
 **A cold slim lease outlives a default MCP request timeout.** Measured on
 one machine: a full cold lease took ~28s, a cold slim lease ~160s (two
 real boots plus the disable pass). The MCP SDK's default per-request timeout

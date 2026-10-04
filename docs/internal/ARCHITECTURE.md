@@ -265,8 +265,10 @@ mode with `mode` in place of `full`, taking it to 8. ADR 0010 adds
 `component.install` and its `component-progress` push, taking it to 9: a
 gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
-`incompatible` rather than fail in the middle of a relay. So the range both
-sides advertise is `{min: 9, max: 9}`, an older client and a current daemon simply
+`incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
+event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
+required capacity field, taking it to 11. So the range both
+sides advertise is `{min: 11, max: 11}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -643,7 +645,7 @@ that removed a worker, or the last that decided when none removed any — is
 reported on `request.dispatched`. `gateway.routing` names a whole list; the
 lists are code, and no config key lists or orders stages.
 
-The v1 policy (`warm-then-free`) is four stages:
+The v1 policy (`warm-then-free`) is eight stages:
 
 1. `takes-requests` (filter): drop workers that are disconnected,
    incompatible, drained, or whose capacity or catalog has not been read
@@ -655,11 +657,29 @@ The v1 policy (`warm-then-free`) is four stages:
    model's `modelRuntimes`; with none named the list must be non-empty. Only
    installed runtimes count, so a download never makes a worker able to
    serve;
-3. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
+3. `healthy` (filter): keep a worker whose health is `running`;
+4. `idle-queue` (filter): keep a worker whose own `queueDepth` is zero, since a
+   worker with a local waiter refuses every `noWait` request (ADR 0005
+   requirement 12). A worker that has not reported health or queue depth is
+   not known to be healthy or idle, so it is dropped. Stages 3 and 4 drop a
+   worker that is busy, not unable: its requests wait;
+5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
    matching the request, compared against the worker's own name for the
    model — a **warm hit**, and a sub-second grant;
-4. `free-capacity` (rank): otherwise the worker with the **most free running
+6. `free-slot` (filter): keep a worker with a free running slot for the platform
+   and globally, counting a running device that is not leased as free (the
+   planner evicts it);
+7. `ram-budget` (rank): prefer a worker whose capacity entry for the platform
+   has `atRamBudget: false` (ADR 0009 §7). The gateway reads the flag from
+   status and imports no capacity module. A rank, so a worker at its budget
+   is still asked when it is the only one left;
+8. `free-capacity` (rank): otherwise the worker with the **most free running
    capacity** for that platform.
+
+`atRamBudget` is computed on the worker by `CapacityCoordinator#atRamBudget`,
+which asks `canProvision` for one more full device of the platform: the
+same function `tryReserveProvisioning` calls, so status and the planner cannot
+disagree.
 
 The same matcher gives the name the gateway forwards: the worker is sent its
 own name for the model, so it resolves exactly what routing matched, and
@@ -881,7 +901,9 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   the catalog's `modelRuntimes` and `modelAliases` are required, and ADR 0007 to
   `{min: 7, max: 7}`, because a device's `mode` is required, then to
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
-  `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers; a
+  `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
+  ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
+  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

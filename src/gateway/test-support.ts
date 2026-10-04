@@ -36,6 +36,7 @@ type PlatformCatalog = z.infer<typeof platformCatalogSchema>;
 type EventEnvelope = z.infer<(typeof OPERATIONS)["events.replay"]["output"]>[number];
 
 const emptyPlatformCapacity = {
+  atRamBudget: false,
   limit: 2,
   maxRunning: 2,
   overLimit: false,

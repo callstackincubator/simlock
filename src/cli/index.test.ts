@@ -2409,6 +2409,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   const connectedWorker = {
     capacity: {
       android: {
+        atRamBudget: false,
         limit: 2,
         maxRunning: 2,
         overLimit: false,
@@ -2418,7 +2419,16 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
         warm: 0,
       },
       global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 1 },
-      ios: { limit: 2, maxRunning: 2, overLimit: false, reserved: 0, running: 1, used: 1, warm: 1 },
+      ios: {
+        atRamBudget: false,
+        limit: 2,
+        maxRunning: 2,
+        overLimit: false,
+        reserved: 0,
+        running: 1,
+        used: 1,
+        warm: 1,
+      },
     },
     catalog: [],
     connection: "connected" as const,
@@ -2670,6 +2680,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const status = {
       capacity: {
         android: {
+          atRamBudget: false,
           limit: 0,
           maxRunning: 0,
           overLimit: false,
@@ -2680,6 +2691,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         },
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 1, warm: 0 },
         ios: {
+          atRamBudget: false,
           limit: 2,
           maxRunning: 2,
           overLimit: false,
@@ -2945,6 +2957,31 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       await print(statusWith({ limitBytes: 12 * gib, overLimit: true, usedBytes: 13 * gib })),
     ).toContain("RAM budget: 13.00 GiB/12.00 GiB used (over limit)\n");
     expect(await print(statusWith())).not.toContain("RAM");
+  });
+
+  it("prints, per platform, whether the worker is at its RAM budget, after any over-limit mark", async () => {
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      capacity: {
+        ...EMPTY_STATUS.capacity,
+        android: { ...EMPTY_STATUS.capacity.android, atRamBudget: false },
+        ios: { ...EMPTY_STATUS.capacity.ios, atRamBudget: true, overLimit: true },
+      },
+    };
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    expect(lines).toContain(
+      "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0 (over limit) (at RAM budget)",
+    );
+    expect(lines).toContain("Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0");
   });
 
   it("simlock status marks a stalled device", async () => {
@@ -4488,8 +4525,18 @@ const EMPTY_STATUS: StatusGetOutput = {
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
   capacity: {
-    ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
+    ios: {
+      atRamBudget: false,
+      limit: 1,
+      running: 0,
+      maxRunning: 1,
+      reserved: 0,
+      overLimit: false,
+      warm: 0,
+      used: 0,
+    },
     android: {
+      atRamBudget: false,
       limit: 1,
       running: 0,
       maxRunning: 1,

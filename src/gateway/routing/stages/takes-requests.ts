@@ -15,5 +15,4 @@ export const takesRequests: FilterStage = {
     );
   },
   kind: "filter",
-  name: "takes-requests",
 };

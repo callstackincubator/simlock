@@ -22,7 +22,15 @@ function cards(stats: readonly Stat[]): string[] {
 }
 
 function capacity(running: number) {
-  const entry = { limit: 4, maxRunning: 4, overLimit: false, reserved: 0, running, used: running };
+  const entry = {
+    atRamBudget: false,
+    limit: 4,
+    maxRunning: 4,
+    overLimit: false,
+    reserved: 0,
+    running,
+    used: running,
+  };
   return {
     android: { ...entry, running: 0, used: 0, warm: 0 },
     global: { maxRunning: 4, overLimit: false, reserved: 0, running, warm: 0 },

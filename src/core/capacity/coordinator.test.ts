@@ -59,6 +59,52 @@ function iosDevice(id: string, mode: "slim" | "full", state: string): Registered
 const shutdownIos: RegisteredCapacityDevice = iosDevice("shutdown-1", "full", "shutdown");
 
 describe("CapacityCoordinator", () => {
+  it("reports atRamBudget for a platform exactly when the next full device is refused for RAM, by the answer tryReserveProvisioning gives", () => {
+    const capacity = sizedCoordinator();
+    const iosFull = (count: number) =>
+      Array.from({ length: count }, (_, index) => iosDevice(`d${index}`, "full", "ready"));
+    // 8 GiB budget, 3 GiB per full iOS device: two fit, a third does not.
+    expect(capacity.atRamBudget("ios", iosFull(1))).toBe(false);
+    expect(capacity.atRamBudget("ios", iosFull(2))).toBe(true);
+    expect(capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, iosFull(2))).toEqual({
+      ok: false,
+      reason: "ram-budget",
+    });
+    expect(capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, iosFull(1)).ok).toBe(
+      true,
+    );
+  });
+
+  it("counts a full device, not a slim one, when it asks whether the budget is reached", () => {
+    const capacity = sizedCoordinator();
+    const slim = [iosDevice("a", "slim", "ready"), iosDevice("b", "slim", "ready")];
+    // Two slim devices use 2 GiB of 8: a full 3 GiB one fits. A third slim one is not asked.
+    expect(capacity.atRamBudget("ios", slim)).toBe(false);
+    // 6 GiB used: another full device (3 GiB) does not fit although a slim one (1 GiB) would.
+    const used = [iosDevice("a", "full", "ready"), iosDevice("b", "full", "ready")];
+    expect(capacity.atRamBudget("ios", used)).toBe(true);
+    expect(capacity.canProvision({ mode: "slim", platform: "ios" }, used).ok).toBe(true);
+  });
+
+  it("does not report a refusal for the device limit as being at the RAM budget", () => {
+    const capacity = coordinator();
+    const full = [iosDevice("a", "full", "ready")];
+
+    expect(capacity.canProvision({ mode: "full", platform: "ios" }, full)).toEqual({
+      ok: false,
+      reason: "device-limit",
+    });
+    expect(capacity.atRamBudget("ios", full)).toBe(false);
+  });
+
+  it("counts a provisioning reservation it holds when it asks whether the budget is reached", () => {
+    const capacity = sizedCoordinator();
+    capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, []);
+    capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, []);
+
+    expect(capacity.atRamBudget("ios", [])).toBe(true);
+  });
+
   it("accounts for provisioning reservations in both device and running capacity", () => {
     const capacity = coordinator();
     const first = capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, []);

@@ -328,13 +328,21 @@ const runningCapacityEntrySchema = z.object({
   overLimit: z.boolean(),
 });
 
+/**
+ * One platform's entry. `atRamBudget`: creating one more full device of the platform would be
+ * refused for RAM -- the check the planner makes, so a gateway can pass such a worker over
+ * (ADR 0009 §7). Always `false` under a strategy that keeps no RAM budget.
+ */
+const platformCapacityEntrySchema = runningCapacityEntrySchema.extend({
+  limit: z.number(),
+  warm: z.number(),
+  used: z.number(),
+  atRamBudget: z.boolean(),
+});
+
 export const statusCapacitySchema = z.object({
-  ios: runningCapacityEntrySchema.extend({ limit: z.number(), warm: z.number(), used: z.number() }),
-  android: runningCapacityEntrySchema.extend({
-    limit: z.number(),
-    warm: z.number(),
-    used: z.number(),
-  }),
+  ios: platformCapacityEntrySchema,
+  android: platformCapacityEntrySchema,
   global: runningCapacityEntrySchema.extend({ warm: z.number() }),
   /** Present only under a strategy that keeps a RAM budget. `usedBytes` counts every
    * non-deleted device by the mode it reports, without in-flight provisioning. */

@@ -184,6 +184,13 @@ function saturatedIos(): ReturnType<typeof statusFixture>["capacity"] {
   return { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } };
 }
 
+/** Free iOS capacity that differs from the default, so a refresh with it is a changed view that
+ * still takes requests -- unlike a queued waiter or a saturated slot, which a filter drops. */
+function roomierIos(): ReturnType<typeof statusFixture>["capacity"] {
+  const capacity = statusFixture().capacity;
+  return { ...capacity, ios: { ...capacity.ios, maxRunning: 3 } };
+}
+
 function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["request"]>[1]> = {}) {
   return {
     allowDownload: false,
@@ -2644,6 +2651,37 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
   });
 });
 
+describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR 0009 §2)", () => {
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  it.each([
+    ["is not healthy", { health: "starting" as const }, { health: "running" as const }],
+    ["has its own waiters queued", { queueDepth: 2 }, { queueDepth: 0 }],
+  ])(
+    "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
+    async (_label, busy, ready) => {
+      const { coordinator, directory, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      connectWorker(workers, "wrk_a");
+      workers.refresh("wrk_a", busy);
+
+      const granted = coordinator.request(REQUEST, requestOptions());
+      await tick();
+
+      expect(coordinator.queueDepth).toBe(1);
+      expect(leaseRequests(client)).toHaveLength(0);
+
+      workers.refresh("wrk_a", ready);
+      await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_a" } } });
+      expect(leaseRequests(client)).toHaveLength(1);
+    },
+  );
+});
+
 describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on another worker (ADR 0009 §5)", () => {
   function runtimeMissing(): SimlockError<"RUNTIME_MISSING"> {
     return new SimlockError("RUNTIME_MISSING", "domain", "worker a has no such runtime", {
@@ -2727,9 +2765,9 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     expect(state.state).toBe("pending");
     expect(leaseRequests(a)).toHaveLength(1);
     // Every later view change re-walks the waiter; wrk_a must stay out of it.
-    workers.refresh("wrk_a", { queueDepth: 1 });
+    workers.refresh("wrk_a", { capacity: roomierIos() });
     workers.refresh("wrk_b", { queueDepth: 1 });
-    workers.refresh("wrk_b", { queueDepth: 0 });
+    workers.refresh("wrk_b", { capacity: roomierIos(), queueDepth: 0 });
     await tick();
 
     expect(leaseRequests(a)).toHaveLength(1);
@@ -2798,7 +2836,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     expect(state.state).toBe("pending");
     // wrk_a's view changed, so it is asked again and refuses for good. The retry goes back to
     // the queue, and the original deadline has already passed.
-    workers.refresh("wrk_a", { queueDepth: 1 });
+    workers.refresh("wrk_a", { capacity: roomierIos() });
     await tick();
 
     expect(calls).toBe(2);
@@ -2826,7 +2864,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
 
     const { ended, state } = await start(coordinator, { timeoutMs: 60_000 });
     expect(state.state).toBe("pending");
-    workers.refresh("wrk_a", { queueDepth: 1 });
+    workers.refresh("wrk_a", { capacity: roomierIos() });
     await tick();
 
     expect(calls).toBe(2);

@@ -32,7 +32,15 @@ function device(id: string, overrides: Partial<WorkerDevice> = {}): WorkerDevice
 }
 
 function capacity(ramBudget?: { usedBytes: number; limitBytes: number; overLimit: boolean }) {
-  const entry = { limit: 4, maxRunning: 4, overLimit: false, reserved: 0, running: 1, used: 1 };
+  const entry = {
+    atRamBudget: false,
+    limit: 4,
+    maxRunning: 4,
+    overLimit: false,
+    reserved: 0,
+    running: 1,
+    used: 1,
+  };
   return {
     android: { ...entry, warm: 0 },
     global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 0 },

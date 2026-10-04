@@ -55,7 +55,7 @@ export class CapacityCoordinator {
     device: PlannedCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
-    const provision = this.strategy.canProvision(device, this.#withReservations(devices));
+    const provision = this.canProvision(device, devices);
     if (!provision.ok) return provision;
 
     const running = this.canReserveRunning(device.platform, devices);
@@ -114,6 +114,24 @@ export class CapacityCoordinator {
     const bootEntry = { deviceId: device.id };
     this.#bootReservations.push(bootEntry);
     return { ok: true, reservation: this.#reservation(this.#bootReservations, bootEntry) };
+  }
+
+  /**
+   * Whether `device` may be created, read-only. The one question `tryReserveProvisioning` asks
+   * before it reserves, and the one `atRamBudget` reads, so what status reports and what the
+   * planner does cannot disagree.
+   */
+  canProvision(
+    device: PlannedCapacityDevice,
+    devices: readonly CapacityDevice[],
+  ): CapacityDecision {
+    return this.strategy.canProvision(device, this.#withReservations(devices));
+  }
+
+  /** Whether creating one more full device of `platform` would be refused for RAM. */
+  atRamBudget(platform: CapacityPlatform, devices: readonly CapacityDevice[]): boolean {
+    const decision = this.canProvision({ mode: "full", platform }, devices);
+    return !decision.ok && decision.reason === "ram-budget";
   }
 
   canBoot(device: CapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision {

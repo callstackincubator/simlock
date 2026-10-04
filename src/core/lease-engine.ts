@@ -369,6 +369,11 @@ export class LeaseEngine {
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
+  atRamBudget(platform: Platform): boolean {
+    return this.#capacity.atRamBudget(platform, this.#capacityDevices());
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
   get ramBudget(): RamBudget | undefined {
     return this.#capacity.ramBudget(this.#capacityDevices());
   }

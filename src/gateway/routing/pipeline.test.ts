@@ -25,8 +25,8 @@ function rank(name: string, scores: Record<string, number>, settles = false): Ra
   return { kind: "rank", name, score: (worker) => scores[worker.id] ?? 0, settles };
 }
 
-function only(name: string, ...ids: string[]): FilterStage {
-  return { keeps: (worker) => ids.includes(worker.id), kind: "filter", name };
+function only(...ids: string[]): FilterStage {
+  return { keeps: (worker) => ids.includes(worker.id), kind: "filter" };
 }
 
 describe("routing pipeline", () => {
@@ -53,7 +53,7 @@ describe("routing pipeline", () => {
     const abstains = rank("abstains", {});
 
     expect(runStages([], REQUEST, workers)).toBeUndefined();
-    expect(runStages([only("all", "wrk_a", "wrk_b", "wrk_c")], REQUEST, workers)).toBeUndefined();
+    expect(runStages([only("wrk_a", "wrk_b", "wrk_c")], REQUEST, workers)).toBeUndefined();
     expect(runStages([abstains], REQUEST, workers)).toBeUndefined();
   });
 
@@ -105,7 +105,7 @@ describe("routing pipeline", () => {
   it("does not credit a filter with the decision, even when it removed workers", () => {
     const decides = rank("decides", { wrk_a: 1, wrk_b: 1, wrk_c: 1 });
 
-    expect(runStages([only("filter", "wrk_c"), decides], REQUEST, workers)).toEqual({
+    expect(runStages([only("wrk_c"), decides], REQUEST, workers)).toEqual({
       stage: "decides",
       workerId: "wrk_c",
     });
