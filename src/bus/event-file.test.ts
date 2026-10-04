@@ -268,6 +268,19 @@ describe("readEventFile", () => {
     expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
   });
 
+  it("the event file reader skips a line whose id the envelope schema refuses", async () => {
+    const refused = ["evt_", "evt_has space", `evt_${"a".repeat(65)}`, "nope_1"];
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": `${lines(envelope(1, 100))}${refused
+        .map((id, index) => `${JSON.stringify(envelope(10 + index, 200 + index, id))}\n`)
+        .join("")}${lines(envelope(3, 300))}`,
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+
   it("the event file reader returns an event found in both generations once", async () => {
     const filesystem = await filesystemWith({
       "/data/events.jsonl": lines(envelope(1, 100, "evt_same"), envelope(2, 200)),
