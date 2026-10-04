@@ -420,13 +420,14 @@ describe("the events view", () => {
   it("an envelope without a numeric seq, a timestamp that is a date, or a name is not shown", async () => {
     const view = openView();
     view.replayWith([
-      { event: "lease.granted", timestamp: T0 },
-      { event: "lease.granted", seq: 1 },
-      { seq: 2, timestamp: T0 },
-      { event: "lease.granted", seq: 3, timestamp: 1e300 },
+      { event: "lease.granted", id: "evt_a", timestamp: T0 },
+      { event: "lease.granted", id: "evt_b", seq: 1 },
+      { id: "evt_c", seq: 2, timestamp: T0 },
+      { event: "lease.granted", id: "evt_d", seq: 3, timestamp: 1e300 },
       // A date, but as a string: not a timestamp.
-      { event: "lease.granted", seq: 5, timestamp: "2026-10-02T11:30:00Z" },
-      { event: "lease.granted", seq: "6", timestamp: T0 },
+      { event: "lease.granted", id: "evt_e", seq: 5, timestamp: "2026-10-02T11:30:00Z" },
+      { event: "lease.granted", id: "evt_f", seq: "6", timestamp: T0 },
+      { event: 7, id: "evt_g", seq: 7, timestamp: T0 },
       envelope(4, T0),
     ]);
     await settle();

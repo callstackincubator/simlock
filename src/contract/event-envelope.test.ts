@@ -25,6 +25,7 @@ describe("eventEnvelopeSchema", () => {
     );
     expect(eventEnvelopeSchema.safeParse({ ...valid, id: "evt_" }).success).toBe(false);
     expect(eventEnvelopeSchema.safeParse({ ...valid, id: "abc" }).success).toBe(false);
+    expect(eventEnvelopeSchema.safeParse({ ...valid, id: "xevt_abc" }).success).toBe(false);
     expect(eventEnvelopeSchema.safeParse({ ...valid, id: "evt_a b" }).success).toBe(false);
     expect(eventEnvelopeSchema.safeParse({ ...valid, id: 7 }).success).toBe(false);
     for (const timestamp of [Number.POSITIVE_INFINITY, Number.NaN]) {

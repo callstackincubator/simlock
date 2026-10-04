@@ -257,8 +257,10 @@ describe("readEventFile", () => {
 
   it("the event file reader skips a line with no id", async () => {
     const { id: _id, ...withoutId } = envelope(2, 200);
+    const { seq: _seq, ...withoutSeq } = envelope(5, 500);
+    const { timestamp: _timestamp, ...withoutTimestamp } = envelope(6, 600);
     const filesystem = await filesystemWith({
-      "/data/events.jsonl": `${lines(envelope(1, 100))}${JSON.stringify(withoutId)}\n${JSON.stringify({ ...envelope(4, 400), id: 4 })}\n${lines(envelope(3, 300))}`,
+      "/data/events.jsonl": `${lines(envelope(1, 100))}${JSON.stringify(withoutId)}\n${JSON.stringify({ ...envelope(4, 400), id: 4 })}\n${JSON.stringify(withoutSeq)}\n${JSON.stringify(withoutTimestamp)}\n${lines(envelope(3, 300))}`,
     });
 
     const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
