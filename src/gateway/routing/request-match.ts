@@ -17,8 +17,9 @@ import type { RoutableRequest } from "./pipeline.js";
  */
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
   const catalog = catalogOf(worker, request);
-  const model = catalog === undefined ? undefined : findModel(catalog, request);
-  if (catalog === undefined || model === undefined) return undefined;
+  if (catalog === undefined) return undefined;
+  const model = findModel(catalog, request);
+  if (model === undefined) return undefined;
   const { imageTag } = request;
   const runtimes =
     imageTag === undefined

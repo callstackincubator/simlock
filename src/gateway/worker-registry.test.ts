@@ -237,18 +237,16 @@ describe("WorkerRegistry", () => {
       expect(workers.view("wrk_a")?.catalog).toEqual(catalog);
     });
 
-    it("tells a worker whose catalog was read and is empty from one whose catalog never arrived, across a reconnect", () => {
+    it("tells a catalog that was read and is empty from one that has not arrived", () => {
       const { workers } = registry();
       workers.connected("wrk_empty", undefined, undefined);
       workers.connected("wrk_never", undefined, undefined);
+
       workers.refresh("wrk_empty", { catalog: [] });
       workers.refresh("wrk_never", { devices: [] });
 
-      workers.connected("wrk_empty", undefined, undefined);
-      workers.connected("wrk_never", undefined, undefined);
-
-      expect(workers.view("wrk_empty")?.catalogEverRead).toBe(true);
-      expect(workers.view("wrk_never")?.catalogEverRead).toBeUndefined();
+      expect(workers.view("wrk_empty")?.catalogReadAt).toBeDefined();
+      expect(workers.view("wrk_never")?.catalogReadAt).toBeUndefined();
     });
   });
 

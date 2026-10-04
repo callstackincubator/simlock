@@ -244,7 +244,6 @@ describe("GatewayService", () => {
       capacity,
       catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
         .platforms,
-      catalogEverRead: true,
       catalogReadAt: 1_000,
       connection: "connected",
       devices: [deviceFixture("dev_1", "leased")],

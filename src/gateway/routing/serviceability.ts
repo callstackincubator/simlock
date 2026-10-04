@@ -33,9 +33,9 @@ export type Assessment = { readonly kind: "route-or-wait" } | Rejection;
  * busy still makes a request servable, so it never reaches a rejection here.
  *
  * Two terms. A worker *takes requests* when it passes `takes-requests`. The gateway *knows* a
- * worker when it has read a catalog from it and the worker is not `incompatible`; the view keeps
- * its last catalog across a lost uplink, so a disconnected worker stays known until retention
- * removes it. A worker connecting for the first time, with no catalog yet, is neither.
+ * worker when it holds a catalog read from it and the worker is not `incompatible`; the view
+ * keeps its last catalog across a lost uplink, so a disconnected worker stays known until
+ * retention removes it. A worker connecting for the first time, with no catalog yet, is neither.
  */
 export function assess(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
   const takers = views.filter((worker) => takesRequests.keeps(worker, request));
@@ -75,8 +75,10 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
   return { kind: "route-or-wait" };
 }
 
+/** A worker whose catalog was never read holds an empty one, which says nothing about any
+ * platform or model, so only `incompatible` needs ruling out here. */
 function isKnown(worker: WorkerView): boolean {
-  return worker.catalogEverRead === true && worker.connection !== "incompatible";
+  return worker.connection !== "incompatible";
 }
 
 function noWorker(): Rejection {

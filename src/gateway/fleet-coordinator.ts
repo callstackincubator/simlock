@@ -119,10 +119,6 @@ export interface FleetLeaseCoordinatorOptions {
   readonly logger?: Logger;
 }
 
-/** What one dispatch walk did with the candidate it was given: sent it to a worker, rejected it
- * as one no worker can serve, or neither (`#admit` then queues it, or rejects a `noWait` one). */
-type CandidateOutcome = "attempted" | "rejected" | "passed";
-
 type FleetEventName = "lease.requested" | "lease.queued" | "lease.rejected" | "request.dispatched";
 
 export class FleetLeaseCoordinator {
@@ -611,10 +607,11 @@ export class FleetLeaseCoordinator {
    * module graph into ordinary worker startup with no boundary test covering that direction.
    */
   #admit(waiter: FleetWaiter): void {
-    // Attempted, or rejected as unservable (ADR 0009 §4). If an attempt is refused, `#attempt`
-    // decides the rest: one more walk for a `noWait` caller (ADR 0009 §5). A target that turned
-    // out unreachable re-queues it.
-    if (this.#dispatch(waiter) !== "passed") return;
+    // Attempted. If that attempt is refused, `#attempt` decides the rest: one more walk for a
+    // `noWait` caller (ADR 0009 §5). A target that turned out unreachable re-queues it. A
+    // candidate the walk rejected as unservable (ADR 0009 §4) is terminal, so the rejection and
+    // the enqueue below are no-ops on it: `WaitQueue` refuses both for a terminal waiter.
+    if (this.#dispatch(waiter)) return;
     if (waiter.options.noWait === true) {
       this.#reject(
         waiter,
@@ -673,28 +670,27 @@ export class FleetLeaseCoordinator {
    * There is no state a second pass could show the candidate that its first look did not have,
    * which is why re-offering it there would add a branch no test can fail for the right reason.
    */
-  #dispatch(candidate?: FleetWaiter): CandidateOutcome {
+  #dispatch(candidate?: FleetWaiter): boolean {
     if (this.#dispatchDepth > 0) {
       // Round 4 review: a nested pass used to be *dropped*. The outer walk iterates a snapshot
       // and has already claimed workers, so a waiter freed mid-pass would never be reconsidered
       // -- C1's stall, reintroduced silently by the guard meant to prevent recursion. Defer
       // instead of dropping: the outer call runs another pass once this one unwinds.
       this.#passRequested = true;
-      return "passed";
+      return false;
     }
     this.#dispatchDepth += 1;
-    let outcome: CandidateOutcome = "passed";
     try {
-      outcome = this.#dispatchPass(candidate);
+      const candidateAttempted = this.#dispatchPass(candidate);
       while (this.#passRequested) {
         this.#passRequested = false;
         this.#dispatchPass();
       }
+      return candidateAttempted;
     } finally {
       this.#dispatchDepth -= 1;
       this.#passRequested = false;
     }
-    return outcome;
   }
 
   /**
@@ -703,9 +699,8 @@ export class FleetLeaseCoordinator {
    * `candidate` is `#admit`'s waiter, usually brand new with no queue membership yet. It walks
    * **last**, because it is the newest: that is what keeps ADR §10's single fleet FIFO honest,
    * since an admission can never take a slot an already-queued waiter would have had. Returns
-   * what became of the candidate -- attempted, rejected as unservable (ADR 0009 §4), or passed
-   * over -- which is what lets `#admit` tell "nothing could serve it" from "it was attempted" or
-   * "it was rejected" -- the attempt, not `#admit`, settles a `noWait` caller whose
+   * whether the candidate was attempted, which is what lets `#admit` tell "nothing could serve
+   * it" from "it was attempted" -- the attempt, not `#admit`, settles a `noWait` caller whose
    * worker refuses it, and `waiter.state` alone cannot distinguish the two (round 4 review,
    * finding 2). `candidate` may also be a `noWait` waiter whose attempt was just refused, on its
    * one more walk; if it is already queued it walks in its queue position only, never twice.
@@ -714,9 +709,9 @@ export class FleetLeaseCoordinator {
    * unchanged (`#refused`, ADR 0009 §5). This is the one place that exclusion is applied, the
    * same place as the per-pass claim set.
    */
-  #dispatchPass(candidate?: FleetWaiter): CandidateOutcome {
-    let outcome: CandidateOutcome = "passed";
+  #dispatchPass(candidate?: FleetWaiter): boolean {
     const claimedThisPass = new Set<string>();
+    const attempted = new Set<FleetWaiter | undefined>();
     const waiters =
       candidate === undefined || this.#queue.isQueued(candidate)
         ? this.#queue.list()
@@ -724,14 +719,14 @@ export class FleetLeaseCoordinator {
     for (const waiter of waiters) {
       // The candidate is mid-admission, not `queued`, even when it holds a queue position.
       if (waiter !== candidate && waiter.state !== "queued") continue;
-      const result = this.#walkWaiter(waiter, claimedThisPass);
-      if (waiter === candidate) outcome = result;
+      if (this.#walkWaiter(waiter, claimedThisPass)) attempted.add(waiter);
     }
-    return outcome;
+    return attempted.has(candidate);
   }
 
-  /** One waiter's turn in the walk: rejected as unservable, sent to a worker, or passed over. */
-  #walkWaiter(waiter: FleetWaiter, claimedThisPass: Set<string>): CandidateOutcome {
+  /** One waiter's turn in the walk. Whether it was sent to a worker; a waiter the table rejects
+   * is terminal by then, and `#admit` finds both of its follow-ups no-ops on it. */
+  #walkWaiter(waiter: FleetWaiter, claimedThisPass: Set<string>): boolean {
     const views = this.options.views.views();
     const request = routable(waiter);
     // ADR 0009 §4: the table runs before the stages, over every view -- a worker claimed this
@@ -740,16 +735,16 @@ export class FleetLeaseCoordinator {
     const verdict = this.options.routing.assess(request, views);
     if (verdict.kind === "reject") {
       this.#rejectUnservable(waiter, verdict);
-      return "rejected";
+      return false;
     }
     const eligibleWorkers = views.filter(
       (worker) => !claimedThisPass.has(worker.id) && !this.#refused(waiter, worker),
     );
     const decision = this.options.routing.select(request, eligibleWorkers);
-    if (decision === undefined) return "passed";
+    if (decision === undefined) return false;
     claimedThisPass.add(decision.workerId);
     this.#beginAttempt(waiter, decision, forwardedModel(request, eligibleWorkers, decision));
-    return "attempted";
+    return true;
   }
 
   /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and

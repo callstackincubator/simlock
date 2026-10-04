@@ -172,8 +172,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   worker's own `instance.json` identity), label, connection state
   (`connected` / `disconnected` / `incompatible`), daemon health and version,
   capacity per platform, download policy, queue depth, leases, devices,
-  catalog (with when it was read this session and whether one was ever read),
-  host facts, drain state, and a last-seen timestamp. It is rebuilt
+  catalog (with when it was read this session), host facts, drain state, and a last-seen timestamp. It is rebuilt
   over the uplink — `status.get`, `list.get`, `catalog.get`, `config.get` and
   `events.subscribe` on connect, a refresh of status and devices on every
   worker event about a lease or a device, and a slow periodic tick that also
@@ -671,12 +670,12 @@ none has the runtime or pairs it with the model, `RUNTIME_MISSING` with
 last three with reason `unresolvable-spec`); a known worker can serve it but
 none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
 wait. A worker *takes requests* when it passes `takes-requests`; the gateway
-*knows* a worker when its view has ever held a read catalog
-(`catalogEverRead`) and it is not `incompatible`. The view's `catalogReadAt`
-is set by a refresh that carries a catalog and cleared when the worker
-connects, so a reconnecting worker is known from its last catalog but takes
-requests only once the new one arrives, and a first-time worker with no
-catalog yet is neither. `WorkerLink` coalesces refreshes and keeps
+*knows* a worker when its view holds a catalog and it is not
+`incompatible`. The view's `catalogReadAt` is set by a refresh that carries a
+catalog and cleared when the worker connects, so a reconnecting worker is
+known from its last catalog but takes requests only once the new one arrives,
+and a first-time worker with no catalog yet is neither (its catalog is empty,
+so it says nothing about any platform or model). `WorkerLink` coalesces refreshes and keeps
 `includeCatalog` on a queued follow-up, so a catalog refresh that arrives
 during another refresh is still read.
 

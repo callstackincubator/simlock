@@ -14,7 +14,6 @@ function view(id: string, entry: CatalogEntry = IOS, overrides: Partial<WorkerVi
   return {
     capacity: statusFixture().capacity,
     catalog: catalogFixture([entry]).platforms,
-    catalogEverRead: true,
     catalogReadAt: 1,
     connection: "connected",
     devices: [],
@@ -40,7 +39,11 @@ describe("assess", () => {
       view("wrk_pending", IOS, { catalogReadAt: undefined }),
     ];
 
-    expect(rejectionOf(views, REQUEST)).toMatchObject({ code: "NO_CAPACITY", reason: "no-worker" });
+    expect(rejectionOf(views, REQUEST)).toMatchObject({
+      code: "NO_CAPACITY",
+      message: "No worker in the fleet can currently serve this request",
+      reason: "no-worker",
+    });
     expect(rejectionOf([], REQUEST)).toMatchObject({ code: "NO_CAPACITY", reason: "no-worker" });
   });
 
@@ -50,6 +53,7 @@ describe("assess", () => {
     expect(rejectionOf([view("wrk_a")], request)).toMatchObject({
       code: "NO_DRIVER",
       details: { platform: "android" },
+      message: "No driver registered for platform: android",
       reason: "unresolvable-spec",
     });
   });
@@ -68,6 +72,7 @@ describe("assess", () => {
     expect(rejectionOf([view("wrk_a")], { ...REQUEST, model: "iPhone 99" })).toMatchObject({
       code: "UNKNOWN_MODEL",
       details: { model: "iPhone 99", platform: "ios" },
+      message: "Unknown ios model: iPhone 99",
       reason: "unresolvable-spec",
     });
   });
@@ -82,6 +87,7 @@ describe("assess", () => {
     expect(rejectionOf([view("wrk_a")], { ...REQUEST, osVersion: "99.0" })).toMatchObject({
       code: "RUNTIME_MISSING",
       details: { downloadable: false, osVersion: "99.0", platform: "ios" },
+      message: "Runtime missing for ios 99.0",
       reason: "unresolvable-spec",
     });
   });
@@ -132,7 +138,6 @@ describe("assess", () => {
   it("says NO_CAPACITY, never UNKNOWN_MODEL, when the only worker connected for the first time and its catalog has not arrived", () => {
     const first = view("wrk_a", IOS, {
       catalog: [],
-      catalogEverRead: undefined,
       catalogReadAt: undefined,
     });
 
@@ -142,7 +147,7 @@ describe("assess", () => {
     });
   });
 
-  it("knows a worker whose catalog was read and is empty, so its silence is a fact", () => {
+  it("says NO_DRIVER when the only worker that takes requests read an empty catalog", () => {
     const empty = view("wrk_a", IOS, { catalog: [] });
 
     expect(rejectionOf([empty], REQUEST).code).toBe("NO_DRIVER");

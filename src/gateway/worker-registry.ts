@@ -302,7 +302,7 @@ export class WorkerRegistry {
       ...snapshot,
       lastSeenAt: now,
       // ADR 0009 §4: a refresh that carries a catalog is a read of it.
-      ...(snapshot.catalog === undefined ? {} : { catalogEverRead: true, catalogReadAt: now }),
+      ...(snapshot.catalog === undefined ? {} : { catalogReadAt: now }),
     };
     this.#workers.set(workerId, next);
     if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
