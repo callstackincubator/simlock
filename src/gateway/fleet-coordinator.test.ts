@@ -39,6 +39,8 @@ class FakeDirectory implements WorkerDirectory {
   readonly refreshCalls: string[] = [];
   /** The workers whose refresh asked for the catalog too, in call order. */
   readonly catalogRefreshCalls: string[] = [];
+  /** Workers whose refresh rejects. */
+  readonly failingRefresh = new Set<string>();
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -55,6 +57,7 @@ class FakeDirectory implements WorkerDirectory {
       refresh: async (options) => {
         this.refreshCalls.push(workerId);
         if (options?.includeCatalog === true) this.catalogRefreshCalls.push(workerId);
+        if (this.failingRefresh.has(workerId)) throw new Error("refresh failed");
       },
       workerId,
     };
@@ -66,7 +69,11 @@ class FakeDirectory implements WorkerDirectory {
 class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 
-  debug(): void {}
+  readonly debugs: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+
+  debug(message: string, fields?: Record<string, unknown>): void {
+    this.debugs.push(fields === undefined ? { message } : { fields, message });
+  }
   info(): void {}
   warn(message: string, fields?: Record<string, unknown>): void {
     this.warnings.push(fields === undefined ? { message } : { fields, message });
@@ -2789,5 +2796,29 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     await coordinator.request(REQUEST, requestOptions());
 
     expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
+  });
+
+  it("still retries when the refusing worker's catalog refresh fails, and logs it", async () => {
+    const logger = new RecordingLogger();
+    const fleetHarness = harness({ logger });
+    const a = new ScriptedWorkerClient();
+    const b = new ScriptedWorkerClient();
+    fleetHarness.directory.add("wrk_a", a);
+    fleetHarness.directory.add("wrk_b", b);
+    fleetHarness.directory.failingRefresh.add("wrk_a");
+    connectWorker(fleetHarness.workers, "wrk_a");
+    connectWorker(fleetHarness.workers, "wrk_b");
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await fleetHarness.coordinator.request(REQUEST, requestOptions());
+
+    expect(grant.lease.worker?.id).toBe("wrk_b");
+    expect(logger.debugs).toEqual([
+      {
+        fields: { message: "refresh failed", workerId: "wrk_a" },
+        message: "Failed to refresh a worker's view after a worker's refusal",
+      },
+    ]);
   });
 });
