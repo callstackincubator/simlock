@@ -19,8 +19,14 @@ const fakeClock: Clock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-function envelope(seq: number, timestamp: number, event = "lease.granted", payload: unknown = {}) {
-  return { event, module: "lease", payload, seq, timestamp };
+function envelope(
+  seq: number,
+  timestamp: number,
+  event = "lease.granted",
+  payload: unknown = {},
+  id = `evt_${seq}_${timestamp}`,
+) {
+  return { event, id, module: "lease", payload, seq, timestamp };
 }
 
 /** One event as the stream frames it. */
@@ -81,6 +87,10 @@ function openView(first: Replay = []) {
     /** Sets what `GET /v1/events` answers from now on. */
     replayWith(next: Replay) {
       replay = next;
+    },
+    /** The ids of the events the view shows, newest first. */
+    ids(): string[] {
+      return (feed.snapshot().data ?? []).map((event) => event.id);
     },
     /** The events the view shows, as `seq@timestamp`, newest first. */
     shown(): string[] {
@@ -148,6 +158,26 @@ describe("the events view", () => {
     await settle();
 
     expect(view.shown()).toEqual([`7@${T0}`, `6@${T0 - 1_000}`]);
+  });
+
+  it("two events with the same seq and timestamp but different ids are both shown", async () => {
+    const view = openView();
+    view.replayWith([envelope(1, T0, "lease.granted", {}, "evt_a")]);
+    await settle();
+
+    view.daemon.openStream()?.send(frame(envelope(1, T0, "lease.granted", {}, "evt_b")));
+    await settle();
+
+    expect(view.ids().sort()).toEqual(["evt_a", "evt_b"]);
+  });
+
+  it("an envelope without an id is not shown", async () => {
+    const view = openView();
+    const { id: _id, ...withoutId } = envelope(2, T0);
+    view.replayWith([withoutId, { ...envelope(3, T0), id: 3 }, envelope(4, T0)]);
+    await settle();
+
+    expect(view.ids()).toEqual(["evt_4_" + T0]);
   });
 
   it("events with the same seq from before and after a daemon restart are both shown", async () => {

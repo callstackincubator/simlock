@@ -55,8 +55,9 @@ function history(options: {
   });
 }
 
-function envelope(seq: number, timestamp: number): EventEnvelope {
+function envelope(seq: number, timestamp: number, id = `evt_${seq}`): EventEnvelope {
   return {
+    id,
     seq,
     timestamp,
     event: "daemon.stopping",
@@ -252,6 +253,39 @@ describe("readEventFile", () => {
     const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
 
     expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+
+  it("the event file reader skips a line with no id", async () => {
+    const { id: _id, ...withoutId } = envelope(2, 200);
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": `${lines(envelope(1, 100))}${JSON.stringify(withoutId)}\n${JSON.stringify({ ...envelope(4, 400), id: 4 })}\n${lines(envelope(3, 300))}`,
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+
+  it("the event file reader returns an event found in both generations once", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(1, 100, "evt_same"), envelope(2, 200)),
+      "/data/events.jsonl.1": lines(envelope(1, 100, "evt_same")),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.id)).toEqual(["evt_same", "evt_2"]);
+  });
+
+  it("two events with the same seq and timestamp but different ids are both read back from the file", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(1, 100, "evt_a")),
+      "/data/events.jsonl.1": lines(envelope(1, 100, "evt_b")),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.id)).toEqual(["evt_b", "evt_a"]);
   });
 
   it("skips a line that is not JSON and returns the lines around it", async () => {
