@@ -8,5 +8,4 @@ export const idleQueue: FilterStage = {
     return worker.queueDepth === 0;
   },
   kind: "filter",
-  name: "idle-queue",
 };

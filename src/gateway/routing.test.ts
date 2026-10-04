@@ -84,10 +84,43 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("passes over a worker with its own waiters queued, warm device or not", () => {
-    const queued = view("wrk_a", { devices: [deviceFixture("dev_1", "ready")], queueDepth: 1 });
+    const warmQueued = view("wrk_a", {
+      devices: [deviceFixture("dev_1", "ready")],
+      queueDepth: 1,
+    });
+    const coldQueued = view("wrk_a", { queueDepth: 1 });
 
-    expect(policy.select(REQUEST, [queued, view("wrk_b")])?.workerId).toBe("wrk_b");
-    expect(policy.select(REQUEST, [queued])).toBeUndefined();
+    for (const queued of [warmQueued, coldQueued]) {
+      expect(policy.select(REQUEST, [queued, view("wrk_b")])?.workerId).toBe("wrk_b");
+      expect(policy.select(REQUEST, [queued])).toBeUndefined();
+    }
+  });
+
+  it("picks a worker whose only slot is held by its own warm device, ahead of the free-slot check", () => {
+    // The ready device counts as running, so wrk_a has no free slot; only warm-hit running
+    // before free-slot can still pick it.
+    const warm = view("wrk_a", {
+      capacity: withIos({ maxRunning: 1, running: 1 }),
+      devices: [deviceFixture("dev_1", "ready")],
+    });
+
+    expect(policy.select(REQUEST, [warm, view("wrk_b")])).toMatchObject({
+      reason: "warm-hit",
+      workerId: "wrk_a",
+    });
+    expect(policy.select(REQUEST, [warm])).toMatchObject({ workerId: "wrk_a" });
+  });
+
+  it("drops a worker with no free slot before it ranks RAM, so a worker at its budget with a free slot is picked", () => {
+    // wrk_a is under budget but full; wrk_b is at budget with a free slot. With RAM ranked
+    // first only wrk_a would survive the rank, and the free-slot filter would then leave no pick.
+    const full = view("wrk_a", { capacity: withIos({ maxRunning: 1, running: 1 }) });
+    const capacity = withIos({ maxRunning: 1 });
+    const atBudget = view("wrk_b", {
+      capacity: { ...capacity, ios: { ...capacity.ios, atRamBudget: true } },
+    });
+
+    expect(policy.select(REQUEST, [full, atBudget])).toMatchObject({ workerId: "wrk_b" });
   });
 
   it("passes over a worker at its RAM budget while another has room, and asks it when it is the only one", () => {

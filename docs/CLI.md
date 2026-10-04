@@ -660,11 +660,12 @@ it, the model must pair with at least one installed runtime. A worker that
 has the model and the runtime but cannot pair them is passed over. With
 `--image-tag`, the worker's catalog must list an image of that tag, for that
 runtime when `--os` is given. Among the
-workers that can serve it, the request goes to a machine with a matching warm
-device first. Otherwise a worker that is not healthy, has requests of its own
-waiting, or has no free running slot is passed over (the request waits for it
-rather than failing), a worker under its RAM budget is preferred over one at it,
-and the one with the most free capacity gets the request. You do not name a machine and there is no flag to; where
+workers that can serve it, one that is not healthy or has requests of its own
+waiting is passed over (the request waits for it rather than failing). Of the
+rest, a machine with a matching warm device gets the request first. Otherwise a
+worker with no free running slot is passed over, a worker under its RAM budget
+is preferred over one at it, and the one with the most free capacity gets the
+request. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
 
 ### A request no worker can serve

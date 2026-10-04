@@ -18,7 +18,6 @@ export interface RoutableRequest {
 /** Drops every worker `keeps` answers `false` for. Never decides a pick on its own. */
 export interface FilterStage {
   readonly kind: "filter";
-  readonly name: string;
   keeps(worker: WorkerView, request: RoutableRequest): boolean;
 }
 

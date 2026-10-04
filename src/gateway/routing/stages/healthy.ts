@@ -8,5 +8,4 @@ export const healthy: FilterStage = {
     return worker.health === "running";
   },
   kind: "filter",
-  name: "healthy",
 };

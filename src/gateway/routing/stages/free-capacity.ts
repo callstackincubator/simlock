@@ -1,4 +1,5 @@
 import type { RankStage } from "../pipeline.js";
+import { freeRunning } from "./free-running.js";
 
 /** Prefers the worker with the most free running capacity for the platform
  * (`maxRunning - running - reserved`). A worker with none scores zero, so a fleet with no free
@@ -9,7 +10,7 @@ export const freeCapacity: RankStage = {
   score(worker, request) {
     const entry = worker.capacity?.[request.platform];
     if (entry === undefined) return 0;
-    return Math.max(0, entry.maxRunning - entry.running - entry.reserved);
+    return Math.max(0, freeRunning(entry));
   },
   settles: false,
 };

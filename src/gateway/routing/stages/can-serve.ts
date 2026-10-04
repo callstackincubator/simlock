@@ -10,5 +10,4 @@ export const canServe: FilterStage = {
     return matchRequest(worker, request) !== undefined;
   },
   kind: "filter",
-  name: "can-serve",
 };

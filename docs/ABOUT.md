@@ -46,7 +46,7 @@ local agents exactly as before. A **gateway** owns no devices at all: workers
 dial *out* to it over a single WebSocket **uplink** (so a machine behind NAT
 needs no inbound port), and it fronts them with one fleet-wide queue,
 dispatching each request to the worker best placed to serve it — a warm
-device if one is free, otherwise the machine with the most free capacity.
+device if one is free, otherwise the healthy, unqueued machine with the most free capacity.
 Agents and the web console point at **one URL** and stop caring which machine
 a device lives on: a gateway speaks the same contract a worker does, so
 `lease`, `renew`, `release`, `status`, and even `simlock simctl` / `simlock

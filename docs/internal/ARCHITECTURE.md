@@ -266,7 +266,7 @@ mode with `mode` in place of `full`, taking it to 8. ADR 0010 adds
 gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. So the range both
-sides advertise is `{min: 9, max: 9}`, an older client and a current daemon simply
+sides advertise is `{min: 10, max: 10}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -886,7 +886,8 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   the catalog's `modelRuntimes` and `modelAliases` are required, and ADR 0007 to
   `{min: 7, max: 7}`, because a device's `mode` is required, then to
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
-  `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers; a
+  `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
+  ADR 0009 to `{min: 10, max: 10}`, because `atRamBudget` is required; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

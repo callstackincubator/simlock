@@ -840,9 +840,9 @@ is also full (#195).** The flag is "the planner would refuse one more full
 device for `ram-budget`", asked through `CapacityCoordinator#canProvision`,
 which checks the device limit first. A worker at both limits reports the
 device limit's refusal, so the gateway's RAM rank sees room it does not have.
-The worker still refuses what it cannot create (it evicts an idle device for
-the device limit, then the RAM check runs), so the cost is one wasted
-dispatch, never a wrong device. Fix by reporting RAM alone, bypassing the
+The planner deletes an idle managed device on `device-limit`, which frees
+its RAM too, and then provisions, so the cost is a deleted idle device that
+a worker with room would not have lost. Fix by reporting RAM alone, bypassing the
 device limit, if it shows up in practice.
 
 **A cold slim lease outlives a default MCP request timeout.** Measured on
