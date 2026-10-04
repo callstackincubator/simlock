@@ -175,6 +175,23 @@ describe("WaitQueue", () => {
     expect(timedOut).toHaveBeenCalledWith(waiter);
   });
 
+  it("rejects QUEUE_TIMEOUT instead of marking processing past the original deadline", async () => {
+    const timedOut = vi.fn();
+    const { clock, queue } = createQueue(timedOut);
+    const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+
+    queue.enqueue(waiter);
+    clock.advance(60);
+    queue.markProcessing(waiter);
+    clock.advance(60);
+
+    expect(queue.markProcessing(waiter)).toBe(false);
+
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(waiter.state).toBe("rejected");
+    expect(timedOut).toHaveBeenCalledWith(waiter);
+  });
+
   // H5 (round 3 review): this test used to claim it proved a re-enqueue "re-arms only the time
   // actually remaining" -- but every assertion in it (the waiter's `state` at various clock
   // ticks, and when its promise finally rejects) would come out identical whether `#armTimeout`

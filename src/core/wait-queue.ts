@@ -234,16 +234,7 @@ export class WaitQueue {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
 
-    if (mutable.deadlineAt !== undefined && this.options.clock.now() >= mutable.deadlineAt) {
-      if (this.reject(mutable, new QueueTimeoutError(mutable.id))) {
-        try {
-          this.options.onTimeout?.(mutable);
-        } catch {
-          // Queue wake-up is an observer of this committed timeout fact.
-        }
-      }
-      return false;
-    }
+    if (this.#expireIfPastDeadline(mutable)) return false;
 
     if (!this.#waiters.includes(mutable)) {
       this.#waiters.push(mutable);
@@ -257,7 +248,25 @@ export class WaitQueue {
   markProcessing(waiter: Waiter): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
+    // A waiter that held a worker's attempt open past its deadline must not be handed to the
+    // next worker: the deadline is fixed once and a retry does not reset it.
+    if (this.#expireIfPastDeadline(mutable)) return false;
     mutable.state = "processing";
+    return true;
+  }
+
+  /** Rejects `QUEUE_TIMEOUT` a waiter whose fixed deadline has passed. Whether it did. */
+  #expireIfPastDeadline(mutable: MutableWaiter): boolean {
+    if (mutable.deadlineAt === undefined || this.options.clock.now() < mutable.deadlineAt) {
+      return false;
+    }
+    if (this.reject(mutable, new QueueTimeoutError(mutable.id))) {
+      try {
+        this.options.onTimeout?.(mutable);
+      } catch {
+        // Queue wake-up is an observer of this committed timeout fact.
+      }
+    }
     return true;
   }
 

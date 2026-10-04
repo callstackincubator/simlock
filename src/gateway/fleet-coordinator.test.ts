@@ -2778,7 +2778,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     expect(leaseRequests(b)).toEqual([]);
   });
 
-  it("does not reset the queue deadline when it retries", async () => {
+  it("does not reset the queue deadline when it retries to a queue position", async () => {
     // wrk_b is busy, so the only worker the retry can reach is wrk_a.
     const { a, clock, coordinator, workers } = twoWorkers({ busyB: true });
     a.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
@@ -2807,10 +2807,44 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     expect(coordinator.queueDepth).toBe(0);
   });
 
-  it("keeps any other error code final", async () => {
+  it("does not send a request to the next free worker after its queue deadline passed during a refused attempt", async () => {
+    const { a, b, clock, coordinator, workers } = twoWorkers({ busyB: true });
+    a.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // During wrk_a's second attempt the whole budget passes and wrk_b frees up.
+    let calls = 0;
+    const answer = a.requestLease.bind(a);
+    a.requestLease = async (input, options) => {
+      calls += 1;
+      if (calls === 2) {
+        clock.advance(60_000);
+        workers.refresh("wrk_b", { capacity: statusFixture().capacity });
+      }
+      return answer(input, options);
+    };
+
+    const { ended, state } = await start(coordinator, { timeoutMs: 60_000 });
+    expect(state.state).toBe("pending");
+    workers.refresh("wrk_a", { queueDepth: 1 });
+    await tick();
+
+    expect(calls).toBe(2);
+    expect(state.state).toBe("rejected");
+    expect(await ended).toBeInstanceOf(QueueTimeoutError);
+    expect(leaseRequests(b)).toEqual([]);
+  });
+
+  it.each([
+    "BAD_REQUEST",
+    "INSUFFICIENT_DISK_SPACE",
+    "LICENSE_NOT_ACCEPTED",
+    "REQUESTER_ALREADY_LEASED",
+    "INTERNAL",
+  ] as const)("keeps %s final instead of trying another worker", async (code) => {
     const { a, b, coordinator } = twoWorkers();
     a.requestLeaseQueue.push({
-      error: new SimlockError("BAD_REQUEST", "domain", "nope", {}),
+      error: new SimlockError(code, "domain", "nope", {}),
       kind: "error",
     });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -2818,7 +2852,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     const { ended, state } = await start(coordinator);
 
     expect(state.state).toBe("rejected");
-    expect(await ended).toMatchObject({ code: "BAD_REQUEST" });
+    expect(await ended).toMatchObject({ code });
     expect(leaseRequests(b)).toEqual([]);
   });
 

@@ -607,8 +607,10 @@ gateway sends it `lease.request` with **`noWait: true`**:
   changes), re-reads its catalog, and returns the request to the walk. The
   queue deadline is not reset. When the table over the remaining views no
   longer says route or wait, the request is rejected with the last such
-  refusal, the worker's own code and message, and the gateway emits no
-  `lease.rejected` of its own. After a progress push, and for any other
+  refusal, the worker's own code and message. The worker already emitted its
+  own `lease.rejected`, so the gateway emits none, unless the request had
+  entered the gateway queue: its `lease.queued` needs a terminal fact, so the
+  gateway emits `lease.rejected` with reason `unresolvable-spec`. After a progress push, and for any other
   code, a failure is final (ADR 0009 §5);
 - a request a busy fleet cannot take yet is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
