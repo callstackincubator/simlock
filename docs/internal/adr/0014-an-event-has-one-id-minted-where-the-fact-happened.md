@@ -1,8 +1,8 @@
 # 0014. An event has one id, minted where the fact happened
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-04
-- **Issue:** none yet; the feature issue that carries this decision follows it.
+- **Issue:** [#314](https://github.com/callstackincubator/simlock/issues/314)
 - **Supersedes:** nothing. Narrows [ADR
   0005](0005-gateway-and-worker-modes.md) requirement 22 (what a republished
   envelope keeps), [ADR 0006](0006-events-and-log-are-two-records.md) §5
