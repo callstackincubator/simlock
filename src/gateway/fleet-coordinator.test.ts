@@ -37,6 +37,8 @@ class FakeDirectory implements WorkerDirectory {
    * test previously exercised the *first* of the two ways. */
   readonly reachableButNoClient = new Set<string>();
   readonly refreshCalls: string[] = [];
+  /** The workers whose refresh asked for the catalog too, in call order. */
+  readonly catalogRefreshCalls: string[] = [];
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -50,8 +52,9 @@ class FakeDirectory implements WorkerDirectory {
     return {
       client: () => (hasClient ? client.asClient() : undefined),
       reachable,
-      refresh: async () => {
+      refresh: async (options) => {
         this.refreshCalls.push(workerId);
+        if (options?.includeCatalog === true) this.catalogRefreshCalls.push(workerId);
       },
       workerId,
     };
@@ -2631,5 +2634,160 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     const grant = await outcome;
     expect(grant.lease.worker?.id).toBe("wrk_a");
     expect(coordinator.queueDepth).toBe(0);
+  });
+});
+
+describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on another worker (ADR 0009 §5)", () => {
+  function runtimeMissing(): SimlockError<"RUNTIME_MISSING"> {
+    return new SimlockError("RUNTIME_MISSING", "domain", "worker a has no such runtime", {
+      downloadable: false,
+      osVersion: "26.0",
+      platform: "ios",
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  /** Two workers that both list the request; `wrk_a` is scripted first, `wrk_b` second. */
+  function twoWorkers() {
+    const fleetHarness = harness();
+    const a = new ScriptedWorkerClient();
+    const b = new ScriptedWorkerClient();
+    fleetHarness.directory.add("wrk_a", a);
+    fleetHarness.directory.add("wrk_b", b);
+    connectWorker(fleetHarness.workers, "wrk_a");
+    connectWorker(fleetHarness.workers, "wrk_b");
+    return { a, b, ...fleetHarness };
+  }
+
+  it("grants from another worker after one answers RUNTIME_MISSING", async () => {
+    const { a, b, coordinator } = twoWorkers();
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, requestOptions());
+
+    expect(leaseRequests(a)).toHaveLength(1);
+    expect(grant.lease.worker?.id).toBe("wrk_b");
+  });
+
+  it.each(["UNKNOWN_MODEL", "NO_DRIVER"] as const)(
+    "grants from another worker after one answers %s",
+    async (code) => {
+      const { a, b, coordinator } = twoWorkers();
+      a.requestLeaseQueue.push({
+        error: new SimlockError(code, "domain", "no", { platform: "ios" }),
+        kind: "error",
+      });
+      b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const grant = await coordinator.request(REQUEST, requestOptions());
+
+      expect(leaseRequests(a)).toHaveLength(1);
+      expect(grant.lease.worker?.id).toBe("wrk_b");
+    },
+  );
+
+  it("does not ask the refusing worker again for that request", async () => {
+    const { a, b, coordinator, workers } = twoWorkers();
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    // wrk_b is busy at first, so the request waits with only wrk_a's refusal behind it.
+    b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const outcome = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    // Every later view change re-walks the waiter; wrk_a must stay out of it.
+    workers.refresh("wrk_a", { queueDepth: 1 });
+    workers.refresh("wrk_b", { queueDepth: 1 });
+    workers.refresh("wrk_b", { queueDepth: 0 });
+    await outcome;
+
+    expect(leaseRequests(a)).toHaveLength(1);
+  });
+
+  it("gives the client the worker's own code and message when no worker is left", async () => {
+    const { a, b, coordinator } = twoWorkers();
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({
+      error: new SimlockError("UNKNOWN_MODEL", "domain", "worker b does not know it", {
+        model: "iPhone 17",
+        platform: "ios",
+      }),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+
+    // The most recent refusal, not the first and not the table's own.
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect(rejection).toMatchObject({
+      code: "UNKNOWN_MODEL",
+      message: "worker b does not know it",
+    });
+    expect(leaseRequests(a)).toHaveLength(1);
+    expect(leaseRequests(b)).toHaveLength(1);
+  });
+
+  it("keeps a refusal after a progress push final", async () => {
+    const { a, b, coordinator } = twoWorkers();
+    a.requestLeaseQueue.push({
+      error: runtimeMissing(),
+      kind: "error",
+      progress: [{ etaMs: 1_000, stage: "booting" }],
+    });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
+      code: "RUNTIME_MISSING",
+    });
+    expect(leaseRequests(b)).toEqual([]);
+  });
+
+  it("does not reset the queue deadline when it retries", async () => {
+    const { a, b, clock, coordinator } = twoWorkers();
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    // wrk_b is busy: the retry has nowhere to go and the request waits for its original deadline.
+    b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+
+    const outcome = coordinator.request(REQUEST, requestOptions({ timeoutMs: 60_000 }));
+    const ended = outcome.catch((error: unknown) => error);
+    await tick();
+    clock.advance(59_999);
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    clock.advance(1);
+    await tick();
+
+    expect(await ended).toBeInstanceOf(QueueTimeoutError);
+  });
+
+  it("keeps any other error code final", async () => {
+    const { a, b, coordinator } = twoWorkers();
+    a.requestLeaseQueue.push({
+      error: new SimlockError("BAD_REQUEST", "domain", "nope", {}),
+      kind: "error",
+    });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(leaseRequests(b)).toEqual([]);
+  });
+
+  it("reads the refusing worker's catalog again", async () => {
+    const { a, b, coordinator, directory } = twoWorkers();
+    a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
   });
 });
