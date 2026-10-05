@@ -1769,9 +1769,12 @@ history from before the upgrade that added it is not shown.
 - `--since 1h` reaches further back. Every event is also written to
   `~/.simlock/events.jsonl`, which survives restarts and crashes, so
   `--since` returns events from before the last restart and beyond the
-  in-memory limit, back to the oldest event the file still holds. The file
-  is capped by `eventLog.rotateBytes` (see
-  [CONFIGURATION.md](CONFIGURATION.md)); the oldest events go first.
+  in-memory limit, across every generation of the file, back to the oldest
+  event it still holds. Durations take `ms`, `s`, `m`, `h` and `d` units
+  (`--since 2d`); a bare number is milliseconds. The history is kept for
+  `eventLog.retention` (seven days by default), with `eventLog.maxBytes` as
+  a size backstop (see [CONFIGURATION.md](CONFIGURATION.md)); the oldest
+  events go first.
 - `--since` without `--follow`, with no daemon running, reads the file
   directly and does not start a daemon. `--follow` starts one as usual.
 - `--follow` keeps streaming live events. With `--since`, it prints that

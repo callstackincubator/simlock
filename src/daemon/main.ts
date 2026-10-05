@@ -1189,7 +1189,13 @@ function openEventHistory(options: {
   const logger = options.logger.child("events");
   let sink: NodeFileLogSink | undefined;
   try {
-    sink = new NodeFileLogSink({ maxBytes: options.config.eventLog.rotateBytes, path });
+    const { maxBytes, retention, rotateBytes } = options.config.eventLog;
+    sink = new NodeFileLogSink({
+      maxBytes: rotateBytes,
+      path,
+      retentionMs: retention,
+      totalMaxBytes: maxBytes,
+    });
   } catch (error: unknown) {
     logger.error("Event file could not be opened; events are kept in memory only", {
       error: error instanceof Error ? error.message : String(error),

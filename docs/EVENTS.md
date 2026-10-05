@@ -173,5 +173,6 @@ lease index, rather than trusting the relayed payload's `ownerId` verbatim.
   without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
   one JSON line per event with the same fields. The file survives daemon
   restarts and crashes, is what `simlock events --since` reads, and is the
-  durable record: no event is copied into `daemon.log`. It is capped by
-  `eventLog.rotateBytes`, keeping one rotated generation.
+  durable record: no event is copied into `daemon.log`. It is kept for
+  `eventLog.retention`, bounded in size by `eventLog.maxBytes`, in numbered
+  generations of `eventLog.rotateBytes` each.

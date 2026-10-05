@@ -1905,14 +1905,16 @@ Business facts live in the bus's two records. The ring buffer
 `EventHistory` (`src/bus/event-file.ts`) subscribes to every event and writes
 each envelope as one JSON line to `events.jsonl` in the data directory,
 through a second `NodeFileLogSink` that `startDaemon` opens right after the
-bus with `config.eventLog.rotateBytes`. That file is the durable record and
+bus with `config.eventLog.rotateBytes`, plus `eventLog.retention` and
+`eventLog.maxBytes` (ADR 0016 §4): rotation keeps numbered generations and
+deletes those past retention, then the oldest until the total fits. That file is the durable record and
 the audit trail: it survives restarts and crashes, rotates independently of
 `daemon.log`, and on a gateway holds the relayed fleet events too. A file
 that cannot be opened, or a write that fails, costs the history and never the
 daemon or the emitter: one error line, writing stops, and replay falls back
 to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
 `sinceTs` it answers from the ring, with `sinceTs` from the file (current
-file, then its rotated generation, deduplicated by `id`).
+file, then `.1`, `.2` and so on until one is missing, deduplicated by `id`).
 The CLI reads the file itself only for `simlock events --since` when no
 daemon answers; `--follow` subscribes first, replays, and drops replayed
 pushes, so the join neither loses nor repeats an event.

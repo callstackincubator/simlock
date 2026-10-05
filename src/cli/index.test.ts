@@ -1660,7 +1660,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   });
 
   it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
-    for (const value of ["0", "-5"]) {
+    for (const value of ["0", "1.5"]) {
       const output = outputCapture(realCliEnvironmentPorts());
       let wrote = false;
       const exitCode = await runCli(
@@ -5112,7 +5112,11 @@ function testConfig(): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,

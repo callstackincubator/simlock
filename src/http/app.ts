@@ -10,6 +10,7 @@ import {
   deviceClassSchema,
   imageTagSchema,
 } from "../contract/index.js";
+import { parseDurationMs } from "../contract/duration.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -832,13 +833,8 @@ async function parseRenewBody(c: {
  * not a duplicate of any daemon-side logic (the operation itself takes an absolute timestamp),
  * so it is not one of the re-implementations ADR §2 says fall away with the dispatcher move. */
 function parseDuration(value: string): number {
-  const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
-  if (match === null) throw badRequest(`Invalid duration: ${value}`);
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "ms";
-  const multiplier = unit === "h" ? 3_600_000 : unit === "m" ? 60_000 : unit === "s" ? 1_000 : 1;
-  const milliseconds = amount * multiplier;
-  if (!Number.isSafeInteger(milliseconds)) throw badRequest(`Invalid duration: ${value}`);
+  const milliseconds = parseDurationMs(value);
+  if (milliseconds === undefined) throw badRequest(`Invalid duration: ${value}`);
   return milliseconds;
 }
 

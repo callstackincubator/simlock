@@ -7,39 +7,58 @@ import { byTimeThenSeq } from "./order.js";
 export const EVENT_FILE_NAME = "events.jsonl";
 
 /**
- * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5). The current file is
- * read before its rotated generation (`<path>.1`), so a rotation landing between the two reads
- * can only make one generation show up twice -- never make one go missing -- and the repeat is
- * dropped by `id`. A line that is not JSON (a write cut short by a crash), or has no `id` of the shape
- * the envelope contract accepts (written before events had one, ADR 0014), is skipped; a file that is not there is empty.
+ * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5).
+ * The current file is read first, then its generations `<path>.1`, `<path>.2` and so on until
+ * one is missing (ADR 0016 §4). Newest first means a rotation landing mid-read can only make a
+ * generation show up twice -- never make one go missing -- and the repeat is dropped by `id`; a
+ * generation missing when it is opened is empty and ends the walk. A line that is not JSON (a
+ * write cut short by a crash), or has no `id` of the shape the envelope contract accepts
+ * (written before events had one, ADR 0014), is skipped; a file that is not there is empty.
  */
 export async function readEventFile(
   filesystem: Filesystem,
   path: string,
-  { sinceTs }: { readonly sinceTs: number },
+  options: { readonly sinceTs: number },
 ): Promise<EventEnvelope[]> {
-  const current = await readLines(filesystem, path);
-  const rotated = await readLines(filesystem, `${path}.1`);
-  const seen = new Set<string>();
-  const envelopes: EventEnvelope[] = [];
-  for (const line of [...rotated, ...current]) {
-    const envelope = parseEnvelope(line);
-    if (envelope === undefined || envelope.timestamp <= sinceTs) continue;
-    const key = eventKey(envelope);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    envelopes.push(envelope);
-  }
-  return envelopes.sort(byTimeThenSeq);
+  return (await readEventHistory(filesystem, path, options)).events;
 }
 
-/** The events of {@link readEventFile} plus the oldest timestamp the files hold. */
+/**
+ * {@link readEventFile}, plus the oldest timestamp any kept generation holds -- not only what
+ * is newer than `sinceTs` -- so a reader can say how far back the history reaches (ADR 0016 §5).
+ * `undefined` when no event is held.
+ */
 export async function readEventHistory(
-  _filesystem: Filesystem,
-  _path: string,
-  _options: { readonly sinceTs: number },
+  filesystem: Filesystem,
+  path: string,
+  { sinceTs }: { readonly sinceTs: number },
 ): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
-  return { events: [], oldestTs: 0 };
+  const generations = await readGenerations(filesystem, path);
+  const seen = new Set<string>();
+  const events: EventEnvelope[] = [];
+  let oldestTs: number | undefined;
+  // Oldest generation first, so events that tie on time and seq keep the order they were written.
+  for (const line of generations.reverse().flat()) {
+    const envelope = parseEnvelope(line);
+    if (envelope === undefined) continue;
+    oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
+    if (envelope.timestamp <= sinceTs || seen.has(eventKey(envelope))) continue;
+    seen.add(eventKey(envelope));
+    events.push(envelope);
+  }
+  return { events: events.sort(byTimeThenSeq), oldestTs };
+}
+
+/** The lines of the current file, then of each generation, newest first, until one is missing. */
+async function readGenerations(filesystem: Filesystem, path: string): Promise<string[][]> {
+  const generations: string[][] = [];
+  for (let generation = 0; ; generation += 1) {
+    const lines = await readLines(filesystem, generation === 0 ? path : `${path}.${generation}`);
+    if (lines !== undefined) generations.push(lines);
+    // The current file may be missing while generations exist (a rotation caught between its
+    // rename and its re-open); only a missing *generation* ends the walk.
+    else if (generation > 0) return generations;
+  }
 }
 
 /** What identifies one event across the ring, the file and a live push: its `id` and nothing
@@ -48,11 +67,11 @@ export function eventKey(event: { readonly id: string }): string {
   return event.id;
 }
 
-async function readLines(filesystem: Filesystem, path: string): Promise<string[]> {
+async function readLines(filesystem: Filesystem, path: string): Promise<string[] | undefined> {
   try {
     return (await filesystem.readFile(path)).split("\n");
   } catch (error: unknown) {
-    if (isMissingPathError(error)) return [];
+    if (isMissingPathError(error)) return undefined;
     throw error;
   }
 }

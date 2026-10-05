@@ -107,7 +107,11 @@ describe("loadConfig", () => {
         },
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-      eventLog: { rotateBytes: 5 * 1024 * 1024 },
+      eventLog: {
+        rotateBytes: 5 * 1024 * 1024,
+        retention: 7 * 24 * 60 * 60 * 1000,
+        maxBytes: 256 * 1024 * 1024,
+      },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
       http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
@@ -181,7 +185,7 @@ describe("loadConfig", () => {
     await filesystem.mkdirp("/home/agent/.simlock");
 
     const defaults = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(defaults.eventLog).toEqual({ rotateBytes: 5 * 1024 * 1024 });
+    expect(defaults.eventLog.rotateBytes).toBe(5 * 1024 * 1024);
 
     for (const rotateBytes of [0, -1]) {
       await filesystem.writeFileAtomic(configPath, JSON.stringify({ eventLog: { rotateBytes } }));
