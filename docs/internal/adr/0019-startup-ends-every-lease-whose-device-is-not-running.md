@@ -54,7 +54,7 @@ Startup runs in this order, all while health is `starting`:
    of 60 seconds. A platform with no driver, or whose listing throws or
    passes the limit, is *unreadable*. An unreadable platform no longer
    fails startup. Android's `adb devices` gets a command timeout of its
-   own, as its other adb calls have.
+   own, 30 seconds, below the startup limit.
 3. Leasing's reconciler checks every lease against that read (§2).
 4. Kept leases get their expiry timers back, from their persisted
    deadlines.
@@ -97,7 +97,7 @@ read says of its device:
 | stopped | ended | wiped by the ordinary reclaim and returned to the pool |
 | transitioning (booting or shutting down) | ended | as stopped |
 | absent from a readable platform | ended | marked missing in the same write |
-| on an unreadable platform | ended | `reclaiming`; reclaim runs when a driver can run it |
+| on an unreadable platform | ended | `reclaiming`, with no reclaim started |
 
 "Ended" is the ordinary release with reason `device-lost`, the reason the
 health monitor already uses, emitting `lease.released` post-commit. No
@@ -112,17 +112,21 @@ has nothing to wipe: one registry write removes the lease and marks the
 device missing through doctor's missing-device fix (`device.deleted`,
 initiator `doctor`), and no reclaim starts for it.
 
-A device on an unreadable platform moves to `reclaiming` like any other
-release. If the platform has a driver whose listing failed, the reclaim
-runs at once and succeeds or quarantines as usual. If it has no driver,
-the device stays `reclaiming` until a start that has the driver recovers
-it as an interrupted reclaim.
+A device on an unreadable platform moves to `reclaiming`, but no reclaim
+starts for it, whether the platform has no driver or its listing failed.
+A driver that just failed or hung on a listing would likely hang the
+reclaim too, and a hung reclaim holds its device's claim with no end. The
+device waits, unclaimed, until a start whose read of that platform
+succeeds recovers it as an interrupted reclaim. Meanwhile `status` reports
+it stalled once it passes the stalled-transition threshold, and
+`simlock doctor --fix` quarantines it, as for any stalled reclaim.
 
 ```mermaid
 stateDiagram-v2
   [*] --> leased: lease on disk at start
   leased --> leased: device running
   leased --> reclaiming: stopped, transitioning, unreadable
+  reclaiming --> reclaiming: unreadable, waits for a good read
   leased --> deleted: absent (marked missing)
   reclaiming --> ready: reclaim succeeds
   reclaiming --> quarantined: reclaim fails
@@ -155,6 +159,10 @@ the same `state.json` write that commits the lease marks that request
 granted with the lease's id. A crash can no longer separate them, and the
 first step of §1 never sees that request as open. A repeat of the request
 under the same key answers with the lease.
+
+The one write stores the whole grant a repeat answers today: device,
+environment, lease and timing. The acquisition path builds the
+environment and timing before the write rather than after it.
 
 A repeat answers the grant as recorded even when §2 has since ended that
 lease, as any repeat of a settled request does today after a release or
