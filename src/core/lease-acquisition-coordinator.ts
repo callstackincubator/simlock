@@ -554,6 +554,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
    * `LeaseEngine#waitingRequests` is a different view and does not change.
    */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   waitingDemand(): readonly WaitingDemand[] {
     return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
       waiter.spec !== undefined && waiter.requirement !== undefined
