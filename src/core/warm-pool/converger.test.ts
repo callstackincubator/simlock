@@ -55,6 +55,7 @@ function harness(
     boot?: (target: DeviceRecord) => Promise<DeviceRecord | undefined>;
     waiting?: () => readonly WaitingDemand[];
     maintenance?: () => boolean;
+    refuseClaim?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -114,7 +115,12 @@ function harness(
         };
       },
     },
-    claims,
+    claims: {
+      isClaimed: (id) => claims.isClaimed(id),
+      operationFor: (id) => claims.operationFor(id),
+      tryClaim: (id, operation) =>
+        options.refuseClaim === true ? undefined : claims.tryClaim(id, operation),
+    },
     clock,
     config: { enabled: options.enabled ?? true },
     decisions: new SerializedDecision(),
@@ -397,6 +403,7 @@ describe("warm pool converger", () => {
     expect(rig.bootCalls).toEqual([]);
     expect(rig.claims.isClaimed("shut")).toBe(false);
     expect(rig.kick).not.toHaveBeenCalled();
+    expect(rig.sink.records).toEqual([]);
   });
 
   it("proposes no budget shutdown while a ready device is claimed for a boot on its way to a lease", async () => {
@@ -449,6 +456,96 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("releases the reservation and boots nothing when the device claim is refused", async () => {
+    const rig = harness([device("shut", "shutdown", 1_000)], { refuseClaim: true });
+
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.reservations).toHaveLength(1);
+    expect(rig.reservations[0]?.released).toBe(1);
+    expect(rig.sink.records).toEqual([]);
+    expect(rig.kick).not.toHaveBeenCalled();
+  });
+
+  it("leaves a device alone whose state changed between the proposal and the shutdown", async () => {
+    let change: () => void = () => undefined;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        shutdown: async (target) => {
+          change();
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+    change = () => {
+      rig.state.devices = rig.state.devices.map((item) =>
+        item.id === "b" ? { ...item, state: "reclaiming" } : item,
+      );
+    };
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("leaves a device alone that left the registry between the proposal and the shutdown", async () => {
+    let remove: () => void = () => undefined;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        shutdown: async (target) => {
+          remove();
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+    remove = () => {
+      rig.state.devices = rig.state.devices.filter((item) => item.id !== "b");
+    };
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
+    expect(rig.sink.records).toEqual([]);
+  });
+
+  it("leaves a shut-down device alone that is no longer shut down when its boot comes", async () => {
+    let change: () => void = () => undefined;
+    const rig = harness([device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)], {
+      boot: async (target) => {
+        change();
+        return { ...target, state: "ready" };
+      },
+    });
+    change = () => {
+      rig.state.devices = rig.state.devices.map((item) =>
+        item.id === "y" ? { ...item, state: "ready" } : item,
+      );
+    };
+
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual(["x"]);
+  });
+
+  it("disposes without error when it was never started", async () => {
+    const rig = harness([]);
+
+    expect(() => rig.pool.dispose()).not.toThrow();
   });
 
   it("logs one line for a shutdown that fails and leaves the device ready", async () => {

@@ -117,11 +117,10 @@ function overBudget(
   const candidates = running.filter(
     (device) => !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
   );
-  while (room.global < 0 || room.ios < 0 || room.android < 0) {
-    const victim =
-      candidates.find((device) => room[device.spec.platform] < 0) ??
-      (room.global < 0 ? candidates[0] : undefined);
-    if (victim === undefined) break;
+  const nextVictim = (): DeviceRecord | undefined =>
+    candidates.find((device) => room[device.spec.platform] < 0) ??
+    (room.global < 0 ? candidates[0] : undefined);
+  for (let victim = nextVictim(); victim !== undefined; victim = nextVictim()) {
     candidates.splice(candidates.indexOf(victim), 1);
     release(room, victim);
     proposals.push({ action: "shutdown", deviceId: victim.id, reason: "over-budget" });

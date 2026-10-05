@@ -406,6 +406,48 @@ describe("warm pool policy", () => {
     ]);
   });
 
+  it("boots only as many recently released devices as the tighter of the global and the platform room allows", () => {
+    const first = device("first", "shutdown", { endedAgo: 1_000 });
+    const second = device("second", "shutdown", { endedAgo: 2_000 });
+    const devices = [first, second];
+
+    const globalTight = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { global: 1, ios: 5 }),
+    });
+    const platformTight = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { global: 5, ios: 1 }),
+    });
+
+    expect(globalTight).toEqual([
+      { action: "boot", deviceId: "first", reason: "recently-released" },
+    ]);
+    expect(platformTight).toEqual([
+      { action: "boot", deviceId: "first", reason: "recently-released" },
+    ]);
+  });
+
+  it("proposes no shutdown at exactly the budget, globally or on either platform", () => {
+    const android = device("android", "ready", {
+      endedAgo: 1_000,
+      spec: { model: "Pixel 8", osVersion: "35", platform: "android" },
+    });
+    const ios = device("ios", "ready", { endedAgo: 2_000 });
+    const devices = [android, ios];
+
+    for (const limits of [
+      { android: 5, global: 2, ios: 5 },
+      { android: 5, global: 5, ios: 1 },
+      { android: 1, global: 5, ios: 5 },
+    ]) {
+      expect(
+        evaluate({ ...view(devices), capacity: capacityOf(devices, limits) }),
+        JSON.stringify(limits),
+      ).toEqual([]);
+    }
+  });
+
   it("proposes no boot at the budget, and none for a claimed, leased or spent device", () => {
     const busy = device("busy", "leased");
     const claimed = device("claimed", "shutdown", { endedAgo: 1_000 });

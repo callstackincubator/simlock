@@ -2,12 +2,7 @@ import type { EventBus } from "../../bus/index.js";
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
 import { capacityDevice, capacityDevices, type CapacityCoordinator } from "../capacity/index.js";
 import type { DeviceOperationClaims } from "../device-operation-claims.js";
-import {
-  type DeviceRecord,
-  type LeaseRecord,
-  mayBeGranted,
-  type WaitingDemand,
-} from "../domain.js";
+import { type DeviceRecord, type LeaseRecord, type WaitingDemand } from "../domain.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
@@ -55,7 +50,6 @@ export class WarmPool {
   /** When a device whose boot or shutdown failed may be tried again, by device id. */
   readonly #retryAfter = new Map<string, number>();
   #again = false;
-  #disposed = false;
   #running: Promise<void> | undefined;
   #tick: TimerHandle | undefined;
 
@@ -71,7 +65,6 @@ export class WarmPool {
   }
 
   dispose(): void {
-    this.#disposed = true;
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     if (this.#tick !== undefined) this.options.clock.cancel(this.#tick);
     this.#tick = undefined;
@@ -96,7 +89,6 @@ export class WarmPool {
   }
 
   #trigger(): void {
-    if (this.#disposed) return;
     void this.pass();
   }
 
@@ -111,7 +103,7 @@ export class WarmPool {
     do {
       this.#again = false;
       await this.#once();
-    } while (this.#again && !this.#disposed);
+    } while (this.#again);
   }
 
   async #once(): Promise<void> {
@@ -171,7 +163,7 @@ export class WarmPool {
   async #boot(proposal: WarmProposal): Promise<void> {
     const held = await this.options.decisions.run(() => {
       const device = this.#unleased(proposal.deviceId, "shutdown");
-      if (device === undefined || !mayBeGranted(device)) return undefined;
+      if (device === undefined) return undefined;
       const reservation = this.options.capacity.tryReserveBoot(
         capacityDevice(device),
         capacityDevices(this.options.registry.snapshot.devices),

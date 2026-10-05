@@ -557,17 +557,17 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   waitingDemand(): readonly WaitingDemand[] {
     return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
-      waiter.spec !== undefined && waiter.requirement !== undefined
-        ? [
+      waiter.spec === undefined
+        ? []
+        : [
             {
               classOf: waiter.classOf ?? (() => undefined),
               inFlight: waiter.state === "processing",
               mode: specMode(waiter.spec),
               platform: waiter.spec.platform,
-              requirement: waiter.requirement,
+              requirement: waiter.requirement ?? exactRequirement(waiter.spec),
             },
-          ]
-        : [],
+          ],
     );
   }
 
