@@ -5,11 +5,16 @@
  * touches that stage and the list in `routing.ts`, and no other stage.
  */
 import type { Platform } from "../../contract/index.js";
+import type { DeviceClass } from "../../core/domain.js";
 import type { WorkerView } from "../worker-registry.js";
 
 export interface RoutableRequest {
   readonly platform: Platform;
-  readonly model: string;
+  /** The exact model the request names; absent for a class request or one naming neither. */
+  readonly model?: string;
+  /** The class the request names; with no `model` either, the request means `phone`. */
+  readonly class?: DeviceClass;
+  /** The OS constraint as typed: an exact version or a range (`os-range`). */
   readonly osVersion?: string;
   /** The image tag the request names, matched against the catalog's `images`; absent for none. */
   readonly imageTag?: string;

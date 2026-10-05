@@ -655,10 +655,14 @@ The v1 policy (`warm-then-free`) is eight stages:
 2. `can-serve` (filter): drop workers whose catalog cannot serve the request
    (ADR 0009 §3, `routing/request-match.ts`). The model is the first entry of
    the worker's `models` whose name or `modelAliases` entry equals the
-   requested name, ignoring letter case. A named runtime must be in that
-   model's `modelRuntimes`; with none named the list must be non-empty. Only
-   installed runtimes count, so a download never makes a worker able to
-   serve;
+   requested name, ignoring letter case (`findCatalogModel`, the core's one
+   matcher). A class request (the class `requestedClass` gives, `phone` for
+   neither a model nor a class, ADR 0015 §8) matches when the catalog's
+   `modelClasses` puts any model in that class. Either way a model needs a
+   paired runtime in `modelRuntimes` that satisfies the request's OS
+   constraint (`os-range`, the contract's one grammar: an exact version or a
+   range); with none named the list must be non-empty. Only installed
+   runtimes count, so a download never makes a worker able to serve;
 3. `healthy` (filter): keep a worker whose health is `running`;
 4. `idle-queue` (filter): keep a worker whose own `queueDepth` is zero, since a
    worker with a local waiter refuses every `noWait` request (ADR 0005
@@ -666,11 +670,14 @@ The v1 policy (`warm-then-free`) is eight stages:
    not known to be healthy or idle, so it is dropped. Stages 3 and 4 drop a
    worker that is busy, not unable: its requests wait;
 5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
-   matching the request, compared against the worker's own name for the
-   model — a **warm hit**, and a sub-second grant. The runtime must be the
-   one requested or, with none requested, the one the worker would pick (the
-   catalog's `defaultRuntime` when the model pairs with it, otherwise its only
-   paired runtime; none when several pair and no default does). The mode must
+   matching the request — a **warm hit**, and a sub-second grant. "Matching"
+   is the core's `fits` (ADR 0015 §6, §8) over a requirement built from the
+   worker's own catalog: its own name for an exact model, or the class with
+   the worker's `modelClasses` as `classOf`. The OS is the one requested or
+   the range requested; with none requested, an exact model needs the runtime
+   the worker would pick (the catalog's `defaultRuntime` when the model pairs
+   with it, otherwise its only paired runtime; none when several pair and no
+   default does) and a class accepts any installed runtime. The mode must
    fit (ADR 0009 §6): `full` needs a device reporting `mode: "full"`, `slim` one
    reporting `slim`, and a request naming none a device reporting
    `servesDefaultMode`, which the worker computes in
@@ -692,9 +699,12 @@ same function `tryReserveProvisioning` calls, so status and the planner cannot
 disagree.
 
 The same matcher gives the name the gateway forwards: the worker is sent its
-own name for the model, so it resolves exactly what routing matched, and
-`allowDownload` is always forwarded as `false`. `lease.requested` keeps the
-name the client sent.
+own name for an exact model, so it resolves exactly what routing matched, and
+`allowDownload` is always forwarded as `false`. A class and an OS range are
+forwarded as they arrived, with no `model` for a class request: the worker
+resolves them by its own rules (ADR 0015 §5), and the gateway compares no
+versions. `lease.requested` keeps the request as the client sent it, and
+`request.dispatched` carries `model` or `class`, whichever the request named.
 
 #### A request that cannot be served
 
@@ -706,9 +716,11 @@ arriving request on rows 1 to 5 is rejected without entering the queue (no
 `lease.queued`, no `queued` progress), and a drain or a lost uplink re-runs the
 walk, which rejects a waiting request that has moved onto those rows. In
 order: no worker takes requests, `NO_CAPACITY` (reason `no-worker`); no known
-worker has the platform, `NO_DRIVER`; none lists the model, `UNKNOWN_MODEL`;
-none has the runtime or pairs it with the model, `RUNTIME_MISSING` with
-`downloadable: false` and `osVersion: "default"` for an unnamed runtime (the
+worker has the platform, `NO_DRIVER`; none lists the model, or for a class
+request any model of it, `UNKNOWN_MODEL` (its details carry `class` instead of
+`model`); none has the runtime or pairs it with the model, or with a model of
+the class, `RUNTIME_MISSING` with `downloadable: false` and `osVersion` the
+constraint as typed, `"default"` for an unnamed runtime (the
 last three with reason `unresolvable-spec`); a known worker can serve it but
 none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
 wait. A worker *takes requests* when it passes `takes-requests`; the gateway
