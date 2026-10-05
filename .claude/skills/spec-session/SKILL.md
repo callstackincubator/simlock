@@ -34,6 +34,13 @@ when:
 
 ## 1. Load the issue
 
+Once the issue and mode are known, rename the session to
+`[Spec #N, <mode>] <issue title>` with
+`mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it
+with ToolSearch first). Skip it when the arguments say `unattended` (a delivery
+run owns the title then), and when the tool is missing or the rename is declined: the title
+is never a reason to stop or ask.
+
 ```bash
 read -r OWNER REPO < <(gh repo view --json owner,name -q '"\(.owner.login) \(.name)"')
 gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number=<N> -f query='

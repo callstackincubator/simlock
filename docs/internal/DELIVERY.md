@@ -139,7 +139,8 @@ agent in `.claude/agents/` that runs on the model and effort its
 frontmatter pins — `implementer` on Sonnet, `reviewer`, `bug-triager` and
 `spec-checker` on Opus — up to two issues at once, and reasons only over the
 fixed report each one returns. The stage skills of the same names are thin
-wrappers that start those agents when a person invokes them. `deliver` and `spec-session` run in
+wrappers that start those agents when a person invokes them, after renaming the session
+so its title names the issue or PR. `deliver` and `spec-session` run in
 the session that invoked them; their frontmatter pins Opus only until the
 next message, so an unattended run keeps it and an attended one returns to
 the session's model after the first reply. `implement` commits the spec's
