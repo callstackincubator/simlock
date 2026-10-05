@@ -1978,7 +1978,7 @@ describe("CLI: catalog", () => {
   it("prints each model under its class in the order of the enum, and an unclassed model under (no class)", async () => {
     const catalog = {
       defaultRuntime: "26.0",
-      modelAliases: { "iPhone 17": ["iphone-17"] },
+      modelAliases: { "iPhone 17": ["iphone-17", "i17"] },
       modelClasses: {
         "Apple TV 4K": "tv" as const,
         "Apple Watch Series 11 (46mm)": "watch" as const,
@@ -2021,7 +2021,7 @@ describe("CLI: catalog", () => {
         "  Models:",
         "    phone:",
         "      iPhone 17: 26.0",
-        "        Other names: iphone-17",
+        "        Other names: iphone-17, i17",
         "      iPhone 16 (custom): 26.0",
         "    tablet:",
         "      iPad Pro: 26.0",

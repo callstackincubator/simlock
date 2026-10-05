@@ -259,7 +259,7 @@ type SlimApplyOutcome =
  * ADR 0015 §3: which simctl product family is which device class. A family not listed here has
  * no class, and its models stay in the catalog without one.
  */
-const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string, DeviceClass> = new Map([
+const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new Map([
   ["iPhone", "phone"],
   ["iPad", "tablet"],
   ["Apple Watch", "watch"],
@@ -1290,10 +1290,7 @@ export class IosSimctlDriver implements Driver {
       modelAliases: {},
       modelClasses: Object.fromEntries(
         catalog.deviceTypes.flatMap((deviceType) => {
-          const deviceClass =
-            deviceType.productFamily === undefined
-              ? undefined
-              : PRODUCT_FAMILY_CLASSES.get(deviceType.productFamily);
+          const deviceClass = PRODUCT_FAMILY_CLASSES.get(deviceType.productFamily);
           return deviceClass === undefined ? [] : [[deviceType.name, deviceClass]];
         }),
       ),

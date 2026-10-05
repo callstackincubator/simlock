@@ -234,9 +234,7 @@ function indexCatalogs(
 ): Map<Platform, CatalogBucket> {
   const byPlatform = new Map<Platform, CatalogBucket>();
   // In id order, so a model two workers class differently keeps the first worker's class.
-  const inIdOrder = [...views].sort((left, right) =>
-    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
-  );
+  const inIdOrder = [...views].sort((left, right) => left.id.localeCompare(right.id));
   for (const view of inIdOrder) {
     if (view.connection !== "connected") continue;
     for (const entry of view.catalog) {
@@ -297,10 +295,8 @@ function addAliases(
  * worker does not list itself is dropped.
  */
 function addModelClasses(index: Map<string, DeviceClass>, entry: PlatformCatalog): void {
-  for (const model of entry.models) {
-    if (index.has(model) || !Object.hasOwn(entry.modelClasses, model)) continue;
-    const deviceClass = entry.modelClasses[model];
-    if (deviceClass !== undefined) index.set(model, deviceClass);
+  for (const [model, deviceClass] of Object.entries(entry.modelClasses)) {
+    if (entry.models.includes(model) && !index.has(model)) index.set(model, deviceClass);
   }
 }
 

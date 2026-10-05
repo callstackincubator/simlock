@@ -64,6 +64,9 @@ describe("MCP server (smoke)", () => {
         "release_simulator",
         "lease_status",
       ]);
+      expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
+        "modelClasses",
+      );
       for (const tool of tools.tools) {
         expect(tool.inputSchema).toEqual(expect.any(Object));
         expect(tool.outputSchema).toEqual(expect.any(Object));

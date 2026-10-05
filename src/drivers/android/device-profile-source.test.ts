@@ -738,7 +738,7 @@ describe("device classes", () => {
     const catalog = await registry.catalog();
 
     expect(catalog.models).toEqual(["Odd Device", "Pixel 8"]);
-    expect(catalog.modelClasses).toEqual({ "Pixel 8": "phone" });
+    expect(catalog.modelClasses).toStrictEqual({ "Pixel 8": "phone" });
   });
 });
 
@@ -747,11 +747,17 @@ describe("parseAvdmanagerDeviceProfiles", () => {
     const output =
       "Available devices:\n    Tag : android-wear\n" +
       'id: 0 or "a"\n    Name: A\n    Tag : android-tv\n---------\n' +
-      'id: 1 or "b"\n    Name: B\n';
+      'id: 1 or "b"\n    Name: B\n' +
+      'id: 2 or "c"\n    Name: C\n    Tag: android-desktop\n' +
+      'id: 3 or "d"\n    Name: D\n    Tag  :android-wear\n' +
+      'id: 4 or "e"\n    Name: E\n    Some Tag : android-tv\n';
 
     expect(parseAvdmanagerDeviceProfiles(output).map((p) => [p.name, p.tag])).toEqual([
       ["A", "android-tv"],
       ["B", undefined],
+      ["C", "android-desktop"],
+      ["D", "android-wear"],
+      ["E", undefined],
     ]);
   });
 });
