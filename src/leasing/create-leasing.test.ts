@@ -5,6 +5,7 @@ import {
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
+  type Core,
   DriverCrashError,
   type DeviceSpec,
   type LeaseProgress,
@@ -23,7 +24,9 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
+import { createLeasing } from "./create-leasing.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
+import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
@@ -2271,6 +2274,38 @@ describe("createLeasing logger wiring", () => {
       },
     ]);
   });
+  it("createLeasing hands its logger to the lease release coordinator: a background reclaim that cannot commit is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 20 },
+      platform: "ios",
+    });
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver, logger });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+    await harness.engine.release(first.lease.id, "explicit");
+    // The release has committed and the erase is still running. A disk that refuses the write
+    // makes the reclaim's own commit throw, with no caller left to reject to.
+    harness.filesystem.defineFailure(statePath, "EIO");
+
+    clock.advance(20);
+    await harness.engine.settle();
+
+    expect(
+      sink.records.filter((record) => record.message === "background reclaim failed"),
+    ).toMatchObject([
+      {
+        level: "error",
+        module: "daemon.lease-release-coordinator",
+        fields: { deviceId: first.device.id, leaseId: first.lease.id },
+      },
+    ]);
+  });
 });
 
 describe("createLeasing restart recovery of stored lease requests", () => {
@@ -2691,4 +2726,57 @@ describe("createLeasing: lease.rejected names its request", () => {
       });
     },
   );
+});
+
+describe("createLeasing wiring", () => {
+  const components = {
+    claimProvision: () => () => undefined,
+    install: async () => ({ outcome: "installed" as const, version: "26.5" }),
+  };
+
+  it("wires the leased-device health monitor, and leaves it out when told to", async () => {
+    const harness = await createHarness();
+    const without = createLeasing({
+      clock: harness.clock,
+      components,
+      config: config(),
+      core: harness.engine.core,
+      eventBus: harness.bus,
+      healthMonitor: false,
+      idGenerator: { generate: () => "1" },
+    });
+
+    expect(harness.engine.leasing.healthMonitor).toBeInstanceOf(LeaseHealthMonitor);
+    expect(without.healthMonitor).toBeUndefined();
+  });
+
+  it("hands core the spec the queue's head waits for, and nothing while no request waits", async () => {
+    const harness = await createHarness();
+    let ports: Parameters<Core["connect"]>[0] | undefined;
+    const core: Core = {
+      ...harness.engine.core,
+      connect: (supplied) => {
+        ports = supplied;
+      },
+    };
+    const leasing = createLeasing({
+      clock: harness.clock,
+      components,
+      config: config(),
+      core,
+      eventBus: harness.bus,
+      idGenerator: { generate: () => "1" },
+    });
+    expect(ports?.queueHeadDemand()).toBeUndefined();
+
+    await leasing.request(request, { ownerId: "holder", requesterId: "holder" });
+    const waiting = leasing.request(request, { ownerId: "waiter", requesterId: "waiter" });
+    waiting.catch(() => undefined);
+    await flush();
+
+    expect(ports?.queueHeadDemand()).toEqual({
+      spec: expect.objectContaining({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
+    });
+    await leasing.cancelPending("waiter");
+  });
 });

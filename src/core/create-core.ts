@@ -46,9 +46,9 @@ interface CoreOptions {
    * reclaim has no caller left to reject to, so without this its only trace is the device's own
    * registry state.
    */
-  readonly logger?: Logger;
+  readonly logger?: Logger | undefined;
   /** ADR 0015 §4: the model names to try for each class, per platform, operator's list first. */
-  readonly modelPreferences?: ModelPreferences;
+  readonly modelPreferences?: ModelPreferences | undefined;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
 }

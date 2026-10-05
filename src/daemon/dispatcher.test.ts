@@ -280,7 +280,7 @@ async function buildDispatcher(
     drivers: [driver],
     eventBus,
     leaseExpirer: engine,
-    quarantine: engine,
+    quarantine: engine.core.quarantine,
     registry,
   });
   const tokens = new TokenStore({

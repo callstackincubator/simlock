@@ -68,6 +68,27 @@ describe("Registry lease requests", () => {
     expect(await storedRequestIds(filesystem)).toEqual([next.id]);
   });
 
+  it("writes a result onto an open record once, leaving a settled record with the result it has", async () => {
+    const { registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest(newRequest("first"));
+    await registry.settleLeaseRequest(created.id, { failure, state: "failed" });
+
+    const again = await registry.settleLeaseRequest(created.id, { state: "cancelled" });
+
+    expect(again).toBeUndefined();
+    expect(registry.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
+  });
+
+  it("settles nothing for an id no record is stored under", async () => {
+    const { registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest(newRequest("first"));
+
+    const settled = await registry.settleLeaseRequest("req_missing", { state: "cancelled" });
+
+    expect(settled).toBeUndefined();
+    expect(registry.leaseRequests()).toMatchObject([{ id: created.id, state: "open" }]);
+  });
+
   it("keeps an open record past the retention window", async () => {
     const { clock, registry } = await loadRegistry({
       limits: { maxRecords: 100, retentionMs: 60_000 },

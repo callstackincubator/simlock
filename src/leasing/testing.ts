@@ -36,12 +36,12 @@ export interface TestEngineOptions {
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
-  readonly logger?: Logger;
+  readonly logger?: Logger | undefined;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
-  readonly describeFailure?: (error: unknown) => LeaseRequestFailure;
-  readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
-  readonly modelPreferences?: ModelPreferences;
+  readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
+  readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
+  readonly modelPreferences?: ModelPreferences | undefined;
 }
 
 /**
@@ -64,10 +64,10 @@ export interface TestEngine
   readonly cleanup: Core["cleanup"];
   readonly healthMonitor: LeaseHealthMonitor;
   readonly requests: Leasing["requests"];
-  enterFromStalledTransition(deviceId: string): Promise<void>;
   /** The daemon's startup order: leasing's steps, core's device steps, then the first queue depth. */
   convergeRunningCapacity(): Promise<void>;
   settle(): Promise<void>;
+  /** Cancels leasing's timers: the lease expiry timers a test leaves armed. */
   dispose(): void;
   waitingRequests: Leasing["waitingRequests"];
 }
@@ -80,10 +80,8 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     decisions: options.decisions,
     drivers: options.drivers,
     eventBus: options.eventBus,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(options.modelPreferences === undefined
-      ? {}
-      : { modelPreferences: options.modelPreferences }),
+    logger: options.logger,
+    modelPreferences: options.modelPreferences,
     registry: options.registry,
     systemStats: options.systemStats,
   });
@@ -92,30 +90,26 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     components: options.components,
     config: options.config,
     core,
+    defaultModes: options.defaultModes,
+    describeFailure: options.describeFailure,
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(options.describeFailure === undefined ? {} : { describeFailure: options.describeFailure }),
-    ...(options.defaultModes === undefined ? {} : { defaultModes: options.defaultModes }),
-    ...(options.modelPreferences === undefined
-      ? {}
-      : { modelPreferences: options.modelPreferences }),
+    logger: options.logger,
+    modelPreferences: options.modelPreferences,
   });
-  const healthMonitor = leasing.healthMonitor;
-  if (healthMonitor === undefined) throw new Error("createLeasing wires the health monitor");
   return {
     core,
     leasing,
     claimReader: core.claimReader,
     cleanup: core.cleanup,
-    healthMonitor,
+    // `createLeasing` wires the monitor unless told not to, and this helper never tells it not to.
+    healthMonitor: leasing.healthMonitor as LeaseHealthMonitor,
     requests: leasing.requests,
     request: (request, requestOptions) => leasing.request(request, requestOptions),
     release: (leaseId, reason) => leasing.release(leaseId, reason),
     releaseAll: (reason) => leasing.releaseAll(reason),
     renew: (leaseId, ttlMs) => leasing.renew(leaseId, ttlMs),
     expire: (leaseId) => leasing.expire(leaseId),
-    enterFromStalledTransition: (deviceId) => core.quarantine.enterFromStalledTransition(deviceId),
     nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),
     async convergeRunningCapacity() {
       await leasing.startup();
@@ -123,10 +117,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
       leasing.announceQueueDepth();
     },
     settle: () => leasing.settle(),
-    dispose() {
-      core.dispose();
-      leasing.dispose();
-    },
+    dispose: () => leasing.dispose(),
     get queueDepth() {
       return leasing.queueDepth;
     },

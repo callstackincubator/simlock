@@ -46,29 +46,29 @@ export interface LeasingOptions {
    * reclaim has no caller left to reject to, so without this its only trace is the device's own
    * registry state.
    */
-  readonly logger?: Logger;
+  readonly logger?: Logger | undefined;
   /**
    * Turns the error a lease request failed with into the code and message stored for it. The
    * daemon passes its contract error classifier; leasing never reads the code. Omitted, every
    * failure is stored as `INTERNAL` with its own message.
    */
-  readonly describeFailure?: (error: unknown) => LeaseRequestFailure;
+  readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
   /**
    * The worker's default device mode per platform, built from config by the composition root
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
-  readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
+  readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
   /**
    * ADR 0015 §4: the model names to try for each class, per platform, operator's list first.
    * Absent means none, so the catalog names no class default.
    */
-  readonly modelPreferences?: ModelPreferences;
+  readonly modelPreferences?: ModelPreferences | undefined;
   /**
    * Whether the leased-device health monitor is wired. Built here but deliberately not started:
    * the daemon arms it only once startup convergence has finished, so no health probe shells out
    * while convergence is still doing so itself. See `DaemonServer#start`. Default: wired.
    */
-  readonly healthMonitor?: boolean;
+  readonly healthMonitor?: boolean | undefined;
 }
 
 /** What the daemon's request handlers and status reporting use leasing through. */
