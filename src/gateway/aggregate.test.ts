@@ -404,10 +404,15 @@ describe("aggregateCatalog", () => {
   });
 
   it("carries a class default only when every connected worker reports the same one", () => {
+    // Every default names a model its worker lists, so a disagreement reaches agreedClassDefaults.
     const withDefaults = (
       classDefaults: Record<string, string>,
       base: typeof iosOnA | typeof iosOnB = iosOnA,
-    ) => ({ ...base, classDefaults });
+    ) => ({
+      ...base,
+      classDefaults,
+      models: [...new Set([...base.models, "iPad Pro", "iPad (A16)"])],
+    });
 
     const agreed = aggregateCatalog([
       view({ catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad Pro" })], id: "wrk_a" }),
