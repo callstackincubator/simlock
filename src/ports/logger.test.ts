@@ -382,16 +382,15 @@ describe("NodeFileLogSink", () => {
     it("keeps numbered generations with only a total size cap, and deletes the oldest to fit it", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");
-      const sink = new NodeFileLogSink({ maxBytes: 10, path, totalMaxBytes: 1_000_000 });
+      const sink = new NodeFileLogSink({ maxBytes: 10, path, totalMaxBytes: 30 });
 
-      for (const letter of ["a", "b", "c"]) sink.write(letter.repeat(10));
+      for (const letter of ["a", "b", "c", "d"]) sink.write(letter.repeat(10));
       sink.close();
 
-      expect(await generations(directory)).toEqual([
-        "events.jsonl",
-        "events.jsonl.1",
-        "events.jsonl.2",
-      ]);
+      // Each file is 11 bytes: the current file plus one generation fit 30, a second do not.
+      expect(await generations(directory)).toEqual(["events.jsonl", "events.jsonl.1"]);
+      expect(await readFile(`${path}.1`, "utf8")).toBe("cccccccccc\n");
+      expect(await readFile(path, "utf8")).toBe("dddddddddd\n");
     });
 
     it("keeps a generation whose newest line is exactly at the retention boundary", async () => {

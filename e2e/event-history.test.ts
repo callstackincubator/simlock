@@ -107,7 +107,7 @@ describe("event history", () => {
   });
 
   it("keeps no more than two generations beside events.jsonl when eventLog.maxBytes is twice eventLog.rotateBytes, holding the newest event", async () => {
-    const rotateBytes = 8 * 1024;
+    const rotateBytes = 2 * 1024;
     const env = await withDaemon({
       configOverrides: { eventLog: { maxBytes: 2 * rotateBytes, rotateBytes } },
     });
