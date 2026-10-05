@@ -4296,6 +4296,42 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
   return state.value;
 }
 
+describe("IosSimctlDriver defaultModels", () => {
+  it("lists the built-in iOS preference list per class, newest first, with phone starting at iPhone 17", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.defaultModels).toEqual({
+      phone: ["iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14", "iPhone 13"],
+      tablet: [
+        "iPad Pro 11-inch (M5)",
+        "iPad Pro 11-inch (M4)",
+        "iPad Air 11-inch (M3)",
+        "iPad (A16)",
+        "iPad (10th generation)",
+      ],
+      tv: ["Apple TV 4K (3rd generation)", "Apple TV"],
+      vision: ["Apple Vision Pro"],
+      watch: [
+        "Apple Watch Series 11 (46mm)",
+        "Apple Watch Series 10 (46mm)",
+        "Apple Watch Series 9 (45mm)",
+      ],
+    });
+  });
+
+  it("has no iOS list for auto or desktop", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(Object.keys(driver.defaultModels).sort()).toEqual([
+      "phone",
+      "tablet",
+      "tv",
+      "vision",
+      "watch",
+    ]);
+  });
+});
+
 describe("IosSimctlDriver toolVersions()", () => {
   it("reports the Xcode version and build that xcodebuild -version prints", async () => {
     const runner = new ScriptedProcessRunner([

@@ -30,6 +30,45 @@ async function simctlRuntimes(): Promise<string[]> {
   return parsed.runtimes.filter((runtime) => runtime.isAvailable).map((runtime) => runtime.version);
 }
 
+/** Every runtime the catalog lists is one real simctl reports as installed. */
+function expectRuntimesAgree(reported: readonly string[] | undefined, available: string[]): void {
+  for (const runtime of reported ?? []) {
+    expect(available, "simlock catalog's runtimes must agree with real simctl").toContain(runtime);
+  }
+}
+
+/** The catalog's default phone model, read through the CLI as the daemon currently reports it. */
+async function iosPhoneDefault(env: TestEnv): Promise<string | undefined> {
+  const reported = await env.cli(["catalog", "--json", "--platform", "ios"]);
+  expect(reported.code, `catalog failed: ${reported.stderr}`).toBe(0);
+  const platforms = (
+    reported.json as { platforms: { platform: string; classDefaults: Record<string, string> }[] }
+  ).platforms;
+  return platforms.find((platform) => platform.platform === "ios")?.classDefaults["phone"];
+}
+
+/**
+ * `ios.defaultModels` against a real catalog: a configured name the catalog lists is the shown
+ * default, and one it does not list falls through to the built-in list.
+ */
+async function expectConfiguredPhoneDefaults(
+  env: TestEnv,
+  models: readonly string[] | undefined,
+): Promise<void> {
+  expect(models ?? [], "this lane needs the host's simctl to list iPhone 15").toContain(
+    "iPhone 15",
+  );
+  await env.withConfig({ ios: { defaultModels: { phone: ["iPhone 15"] } } }, async () => {
+    expect(await iosPhoneDefault(env)).toBe("iPhone 15");
+  });
+  await env.withConfig(
+    { ios: { defaultModels: { phone: ["Simlock Unlisted Phone"] } } },
+    async () => {
+      expect(await iosPhoneDefault(env)).toBe("iPhone 17");
+    },
+  );
+}
+
 // This lane needs the real simctl toolchain, hence darwin-only and gated on an
 // installed runtime -- it never installs one itself (no --allow-download).
 /**
@@ -72,6 +111,7 @@ describe.skipIf(process.platform !== "darwin")(
               models: string[];
               runtimes: string[];
               modelClasses: Record<string, string>;
+              classDefaults: Record<string, string>;
             }[];
           }
         ).platforms;
@@ -84,12 +124,10 @@ describe.skipIf(process.platform !== "darwin")(
         // The class comes from the device type's product family, read off this host's simctl.
         expect(iosCatalog?.modelClasses["iPhone 17"]).toBe("phone");
         expect(iosCatalog?.modelClasses["Apple Watch Series 11 (46mm)"]).toBe("watch");
-        for (const runtime of iosCatalog?.runtimes ?? []) {
-          expect(
-            availableRuntimes,
-            "simlock catalog's runtimes must agree with real simctl",
-          ).toContain(runtime);
-        }
+        // With no `ios.defaultModels`, the built-in list's first listed phone is the default.
+        expect(iosCatalog?.classDefaults["phone"]).toBe("iPhone 17");
+        await expectConfiguredPhoneDefaults(env, iosCatalog?.models);
+        expectRuntimesAgree(iosCatalog?.runtimes, availableRuntimes);
         const model = iosCatalog?.models[0] as string;
 
         const lease = await env.cli(

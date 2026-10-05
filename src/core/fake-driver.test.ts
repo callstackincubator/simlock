@@ -203,6 +203,15 @@ describe("FakeDriver", () => {
     expect((await new FakeDriver(options).listCatalog()).modelClasses).toEqual({});
   });
 
+  it("reports the built-in preference lists its options name, and none without them", () => {
+    const options = { clock: new FakeClock(), platform: "ios" as const };
+
+    expect(
+      new FakeDriver({ ...options, defaultModels: { phone: ["iPhone 17"] } }).defaultModels,
+    ).toEqual({ phone: ["iPhone 17"] });
+    expect(new FakeDriver(options).defaultModels).toEqual({});
+  });
+
   it("reports the custom models its options name, and no customModels field without them", async () => {
     const options = {
       availableOsVersions: ["35"],

@@ -332,6 +332,7 @@ describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    classDefaults: {},
     modelClasses: {},
     modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
@@ -342,6 +343,7 @@ describe("aggregateCatalog", () => {
   const iosOnB = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    classDefaults: {},
     modelClasses: {},
     modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
@@ -401,6 +403,59 @@ describe("aggregateCatalog", () => {
     expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
   });
 
+  it("carries a class default only when every connected worker reports the same one", () => {
+    // Every default names a model its worker lists, so a disagreement reaches agreedClassDefaults.
+    const withDefaults = (
+      classDefaults: Record<string, string>,
+      base: typeof iosOnA | typeof iosOnB = iosOnA,
+    ) => ({
+      ...base,
+      classDefaults,
+      models: [...new Set([...base.models, "iPad Pro", "iPad (A16)"])],
+    });
+
+    const agreed = aggregateCatalog([
+      view({ catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad Pro" })], id: "wrk_a" }),
+      view({
+        catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad (A16)" }, iosOnB)],
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(agreed.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
+    expect(() => OPERATIONS["catalog.get"].output.parse(agreed)).not.toThrow();
+  });
+
+  it("drops a class default when a connected worker has none for that class", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({ catalog: [{ ...iosOnB, classDefaults: {} }], id: "wrk_b" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
+  it("drops a class default naming a model the worker does not list", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnB, classDefaults: { phone: "Ghost" } }], id: "wrk_a" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
+  it("keeps a class default a lone connected worker reports, and ignores a disconnected worker's", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({
+        catalog: [{ ...iosOnB, classDefaults: { phone: "iPhone 16" } }],
+        connection: "disconnected",
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
+  });
+
   it("keeps a default runtime only when every worker agrees on it", () => {
     const agreed = aggregateCatalog([
       view({ catalog: [iosOnA], id: "wrk_a" }),
@@ -434,6 +489,7 @@ describe("aggregateCatalog", () => {
   it("pairs a model with a runtime when at least one connected worker pairs them", () => {
     const iosOnC = {
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
@@ -465,6 +521,7 @@ describe("aggregateCatalog", () => {
   it("ignores the pairings of disconnected and incompatible workers", () => {
     const pairsOld = {
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
@@ -483,6 +540,7 @@ describe("aggregateCatalog", () => {
   it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
     const unpaired = {
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
       modelRuntimes: { "iPhone XS": [] },
       models: ["iPhone XS"],
@@ -508,6 +566,7 @@ describe("aggregateCatalog", () => {
       platforms: [
         {
           modelAliases: {},
+          classDefaults: {},
           modelClasses: {},
           modelRuntimes: {},
           models: ["constructor"],
@@ -525,6 +584,7 @@ describe("aggregateCatalog", () => {
   it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
     const claimsMore = {
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
       models: ["iPhone 17"],
@@ -548,6 +608,7 @@ describe("aggregateCatalog", () => {
             iosOnA,
             {
               modelAliases: {},
+              classDefaults: {},
               modelClasses: {},
               modelRuntimes: { "Pixel 9": ["35"] },
               models: ["Pixel 9"],
@@ -572,6 +633,7 @@ describe("aggregateCatalog", () => {
         images: { runtime: string; tag: string; abi: string }[];
         runtimes: string[];
         customModels: string[];
+        classDefaults: {};
         modelClasses: Record<string, "phone">;
       }>,
     ) => {
@@ -581,6 +643,7 @@ describe("aggregateCatalog", () => {
         ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
+        classDefaults: {},
         modelClasses: overrides.modelClasses ?? {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
         models,
@@ -701,6 +764,7 @@ describe("aggregateCatalog", () => {
             "Pixel 8": names(prefix, 32),
           },
           customModels: ["Pixel 8", ...names(`${prefix}m`, 4095)],
+          classDefaults: {},
           modelClasses: Object.fromEntries(
             ["Pixel 8", ...names(`${prefix}m`, 4095)].map((model) => [model, "phone" as const]),
           ),
@@ -737,6 +801,7 @@ describe("aggregateCatalog", () => {
         Array.from({ length: 4096 }, (_, index) => `${prefix}${index}`);
       const worker = (prefix: string) =>
         androidOn({
+          classDefaults: {},
           modelClasses: Object.fromEntries(names(prefix).map((model) => [model, "phone" as const])),
           models: names(prefix),
         });

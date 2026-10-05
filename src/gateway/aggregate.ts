@@ -7,6 +7,7 @@ import type { z } from "zod";
 
 import {
   CATALOG_LIST_LIMITS,
+  deviceClassSchema,
   INSTALL_LIST_LIMIT,
   OPERATIONS,
   type DeviceClass,
@@ -226,6 +227,8 @@ interface CatalogBucket {
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly defaults: Set<string | undefined>;
+  /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
+  readonly classDefaults: Partial<Record<DeviceClass, string>>[];
 }
 
 function indexCatalogs(
@@ -253,6 +256,7 @@ function addCatalogEntry(
   workerId: string,
 ): void {
   const bucket = byPlatform.get(entry.platform) ?? {
+    classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
     images: undefined,
@@ -271,6 +275,20 @@ function addCatalogEntry(
   addCustomModels(bucket.customModels, entry);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+/**
+ * A worker's class defaults with any naming a model the worker does not list itself dropped, so
+ * the fleet never shows a default nobody can lease; a dropped class counts as the worker having none.
+ */
+function listedClassDefaults(entry: PlatformCatalog): Partial<Record<DeviceClass, string>> {
+  const listed: Partial<Record<DeviceClass, string>> = {};
+  for (const deviceClass of deviceClassSchema.options) {
+    const model = entry.classDefaults[deviceClass];
+    if (model !== undefined && entry.models.includes(model)) listed[deviceClass] = model;
+  }
+  return listed;
 }
 
 /** Folds one worker's other names for `model` into the fleet's, once per spelling ignoring case. */
@@ -332,10 +350,27 @@ function addPairings(index: Map<string, Set<string>>, entry: PlatformCatalog, mo
   index.set(model, paired);
 }
 
+/**
+ * A class's default is kept when every worker reports the same model for it, as `defaultRuntime`
+ * is; a worker with no entry for the class counts as disagreeing.
+ */
+function agreedClassDefaults(
+  workers: readonly Partial<Record<DeviceClass, string>>[],
+): Partial<Record<DeviceClass, string>> {
+  const agreed: Partial<Record<DeviceClass, string>> = {};
+  for (const deviceClass of deviceClassSchema.options) {
+    const reported = new Set(workers.map((worker) => worker[deviceClass]));
+    const [only] = reported;
+    if (reported.size === 1 && only !== undefined) agreed[deviceClass] = only;
+  }
+  return agreed;
+}
+
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
+    classDefaults: agreedClassDefaults(bucket.classDefaults),
     ...(bucket.customModels.size === 0
       ? {}
       : {

@@ -6,7 +6,16 @@ export type Platform = "ios" | "android";
  * ADR 0015 §3: the kind of device a model is. Declared here beside `Platform` rather than
  * imported from the contract; which family or tag is which class is the driver's to say.
  */
-export type DeviceClass = "phone" | "tablet" | "watch" | "tv" | "vision" | "auto" | "desktop";
+export const DEVICE_CLASSES = [
+  "phone",
+  "tablet",
+  "watch",
+  "tv",
+  "vision",
+  "auto",
+  "desktop",
+] as const;
+export type DeviceClass = (typeof DEVICE_CLASSES)[number];
 
 /** The mode a device actually has: slimmed by its driver, or not. */
 export type DeviceMode = "slim" | "full";

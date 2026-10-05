@@ -119,7 +119,7 @@ describe("loadConfig", () => {
         },
       },
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-      ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
@@ -815,11 +815,17 @@ describe("loadConfig", () => {
   });
 
   it.each([
-    [{ android: { emulator: { headless: "yes" } } }, "android.emulator.headless"],
-    [{ android: { emulator: { audio: 0 } } }, "android.emulator.audio"],
-    [{ android: { emulator: { bootAnimation: "false" } } }, "android.emulator.bootAnimation"],
-    [{ android: { emulator: { gpu: "" } } }, "android.emulator.gpu"],
-    [{ android: { emulator: { gpu: true } } }, "android.emulator.gpu"],
+    [
+      { android: { defaultModels: {}, emulator: { headless: "yes" } } },
+      "android.emulator.headless",
+    ],
+    [{ android: { defaultModels: {}, emulator: { audio: 0 } } }, "android.emulator.audio"],
+    [
+      { android: { defaultModels: {}, emulator: { bootAnimation: "false" } } },
+      "android.emulator.bootAnimation",
+    ],
+    [{ android: { defaultModels: {}, emulator: { gpu: "" } } }, "android.emulator.gpu"],
+    [{ android: { defaultModels: {}, emulator: { gpu: true } } }, "android.emulator.gpu"],
   ])("rejects a malformed android.emulator key at load, naming it", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -836,7 +842,9 @@ describe("loadConfig", () => {
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ android: { emulator: { launchArgs: ["-port", "5554"] } } }),
+      JSON.stringify({
+        android: { defaultModels: {}, emulator: { launchArgs: ["-port", "5554"] } },
+      }),
     );
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
@@ -847,6 +855,110 @@ describe("loadConfig", () => {
       "gpu",
       "headless",
     ]);
+  });
+
+  it.each(["ios", "android"] as const)(
+    "%s.defaultModels defaults to no class having a list",
+    async (platform) => {
+      const config = await loadConfig({
+        configPath,
+        filesystem: new MemoryFilesystem(),
+        systemStats: createStats(),
+      });
+
+      expect(config[platform].defaultModels).toEqual({});
+    },
+  );
+
+  it.each([
+    ["ios", "phone", "iPhone 15"],
+    ["ios", "tablet", ["iPad (A16)", "iPad (10th generation)"]],
+    ["android", "phone", "Pixel 7"],
+    ["android", "tv", ["Television (4K)"]],
+  ] as const)(
+    "%s.defaultModels.%s accepts one model name or a list of them",
+    async (platform, deviceClass, value) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        configPath,
+        JSON.stringify({ [platform]: { defaultModels: { [deviceClass]: value } } }),
+      );
+
+      const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+      expect(config[platform].defaultModels[deviceClass]).toEqual(
+        typeof value === "string" ? [value] : value,
+      );
+    },
+  );
+
+  it("stores a string ios.defaultModels value as a one-element list", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ ios: { defaultModels: { phone: "iPhone 15" } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.ios.defaultModels).toStrictEqual({ phone: ["iPhone 15"] });
+  });
+
+  it.each([
+    [{ phone: "" }, "ios.defaultModels.phone"],
+    [{ phone: [] }, "ios.defaultModels.phone"],
+    [{ phone: ["iPhone 15", ""] }, "ios.defaultModels.phone"],
+    [{ phone: 15 }, "ios.defaultModels.phone"],
+    [{ phone: [15] }, "ios.defaultModels.phone"],
+    [{ phone: [["iPhone 15"]] }, "ios.defaultModels.phone"],
+    [{ mobile: "iPhone 15" }, "ios.defaultModels.mobile"],
+    [{ constructor: "iPhone 15" }, "ios.defaultModels.constructor"],
+  ])("refuses ios.defaultModels %j, naming the key", async (defaultModels, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultModels } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(`Invalid config value for "${path}"`);
+  });
+
+  it("says what ios.defaultModels expects: a device class for a key, a name or a list of names for a value", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const load = async (defaultModels: unknown) => {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultModels } }));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    };
+
+    await expect(load({ mobile: "iPhone 15" })).rejects.toThrow(
+      "expected a device class (phone, tablet, watch, tv, vision, auto, desktop)",
+    );
+    await expect(load({ phone: [] })).rejects.toThrow(
+      "expected a model name or a non-empty list of model names",
+    );
+  });
+
+  it("refuses an empty android.defaultModels list and a key that is not a class, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ android: { defaultModels: { phone: [] } } }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow('Invalid config value for "android.defaultModels.phone"');
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ android: { defaultModels: { fridge: "Pixel 8" } } }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow('Invalid config value for "android.defaultModels.fridge"');
   });
 
   it("applies a file-level stalledTransition override", async () => {
@@ -1252,7 +1364,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("warns about android.emulator on a gateway without refusing the config", async () => {
     const warn = vi.fn();
     const config = await load(
-      { mode: "gateway", android: { emulator: { headless: true } } },
+      { mode: "gateway", android: { defaultModels: {}, emulator: { headless: true } } },
       { warn },
     );
 

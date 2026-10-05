@@ -913,7 +913,8 @@ why its Android catalog looks thin, trimmed to one worker:
           "defaultRuntime": "26.0",
           "modelRuntimes": {"iPhone 16": ["18.4"]},
           "modelAliases": {},
-          "modelClasses": {"iPhone 16": "phone"}
+          "modelClasses": {"iPhone 16": "phone"},
+          "classDefaults": {"phone": "iPhone 16"}
         },
         {
           "platform": "android",
@@ -923,6 +924,7 @@ why its Android catalog looks thin, trimmed to one worker:
           "modelRuntimes": {},
           "modelAliases": {},
           "modelClasses": {},
+          "classDefaults": {},
           "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],
@@ -1254,6 +1256,16 @@ is `desktop`, and a profile with no tag, or a custom profile from
 `devices.xml`, is `phone`. A model whose tooling reports nothing usable has
 no entry, and is still listed and leasable by name.
 
+`classDefaults` says, for a class, which model Simlock would create for it on
+this machine: the first name on the class's preference list that the catalog
+lists, that is a model of the class, and that pairs with an installed runtime
+(or the first of those that are listed and of the class, when none pairs).
+The list is the names in `ios.defaultModels.<class>` or
+`android.defaultModels.<class>`, then Simlock's own list for the platform;
+see [`docs/CONFIGURATION.md`](CONFIGURATION.md#default-models-per-class). A class
+in which no listed name counts has no entry. The human-oriented output shows
+it beside the class, as `none` when there is none.
+
 `customModels` lists the models that exist because of something on that
 machine rather than the platform's tools. The field is absent when there are
 none, and iOS never has it. See [Where Android models come
@@ -1269,14 +1281,14 @@ downloads a runtime or system image, and lists only what is installed,
 whatever `downloads.policy` says.
 
 Human-oriented by default, models grouped under a line for their class (in
-the order above, then `(no class)`), one line per model with the runtimes it
+the order above, then `(no class)`) that shows the class's default model, one line per model with the runtimes it
 pairs with, its other names on the line below it, and then each image:
 
 ```text
 Platform: android
   Runtimes: 34, 35 (default: 35)
   Models:
-    phone:
+    phone (default: Pixel 8):
       My Tablet (custom): 34, 35
       Pixel 8: 34, 35
         Other names: pixel_8
@@ -1292,6 +1304,7 @@ Platform: android
   "modelRuntimes":{"My Tablet":["34","35"],"Pixel 8":["34","35"]},
   "modelAliases":{"Pixel 8":["pixel_8"]},
   "modelClasses":{"My Tablet":"phone","Pixel 8":"phone"},
+  "classDefaults":{"phone":"Pixel 8"},
   "customModels":["My Tablet"],
   "images":[{"runtime":"34","tag":"default","abi":"x86_64"},{"runtime":"35","tag":"google_apis","abi":"arm64-v8a"}]}]}
 ```
@@ -1299,7 +1312,9 @@ Platform: android
 Against a gateway, `modelAliases` is the union of each worker's other names
 for a model, `modelClasses` the union of their classes (when two workers
 class a model differently, the worker with the smallest id wins), and `images`
-the union of their images. A model is in
+the union of their images. A class's entry in `classDefaults` is kept only
+when every connected worker reports the same model for it; a worker with none
+for that class counts as disagreeing. A model is in
 `customModels` when any worker that lists it marks it custom;
 `simlock worker list --json` shows which worker that is. A gateway accepts any
 name a worker lists for a model, in any letter case, and sends that worker its

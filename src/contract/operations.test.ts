@@ -481,6 +481,7 @@ describe("operation input/output round trips", () => {
               models: ["iPhone 17"],
               runtimes: ["26.0"],
               modelAliases: {},
+              classDefaults: {},
               modelClasses: {},
               modelRuntimes: { "iPhone 17": ["26.0"] },
             },
@@ -512,6 +513,7 @@ describe("operation input/output round trips", () => {
           models: ["iPhone 17"],
           runtimes: ["26.0"],
           modelAliases: {},
+          classDefaults: {},
           modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
@@ -528,6 +530,7 @@ describe("operation input/output round trips", () => {
       models: ["iPhone 17"],
       runtimes: ["26.0"],
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
     };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
@@ -545,6 +548,7 @@ describe("operation input/output round trips", () => {
       platform: "ios",
       models: ["iPhone 17"],
       runtimes: ["26.0"],
+      classDefaults: {},
       modelAliases: {},
       modelRuntimes: { "iPhone 17": ["26.0"] },
     };
@@ -566,6 +570,7 @@ describe("operation input/output round trips", () => {
       platform: "android",
       models: ["Pixel 8"],
       runtimes: ["35"],
+      classDefaults: {},
       modelClasses: {},
       modelRuntimes: { "Pixel 8": ["35"] },
     };
@@ -593,6 +598,7 @@ describe("operation input/output round trips", () => {
       runtimes: ["35"],
       modelRuntimes: { "Pixel 8": ["35"] },
       modelAliases: {},
+      classDefaults: {},
       modelClasses: {},
     };
     const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
@@ -795,8 +801,11 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", slim: { bootTimeoutMs: 1 } },
-      android: { emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false } },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      android: {
+        defaultModels: {},
+        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
+      },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
@@ -811,6 +820,23 @@ describe("operation input/output round trips", () => {
       expect(() => shape.parse({ ...budget, usedBytes })).toThrow();
     }
     expect(() => shape.parse({ ...budget, limitBytes: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
+  it("config.get: carries each platform's defaultModels as lists of names per class, and refuses anything else", () => {
+    const shape = OPERATIONS["config.get"].output.shape;
+    const parse = (defaultModels: unknown) => ({
+      ios: shape.ios.shape.defaultModels.safeParse(defaultModels),
+      android: shape.android.shape.defaultModels.safeParse(defaultModels),
+    });
+
+    for (const parsed of Object.values(parse({ phone: ["iPhone 15", "iPhone 14"], tv: ["x"] }))) {
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual({ phone: ["iPhone 15", "iPhone 14"], tv: ["x"] });
+    }
+    for (const refused of [{ phone: [] }, { phone: [""] }, { fridge: ["x"] }, { phone: "x" }]) {
+      expect(parse(refused).ios.success).toBe(false);
+      expect(parse(refused).android.success).toBe(false);
+    }
   });
 
   it("config.get: keeps both slim RAM sizes of the resource strategy when they are set", () => {

@@ -268,8 +268,9 @@ relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
 required capacity field, taking it to 11, and ADR 0015 §3 makes
-`modelClasses` a required catalog field, taking it to 12. So the range both
-sides advertise is `{min: 12, max: 12}`, an older client and a current daemon simply
+`modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
+`classDefaults` one too, taking it to 13. So the range both
+sides advertise is `{min: 13, max: 13}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -832,7 +833,9 @@ of fleet models and fleet runtimes: one worker with the model and another
 with the runtime is not a leasable pair. `modelAliases` is the union per
 model, deduplicated ignoring case, `modelClasses` the union over workers
 (ADR 0015 §3: when two class a model differently, the first worker in id
-order wins), and `images` the union by runtime, tag, and ABI, absent when no
+order wins), `classDefaults` a class's model only when every connected worker
+reports the same one for it (a worker with none counts as disagreeing, ADR 0015 §4),
+and `images` the union by runtime, tag, and ABI, absent when no
 worker reports the field. `customModels` lists a
 model when any worker that lists it marks it custom; a name a worker marks
 but does not list is dropped. Each worker's lists are
@@ -907,7 +910,8 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
   ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
-  ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required; a
+  ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
+  to `{min: 13, max: 13}`, because its `classDefaults` is; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

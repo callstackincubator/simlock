@@ -92,6 +92,28 @@ const MARK_FILE_NAME = "simlock-mark.json";
 export const IOS_PASSTHROUGH_TOOL = "simctl";
 
 /**
+ * ADR 0015 §4: the models Simlock tries for each class on iOS when the operator names none
+ * first, newest first. `auto` and `desktop` have no iOS device type, so they have no list.
+ */
+const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
+  phone: ["iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14", "iPhone 13"],
+  tablet: [
+    "iPad Pro 11-inch (M5)",
+    "iPad Pro 11-inch (M4)",
+    "iPad Air 11-inch (M3)",
+    "iPad (A16)",
+    "iPad (10th generation)",
+  ],
+  tv: ["Apple TV 4K (3rd generation)", "Apple TV"],
+  vision: ["Apple Vision Pro"],
+  watch: [
+    "Apple Watch Series 11 (46mm)",
+    "Apple Watch Series 10 (46mm)",
+    "Apple Watch Series 9 (45mm)",
+  ],
+};
+
+/**
  * Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
  * which the registry -- not `simctl` -- is the record of: a device created here has no
  * registry entry and reads as an orphan, and one erased or deleted under a live lease
@@ -321,6 +343,7 @@ type ProcessOutcome =
 /** iOS simulator implementation. Its simctl details remain opaque to the core. */
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
+  readonly defaultModels = IOS_DEFAULT_MODELS;
   readonly #clock: Clock;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly #filesystem: Filesystem;

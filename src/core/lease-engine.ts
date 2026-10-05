@@ -16,7 +16,7 @@ import type {
   Platform,
 } from "./domain.js";
 import type { DeviceRequest, Driver, PassthroughCommand, PassthroughContext } from "./driver.js";
-import { DriverCatalog, type PlatformCatalog } from "./driver-catalog.js";
+import { DriverCatalog, type ModelPreferences, type PlatformCatalog } from "./driver-catalog.js";
 import {
   LeaseAcquisitionCoordinator,
   type LeaseGrant,
@@ -75,6 +75,11 @@ export interface LeaseEngineOptions {
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
+  /**
+   * ADR 0015 §4: the model names to try for each class, per platform, operator's list first.
+   * Absent means none, so the catalog names no class default.
+   */
+  readonly modelPreferences?: ModelPreferences;
 }
 
 export {
@@ -127,7 +132,10 @@ export class LeaseEngine {
     );
     this.claimReader = this.#claims;
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
-    this.#drivers = new DriverCatalog(options.drivers, { logger: options.logger });
+    this.#drivers = new DriverCatalog(options.drivers, {
+      logger: options.logger,
+      preferences: options.modelPreferences,
+    });
     this.#deviceLifecycle = new ManagedDeviceLifecycle(
       this.#drivers,
       options.registry,

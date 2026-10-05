@@ -30,6 +30,7 @@ import {
 } from "../ports/index.js";
 import {
   deviceModeWiring,
+  modelPreferenceWiring,
   discoverDrivers,
   emitSlimDiagnostic,
   processRunnerFor,
@@ -1196,12 +1197,63 @@ describe("deviceModeWiring", () => {
   it.each(["slim", "full"] as const)(
     "maps ios.defaultMode %s to the default-mode map and to whether the iOS default is slim",
     (defaultMode) => {
-      expect(deviceModeWiring({ ios: { defaultMode, slim: { bootTimeoutMs: 1 } } })).toEqual({
+      expect(
+        deviceModeWiring({
+          ios: { defaultMode, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+        }),
+      ).toEqual({
         defaultModes: { ios: defaultMode },
         slimByDefault: defaultMode === "slim",
       });
     },
   );
+});
+
+describe("modelPreferenceWiring", () => {
+  const drivers = [
+    {
+      defaultModels: { phone: ["iPhone 17", "iPhone 16"], tablet: ["iPad (A16)"] },
+      platform: "ios" as const,
+    },
+    { defaultModels: { phone: ["Pixel 9"] }, platform: "android" as const },
+  ];
+  const config = (
+    ios: Config["ios"]["defaultModels"],
+    android: Config["android"]["defaultModels"],
+  ) =>
+    ({
+      android: { defaultModels: android },
+      ios: { defaultModels: ios },
+    }) as Pick<Config, "android" | "ios">;
+
+  it("puts the configured names of a class before the driver's built-in ones", () => {
+    expect(
+      modelPreferenceWiring(
+        config({ phone: ["iPhone 15", "iPhone 14"] }, { phone: ["Pixel 7"] }),
+        drivers,
+      ),
+    ).toEqual({
+      android: { phone: ["Pixel 7", "Pixel 9"] },
+      ios: { phone: ["iPhone 15", "iPhone 14", "iPhone 17", "iPhone 16"], tablet: ["iPad (A16)"] },
+    });
+  });
+
+  it("is the driver's built-in list alone for a class the config does not name", () => {
+    expect(modelPreferenceWiring(config({}, {}), drivers)).toEqual({
+      android: { phone: ["Pixel 9"] },
+      ios: { phone: ["iPhone 17", "iPhone 16"], tablet: ["iPad (A16)"] },
+    });
+  });
+
+  it("keeps a configured class the driver has no built-in list for", () => {
+    expect(
+      modelPreferenceWiring(config({ vision: ["Apple Vision Pro"] }, {}), drivers).ios?.vision,
+    ).toEqual(["Apple Vision Pro"]);
+  });
+
+  it("leaves out a platform with no driver", () => {
+    expect(modelPreferenceWiring(config({}, {}), [drivers[0]!])).not.toHaveProperty("android");
+  });
 });
 
 describe("slim diagnostic bridging", () => {

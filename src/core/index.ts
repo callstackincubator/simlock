@@ -11,6 +11,7 @@ export {
   redactConfig,
 } from "./config.js";
 export {
+  DEVICE_CLASSES,
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
@@ -62,7 +63,11 @@ export {
   UnknownModelError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
-export { DriverCatalog, UnknownPassthroughToolError } from "./driver-catalog.js";
+export {
+  DriverCatalog,
+  type ModelPreferences,
+  UnknownPassthroughToolError,
+} from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor, isStalledTransition, type StallInput } from "./doctor.js";

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
@@ -27,7 +28,7 @@ import {
   PassthroughRefusedError,
   removeListedComponent,
 } from "../../dist/core/driver.js";
-import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
+import type { DeviceClass, DeviceSpec, Platform } from "../../dist/core/domain.js";
 import type {
   FakeDriverErrorSpec,
   FakeDriverOperation,
@@ -215,6 +216,21 @@ export class OutOfProcessFakeDriver implements Driver {
     this.#clock = options.clock;
     this.#logPath = options.logPath;
     this.#scriptPath = options.scriptPath;
+  }
+
+  /**
+   * The script's `defaultModels`, `{}` when unset. Read from the file on each access, as every
+   * operation re-reads it, but synchronously: the port reads this as a property, once at start.
+   */
+  get defaultModels(): Readonly<Partial<Record<DeviceClass, readonly string[]>>> {
+    if (this.#scriptPath === undefined) return {};
+    try {
+      const parsed = JSON.parse(readFileSync(this.#scriptPath, "utf8")) as FakeDriverScript;
+      return parsed[this.platform]?.defaultModels ?? {};
+    } catch {
+      // The same fallback as `readPlatformScript`: a missing or half-written file reads as unset.
+      return {};
+    }
   }
 
   /**

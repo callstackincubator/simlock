@@ -2388,11 +2388,17 @@ function formatCatalog(response: CatalogGetOutput): string {
       // Models sit under a line for their class, in the order of the enum, then `(no class)`.
       const classOf = (model: string): string | undefined =>
         Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+      // A class line says which model Simlock would create for it on this host, or `none`.
+      const classLine = (deviceClass: string | undefined): string => {
+        if (deviceClass === undefined) return "    (no class):";
+        const model = Object.hasOwn(entry.classDefaults, deviceClass)
+          ? entry.classDefaults[deviceClass as keyof typeof entry.classDefaults]
+          : undefined;
+        return `    ${deviceClass} (default: ${model ?? "none"}):`;
+      };
       const models = [...DEVICE_CLASS_ORDER, undefined].flatMap((deviceClass) => {
         const members = entry.models.filter((model) => classOf(model) === deviceClass);
-        return members.length === 0
-          ? []
-          : [`    ${deviceClass ?? "(no class)"}:`, ...members.flatMap(modelLine)];
+        return members.length === 0 ? [] : [classLine(deviceClass), ...members.flatMap(modelLine)];
       });
       const images = (entry.images ?? []).map(
         (image) => `    ${image.runtime} ${image.tag} ${image.abi}`,

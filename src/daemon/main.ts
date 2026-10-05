@@ -7,12 +7,15 @@ import { fitHostFacts } from "../contract/index.js";
 import {
   type Config,
   type ConfigOverrides,
+  type DeviceClass,
   type DeviceMode,
   type Driver,
   type DriverRejection,
+  type ModelPreferences,
   type PrerequisiteCheck,
   CleanupReaper,
   ComponentInstaller,
+  DEVICE_CLASSES,
   DiskSpaceGuard,
   DriverCatalog,
   Doctor,
@@ -257,6 +260,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     decisions,
     defaultModes: deviceModeWiring(config).defaultModes,
+    modelPreferences: modelPreferenceWiring(config, drivers),
     describeFailure: describeLeaseRequestFailure,
     drivers,
     eventBus,
@@ -1116,6 +1120,32 @@ export function deviceModeWiring(config: Pick<Config, "ios">): {
     defaultModes: { ios: config.ios.defaultMode },
     slimByDefault: config.ios.defaultMode === "slim",
   };
+}
+
+/**
+ * The one place a class's preference list is merged (ADR 0015 §4): the operator's names from
+ * `ios.defaultModels` or `android.defaultModels` first, then the driver's built-in ones, per
+ * platform that has a driver. The catalog reads the result; nothing else builds the list.
+ */
+export function modelPreferenceWiring(
+  config: Pick<Config, "android" | "ios">,
+  drivers: readonly Pick<Driver, "defaultModels" | "platform">[],
+): ModelPreferences {
+  return Object.fromEntries(
+    drivers.map((driver) => {
+      const configured =
+        driver.platform === "ios" ? config.ios.defaultModels : config.android.defaultModels;
+      const merged: Partial<Record<DeviceClass, readonly string[]>> = {};
+      for (const deviceClass of DEVICE_CLASSES) {
+        const names = [
+          ...(configured[deviceClass] ?? []),
+          ...(driver.defaultModels[deviceClass] ?? []),
+        ];
+        if (names.length > 0) merged[deviceClass] = names;
+      }
+      return [driver.platform, merged];
+    }),
+  );
 }
 
 /**
