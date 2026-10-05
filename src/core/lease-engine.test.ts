@@ -2662,6 +2662,17 @@ describe("LeaseEngine warm pool", () => {
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
   });
 
+  it("accepts a new request again once a nuke has finished", async () => {
+    const harness = await createHarness();
+    await harness.engine.request(request, { ownerId: "held", requesterId: "held" });
+
+    await harness.engine.nuke(false);
+
+    await expect(
+      harness.engine.request(request, { ownerId: "after", requesterId: "after" }),
+    ).resolves.toMatchObject({ lease: { requesterId: "after" } });
+  });
+
   it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
