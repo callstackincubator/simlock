@@ -18,7 +18,7 @@ const device = (
   state,
 });
 
-describe("warm-pool policy", () => {
+describe("idle order", () => {
   it("selects deterministic LRU warm inventory in the blocking scope", () => {
     const devices = [
       device("ios-b", "ios", "ready", 10),

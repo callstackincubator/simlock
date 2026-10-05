@@ -137,7 +137,7 @@ function createHarness(
 }
 
 describe("StartupConverger", () => {
-  it("restores timers before recovering interrupted reclaims and converging capacity", async () => {
+  it("restores timers before recovering interrupted reclaims", async () => {
     const harness = createHarness(
       [device("reclaiming", "ios", "reclaiming", 1), device("ready", "ios", "ready", 2)],
       [],
@@ -146,41 +146,22 @@ describe("StartupConverger", () => {
 
     await harness.converger.converge();
 
-    expect(harness.order).toEqual([
-      "timers",
-      "quarantine-restore",
-      "recover:reclaiming",
-      "cleanup:ready",
-    ]);
+    expect(harness.order).toEqual(["timers", "quarantine-restore", "recover:reclaiming"]);
     expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledOnce();
     expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
   });
 
-  it("chooses the least recently used unleased device for global excess", async () => {
+  it("leaves ready devices over maxRunning running at startup", async () => {
     const older = device("older", "ios", "ready", 1);
     const newer = device("newer", "android", "ready", 2);
-    const harness = createHarness([newer, older], [], { android: 2, global: 1, ios: 2 });
+    const harness = createHarness([newer, older], [], { android: 0, global: 0, ios: 0 });
 
     await harness.converger.converge();
 
-    expect(harness.cleanupCalls).toEqual(["older"]);
-  });
-
-  it("selects only an over-limit platform when global capacity remains within limit", async () => {
-    const iosOlder = device("ios-older", "ios", "ready", 1);
-    const iosNewer = device("ios-newer", "ios", "ready", 2);
-    const android = device("android", "android", "ready", 0);
-    const harness = createHarness([iosNewer, android, iosOlder], [], {
-      android: 2,
-      global: 3,
-      ios: 1,
-    });
-
-    await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual(["ios-older"]);
-    expect(android.state).toBe("ready");
+    expect(harness.cleanupCalls).toEqual([]);
+    expect(older.state).toBe("ready");
+    expect(newer.state).toBe("ready");
   });
 
   it("leaves unavoidable leased overage untouched", async () => {
@@ -217,22 +198,6 @@ describe("StartupConverger", () => {
     expect(second.state).toBe("leased");
   });
 
-  it("skips claimed targets and terminates after executor refusal", async () => {
-    const claimed = device("claimed", "ios", "ready", 1);
-    const refused = device("refused", "ios", "ready", 2);
-    const harness = createHarness([claimed, refused], [], { android: 1, global: 0, ios: 0 });
-    harness.claimed.add(claimed.id);
-    vi.mocked(harness.cleanup.execute).mockResolvedValue(false);
-
-    await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
-    expect(harness.cleanup.execute).toHaveBeenCalledTimes(1);
-    expect(harness.cleanup.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ target: refused.id }),
-    );
-  });
-
   it("leaves a platform without a driver untouched instead of failing convergence", async () => {
     const interrupted = device("ios-reclaiming", "ios", "reclaiming", 1);
     const excess = device("ios-ready", "ios", "ready", 2);
@@ -255,7 +220,7 @@ describe("StartupConverger", () => {
     expect(harness.devices.find((item) => item.id === excess.id)?.state).toBe("ready");
   });
 
-  it("is idempotent after recovery and successful convergence", async () => {
+  it("is idempotent after recovery", async () => {
     const recovering = device("recovering", "ios", "reclaiming", 1);
     const ready = device("ready", "ios", "ready", 2);
     const harness = createHarness([recovering, ready], [], { android: 1, global: 0, ios: 1 });
@@ -264,7 +229,7 @@ describe("StartupConverger", () => {
     await harness.converger.converge();
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
-    expect(harness.cleanupCalls).toEqual(["ready"]);
+    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledTimes(2);
   });
 

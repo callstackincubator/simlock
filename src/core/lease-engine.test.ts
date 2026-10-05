@@ -651,7 +651,7 @@ describe("LeaseEngine", () => {
     ).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
   });
 
-  it("converges startup excess through shutdown without touching leases and is idempotent", async () => {
+  it("leaves ready devices over maxRunning running at startup, and is idempotent", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -674,10 +674,10 @@ describe("LeaseEngine", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([
       { id: leasedDevice.id, state: "leased" },
-      { id: unleasedDevice.id, state: "shutdown" },
+      { id: unleasedDevice.id, state: "ready" },
     ]);
-    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
-    expect(harness.engine.runningCapacity.global.overLimit).toBe(false);
+    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
+    expect(harness.engine.runningCapacity.global.overLimit).toBe(true);
   });
 
   it("retains in-limit warm devices at startup and never boots shutdown inventory", async () => {

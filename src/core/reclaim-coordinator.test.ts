@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import {
-  FakeClock,
-  FakeSystemStats,
-  JsonLinesLogger,
-  type Logger,
-  MemoryLogSink,
-} from "../ports/index.js";
-import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
-import { resourceStrategy } from "./capacity/strategies/resource/index.js";
+import { FakeClock, FakeSystemStats, type Logger } from "../ports/index.js";
+import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -231,18 +224,19 @@ function released(device: DeviceRecord): ReleasedLease {
 }
 
 describe("ReclaimCoordinator", () => {
-  it("retains a reclaimed ready device when capacity permits", async () => {
-    const harness = await createHarness();
+  it("commits shutdown, emits device.reclaimed and kicks acquisition when the driver returns shutdown", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
+    const harness = await createHarness({ driver });
 
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
     expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
   });
 
-  it("shuts a reclaimed ready device down when running capacity is exceeded", async () => {
+  it("commits ready when the driver returns ready, even when running capacity is over its limit", async () => {
     const harness = await createHarness();
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
     const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
@@ -262,172 +256,19 @@ describe("ReclaimCoordinator", () => {
 
     expect(
       overloaded.snapshot.devices.find((device) => device.id === harness.reclaiming.id)?.state,
-    ).toBe("shutdown");
-    expect(harness.driver.calls.map((call) => call.operation)).toContain("shutdown");
+    ).toBe("ready");
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
   });
 
-  it("does not retain a warm device when a different queue head cannot reserve capacity", async () => {
-    const harness = await createHarness({
-      headSpec: { model: "Pixel 9", osVersion: "36", platform: "android" },
-    });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-  });
-
-  it("boots a shutdown reclaim result when warm retention is allowed", async () => {
+  it("never calls makeReady on a reclaim", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
     const harness = await createHarness({ driver });
 
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    expect(harness.driver.calls.map((call) => call.operation)).toContain("makeReady");
-  });
-
-  it("stores the driver's mode when a warm re-boot slims the device", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      clock,
-      mode: "slim",
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    expect(harness.registry.lastUpdate).toMatchObject({ mode: "slim" });
-    expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim" });
-  });
-
-  it.each([
-    ["a slim spec", { ...spec, mode: "slim" as const }, "slim"],
-    ["a full spec", spec, "full"],
-  ] as const)(
-    "passes %s's mode to makeReady on a warm re-boot",
-    async (_label, deviceSpec, mode) => {
-      const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-      const reclaiming = device(
-        "reclaiming",
-        "reclaiming",
-        (await driver.provision(deviceSpec)).deviceId,
-        deviceSpec,
-      );
-      const harness = await createHarness({ devices: [reclaiming], driver });
-
-      await harness.coordinator.reclaim(released(reclaiming));
-
-      const boot = driver.calls.filter((call) => call.operation === "makeReady").at(-1);
-      expect(boot?.arguments[1]).toEqual({ mode, purpose: "prepare" });
-    },
-  );
-
-  describe("a reclaimed slim device that needs a boot to stay warm", () => {
-    const slimSpec: DeviceSpec = { ...spec, mode: "slim" };
-
-    /** 12 GiB of RAM: an 8 GiB budget. Full iOS devices take 3 GiB, slim ones 1 GiB. */
-    function sizedCapacity(): CapacityCoordinator {
-      return new CapacityCoordinator(
-        resourceStrategy.create(
-          {
-            limits: {
-              android: { maxDevices: 8, maxRunning: 8 },
-              ios: { maxDevices: 8, maxRunning: 8 },
-              maxRunning: 16,
-            },
-            ramBudget: {
-              androidBytesPerDevice: 4 * gibibyte,
-              iosBytesPerDevice: 3 * gibibyte,
-              iosSlimBytesPerDevice: gibibyte,
-            },
-          },
-          new FakeSystemStats({
-            cpuCount: 8,
-            totalRamBytes: 12 * gibibyte,
-          }),
-        ),
-      );
-    }
-
-    async function reclaimBeside(
-      fullDevices: number,
-      reclaimResult: "ready" | "shutdown" = "shutdown",
-    ) {
-      const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({
-        clock,
-        mode: "slim",
-        platform: "ios",
-        reclaimResult,
-      });
-      const reclaiming = {
-        ...device(
-          "reclaiming",
-          "reclaiming",
-          (await driver.provision(slimSpec)).deviceId,
-          slimSpec,
-        ),
-        mode: "slim" as const,
-      };
-      const others = Array.from({ length: fullDevices }, (_, index) =>
-        device(`full-${index}`, "leased", `full-driver-${index}`, { ...spec, model: "iPhone SE" }),
-      );
-      const capacity = sizedCapacity();
-      const harness = await createHarness({ capacity, devices: [reclaiming, ...others], driver });
-      await harness.coordinator.reclaim(released(reclaiming));
-      return { capacity, driver, harness };
-    }
-
-    it("stays shut down, without a boot, when its full size does not fit", async () => {
-      // 7 GiB used of 8: the boot adds the 2 GiB between the slim and the full size.
-      const { driver, harness } = await reclaimBeside(2);
-
-      expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-      expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
-    });
-
-    it("stays warm when its reclaim left it running, even where a boot would not fit", async () => {
-      // 7 GiB used of 8, as above, but nothing needs to boot.
-      const { driver, harness } = await reclaimBeside(2, "ready");
-
-      expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-      expect(driver.calls.map((call) => call.operation)).not.toContain("shutdown");
-    });
-
-    it("boots back to warm when its full size fits, and frees the boot's extra size after", async () => {
-      // 4 GiB used of 8: the boot reaches 6.
-      const { capacity, driver, harness } = await reclaimBeside(1);
-
-      expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim", state: "ready" });
-      expect(driver.calls.map((call) => call.operation)).toContain("makeReady");
-      // Back at 4 GiB: a new device's 3 GiB fits. Were the 2 GiB still held, it would not.
-      expect(
-        capacity.tryReserveProvisioning(
-          { mode: "full", platform: "ios" },
-          capacityDevices(harness.registry.snapshot.devices),
-        ),
-      ).toMatchObject({ ok: true });
-    });
-  });
-
-  it("stores full, replacing a stored slim, when a warm re-boot's makeReady reports no mode", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    const staleReclaiming = {
-      ...device("reclaiming", "reclaiming", (await driver.provision(spec)).deviceId, spec),
-      mode: "slim" as const,
-    };
-    const harness = await createHarness({ devices: [staleReclaiming], driver });
-
-    await harness.coordinator.reclaim(released(staleReclaiming));
-
-    expect(harness.registry.lastUpdate).toHaveProperty("mode", "full");
-    expect(harness.registry.snapshot.devices[0]?.mode).toBe("full");
+    expect(driver.calls.map((call) => call.operation)).toContain("reclaim");
+    expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
   });
 
   it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {
@@ -452,55 +293,6 @@ describe("ReclaimCoordinator", () => {
     // wakes a queued waiter -- and no readiness probe ever runs.
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
-  });
-
-  it("A reclaimed device that fails to shut down logs the error.", async () => {
-    const sink = new MemoryLogSink();
-    // A different queue head cannot reserve capacity, so the reclaimed ready device is shut down.
-    const harness = await createHarness({
-      headSpec: { model: "Pixel 9", osVersion: "36", platform: "android" },
-      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
-    });
-    harness.driver.failOn("shutdown", 1, new Error("shutdown wedged"));
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        module: "daemon.warm-pool-coordinator",
-        fields: {
-          deviceId: harness.reclaiming.id,
-          error: "Error: shutdown wedged",
-          leaseId: "lease-1",
-          step: "shutdown",
-        },
-      }),
-    ]);
-  });
-
-  it("A reclaimed device that fails to become ready logs the error.", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    driver.failOn("makeReady", 1, new Error("boot wedged"));
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({ driver, logger: new JsonLinesLogger({ clock, sink }) });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        fields: {
-          deviceId: harness.reclaiming.id,
-          error: "Error: boot wedged",
-          leaseId: "lease-1",
-          step: "make-ready",
-        },
-      }),
-    ]);
   });
 
   it("recovers an unleased interrupted reclaim through shutdown and a committed fact", async () => {
