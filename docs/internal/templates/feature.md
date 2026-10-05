@@ -91,6 +91,12 @@ feature is split into tasks. -->
 
 ### Modules touched
 
+<!-- A Mermaid flowchart of the modules this changes and the ones they call,
+changed ones marked, arrows pointing from caller to callee. When the change
+crosses a process or a network hop (CLI, daemon, driver, gateway, worker,
+HTTP or MCP client), add a Mermaid sequence diagram of one request through
+it, including the failure reply. Skip a diagram that would show one box. -->
+
 ### Contract and event changes
 
 <!-- Every new or changed event needs its EVENTS.md entry named here. -->

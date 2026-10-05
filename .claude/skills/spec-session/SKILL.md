@@ -165,6 +165,11 @@ so explain before you ask, and show before you explain:
 - Before writing the body, play the result back: the user flow diagram,
   the example, and a list of what will and will not change. Write only
   after the maintainer says it matches what they meant.
+- In a Technical spec, draw what the change touches: a Mermaid dependency
+  flowchart of the modules involved (changed ones marked), and a Mermaid
+  sequence diagram for any request that crosses a process or a network
+  hop, failure reply included. Use the same diagrams when you ask a
+  technical question.
 - In the body, fill "How it works for the user", "Examples", "What could
   go wrong" and "Words used" (feature) or "In short" (task) as the template
   says. A diagram has at most about
