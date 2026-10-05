@@ -1,4 +1,4 @@
-import type { NukeExecutor } from "./lease-ports.js";
+import type { NukeExecutor } from "./core-ports.js";
 import type { Registry } from "./registry.js";
 
 export interface NukeOptions {

@@ -155,7 +155,7 @@ export type CancelOutcome =
   | { readonly kind: "not-cancellable"; readonly leaseId?: string };
 
 /**
- * The daemon's stored lease requests, as this resource reads them: a worker's `LeaseEngine`
+ * The daemon's stored lease requests, as this resource reads them: a worker's leasing
  * request book, or a gateway's fleet coordinator's. `record` is read through the contract's
  * `leaseRequestRecordSchema` rather than trusted, because the two backends store different grant
  * types and this module names neither.

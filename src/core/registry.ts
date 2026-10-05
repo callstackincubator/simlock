@@ -34,7 +34,7 @@ import {
   retainedLeaseRequests,
   withNewLeaseRequest,
   withSettledLeaseRequest,
-} from "./lease-request-book.js";
+} from "./lease-request-store.js";
 
 const DEFAULT_REGISTRY_PATH = "~/.simlock/state.json";
 
@@ -705,7 +705,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */
-  // fallow-ignore-next-line unused-class-member -- called by LeaseEngine, which holds the registry as a `Registry`; the audit does not follow it.
+  // fallow-ignore-next-line unused-class-member -- called by createCore, which holds the registry as a `Registry`; the audit does not follow it.
   onCommit(listener: () => void): void {
     this.#commitListeners.push(listener);
   }

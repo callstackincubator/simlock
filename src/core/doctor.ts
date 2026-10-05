@@ -20,7 +20,7 @@ import type {
   ObservedMark,
   PrerequisiteCheck,
 } from "./driver.js";
-import type { LeaseExpirer } from "./lease-ports.js";
+import type { LeaseExpirer } from "./core-ports.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =

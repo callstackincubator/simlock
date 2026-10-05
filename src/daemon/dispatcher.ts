@@ -22,12 +22,10 @@ import {
   transitionEnteredAt,
   UnknownLeaseError,
   type CapacityReader,
-  type DeviceModeReader,
   type CatalogReader,
-  type LeaseCommands,
   type PassthroughResolver,
-  type QueueControl,
 } from "../core/index.js";
+import { type DeviceModeReader, type LeaseCommands, type QueueControl } from "../leasing/index.js";
 import type {
   Clock,
   Logger,
@@ -90,7 +88,7 @@ export class NukeUnavailableError extends Error {
 }
 
 export interface DispatcherOptions {
-  readonly capacity: CapacityReader & DeviceModeReader;
+  readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
@@ -103,6 +101,8 @@ export interface DispatcherOptions {
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
+  /** Answers whether a device's pool is the one a request naming no mode draws from. */
+  readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
   /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
@@ -808,7 +808,7 @@ export class Dispatcher {
     readonly transitionAgeMs?: number;
     readonly stalled?: true;
   } {
-    const servesDefaultMode = this.options.capacity.servesDefaultMode(device.spec);
+    const servesDefaultMode = this.options.deviceModes.servesDefaultMode(device.spec);
     const enteredAt = transitionEnteredAt(device);
     if (enteredAt === undefined) return { ...device, servesDefaultMode };
     const now = this.options.clock.now();

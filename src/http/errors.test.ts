@@ -5,13 +5,12 @@ import {
   ComponentInstallTimeoutError,
   InsufficientDiskSpaceError,
   LicenseNotAcceptedError,
-  NoCapacityError,
   NoDriverError,
-  RequesterAlreadyLeasedError,
   RuntimeMissingError,
   UnknownLeaseError,
   UnknownModelError,
 } from "../core/index.js";
+import { NoCapacityError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 import { classifyError, StartupFailedError } from "../daemon/error-code.js";
 import {
   DispatchError,

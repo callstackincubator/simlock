@@ -387,7 +387,7 @@ describe("GatewayService", () => {
     const republished = harness.events.find((event) => event.event === "lease.granted");
     expect(republished).toMatchObject({
       // The name and the emitting module travel unchanged -- the fact happened in that
-      // worker's lease engine, and `workerId` is what says which machine.
+      // worker's leasing module, and `workerId` is what says which machine.
       module: "lease-engine",
       payload: { deviceId: "dev_1", leaseId: "lease_1", workerId: "wrk_1" },
     });

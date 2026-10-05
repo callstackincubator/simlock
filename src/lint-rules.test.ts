@@ -143,7 +143,7 @@ describe("import rules enforced by pnpm lint", () => {
   });
 
   it("passes a gateway file importing a name it is allowed from core's index", () => {
-    expectLintPass("src/gateway/x.ts", `import { WaitQueue } from "../core/index.js";\n`);
+    expectLintPass("src/gateway/x.ts", `import { LeaseRecord } from "../core/index.js";\n`);
   });
 
   it("fails a gateway file importing from drivers, http, cli or mcp", () => {
@@ -251,5 +251,31 @@ describe("import rules enforced by pnpm lint", () => {
   it("fails a gateway file importing createLeasing from leasing's index, and passes LeaseRequestBook", () => {
     expectLintError("src/gateway/x.ts", `import { createLeasing } from "../leasing/index.js";\n`);
     expectLintPass("src/gateway/x.ts", `import { LeaseRequestBook } from "../leasing/index.js";\n`);
+  });
+  it("fails a gateway file importing a leasing name from core's index, and a leasing name outside its allow-list", () => {
+    expectLintError("src/gateway/x.ts", `import { WaitQueue } from "../core/index.js";\n`);
+    expectLintError(
+      "src/gateway/x.ts",
+      `import { LeaseHealthMonitor } from "../leasing/index.js";\n`,
+    );
+    expectLintPass("src/gateway/x.ts", `import { WaitQueue } from "../leasing/index.js";\n`);
+  });
+
+  it("fails a leasing file importing a private core file, and passes core's index; a leasing test may import core's testing file", () => {
+    expectLintError("src/leasing/x.ts", `import { x } from "../core/registry.js";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "../core/testing.js";\n`);
+    expectLintPass("src/leasing/x.ts", `import { x } from "../core/index.js";\n`);
+    expectLintPass("src/leasing/x.test.ts", `import { x } from "../core/testing.js";\n`);
+    expectLintError("src/leasing/x.test.ts", `import { x } from "../core/registry.js";\n`);
+  });
+
+  it("fails leasing's testing file breaking leasing's direction rule, and core's testing file importing leasing", () => {
+    expectLintError("src/leasing/testing.ts", `import { x } from "node:fs";\n`);
+    expectLintError("src/core/testing.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("passes the composition root importing leasing's index", () => {
+    expectLintPass("src/daemon/main.ts", `import { x } from "../leasing/index.js";\n`);
+    expectLintError("src/daemon/main.ts", `import { x } from "../leasing/wait-queue.js";\n`);
   });
 });

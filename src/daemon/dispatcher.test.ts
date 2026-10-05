@@ -16,16 +16,15 @@ import {
   DriverCatalog,
   type HostFacts,
   HostFactsReader,
-  LeaseEngine,
   Nuke,
   PassthroughRefusedError,
   Registry,
   SerializedDecision,
   RuntimeMissingError,
-  NoCapacityError,
   type CatalogReader,
   type PassthroughResolver,
 } from "../core/index.js";
+import { NoCapacityError } from "../leasing/index.js";
 import {
   OPERATIONS,
   statusDeviceSchema,
@@ -47,6 +46,7 @@ import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
@@ -55,7 +55,7 @@ const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
  * ADR 0003 §12: "full contract coverage at the dispatcher: one suite ... against a fake driver
  * and a scripted session, covering parsing, role rejection, ownership, and error codes." This
  * suite drives `Dispatcher` directly -- no socket, no `DaemonServer` -- against a real
- * `LeaseEngine`/`Registry`/`CleanupReaper` backed by `FakeDriver`, the same harness style
+ * `createCore`/`createLeasing`/`Registry`/`CleanupReaper` backed by `FakeDriver`, the same harness style
  * `server.test.ts` uses for its own socket-level tests. It deliberately does not re-walk every
  * operation the way `server.test.ts` already does at the framing/connection level (ADR §12:
  * "re-walking every operation through each transport would test nothing new") -- this suite is
@@ -68,7 +68,7 @@ const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
  * that cannot get any more complicated, not to the 130-line one already carrying a dozen of
  * these. */
 function resolvePassthroughOverride(
-  engine: LeaseEngine,
+  engine: TestEngine,
   override: PassthroughResolver | undefined,
 ): PassthroughResolver {
   return override ?? engine;
@@ -78,7 +78,7 @@ function resolvePassthroughOverride(
  * other platforms' a test lists. Pulled out of `buildDispatcher` for the same reason as
  * `resolvePassthroughOverride`. */
 function stallOptions(
-  engine: LeaseEngine,
+  engine: TestEngine,
   driver: FakeDriver,
   overrides: {
     readonly claims?: { isClaimed(deviceId: string): boolean };
@@ -211,8 +211,8 @@ async function buildDispatcher(
     readonly claims?: { isClaimed(deviceId: string): boolean };
     /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
     readonly otherStallDrivers?: readonly FakeDriver[];
-    /** Extra lease engine options, such as `defaultModes` (a platform's default device mode). */
-    readonly engine?: Pick<ConstructorParameters<typeof LeaseEngine>[0], "defaultModes">;
+    /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
+    readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -251,7 +251,7 @@ async function buildDispatcher(
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -293,6 +293,7 @@ async function buildDispatcher(
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
     capacity: engine,
+    deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
     components: wiring.components,

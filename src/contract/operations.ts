@@ -183,7 +183,7 @@ const leaseRequestBaseSchema = z
      * `BAD_REQUEST` for a held lease). Omitting it means `lease.defaultTtlMs`; a value above
      * `lease.maxTtlMs` is `BAD_REQUEST`, enforced by the dispatcher's handler rather than here
      * because the cap is a daemon config value this module deliberately cannot see. Wired
-     * through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by that same handler.
+     * through to `LeaseRequestOptions.ttlMs` (src/leasing/wait-queue.ts) by that same handler.
      */
     ttlMs: z.number().finite().positive().optional(),
     /**

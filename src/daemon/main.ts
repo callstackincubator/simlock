@@ -20,7 +20,7 @@ import {
   DriverCatalog,
   Doctor,
   HostFactsReader,
-  LeaseEngine,
+  createCore,
   loadConfig,
   loadInstanceId,
   OwnedRootError,
@@ -28,6 +28,7 @@ import {
   Nuke,
   SerializedDecision,
 } from "../core/index.js";
+import { createLeasing } from "../leasing/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
@@ -250,7 +251,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
-  // One gate for every registry write: the lease engine's and the installer's records.
+  // One gate for every registry write: leasing's, core's and the installer's records.
   const decisions = new SerializedDecision();
   // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
   // one, so an iOS and an Android install see each other's reservations.
@@ -265,26 +266,37 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     timeoutMs: config.downloads.timeoutMs,
   });
-  const leaseEngine = new LeaseEngine({
+  const modelPreferences = modelPreferenceWiring(config, drivers);
+  const core = createCore({
     clock,
     components,
     config,
     decisions,
-    defaultModes: deviceModeWiring(config).defaultModes,
-    modelPreferences: modelPreferenceWiring(config, drivers),
-    describeFailure: describeLeaseRequestFailure,
     drivers,
+    eventBus,
+    logger,
+    modelPreferences,
+    registry,
+    systemStats,
+  });
+  // Builds leasing on top of core, then hands core the ports leasing implements (ADR 0018 §2).
+  const leasing = createLeasing({
+    clock,
+    components,
+    config,
+    core,
+    defaultModes: deviceModeWiring(config).defaultModes,
+    describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
     logger,
-    registry,
-    systemStats,
+    modelPreferences,
   });
   const reaper = new CleanupReaper({
     clock,
     config,
     eventBus,
-    executor: leaseEngine.cleanup,
+    executor: core.cleanup,
     filesystem,
     logger,
     registry,
@@ -294,20 +306,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // Without this, a backgrounded reclaim -- which holds its device in `reclaiming`
     // for a full erase, and is now how every release purges -- reads as a stalled
     // transition.
-    claims: leaseEngine.claimReader,
+    claims: core.claimReader,
     clock,
     config,
     drivers,
     driverRejections: rejections,
     eventBus,
-    leaseExpirer: leaseEngine,
+    leaseExpirer: leasing,
     logger,
     prerequisiteChecks,
-    quarantine: leaseEngine,
+    quarantine: core.quarantine,
     registry,
     runningPlatforms: () => drivers.map((driver) => driver.platform),
   });
-  const nuke = new Nuke({ executor: leaseEngine, registry });
+  const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
   // token is a socket-hello credential too, so the daemon must be able to verify one against
   // the token store regardless of whether the HTTP gateway is running. Previously this was
@@ -374,9 +386,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         rejectGatewayStarted = reject;
       })
     : Promise.resolve();
+  // Startup in this order: leasing's steps (settle open requests, restore expiry timers), then
+  // core's device steps, then the queue's first depth, which every run begins with.
+  const convergeStartup = async (): Promise<void> => {
+    await leasing.startup();
+    await core.converge();
+    leasing.announceQueueDepth();
+  };
   const daemon = new DaemonServer({
-    capacity: leaseEngine,
-    catalog: leaseEngine,
+    capacity: core.capacityReader,
+    catalog: core.catalog,
+    deviceModes: leasing,
     clock,
     components,
     config,
@@ -386,7 +406,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
     eventHistory,
-    healthMonitor: leaseEngine.healthMonitor,
+    ...(leasing.healthMonitor === undefined ? {} : { healthMonitor: leasing.healthMonitor }),
     hostFacts: () => fitHostFacts(hostFacts.current()),
     // ADR 0012 §1: `worker.list` answers with this host under the id it presents to a gateway.
     instanceId,
@@ -397,9 +417,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       listenerFactory: ipc,
       logger: logger.child("connection-host"),
     }),
-    leases: leaseEngine,
+    leases: leasing,
     logger: logger.child("server"),
-    passthrough: leaseEngine,
+    passthrough: core.catalog,
     // ADR 0005 §19a: `device.exec` runs its command here, on the machine that owns the device.
     // The runner is the same port every driver already shells out through, and `execEnv` is the
     // daemon's own environment -- read here, in the composition root, because that is the only
@@ -407,14 +427,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // layered over it per command.
     processRunner,
     execEnv: process.env,
-    queue: leaseEngine,
+    queue: leasing,
     reaper,
     nuke,
     registry,
     // `status.get` and `list.get` flag a stalled device by the rule `doctor` reports, so they
     // need what `doctor` has: the drivers, and the claims that keep a live reclaim from reading
     // as a stall.
-    stalls: { claims: leaseEngine.claimReader, drivers },
+    stalls: { claims: core.claimReader, drivers },
     resolveRole,
     adminSecret,
     tokens,
@@ -427,21 +447,22 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // see doctor.ts) that already runs interleaved with live lease/reclaim activity
     // whenever a client issues `doctor.run` mid-session, so running it alongside
     // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeRunningCapacity() releases no leases at all any more (ADR 0004 removed the
+    // convergeStartup() releases no leases at all any more (ADR 0004 removed the
     // orphan sweep), so the only device work left on this path is interrupted-reclaim
     // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
     // left in flight is finished off in the background, off this critical path (#43).
     converge: async () => {
-      await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
+      await Promise.all([doctor.reconcile(), convergeStartup()]);
     },
-    settle: async () => leaseEngine.settle(),
+    settle: async () => leasing.settle(),
     // Drivers are disposed after the lease subsystem, and every one of them is tried even
     // when another throws: Android's disposal is the only thing that can stop the adb
     // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a
     // shutdown that abandoned it would leave a server nothing can reap holding the port
     // the next daemon needs.
     dispose: async () => {
-      leaseEngine.dispose();
+      core.dispose();
+      leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
@@ -511,7 +532,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
-      leaseRequests: leaseEngine.requests,
+      leaseRequests: leasing.requests,
       logger: httpLogger,
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
@@ -1120,7 +1141,7 @@ async function loadDriversModule(
 
 /**
  * What the config says about device modes, in the two shapes the composition root hands out
- * (ADR 0007 §2, §14): the worker's default mode per platform for the lease engine, and whether
+ * (ADR 0007 §2, §14): the worker's default mode per platform for leasing, and whether
  * the iOS default is slim for the iOS driver's advisory. Android has no key until Android slim
  * lands, so it is left out and falls to the core's own `"full"`.
  */

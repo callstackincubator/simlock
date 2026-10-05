@@ -1,9 +1,11 @@
 import { type Logger, NoopLogger } from "../ports/index.js";
-import type { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { LeaseRecord } from "./domain.js";
-import type { ReleasedLease } from "./registry.js";
-import type { SerializedDecision } from "./serialized-decision.js";
-import type { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+import {
+  type DeviceOperationClaims,
+  type LeaseRecord,
+  type ReleasedLease,
+  type SerializedDecision,
+  type WarmPoolCoordinator,
+} from "../core/index.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
@@ -65,7 +67,7 @@ type ReclaimMode = "await" | "background";
  * decision section; reclaiming is intentionally outside it, and -- except under
  * maintenance -- outside the caller's await as well (see `ReclaimMode`).
  *
- * releaseAll preserves the engine's snapshot-and-parallel behavior. Concurrent
+ * releaseAll preserves the snapshot-and-parallel behavior it always had. Concurrent
  * calls are not idempotent: overlapping snapshots can yield UnknownLeaseError.
  */
 export class LeaseReleaseCoordinator

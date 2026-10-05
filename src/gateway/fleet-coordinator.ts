@@ -54,13 +54,15 @@ import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import {
   type LeaseRequestFailure,
   type DeviceRequest,
-  InMemoryLeaseRequestStore,
-  LeaseRequestBook,
   type LeaseRequestLimits,
   newLeaseRequestId,
-  type WaitingRequest,
   SerializedDecision,
 } from "../core/index.js";
+import {
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  type WaitingRequest,
+} from "../leasing/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";

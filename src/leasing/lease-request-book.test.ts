@@ -6,11 +6,13 @@ import {
   IdempotencyConflictError,
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
+} from "./lease-request-book.js";
+import {
   type LeaseRequestLimits,
   type LeaseRequestStore,
-} from "./lease-request-book.js";
-import { Registry } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
+  Registry,
+  SerializedDecision,
+} from "../core/index.js";
 import { RequestCancelledError } from "./wait-queue.js";
 
 const statePath = "/home/agent/.simlock/state.json";

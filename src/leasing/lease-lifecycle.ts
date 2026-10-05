@@ -1,8 +1,7 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import { type DeviceRecord, type LeaseRecord, type ReleasedLease } from "../core/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
-import type { ReleasedLease } from "./registry.js";
 
 export interface LeaseLifecycleRegistry {
   readonly snapshot: {

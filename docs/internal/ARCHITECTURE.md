@@ -169,7 +169,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
 - **A gateway is a second implementation of the contract's handlers, not a
   second contract** (`src/gateway/`). Same dispatch pipeline, same operation
   declarations, same role checks; the handlers read *worker views* instead of a
-  registry and a lease engine. Every frontend — CLI, MCP, HTTP,
+  registry and leasing. Every frontend — CLI, MCP, HTTP,
   `simlock/client` — works against a gateway unchanged, because they only ever
   see the contract.
 - **A worker view** is what the gateway knows about one worker: id (the
@@ -969,10 +969,12 @@ handlers read worker views and forward over uplinks instead of calling
 unchanged.
 
 `src/gateway/` **imports nothing from `drivers`** — it has no concept of a
-UDID, an AVD, a snapshot, or an adb port — and from `core` only the
-platform-agnostic queue and bus modules it reuses, never the registry,
+UDID, an AVD, a snapshot, or an adb port — and from `leasing` only the request
+book, the in-memory store, the wait queue, their errors and their types, never
+`createLeasing`, the acquisition coordinator or the lifecycle; from `core` only
+the shapes those are typed against and catalog matching, never the registry,
 capacity, or lifecycle modules. `pnpm lint` enforces it (`.oxlintrc.json`: the gateway
-override allows only the core names its allow-list gives). The rule is not stylistic: a
+override allows only the core and leasing names its allow-lists give). The rule is not stylistic: a
 gateway that could reach a registry module is a gateway that could grow a
 device-state opinion, and the safety argument above rests on it having none.
 
@@ -1127,9 +1129,9 @@ leave the budget over its limit; the strategy then refuses every
 new device and every boot that adds RAM, and the core stops or reclaims nothing for
 it. `fixed` ignores mode, never refuses a boot, and reports no budget.
 
-At startup, `StartupConverger` restores the persisted TTL timer of **every**
-lease it finds, and re-arms retry timers for devices still `quarantined` (see
-below) from their persisted next-retry deadline. A lease survives a daemon
+At startup, leasing's `LeaseStartup` restores the persisted TTL timer of **every**
+lease it finds, and core's `StartupConverger` re-arms retry timers for devices
+still `quarantined` (see below) from their persisted next-retry deadline. A lease survives a daemon
 restart because a lease's liveness was never the daemon connection to begin
 with (ADR 0004). The *holder* does not survive it in the same way: the typed
 client never reconnects (ADR 0003 §10), so a running `simlock lease` exits `1`
@@ -1361,10 +1363,19 @@ beyond that is logged by the coordinator rather than left unhandled.
 
 ### Lease subsystem boundaries and wiring
 
-The lease subsystem is assembled from focused modules. `LeaseEngine` is the
-composition root and compatibility facade: it wires one shared
-`SerializedDecision`, `DeviceOperationClaims`, `DriverCatalog`, registry, and
-capacity coordinator into these direct transactional call chains:
+The lease subsystem is its own module, `src/leasing/`, entered only through
+`src/leasing/index.ts` (ADR 0018). Device management stays in `src/core/`, and
+core never imports leasing. `createCore` wires one shared `SerializedDecision`,
+`DeviceOperationClaims`, `DriverCatalog`, registry, and capacity coordinator and
+returns them with a `connect` step; `createLeasing({ core, ... })` builds leasing
+on top of them, and `daemon/main.ts` calls both. Where core must act on a lease
+it declares a port (nuke's release-all during maintenance, the kick it gives
+acquisition once a device is back, the queue head's spec the warm pool reads),
+leasing implements it, and the daemon hands it over through `core.connect`; a
+core service called before `connect` fails with an error naming the missing
+port. The health monitor is optional: no other leasing part imports it, and
+`createLeasing` wires it or leaves it out. The direct transactional call chains
+are:
 
 - `LeaseRequestBook` stores every lease request in the registry before the
   queue sees it, answers a repeat under the same `(requesterId,
@@ -1387,11 +1398,12 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` settles every lease request the previous process left
-  open as failed, then runs TTL-timer restoration, interrupted-reclaim
-  recovery, and running-capacity convergence in that order. `NukeService`
-  coordinates lease release, pending-request cancellation, and
-  registry-scoped reset operations.
+- Startup runs in two parts, leasing's then core's. Leasing settles every lease
+  request the previous process left open as failed, then restores every lease's
+  TTL timer. `StartupConverger` in core then re-arms quarantine retries,
+  recovers interrupted reclaims, deletes spent devices, and converges running
+  capacity. `NukeService` coordinates lease release, pending-request
+  cancellation, and registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
 Driver work remains outside it. One `state.json` write does sit inside it: a
@@ -1581,7 +1593,7 @@ Android. One function per driver builds it.
 `ComponentInstaller` (`src/core/component-installer.ts`) is the only caller of
 `installComponent`. `src/daemon/main.ts` builds one with the drivers, a
 `DiskSpaceGuard`, the registry, the bus, the shared `SerializedDecision` and
-`downloads.timeoutMs`, hands it to the lease engine and to the `Dispatcher`
+`downloads.timeoutMs`, hands it to core, leasing and the `Dispatcher`
 (through `DaemonServer`), and closes it on dispose before the drivers are
 disposed. A call for a platform with no driver, or after `close()`, is refused
 at the door; any other call is admitted synchronously (`onAdmitted`) before it
@@ -1997,7 +2009,7 @@ forbids installs outright, even over an explicit `--allow-download` /
 `allowDownload`; `"always"` grants it to every explicit lease request
 without the caller having to ask; `"on-request"` (the default) defers to
 the request's own flag, which is today's behavior byte-for-byte. Only an
-explicit lease request (`LeaseEngine#request`) carries download permission,
+explicit lease request (`createLeasing`'s `request`) carries download permission,
 and the acquisition coordinator, not a driver, acts on it by calling the
 component installer (see "Components: one installer in the core"); no
 `resolveSpec` downloads anything. Warm-pool provisioning and startup

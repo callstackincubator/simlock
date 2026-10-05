@@ -5,9 +5,9 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { FakeDriver } from "./fake-driver.js";
-import { LeaseEngine } from "./lease-engine.js";
 import { Nuke } from "./nuke.js";
 import { Registry } from "./registry.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 describe("Nuke", () => {
   it("destroys every registry device and never targets a foreign device", async () => {
@@ -48,7 +48,7 @@ describe("Nuke", () => {
       event: "device.ready",
       payload: { bootDuration: 0, deviceId: device.id },
     });
-    const engine = new LeaseEngine({
+    const engine = createTestEngine({
       ...testComponentWiring({
         clock: clock,
         drivers: [driver],
@@ -94,7 +94,7 @@ describe("Nuke", () => {
       latencyMs: { reclaim: 20 },
       platform: "ios",
     });
-    const engine = new LeaseEngine({
+    const engine = createTestEngine({
       ...testComponentWiring({
         clock: clock,
         drivers: [driver],

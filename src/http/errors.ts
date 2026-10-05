@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 
-import { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import {

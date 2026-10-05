@@ -23,7 +23,14 @@ export {
   transition,
   transitionEnteredAt,
 } from "./domain.js";
-export { buildCapacityFigures } from "./capacity/index.js";
+export {
+  buildCapacityFigures,
+  CapacityCoordinator,
+  capacityDevice,
+  capacityDevices,
+  type CapacityReservation,
+  plannedCapacityDevice,
+} from "./capacity/index.js";
 export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
@@ -68,6 +75,7 @@ export {
 } from "./driver.js";
 export {
   DriverCatalog,
+  NoDriverError,
   type ModelPreferences,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
@@ -83,22 +91,8 @@ export type { OwnedRootMarker } from "./device-root.js";
 export { InstanceIdentityError, loadInstanceId } from "./instance-identity.js";
 // fallow-ignore-next-line unused-type -- public options contract for the daemon composition root.
 export type { InstanceIdentityOptions } from "./instance-identity.js";
-export {
-  LeaseEngine,
-  type LeaseProgress,
-  NoCapacityError,
-  NoDriverError,
-  QueueTimeoutError,
-  RequestCancelledError,
-  RequesterAlreadyLeasedError,
-} from "./lease-engine.js";
-export { LeaseHealthMonitor } from "./lease-health-monitor.js";
-export {
-  IdempotencyConflictError,
-  LeaseRequestForbiddenError,
-  ReplayedLeaseRequestError,
-} from "./lease-request-book.js";
 export { Nuke } from "./nuke.js";
+export { type NukeExecutor } from "./core-ports.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
 export {
   ComponentInstaller,
@@ -109,24 +103,9 @@ export { SerializedDecision } from "./serialized-decision.js";
 export {
   type CapacityReader,
   type CatalogReader,
-  type DeviceModeReader,
-  type LeaseCommands,
+  type LeaseExpirer,
   type PassthroughResolver,
-  type QueueControl,
-} from "./lease-ports.js";
-export {
-  InMemoryLeaseRequestStore,
-  LeaseRequestBook,
-  type LeaseRequestLimits,
-  newLeaseRequestId,
-  type WaitingRequest,
-} from "./lease-request-book.js";
-export {
-  type LeaseRequestOptions,
-  type QueuePlace,
-  type WaiterState,
-  WaitQueue,
-} from "./wait-queue.js";
+} from "./core-ports.js";
 export { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 export { type DeviceRequirement, fits, type LeaseGrant } from "./domain.js";
 export {
@@ -136,4 +115,41 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
-export { createCore } from "./create-core.js";
+export {
+  type Core,
+  type CoreOptions,
+  CorePortMissingError,
+  type CorePorts,
+  createCore,
+} from "./create-core.js";
+export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
+export { DeviceProvisioner } from "./device-provisioner.js";
+export {
+  exactRequirement,
+  isSettled,
+  type LeaseProgress,
+  type LeaseRequestRecord,
+  mayBeGranted,
+  sameSpec,
+  specMode,
+  type LeaseTiming,
+} from "./domain.js";
+export { classCandidates } from "./catalog-match.js";
+export { ComponentBeingRemovedError } from "./component-installer.js";
+export { type AcquisitionMaintenance, type LeaseMaintenance } from "./nuke-service.js";
+export { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
+export { type ReleasedLease } from "./registry.js";
+export { stableError } from "./stable-error.js";
+export {
+  type LeaseRequestLimits,
+  type LeaseRequestOutcome,
+  type LeaseRequestStore,
+  type NewLeaseRequest,
+  newLeaseRequestId,
+  newLeaseRequestRecord,
+  retainedLeaseRequests,
+  withNewLeaseRequest,
+  withSettledLeaseRequest,
+} from "./lease-request-store.js";
+export { selectManagedVictim, selectWarmVictim, type WarmVictimScope } from "./warm-pool.js";
+export { WarmPoolCoordinator } from "./warm-pool-coordinator.js";

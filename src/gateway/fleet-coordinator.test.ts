@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
-import { QueueTimeoutError } from "../core/index.js";
+import { QueueTimeoutError } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";

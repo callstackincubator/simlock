@@ -14,18 +14,17 @@
  * §33 keeps off limits.
  */
 import type { Clock, IdGenerator } from "../ports/index.js";
+import { type LeaseRecord, type DeviceRequest, type LeaseProgress } from "../core/index.js";
 import {
-  type LeaseRecord,
-  type DeviceRequest,
   WaitQueue,
-  type LeaseProgress,
   type LeaseRequestOptions,
   type QueuePlace,
   type WaiterState,
-} from "../core/index.js";
+} from "../leasing/index.js";
 
-export type { LeaseProgress, LeaseRequestOptions } from "../core/index.js";
-export { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
+export type { LeaseProgress } from "../core/index.js";
+export type { LeaseRequestOptions } from "../leasing/index.js";
+export { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 
 /**
  * The lease record a fleet grant carries. Identical to a worker's own `LeaseRecord` plus the

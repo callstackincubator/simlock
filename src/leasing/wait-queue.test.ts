@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeClock } from "../ports/index.js";
-import type { DeviceRequest } from "./driver.js";
+import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
 import {
   ForeignWaiterError,
   QueueTimeoutError,
   RequestCancelledError,
   WaitQueue,
-  type LeaseGrant,
-  type LeaseProgress,
 } from "./wait-queue.js";
 
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;

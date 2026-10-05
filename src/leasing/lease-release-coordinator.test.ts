@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
-import { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import {
+  DeviceOperationClaims,
+  type DeviceRecord,
+  type LeaseRecord,
+  Registry,
+  UnknownLeaseError,
+  type ReleasedLease,
+  SerializedDecision,
+} from "../core/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
-import { Registry, UnknownLeaseError, type ReleasedLease } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
 
 const statePath = "/home/agent/.simlock/state.json";
 

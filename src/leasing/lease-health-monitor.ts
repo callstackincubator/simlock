@@ -1,9 +1,14 @@
 import type { EventBus } from "../bus/index.js";
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
-import type { Config } from "./config.js";
-import type { DeviceRecord, LeaseRecord, Platform } from "./domain.js";
-import type { DriverCatalog } from "./driver-catalog.js";
-import type { ObservedDevice, ObservedMark } from "./driver.js";
+import {
+  type Config,
+  type DeviceRecord,
+  type LeaseRecord,
+  type Platform,
+  type DriverCatalog,
+  type ObservedDevice,
+  type ObservedMark,
+} from "../core/index.js";
 
 export interface HealthMonitorRegistry {
   readonly snapshot: {
@@ -64,7 +69,7 @@ export class LeaseHealthMonitor {
 
   /**
    * Arms the recurring probe tick. Deliberately not done in the constructor:
-   * `LeaseEngine` (and its tests) construct their dependencies while driving a
+   * `createLeasing` (and its tests) construct their dependencies while driving a
    * `FakeClock` directly, and a self-arming monitor would inject surprise
    * `listManaged()` driver calls into every one of those tests.
    */

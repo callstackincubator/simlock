@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import { FakeSystemStats } from "../ports/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
-import type { Config } from "./config.js";
-import { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
+import {
+  CapacityCoordinator,
+  type Config,
+  DeviceOperationClaims,
+  type DeviceRecord,
+  type DeviceSpec,
+  type LeaseRecord,
+} from "../core/index.js";
+import { createCapacityStrategy } from "../core/testing.js";
 
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;

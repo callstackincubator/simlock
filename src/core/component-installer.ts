@@ -66,7 +66,7 @@ export interface ComponentInstallOutcome {
 export interface ComponentInstallerOptions {
   readonly clock: Clock;
   /**
-   * The daemon's one decision gate, shared with the lease engine: every registry write runs
+   * The daemon's one decision gate, shared with core and leasing: every registry write runs
    * inside it, so the installer's record never interleaves with a device or lease commit.
    */
   readonly decisions: Pick<SerializedDecision, "run">;
