@@ -1137,20 +1137,22 @@ describe("Dispatcher: usage.get", () => {
     const { dispatcher } = await buildDispatcher({ eventHistory: history });
     const call = (window: { from: number; to: number }) =>
       dispatcher.dispatch("usage.get", window, session({ role: "admin" }));
+    const minute = 60_000;
+    const asked = { from: WINDOW.from + 10_000, to: WINDOW.to + 10_000 };
 
-    const first = await call(WINDOW);
-    const second = await call({ from: WINDOW.from + 30_000, to: WINDOW.to + 30_000 });
+    const first = await call(asked);
+    const second = await call({ from: asked.from + 20_000, to: asked.to + 20_000 });
 
     expect(state.reads).toBe(1);
     expect(second).toEqual(first);
-    // The answer's window is the rounded one, not the one asked for.
-    expect(second.window).toEqual(WINDOW);
+    // The answer's window is the window asked for rounded out to the bucket, not the one asked for.
+    expect(second.window).toEqual({ from: WINDOW.from, to: WINDOW.to + minute });
 
     state.newest = "evt_2";
-    await call(WINDOW);
+    await call(asked);
     expect(state.reads).toBe(2);
 
-    await call({ from: WINDOW.from + 60_000, to: WINDOW.to + 60_000 });
+    await call({ from: asked.from + minute, to: asked.to + minute });
     expect(state.reads).toBe(3);
   });
 

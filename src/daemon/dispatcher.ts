@@ -54,7 +54,9 @@ import {
   runDispatch,
   type DispatchSession,
   type ErasedHandler,
+  usageAnswer,
 } from "./dispatch.js";
+import { tokenLabelMap, UsageReader } from "../core/usage/usage-reader.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
@@ -232,9 +234,16 @@ export class Dispatcher {
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
   /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
   readonly #unsubscribe: (() => void)[] = [];
+  /** Answers `usage.get` from the event history, as this host's own entry (ADR 0016, ADR 0012). */
+  readonly #usage: UsageReader;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#usage = new UsageReader({
+      history: options.eventHistory,
+      tokenLabels: async () => tokenLabelMap((await options.tokens?.list()) ?? []),
+      workers: () => [{ id: options.instanceId, label: options.config.gateway.label }],
+    });
     // Observers only (architecture rule 5): dropping a kept read decides nothing.
     for (const event of WORKER_VIEW_CATALOG_EVENTS) {
       const unsubscribe = options.eventBus?.subscribe(event, () => {
@@ -630,9 +639,7 @@ export class Dispatcher {
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
 
-  #usageGet: Handler<"usage.get"> = () => {
-    throw new DispatchError("INTERNAL", "usage.get is not implemented");
-  };
+  #usageGet: Handler<"usage.get"> = async (input) => usageAnswer(await this.#usage.get(input));
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

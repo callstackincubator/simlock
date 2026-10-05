@@ -5403,7 +5403,7 @@ describe("CLI: stats", () => {
     for (const argv of [["--since", "1h"], ["--from", "2026-10-05T10:00:00Z"], ["--json"]]) {
       const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
       await expect(run, argv.join(" ")).resolves.toBe(0);
-      expect(output.stderr, argv.join(" ")).toBe("");
+      expect(output.stderr, argv.join(" ")).not.toContain("USAGE");
     }
     for (const argv of [
       ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],

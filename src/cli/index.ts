@@ -55,6 +55,7 @@ import {
   type LeaseRenewal,
 } from "../lease-policy/index.js";
 import { followLog, type Signals } from "./follow-log.js";
+import { formatUsage } from "./stats.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 import { parseDurationMs } from "../contract/duration.js";
@@ -65,7 +66,7 @@ const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
-  daemon, config, token
+  stats, daemon, config, token
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway; on a
                               single host, list shows the host itself
@@ -618,6 +619,8 @@ export async function runCli(
         return await runNuke(rest.slice(1), environment, token);
       case "events":
         return await runEvents(rest.slice(1), environment, token);
+      case "stats":
+        return await runStats(rest.slice(1), environment, token);
       case "daemon":
         return await runDaemon(rest.slice(1), environment, token);
       case "config":
@@ -1537,6 +1540,69 @@ async function runEvents(
   } finally {
     await client.close();
   }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `simlock stats`: the usage figures for a window, from the daemon's event history (ADR 0016). */
+async function runStats(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    from: { type: "string" },
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+    since: { type: "string" },
+    to: { type: "string" },
+  });
+  if (values.help) {
+    environment.stdout.write(
+      "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json]\n",
+    );
+    return 0;
+  }
+  const window = statsWindow(values, environment.clock.now());
+  const client = await connectDaemonClient(environment, token);
+  try {
+    const usage = await client.usage(window);
+    if (values.json) writeResult(environment, usage);
+    else environment.stdout.write(`${formatUsage(usage)}\n`);
+    return 0;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * The window `simlock stats` asks for: `--since` back from now, or `--from` to `--to` (now when
+ * `--to` is left out), the last 24 hours when none is given. Flags that disagree are usage errors.
+ */
+function statsWindow(
+  values: Readonly<Record<string, unknown>>,
+  now: number,
+): { readonly from: number; readonly to: number } {
+  const { from, since, to } = values;
+  if (from !== undefined && since !== undefined) {
+    throw new UsageError("stats takes --since or --from, not both");
+  }
+  if (to !== undefined && from === undefined) throw new UsageError("--to needs --from");
+  if (typeof from !== "string") {
+    return { from: now - (typeof since === "string" ? parseDuration(since) : DAY_MS), to: now };
+  }
+  const window = { from: parseTime(from), to: typeof to === "string" ? parseTime(to) : now };
+  if (window.from >= window.to) {
+    throw new UsageError("--from must be earlier than --to, or than now when --to is left out");
+  }
+  return window;
+}
+
+/** Parses an ISO time only at the CLI boundary. */
+function parseTime(value: string): number {
+  const milliseconds = Date.parse(value);
+  if (Number.isNaN(milliseconds)) throw new UsageError(`Invalid time: ${value}`);
+  return milliseconds;
 }
 
 /**

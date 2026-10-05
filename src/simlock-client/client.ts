@@ -582,8 +582,8 @@ class SimlockClientImpl {
     return this.#call("events.replay", input);
   }
 
-  usage(_window: UsageGetInput): Promise<UsageGetOutput> {
-    return Promise.reject(new Error("usage is not implemented"));
+  usage(window: UsageGetInput): Promise<UsageGetOutput> {
+    return this.#call("usage.get", window);
   }
 
   async subscribeEvents(listener: (event: EventPush) => void): Promise<() => Promise<void>> {
