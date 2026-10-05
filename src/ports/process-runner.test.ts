@@ -564,13 +564,23 @@ describe("NodeProcessRunner", () => {
     const runner = new NodeProcessRunner({ sigkillGraceMs: 100 });
     const startedAt = Date.now();
 
-    await expect(
+    // The child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
+    // SIGKILL fails on the assertion instead of waiting out vitest's timeout or leaking it.
+    const outcome = await Promise.race([
       runner.run(
         process.execPath,
-        ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000)"],
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
+        ],
         { timeoutMs: 100 },
       ),
-    ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
+      new Promise<"still running after 2 s">((resolve) => {
+        setTimeout(() => resolve("still running after 2 s"), 2_000).unref();
+      }),
+    ]);
+
+    expect(outcome).toEqual({ code: null, stderr: "", stdout: "" });
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   }, 15_000);
 
