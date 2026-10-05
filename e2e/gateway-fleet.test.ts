@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { freeLoopbackPort, waitFor, waitForDeviceState, withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
@@ -571,6 +571,131 @@ describe("gateway fleet", () => {
 
     await expect(lease("ios", "iphone 16 pro")).resolves.toBe("iPhone 16 Pro");
     await expect(lease("android", "pixel_7")).resolves.toBe("Pixel 7");
+  });
+
+  it("grants an Android --class phone request on the worker holding a warm Pixel, not on one with free capacity", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const pixels = {
+      android: {
+        availableOsVersions: ["34"],
+        defaultModels: { phone: ["Pixel 8"] },
+        knownModels: ["Pixel 8"],
+        modelClasses: { "Pixel 8": "phone" },
+      },
+    } as const;
+    const join = (label: string) =>
+      withDaemon({
+        configOverrides: { gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` } },
+        driverScript: pixels,
+        fakeDriverPlatforms: ["android"],
+      });
+    const warmWorker = await join("worker-warm");
+    const freeWorker = await join("worker-free");
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+
+    // Warm one device on the first worker through its own socket, and let it go idle.
+    const warmed = await warmWorker.cli([
+      "lease",
+      "--platform",
+      "android",
+      "--device",
+      "Pixel 8",
+      "--detach",
+    ]);
+    expect(warmed.code, warmed.stderr).toBe(0);
+    const { device: warmDevice, lease: warmLease } = warmed.json as {
+      device: { id: string; driverDeviceId: string };
+      lease: { id: string };
+    };
+    await warmWorker.cli(["release", warmLease.id]);
+    await waitForDeviceState(warmWorker, warmDevice.driverDeviceId, "ready");
+    // Until the gateway's view shows that device ready, a request could miss it.
+    await waitFor(
+      async () => {
+        const status = await gateway.cli(["status", "--json"]);
+        const devices = (status.json as { devices?: { id: string; state: string }[] }).devices;
+        return devices?.some((device) => device.state === "ready") === true;
+      },
+      { label: "the warm device ready in the gateway's view", timeout: 30_000 },
+    );
+    await freeWorker.driverLog.clear();
+
+    const leased = await gateway.cli(
+      ["lease", "--platform", "android", "--class", "phone", "--detach"],
+      { timeout: 30_000 },
+    );
+
+    expect(leased.code, leased.stderr).toBe(0);
+    const grant = leased.json as {
+      device: { id: string };
+      lease: { worker?: { label?: string } };
+    };
+    expect(grant.device.id).toBe(warmDevice.id);
+    expect(grant.lease.worker?.label).toBe("worker-warm");
+    const work = (await freeWorker.driverLog.calls()).filter((call) =>
+      ["provision", "makeReady"].includes(call.operation),
+    );
+    expect(work).toEqual([]);
+  });
+
+  it("grants --class phone with --os '>=18' through a gateway on a worker whose runtime is in the range, and nothing else", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const join = (label: string, osVersion: string) =>
+      withDaemon({
+        configOverrides: {
+          gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` },
+        },
+        driverScript: {
+          ios: {
+            availableOsVersions: [osVersion],
+            defaultModels: { phone: ["iPhone 17"] },
+            knownModels: ["iPhone 17"],
+            modelClasses: { "iPhone 17": "phone" },
+          },
+        },
+        fakeDriverPlatforms: ["ios"],
+      });
+    // Sorted either way by id, only the range can send the request to the newer worker.
+    await join("worker-old", "17.5");
+    await join("worker-new", "26.0");
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+
+    const leased = await gateway.cli(
+      ["lease", "--platform", "ios", "--class", "phone", "--os", ">=18", "--detach"],
+      { timeout: 30_000 },
+    );
+
+    expect(leased.code, leased.stderr).toBe(0);
+    const grant = leased.json as {
+      device: { spec: { osVersion: string } };
+      lease: { worker?: { label?: string } };
+    };
+    expect(grant.device.spec.osVersion).toBe("26.0");
+    expect(grant.lease.worker?.label).toBe("worker-new");
   });
 
   it("refuses an uplink whose token is not a worker join token", async () => {

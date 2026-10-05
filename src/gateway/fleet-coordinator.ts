@@ -52,7 +52,7 @@ import {
 } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { LeaseRequestFailure } from "../core/domain.js";
-import type { ExactDeviceRequest } from "../core/driver.js";
+import type { DeviceRequest } from "../core/driver.js";
 import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
@@ -238,7 +238,7 @@ export class FleetLeaseCoordinator {
    * Everything past admission -- reaching a worker at all -- is I/O and stays outside it.
    */
   async request(
-    deviceRequest: ExactDeviceRequest,
+    deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
     const admitted = await this.#decisions.run(async () => {
@@ -268,7 +268,7 @@ export class FleetLeaseCoordinator {
 
   /** One lease or pending request per requester, fleet-wide (§14). */
   #refuseIfAlreadyLeased(
-    deviceRequest: ExactDeviceRequest,
+    deviceRequest: DeviceRequest,
     requesterId: string,
     requestId: string,
   ): void {
@@ -821,9 +821,9 @@ export class FleetLeaseCoordinator {
    * `#settleGrant` while `queue.resolve` quietly answers `false`, leaving an orphan lease no
    * client holds a reference to release.
    */
-  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, model: string): void {
+  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, rename: ModelName): void {
     if (!this.#queue.markProcessing(waiter)) return;
-    void this.#attempt(waiter, decision, model);
+    void this.#attempt(waiter, decision, rename);
   }
 
   /**
@@ -856,7 +856,7 @@ export class FleetLeaseCoordinator {
    * queued waiter needs, and nothing else would ever schedule that second look.
    */
   // fallow-ignore-next-line complexity -- one attempt, every exit of which is named in the doc comment above.
-  async #attempt(waiter: FleetWaiter, decision: RoutingDecision, model: string): Promise<void> {
+  async #attempt(waiter: FleetWaiter, decision: RoutingDecision, rename: ModelName): Promise<void> {
     const workerId = decision.workerId;
     const client = liveClient(this.options.directory.target(workerId));
     if (client === undefined) {
@@ -875,7 +875,8 @@ export class FleetLeaseCoordinator {
       // see `bus/index.ts`'s own doc comment on why it was narrowed and then restored.
       const createdAt = this.#createdAt.get(waiter);
       this.#emit("request.dispatched", {
-        model: waiter.request.model,
+        ...(waiter.request.model === undefined ? {} : { model: waiter.request.model }),
+        ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
         ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
         platform: waiter.request.platform,
         queuedMs: createdAt === undefined ? 0 : Math.max(0, this.options.clock.now() - createdAt),
@@ -903,8 +904,8 @@ export class FleetLeaseCoordinator {
       grant = await this.#withLeaseRequestTimeout(
         client.requestLease(
           {
-            // The request as it arrived, under the worker's own name for the model.
-            ...requestedDevice({ ...waiter.request, model }),
+            // The request as it arrived, under the worker's own name for an exact model.
+            ...requestedDevice({ ...waiter.request, ...rename }),
             requesterId: namespacedRequesterId,
             // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
             // session may set `owner` -- and this RPC always travels over exactly that
@@ -1245,23 +1246,31 @@ export class FleetLeaseCoordinator {
 }
 
 /**
- * ADR 0009 §3: the worker is sent its own name for the model, so it resolves exactly what routing
- * matched. The client's name is kept only for a worker the catalog does not match, which no
- * registered policy picks.
+ * ADR 0009 §3: the worker is sent its own name for an exact model, so it resolves exactly what
+ * routing matched. The client's name is kept only for a worker the catalog does not match, which
+ * no registered policy picks. A class request has no model to send (ADR 0015 §8): the worker
+ * applies its own rules to the class, so it stays as it arrived.
  */
 function forwardedModel(
   request: RoutableRequest,
   views: readonly WorkerView[],
   decision: RoutingDecision,
-): string {
+): ModelName {
+  if (request.model === undefined) return {};
   const view = views.find((worker) => worker.id === decision.workerId);
-  return (view === undefined ? undefined : matchRequest(view, request)) ?? request.model;
+  return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };
+}
+
+/** The `model` a forward overrides the request's own with: none for a class request. */
+interface ModelName {
+  readonly model?: string;
 }
 
 function routable(waiter: FleetWaiter): RoutableRequest {
   return {
     platform: waiter.request.platform as Platform,
-    model: waiter.request.model,
+    ...(waiter.request.model === undefined ? {} : { model: waiter.request.model }),
+    ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFixture, statusFixture } from "../test-support.js";
 import type { WorkerView } from "../worker-registry.js";
-import { matchRequest } from "./request-match.js";
+import { listsModel, matchRequest } from "./request-match.js";
 
 function worker(entry: Parameters<typeof catalogFixture>[0][number]): WorkerView {
   return {
@@ -85,7 +85,7 @@ describe("matchRequest", () => {
   it("reads no inherited key as a pairing or an alias", () => {
     const view = worker({
       modelAliases: {},
-      modelClasses: {},
+      modelClasses: {} as const,
       modelRuntimes: {},
       models: ["constructor"],
       platform: "ios",
@@ -98,7 +98,7 @@ describe("matchRequest", () => {
     // alias list for the model and moves on to the next one.
     const withNext = worker({
       modelAliases: {},
-      modelClasses: {},
+      modelClasses: {} as const,
       models: ["constructor", "iPhone 17"],
       platform: "ios",
       runtimes: ["26.0"],
@@ -148,5 +148,85 @@ describe("matchRequest", () => {
         matchRequest(view, { ...tagged, model: "iPhone 17", platform: "ios" }),
       ).toBeUndefined();
     });
+  });
+
+  describe("with a class", () => {
+    const PHONES = {
+      modelClasses: { "iPad Pro": "tablet", "iPhone 16": "phone", "iPhone 17": "phone" } as const,
+      modelRuntimes: { "iPad Pro": ["26.0"], "iPhone 16": ["18.0"], "iPhone 17": ["26.0"] },
+      models: ["iPad Pro", "iPhone 16", "iPhone 17"],
+      platform: "ios" as const,
+      runtimes: ["18.0", "26.0"],
+    };
+    const phone = { class: "phone" as const, platform: "ios" as const };
+
+    it("matches a worker whose catalog lists a model of the class paired with a runtime that satisfies the constraint", () => {
+      expect(matchRequest(worker(PHONES), phone)).toBeDefined();
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: ">=26" })).toBeDefined();
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "18.0" })).toBeDefined();
+    });
+
+    it("does not match a worker whose models of the class pair only with runtimes outside the range", () => {
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "<18" })).toBeUndefined();
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "27.0" })).toBeUndefined();
+      // The tablet pairs with 26.0, but the class asked for is phone and no phone pairs with 19.
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "19 - 25" })).toBeUndefined();
+    });
+
+    it("does not match a worker with no model of the class", () => {
+      expect(matchRequest(worker(PHONES), { class: "watch", platform: "ios" })).toBeUndefined();
+      expect(
+        matchRequest(worker(PHONES), { class: "tablet", osVersion: "18.0", platform: "ios" }),
+      ).toBeUndefined();
+    });
+
+    it("matches a request with neither model nor class as phone", () => {
+      expect(matchRequest(worker(PHONES), { platform: "ios" })).toBeDefined();
+      const tablets = worker({
+        ...PHONES,
+        modelClasses: { "iPad Pro": "tablet" } as const,
+        models: ["iPad Pro"],
+      });
+      expect(matchRequest(tablets, { platform: "ios" })).toBeUndefined();
+    });
+
+    it("counts only runtimes with an image of the tag for a class request", () => {
+      const tagged = worker({
+        ...PHONES,
+        images: [{ abi: "arm64-v8a", runtime: "18.0", tag: "x" }],
+      });
+
+      expect(matchRequest(tagged, { ...phone, imageTag: "x", osVersion: ">=18" })).toBeDefined();
+      expect(matchRequest(tagged, { ...phone, imageTag: "x", osVersion: ">=26" })).toBeUndefined();
+    });
+
+    it("lists a class when any model of it is listed, whatever it pairs with", () => {
+      expect(listsModel(worker(PHONES), { ...phone, osVersion: "99" })).toBe(true);
+      expect(listsModel(worker(PHONES), { class: "watch", platform: "ios" })).toBe(false);
+      expect(listsModel(worker(PHONES), { platform: "ios" })).toBe(true);
+    });
+
+    it("matches no runtime for a string the OS grammar refuses", () => {
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "^18" })).toBeUndefined();
+    });
+
+    it("reads no inherited key as a class", () => {
+      const view = worker({ ...PHONES, modelClasses: {} as const, models: ["constructor"] });
+
+      expect(matchRequest(view, phone)).toBeUndefined();
+    });
+  });
+
+  it("matches an exact model with a range when one of its paired runtimes is in it", () => {
+    const view = worker({
+      modelRuntimes: { "iPhone 17": ["18.0", "26.0"] },
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["18.0", "26.0"],
+    });
+    const request = { model: "iPhone 17", platform: "ios" as const };
+
+    expect(matchRequest(view, { ...request, osVersion: ">=26" })).toBe("iPhone 17");
+    expect(matchRequest(view, { ...request, osVersion: ">26" })).toBeUndefined();
   });
 });

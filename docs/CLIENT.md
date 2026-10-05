@@ -50,7 +50,9 @@ await client.requestLease({ platform: "ios", class: "tablet" });
 await client.requestLease({ platform: "android" }); // a phone
 ```
 
-Through a gateway, a request that names no `model` is a `BAD_REQUEST` for now.
+Through a gateway the same requests work: any worker that has something fitting
+serves one, a warm device first, and one nothing in the fleet can serve fails at
+once with the code a single machine gives.
 
 `requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
 mode the lease asks for. Without it the lease gets the default mode of the
@@ -83,7 +85,7 @@ or a hyphen range (`"18 - 26"`). A short version covers everything under it, so
 by an idle device whose OS satisfies it or by a new device on the newest
 installed runtime in it, and when none is installed it fails at once with
 `RUNTIME_MISSING`, whatever `allowDownload` says. Through a gateway a range is
-`BAD_REQUEST` for now. A request with `imageTag` never downloads:
+served by any worker with a paired runtime in it. A request with `imageTag` never downloads:
 when no image of that tag is installed for the API level it fails with
 `RUNTIME_MISSING`, whatever `allowDownload` says. On iOS it is a
 `BAD_REQUEST`, and so is a tag that is not 1 to 64 letters, digits, `_`, `.`

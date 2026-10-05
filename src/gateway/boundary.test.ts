@@ -56,7 +56,9 @@ const ALLOWED_DAEMON_IMPORTS = ["daemon/dispatch.js"];
  * `DeviceRequest`), which the fleet queue and coordinator need to name the same shapes wait-queue
  * itself is typed against rather than redeclaring them. Neither module is the registry, capacity,
  * or lifecycle engine §33 keeps off limits -- `domain.js` is pure data shapes and a spec-equality
- * predicate, `driver.js` is interface declarations only.
+ * predicate, `driver.js` is interface declarations only. `catalog-match.js` is the one place a
+ * request's model or class is read against a catalog (ADR 0015 §8; architecture rule 10): pure
+ * functions over a catalog entry, so the gateway matches exactly as a worker does.
  */
 const ALLOWED_CORE_IMPORTS = [
   "core/wait-queue.js",
@@ -64,6 +66,7 @@ const ALLOWED_CORE_IMPORTS = [
   "core/serialized-decision.js",
   "core/domain.js",
   "core/driver.js",
+  "core/catalog-match.js",
 ];
 
 describe("gateway module boundary", () => {
