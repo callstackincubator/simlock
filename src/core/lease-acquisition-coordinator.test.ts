@@ -1783,7 +1783,7 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
 
   it("does not grant an exact iPhone 16 request a ready idle iPhone 15", async () => {
     const harness = await classHarness();
-    const warm = await seedReady(harness, iphone15);
+    const warm = await seedReady(harness, { ...iphone15, osVersion: "26.5" });
 
     const granted = await harness.coordinator.request(
       { model: "iPhone 16", platform: "ios" },

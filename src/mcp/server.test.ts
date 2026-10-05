@@ -263,8 +263,10 @@ describe("MCP server (smoke)", () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(text(result)).toContain("class");
-      expect(text(result)).toContain("model");
+      const refusal = JSON.parse(text(result)) as { code: string; message: string };
+      expect(refusal.code).toBe("BAD_REQUEST");
+      expect(refusal.message).toContain("`model`");
+      expect(refusal.message).toContain("`class`");
       expect(client.calls).toEqual([]);
     } finally {
       await close();

@@ -877,8 +877,8 @@ describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () =
 
     expect(result.success).toBe(false);
     const message = result.success ? "" : result.error.issues.map((issue) => issue.message).join();
-    expect(message).toContain("class");
-    expect(message).toContain("model");
+    expect(message).toContain("`model`");
+    expect(message).toContain("`class`");
   });
 
   it("accepts a request with a class only, a model only, or neither", () => {

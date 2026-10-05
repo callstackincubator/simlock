@@ -141,8 +141,8 @@ describe("lease lifecycle across both frontends", () => {
     }
 
     /** Leases and releases an exact device, leaving it warm and idle. */
-    async function warm(env: Awaited<ReturnType<typeof withDaemon>>, model: string) {
-      const warmed = granted(await lease(env, "warmer", ["--device", model, "--os", "18.4"]));
+    async function warm(env: Awaited<ReturnType<typeof withDaemon>>, model: string, os = "18.4") {
+      const warmed = granted(await lease(env, "warmer", ["--device", model, "--os", os]));
       await env.cli(["release", warmed.lease.id]);
       await waitForDeviceState(env, warmed.device.driverDeviceId, "ready");
       return warmed.device;
@@ -168,13 +168,15 @@ describe("lease lifecycle across both frontends", () => {
 
     it("grants --class phone a ready idle iPhone 15 without provisioning or booting, and not to an exact iPhone 16 request", async () => {
       const env = await withDaemon({ driverScript: { ios: iosScript } });
-      const warmed = await warm(env, "iPhone 15");
+      const warmed = await warm(env, "iPhone 15", "26.0");
       await env.driverLog.clear();
 
       const byClass = await lease(env, "by-class", ["--class", "phone"]);
       expect(byClass.code, byClass.stderr).toBe(0);
       expect(granted(byClass).device.id).toBe(warmed.id);
       expect(await deviceWork(env)).toBe(0);
+      await env.cli(["release", granted(byClass).lease.id]);
+      await waitForDeviceState(env, warmed.driverDeviceId, "ready");
 
       const exact = await lease(env, "exact", ["--device", "iPhone 16"]);
       expect(exact.code, exact.stderr).toBe(0);
