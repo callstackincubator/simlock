@@ -38,7 +38,7 @@ async function createHarness() {
     ttl: { defaultMs: 20 },
   });
   const reclaims: ReleasedLease[] = [];
-  const warmPool = {
+  const reclaim = {
     async reclaim(released: ReleasedLease) {
       reclaims.push(released);
     },
@@ -57,7 +57,7 @@ async function createHarness() {
       availability.onNotify?.();
     },
     registry,
-    warmPool,
+    reclaim,
   });
   return {
     availability,
@@ -68,7 +68,7 @@ async function createHarness() {
     lifecycle,
     reclaims,
     registry,
-    warmPool,
+    reclaim,
   };
 }
 
@@ -166,7 +166,7 @@ describe("LeaseReleaseCoordinator", () => {
     const harness = await createHarness();
     const granted = await grant(harness);
     let leasesAtReclaim = -1;
-    harness.warmPool.reclaim = async () => {
+    harness.reclaim.reclaim = async () => {
       leasesAtReclaim = harness.registry.snapshot.leases.length;
       throw new Error("reclaim failed");
     };
@@ -192,7 +192,7 @@ describe("LeaseReleaseCoordinator", () => {
     const blocked = new Promise<void>((resolve) => {
       unblockReclaim = resolve;
     });
-    harness.warmPool.reclaim = async (released) => {
+    harness.reclaim.reclaim = async (released) => {
       harness.reclaims.push(released);
       reclaimStarted();
       await blocked;
@@ -237,7 +237,7 @@ describe("LeaseReleaseCoordinator", () => {
     const blocked = new Promise<void>((resolve) => {
       unblockReclaim = resolve;
     });
-    harness.warmPool.reclaim = async (released) => {
+    harness.reclaim.reclaim = async (released) => {
       harness.reclaims.push(released);
       reclaimStarted();
       await blocked;
@@ -295,7 +295,7 @@ describe("LeaseReleaseCoordinator", () => {
         const blocked = new Promise<void>((resolve) => {
           unblockReclaim = resolve;
         });
-        harness.warmPool.reclaim = async (released) => {
+        harness.reclaim.reclaim = async (released) => {
           harness.reclaims.push(released);
           await blocked;
         };
@@ -332,7 +332,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async (released) => {
+      harness.reclaim.reclaim = async (released) => {
         harness.reclaims.push(released);
         await blocked;
       };
@@ -355,7 +355,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async (released) => {
+      harness.reclaim.reclaim = async (released) => {
         await blocked;
         harness.reclaims.push(released);
       };
@@ -404,7 +404,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async () => {
+      harness.reclaim.reclaim = async () => {
         await blocked;
       };
 
@@ -434,7 +434,7 @@ describe("LeaseReleaseCoordinator", () => {
         logger,
         notifyAvailability: () => undefined,
         registry: harness.registry,
-        warmPool: { reclaim: async () => Promise.reject(new Error("reclaim failed")) },
+        reclaim: { reclaim: async () => Promise.reject(new Error("reclaim failed")) },
       });
 
       // Vitest fails a test on an unhandled rejection, so simply not throwing here

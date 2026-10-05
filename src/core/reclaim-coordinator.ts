@@ -1,26 +1,7 @@
 import type { EventBus } from "../bus/index.js";
-import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
-import {
-  capacityDevice,
-  capacityDevices,
-  type CapacityDecision,
-  type CapacityDevice,
-  type CapacityReservation,
-  type CapacityReservationAttempt,
-  type RegisteredCapacityDevice,
-  type RunningCapacity,
-} from "./capacity/index.js";
-import {
-  type DeviceRecord,
-  type DeviceSpec,
-  type DeviceTransitionUpdate,
-  type LeaseRecord,
-  mayBeGranted,
-  type Platform,
-  sameSpec,
-  specMode,
-} from "./domain.js";
-import { readyTransitionUpdate, type Driver, type DriverDevice } from "./driver.js";
+import type { Clock } from "../ports/index.js";
+import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
+import type { Driver, DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
@@ -51,18 +32,8 @@ export interface ReclaimRegistry {
           readonly event: "device.deleted";
           readonly payload: { readonly deviceId: string; readonly initiator: string };
         },
-    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
   completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord>;
-}
-
-export interface WarmPoolCapacityReader {
-  runningCapacity(devices: readonly CapacityDevice[]): RunningCapacity;
-  canReserveRunning(platform: Platform, devices: readonly CapacityDevice[]): CapacityDecision;
-  tryReserveRewarm(
-    device: RegisteredCapacityDevice,
-    devices: readonly CapacityDevice[],
-  ): CapacityReservationAttempt;
 }
 
 /** Where a release-time purge failure is handed off once the reclaim attempt commits. */
@@ -71,28 +42,21 @@ export interface ReclaimQuarantine {
 }
 
 export interface ReclaimCoordinatorOptions {
-  readonly capacity: WarmPoolCapacityReader;
   readonly clock: Clock;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: ReclaimDriverCatalog;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly notifyAvailability: () => void;
   readonly quarantine: ReclaimQuarantine;
-  readonly queueHeadDemand: () => { readonly spec?: DeviceSpec } | undefined;
   readonly registry: ReclaimRegistry;
-  readonly logger?: Logger;
 }
 
 /**
- * Reclaims released devices and commits their warm-pool disposition. Driver
+ * Reclaims released devices and commits the state the driver's reclaim returns. Driver
  * work remains outside the serialized registry decision sections.
  */
 export class ReclaimCoordinator {
-  readonly #logger: Logger;
-
-  constructor(private readonly options: ReclaimCoordinatorOptions) {
-    this.#logger = options.logger?.child("warm-pool-coordinator") ?? new NoopLogger();
-  }
+  constructor(private readonly options: ReclaimCoordinatorOptions) {}
 
   async reclaim(released: ReleasedLease): Promise<void> {
     if (!mayBeGranted(released.device)) {
@@ -110,27 +74,15 @@ export class ReclaimCoordinator {
       return;
     }
 
-    const warm = await this.options.decisions.run(async () =>
-      this.#warmDecision(released.device, result.state),
-    );
-    const disposition = await this.#disposition(driver, released, result.state, warm.keepReady);
     await this.options.decisions.run(async () => {
-      warm.reservation?.release();
-      await this.options.registry.transitionDevice(
-        released.device.id,
-        disposition.state,
-        {
-          event: "device.reclaimed",
-          payload: {
-            deviceId: released.device.id,
-            duration: this.options.clock.now() - startedAt,
-            strategy: result.strategy,
-          },
+      await this.options.registry.transitionDevice(released.device.id, result.state, {
+        event: "device.reclaimed",
+        payload: {
+          deviceId: released.device.id,
+          duration: this.options.clock.now() - startedAt,
+          strategy: result.strategy,
         },
-        disposition.readyDevice === undefined
-          ? undefined
-          : readyTransitionUpdate(disposition.readyDevice),
-      );
+      });
     });
     this.options.notifyAvailability();
   }
@@ -254,83 +206,6 @@ export class ReclaimCoordinator {
       error: stableError(error),
       leaseId: released.lease.id,
     });
-  }
-
-  async #disposition(
-    driver: Driver,
-    released: ReleasedLease,
-    reclaimedState: "ready" | "shutdown",
-    keepReady: boolean,
-  ): Promise<{ readonly state: "ready" | "shutdown"; readonly readyDevice?: DriverDevice }> {
-    const { device } = released;
-    if (keepReady && reclaimedState === "shutdown") {
-      const readyDevice = await this.#tryMakeReady(driver, released);
-      return readyDevice === undefined ? { state: "shutdown" } : { readyDevice, state: "ready" };
-    }
-    if (!keepReady && reclaimedState === "ready") {
-      try {
-        await driver.shutdown(toDriverDevice(device));
-        return { state: "shutdown" };
-      } catch (error: unknown) {
-        this.#logFailure("shutting down a reclaimed device failed", released, "shutdown", error);
-        return { state: "ready" };
-      }
-    }
-    return { state: reclaimedState };
-  }
-
-  /** Undefined on failure; otherwise the driver's freshly re-read device, address included. */
-  async #tryMakeReady(driver: Driver, released: ReleasedLease): Promise<DriverDevice | undefined> {
-    try {
-      return await driver.makeReady(toDriverDevice(released.device), {
-        mode: specMode(released.device.spec),
-        purpose: "prepare",
-      });
-    } catch (error: unknown) {
-      this.#logFailure("making a reclaimed device ready failed", released, "make-ready", error);
-      return undefined;
-    }
-  }
-
-  #logFailure(message: string, released: ReleasedLease, step: string, error: unknown): void {
-    this.#logger.warn(message, {
-      deviceId: released.device.id,
-      leaseId: released.lease.id,
-      step,
-      error: stableError(error),
-    });
-  }
-
-  /**
-   * Whether the reclaimed device stays warm. One the reclaim shut down needs a
-   * boot to stay warm, and a boot runs at the full size before any slim pass, so
-   * it stays warm only if that fits; the reservation holds the room while it boots.
-   */
-  #warmDecision(
-    device: DeviceRecord,
-    reclaimedState: "ready" | "shutdown",
-  ): { readonly keepReady: boolean; readonly reservation?: CapacityReservation } {
-    if (!this.#mayRemainWarm(device)) return { keepReady: false };
-    if (reclaimedState === "ready") return { keepReady: true };
-    const rewarm = this.options.capacity.tryReserveRewarm(
-      capacityDevice(device),
-      capacityDevices(this.options.registry.snapshot.devices),
-    );
-    return rewarm.ok ? { keepReady: true, reservation: rewarm.reservation } : { keepReady: false };
-  }
-
-  #mayRemainWarm(device: DeviceRecord): boolean {
-    const devices = capacityDevices(this.options.registry.snapshot.devices);
-    const capacity = this.options.capacity.runningCapacity(devices);
-    if (
-      capacity.global.running > capacity.global.maxRunning ||
-      capacity[device.spec.platform].running > capacity[device.spec.platform].maxRunning
-    ) {
-      return false;
-    }
-    const head = this.options.queueHeadDemand();
-    if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
-    return this.options.capacity.canReserveRunning(head.spec.platform, devices).ok;
   }
 }
 

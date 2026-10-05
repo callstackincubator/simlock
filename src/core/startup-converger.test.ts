@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RunningCapacity } from "./capacity/index.js";
-import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import type { DeviceRecord, DeviceState, LeaseRecord, Platform } from "./domain.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
@@ -24,38 +22,13 @@ function device(
   };
 }
 
-function capacity(
-  devices: readonly DeviceRecord[],
-  limits: { readonly global: number; readonly ios: number; readonly android: number },
-): RunningCapacity {
-  const running = (platform?: Platform) =>
-    devices.filter(
-      (item) =>
-        (item.state === "ready" || item.state === "leased" || item.state === "reclaiming") &&
-        (platform === undefined || item.spec.platform === platform),
-    ).length;
-  const entry = (platform: Platform | undefined, maxRunning: number) => ({
-    maxRunning,
-    overLimit: running(platform) > maxRunning,
-    reserved: 0,
-    running: running(platform),
-  });
-  return {
-    android: entry("android", limits.android),
-    global: entry(undefined, limits.global),
-    ios: entry("ios", limits.ios),
-  };
-}
-
 function createHarness(
   devices: DeviceRecord[],
   leases: LeaseRecord[] = [],
-  limits = { android: 3, global: 3, ios: 3 },
   darkPlatforms: ReadonlySet<Platform> = new Set(),
 ) {
   const order: string[] = [];
   const claimed = new Set<string>();
-  const cleanupCalls: string[] = [];
   let leaseIdsAtTimerRestore: string[] | undefined;
   const timers = {
     restoreExpiryTimers: vi.fn(async () => {
@@ -69,16 +42,6 @@ function createHarness(
       updateState(target.id, "shutdown");
     }),
   };
-  const cleanup: CleanupActionExecutor = {
-    execute: vi.fn(async (proposal) => {
-      order.push(`cleanup:${proposal.target}`);
-      cleanupCalls.push(proposal.target);
-      const current = devices.find((item) => item.id === proposal.target);
-      if (current === undefined || current.state !== "ready") return false;
-      updateState(current.id, "shutdown");
-      return true;
-    }),
-  };
   const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
   const spentDeviceDeletion = {
     deleteSpent: vi.fn(async (target: DeviceRecord) => {
@@ -87,16 +50,7 @@ function createHarness(
     }),
   };
   const converger = new StartupConverger({
-    capacity: {
-      atRamBudget: () => false,
-      deviceLimit: () => limits.ios + limits.android,
-      ramBudget: undefined,
-      get runningCapacity() {
-        return capacity(devices, limits);
-      },
-    },
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
-    cleanup,
     decisions: new SerializedDecision(),
     drivers: { has: (platform) => !darkPlatforms.has(platform) },
     eventBus: { emit: vi.fn() as never },
@@ -120,8 +74,6 @@ function createHarness(
 
   return {
     claimed,
-    cleanup,
-    cleanupCalls,
     converger,
     devices,
     get leaseIdsAtTimerRestore() {
@@ -141,7 +93,6 @@ describe("StartupConverger", () => {
     const harness = createHarness(
       [device("reclaiming", "ios", "reclaiming", 1), device("ready", "ios", "ready", 2)],
       [],
-      { android: 1, global: 0, ios: 1 },
     );
 
     await harness.converger.converge();
@@ -155,11 +106,9 @@ describe("StartupConverger", () => {
   it("leaves ready devices over maxRunning running at startup", async () => {
     const older = device("older", "ios", "ready", 1);
     const newer = device("newer", "android", "ready", 2);
-    const harness = createHarness([newer, older], [], { android: 0, global: 0, ios: 0 });
+    const harness = createHarness([newer, older], []);
 
     await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
     expect(older.state).toBe("ready");
     expect(newer.state).toBe("ready");
   });
@@ -189,11 +138,9 @@ describe("StartupConverger", () => {
         ttlDeadline: 10,
       },
     ];
-    const harness = createHarness([first, second], leases, { android: 1, global: 1, ios: 1 });
+    const harness = createHarness([first, second], leases);
 
     await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
     expect(first.state).toBe("leased");
     expect(second.state).toBe("leased");
   });
@@ -205,7 +152,6 @@ describe("StartupConverger", () => {
     const harness = createHarness(
       [interrupted, excess, androidInterrupted],
       [],
-      { android: 1, global: 1, ios: 0 },
       new Set<Platform>(["ios"]),
     );
 
@@ -215,7 +161,6 @@ describe("StartupConverger", () => {
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledWith(
       expect.objectContaining({ id: androidInterrupted.id }),
     );
-    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.devices.find((item) => item.id === interrupted.id)?.state).toBe("reclaiming");
     expect(harness.devices.find((item) => item.id === excess.id)?.state).toBe("ready");
   });
@@ -223,13 +168,12 @@ describe("StartupConverger", () => {
   it("is idempotent after recovery", async () => {
     const recovering = device("recovering", "ios", "reclaiming", 1);
     const ready = device("ready", "ios", "ready", 2);
-    const harness = createHarness([recovering, ready], [], { android: 1, global: 0, ios: 1 });
+    const harness = createHarness([recovering, ready], []);
 
     await harness.converger.converge();
     await harness.converger.converge();
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
-    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledTimes(2);
   });
 
@@ -251,14 +195,13 @@ describe("StartupConverger", () => {
         ttlDeadline: 1000,
       },
     ];
-    const harness = createHarness([leasedDevice], leases, { android: 1, global: 1, ios: 1 });
+    const harness = createHarness([leasedDevice], leases);
 
     await harness.converger.converge();
 
     expect(harness.leaseIdsAtTimerRestore).toEqual(["lease-1"]);
     expect(harness.leases).toHaveLength(1);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
-    expect(harness.cleanupCalls).toEqual([]);
   });
 
   it("leaves a leased device leased even when the running limit is now zero", async () => {
@@ -278,11 +221,9 @@ describe("StartupConverger", () => {
         ttlDeadline: 1000,
       },
     ];
-    const harness = createHarness([leasedDevice], leases, { android: 1, global: 0, ios: 0 });
+    const harness = createHarness([leasedDevice], leases);
 
     await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
   });
 
@@ -299,7 +240,6 @@ describe("StartupConverger", () => {
         reusableShutdown,
       ],
       [],
-      { android: 3, global: 3, ios: 3 },
     );
 
     await harness.converger.converge();

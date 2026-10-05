@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, type Logger } from "../ports/index.js";
-import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
-import type { Config } from "./config.js";
+import { FakeClock } from "../ports/index.js";
 import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
@@ -16,70 +14,7 @@ import {
   type ReclaimRegistry,
 } from "./reclaim-coordinator.js";
 
-const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
-const config: Config = {
-  mode: "worker",
-  exec: { timeoutMs: 600_000 },
-  diskPressure: { freeBytesThreshold: 10 * gibibyte },
-  gateway: {
-    disconnectedRetentionMs: 24 * 60 * 60_000,
-    execTimeoutMs: 11 * 60_000,
-    leaseRequestTimeoutMs: 5 * 60_000,
-    routing: "warm-then-free" as const,
-  },
-  drivers: {},
-  eventBuffer: { capacity: 100 },
-  health: {
-    enabled: true,
-    maxConcurrentRecoveries: 1,
-    maxRecoveryAttempts: 3,
-    probeIntervalMs: 30_000,
-    recoveryBackoffMs: 5_000,
-    stableObservations: 2,
-  },
-  stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-  downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-  http: { enabled: false, host: "127.0.0.1", port: 4700 },
-  ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
-  android: {
-    defaultModels: {},
-    emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-  },
-  idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-  warmPool: {
-    quarantine: {
-      maxRetries: 3,
-      maxRetryBackoffMs: 300_000,
-      retryBackoffMs: 30_000,
-      retryBackoffMultiplier: 2,
-    },
-  },
-  lease: {
-    defaultTtlMs: 100,
-    maxTtlMs: 100,
-    identity: { ios: "reusable", android: "reusable" },
-    requestRetentionMs: 600_000,
-    maxRequestRecords: 10_000,
-  },
-  capacity: {
-    strategy: "resource",
-    config: {
-      limits: {
-        android: { maxDevices: 2, maxRunning: 1 },
-        ios: { maxDevices: 2, maxRunning: 1 },
-        maxRunning: 1,
-      },
-      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-    },
-  },
-  log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-  eventLog: {
-    rotateBytes: 5 * 1024 * 1024,
-    retention: 7 * 24 * 60 * 60 * 1000,
-    maxBytes: 256 * 1024 * 1024,
-  },
-};
 
 class TestRegistry {
   #devices: DeviceRecord[];
@@ -130,26 +65,11 @@ class TestRegistry {
   }
 }
 
-function capacity(): CapacityCoordinator {
-  return new CapacityCoordinator(
-    createCapacityStrategy(
-      config.capacity,
-      new FakeSystemStats({
-        cpuCount: 8,
-        totalRamBytes: 32 * gibibyte,
-      }),
-    ),
-  );
-}
-
 async function createHarness(
   options: {
-    readonly capacity?: CapacityCoordinator;
     readonly devices?: readonly DeviceRecord[];
     readonly driver?: FakeDriver;
-    readonly headSpec?: DeviceSpec;
     readonly leases?: readonly LeaseRecord[];
-    readonly logger?: Logger;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -165,16 +85,12 @@ async function createHarness(
     enter: vi.fn(async (failure) => void quarantined.push(failure)),
   };
   const coordinator = new ReclaimCoordinator({
-    capacity: options.capacity ?? capacity(),
     clock,
     decisions: new SerializedDecision(),
     drivers: new DriverCatalog([driver]),
     eventBus: bus,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
     quarantine,
-    queueHeadDemand: () =>
-      options.headSpec === undefined ? undefined : { spec: options.headSpec },
     registry,
   });
   return {
@@ -241,14 +157,12 @@ describe("ReclaimCoordinator", () => {
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
     const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
     const coordinator = new ReclaimCoordinator({
-      capacity: capacity(),
       clock: harness.clock,
       decisions: new SerializedDecision(),
       drivers: new DriverCatalog([harness.driver]),
       eventBus: harness.bus,
       notifyAvailability: harness.notifyAvailability,
       quarantine: harness.quarantine,
-      queueHeadDemand: () => undefined,
       registry: overloaded,
     });
 
@@ -379,14 +293,12 @@ describe("ReclaimCoordinator", () => {
       const reusable = device("reusable", "shutdown", "reusable-driver", spec);
       const registry = new TestRegistry([harness.target, reusable], [], harness.bus);
       const coordinator = new ReclaimCoordinator({
-        capacity: capacity(),
         clock: harness.clock,
         decisions: new SerializedDecision(),
         drivers: new DriverCatalog([harness.driver]),
         eventBus: harness.bus,
         notifyAvailability: harness.notifyAvailability,
         quarantine: harness.quarantine,
-        queueHeadDemand: () => undefined,
         registry,
       });
 

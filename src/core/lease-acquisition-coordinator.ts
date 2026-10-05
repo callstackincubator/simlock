@@ -226,10 +226,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
   }
 
-  get queueHeadSpec(): DeviceSpec | undefined {
-    return (this.options.queue.head as AcquisitionWaiter | undefined)?.spec;
-  }
-
   /**
    * Admits a request, or answers a repeat of one. A repeat under a stored key is answered before
    * any other check -- its result never depends on what changed on the host since. A new

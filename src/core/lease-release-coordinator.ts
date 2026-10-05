@@ -45,7 +45,7 @@ export interface LeaseReleaseCoordinatorOptions {
    */
   readonly notifyAvailability: () => void;
   readonly registry: LeaseReleaseRegistry;
-  readonly warmPool: Pick<ReclaimCoordinator, "reclaim">;
+  readonly reclaim: Pick<ReclaimCoordinator, "reclaim">;
 }
 
 /**
@@ -207,7 +207,7 @@ export class LeaseReleaseCoordinator
       this.#reclaimInBackground(released);
       return;
     }
-    await this.options.warmPool.reclaim(released);
+    await this.options.reclaim.reclaim(released);
   }
 
   /**
@@ -229,7 +229,7 @@ export class LeaseReleaseCoordinator
    */
   #reclaimInBackground(released: ReleasedLease): void {
     const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
-    const reclaim = this.options.warmPool
+    const reclaim = this.options.reclaim
       .reclaim(released)
       .catch((error: unknown) => {
         this.#logger.error("background reclaim failed", {
