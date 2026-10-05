@@ -106,6 +106,8 @@ describe("event history", () => {
       expect(history.indexOf(request as Envelope)).toBeLessThan(history.indexOf(grant as Envelope));
     }
     expect(granted.map((grant) => grant?.payload.source)).toEqual(["provisioned", "warm"]);
+    expect(granted[0]?.payload.deviceId).toEqual(expect.any(String));
+    expect(granted[1]?.payload.deviceId).toBe(granted[0]?.payload.deviceId);
   });
 
   it("shows capacity.changed and queue.changed from daemon start, never two in a row with equal payloads", async () => {
