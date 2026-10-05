@@ -1118,6 +1118,14 @@ export function deviceModeWiring(config: Pick<Config, "ios">): {
   };
 }
 
+/** Stub, replaced when the first test goes green. */
+export function modelPreferenceWiring(
+  _config: Pick<Config, "android" | "ios">,
+  _drivers: readonly { readonly platform: "ios" | "android" }[],
+): Readonly<Record<string, never>> {
+  return {};
+}
+
 /**
  * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. The driver
  * never depends on the event bus directly (architecture rule 5) -- this is the one place, at driver construction, that bridges the

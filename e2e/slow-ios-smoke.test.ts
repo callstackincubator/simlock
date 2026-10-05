@@ -72,6 +72,7 @@ describe.skipIf(process.platform !== "darwin")(
               models: string[];
               runtimes: string[];
               modelClasses: Record<string, string>;
+              classDefaults: Record<string, string>;
             }[];
           }
         ).platforms;
@@ -84,6 +85,8 @@ describe.skipIf(process.platform !== "darwin")(
         // The class comes from the device type's product family, read off this host's simctl.
         expect(iosCatalog?.modelClasses["iPhone 17"]).toBe("phone");
         expect(iosCatalog?.modelClasses["Apple Watch Series 11 (46mm)"]).toBe("watch");
+        // With no `ios.defaultModels`, the built-in list's first listed phone is the default.
+        expect(iosCatalog?.classDefaults["phone"]).toBe("iPhone 17");
         for (const runtime of iosCatalog?.runtimes ?? []) {
           expect(
             availableRuntimes,

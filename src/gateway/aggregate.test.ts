@@ -401,6 +401,46 @@ describe("aggregateCatalog", () => {
     expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
   });
 
+  it("carries a class default only when every connected worker reports the same one", () => {
+    const withDefaults = (
+      classDefaults: Record<string, string>,
+      base: typeof iosOnA | typeof iosOnB = iosOnA,
+    ) => ({ ...base, classDefaults });
+
+    const agreed = aggregateCatalog([
+      view({ catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad Pro" })], id: "wrk_a" }),
+      view({
+        catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad (A16)" }, iosOnB)],
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(agreed.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
+    expect(() => OPERATIONS["catalog.get"].output.parse(agreed)).not.toThrow();
+  });
+
+  it("drops a class default when a connected worker has none for that class", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({ catalog: [{ ...iosOnB, classDefaults: {} }], id: "wrk_b" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
+  it("keeps a class default a lone connected worker reports, and ignores a disconnected worker's", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({
+        catalog: [{ ...iosOnB, classDefaults: { phone: "iPhone 16" } }],
+        connection: "disconnected",
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
+  });
+
   it("keeps a default runtime only when every worker agrees on it", () => {
     const agreed = aggregateCatalog([
       view({ catalog: [iosOnA], id: "wrk_a" }),

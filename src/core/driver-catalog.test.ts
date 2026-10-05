@@ -49,6 +49,7 @@ describe("DriverCatalog", () => {
 
     await expect(catalog.listCatalog()).resolves.toEqual([
       {
+        classDefaults: {},
         defaultRuntime: "26.5",
         modelAliases: {},
         modelClasses: {},
@@ -58,6 +59,7 @@ describe("DriverCatalog", () => {
         runtimes: ["18.4", "26.5"],
       },
       {
+        classDefaults: {},
         defaultRuntime: "34",
         modelAliases: {},
         modelClasses: {},
@@ -77,6 +79,7 @@ describe("DriverCatalog", () => {
 
     await expect(catalog.listCatalog("ios")).resolves.toEqual([
       {
+        classDefaults: {},
         defaultRuntime: "26.5",
         modelAliases: {},
         modelClasses: {},
@@ -98,6 +101,7 @@ describe("DriverCatalog", () => {
 
     await expect(catalog.listCatalog()).resolves.toEqual([
       {
+        classDefaults: {},
         defaultRuntime: "26.5",
         modelAliases: {},
         modelClasses: {},
@@ -198,5 +202,138 @@ describe("DriverCatalog", () => {
     const catalog = new DriverCatalog([new FakeDriver({ clock, platform: "ios" })]);
 
     expect(() => catalog.passthrough("adb", ["devices"])).toThrow(UnknownPassthroughToolError);
+  });
+
+  describe("classDefaults", () => {
+    type Classes = Readonly<Record<string, "phone" | "tablet" | "watch">>;
+
+    async function defaultsOf(options: {
+      readonly models: readonly string[];
+      readonly classes: Classes;
+      readonly preferences: readonly string[];
+      readonly tabletPreferences?: readonly string[];
+      readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
+      readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+    }) {
+      const driver = new FakeDriver({
+        availableOsVersions: ["18.4", "26.5"],
+        clock: new FakeClock(),
+        knownModels: options.models,
+        modelAliases: options.modelAliases ?? {},
+        modelClasses: options.classes,
+        ...(options.modelRuntimes === undefined ? {} : { modelRuntimes: options.modelRuntimes }),
+        platform: "ios",
+      });
+      const catalog = new DriverCatalog([driver], {
+        preferences: {
+          ios: {
+            phone: options.preferences,
+            ...(options.tabletPreferences === undefined
+              ? {}
+              : { tablet: options.tabletPreferences }),
+          },
+        },
+      });
+      return (await catalog.listCatalog())[0]?.classDefaults;
+    }
+
+    it("is the first name on the preference list the catalog lists", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPhone 15": "phone", "iPhone 16": "phone" },
+          models: ["iPhone 15", "iPhone 16"],
+          preferences: ["iPhone 17", "iPhone 16", "iPhone 15"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 16" });
+    });
+
+    it("matches a listed name by its alias in any letter case, and names the listed model", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "Pixel 9": "phone" },
+          modelAliases: { "Pixel 9": ["pixel_9"] },
+          models: ["Pixel 9"],
+          preferences: ["PIXEL_9"],
+        }),
+      ).resolves.toEqual({ phone: "Pixel 9" });
+    });
+
+    it("matches a listed name in any letter case", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPhone 17": "phone" },
+          models: ["iPhone 17"],
+          preferences: ["iphone 17"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 17" });
+    });
+
+    it("skips a configured name of another class and falls to the next name that counts", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPad (A16)": "tablet", "iPhone 17": "phone", "iPhone 16": "phone" },
+          models: ["iPad (A16)", "iPhone 17", "iPhone 16"],
+          // The merged list: the configured iPad first, the built-in phones after it.
+          preferences: ["iPad (A16)", "iPhone 17", "iPhone 16"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 17" });
+    });
+
+    it("skips a name whose model has no class", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPhone 16": "phone" },
+          models: ["Mystery", "iPhone 16"],
+          preferences: ["Mystery", "iPhone 16"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 16" });
+    });
+
+    it("skips a name with no paired runtime for a later one that pairs", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPhone 16": "phone", "iPhone 17": "phone" },
+          modelRuntimes: { "iPhone 16": ["18.4"], "iPhone 17": [] },
+          models: ["iPhone 17", "iPhone 16"],
+          preferences: ["iPhone 17", "iPhone 16"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 16" });
+    });
+
+    it("shows the first name of the class when none of them pairs with a runtime", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPhone 16": "phone", "iPhone 17": "phone" },
+          modelRuntimes: { "iPhone 16": [], "iPhone 17": [] },
+          models: ["iPhone 17", "iPhone 16"],
+          preferences: ["iPhone 17", "iPhone 16"],
+        }),
+      ).resolves.toEqual({ phone: "iPhone 17" });
+    });
+
+    it("has no entry for a class in which no name is listed, or in which every listed name is of another class", async () => {
+      await expect(
+        defaultsOf({
+          classes: { "iPad (A16)": "tablet", "iPhone 16": "phone" },
+          models: ["iPad (A16)", "iPhone 16"],
+          preferences: ["iPhone 15", "iPad (A16)"],
+          tabletPreferences: ["iPad Pro"],
+        }),
+      ).resolves.toEqual({});
+    });
+
+    it("has no entry for a class that has no preference list", async () => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(),
+        knownModels: ["iPhone 16"],
+        modelClasses: { "iPhone 16": "phone" },
+        platform: "ios",
+      });
+
+      const [entry] = await new DriverCatalog([driver]).listCatalog();
+
+      expect(entry?.classDefaults).toEqual({});
+    });
   });
 });

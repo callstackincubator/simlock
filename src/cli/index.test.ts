@@ -1978,6 +1978,7 @@ describe("CLI: catalog", () => {
   it("prints each model under its class in the order of the enum, and an unclassed model under (no class)", async () => {
     const catalog = {
       defaultRuntime: "26.0",
+      classDefaults: { phone: "iPhone 17", tablet: "iPad Pro" },
       modelAliases: { "iPhone 17": ["iphone-17", "i17"] },
       modelClasses: {
         "Apple TV 4K": "tv" as const,
@@ -2019,21 +2020,42 @@ describe("CLI: catalog", () => {
         "Platform: ios",
         "  Runtimes: 26.0 (default: 26.0)",
         "  Models:",
-        "    phone:",
+        "    phone (default: iPhone 17):",
         "      iPhone 17: 26.0",
         "        Other names: iphone-17, i17",
         "      iPhone 16 (custom): 26.0",
-        "    tablet:",
+        "    tablet (default: iPad Pro):",
         "      iPad Pro: 26.0",
-        "    watch:",
+        "    watch (default: none):",
         "      Apple Watch Series 11 (46mm): 26.0",
-        "    tv:",
+        "    tv (default: none):",
         "      Apple TV 4K: 26.0",
         "    (no class):",
         "      Mystery: (no paired runtime)",
         "",
       ].join("\n"),
     );
+  });
+
+  it("carries classDefaults in --json as received", async () => {
+    const catalog = {
+      classDefaults: { phone: "Pixel 9", tv: "Not Even Listed" },
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform: "android" as const,
+      runtimes: [],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
   });
 
   it("carries modelClasses in --json as received", async () => {

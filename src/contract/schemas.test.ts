@@ -295,6 +295,7 @@ describe("fitPlatformCatalog", () => {
     defaultRuntime: "35",
     modelAliases: {},
     modelClasses: {},
+    classDefaults: {},
     modelRuntimes: Object.fromEntries(customModels.map((model) => [model, ["35"]])),
     models: customModels,
     platform: "android" as const,
@@ -324,6 +325,16 @@ describe("fitPlatformCatalog", () => {
     });
 
     expect(fitted.modelClasses).toEqual({ "Pixel 8": "phone" });
+    expect(() => platformCatalogSchema.parse(fitted)).not.toThrow();
+  });
+
+  it("drops a classDefaults model name too long for the schema and keeps the rest", () => {
+    const fitted = fitPlatformCatalog({
+      ...entry([]),
+      classDefaults: { phone: "Pixel 8", tv: "x".repeat(257) },
+    });
+
+    expect(fitted.classDefaults).toEqual({ phone: "Pixel 8" });
     expect(() => platformCatalogSchema.parse(fitted)).not.toThrow();
   });
 
@@ -369,5 +380,41 @@ describe("leaseRequestRecordSchema", () => {
 
     expect(leaseRequestRecordSchema.safeParse(record).success).toBe(false);
     expect(grantedDeviceSchema.safeParse(device).success).toBe(false);
+  });
+});
+
+describe("platformCatalogSchema classDefaults", () => {
+  const entry = {
+    defaultRuntime: "35",
+    modelAliases: {},
+    modelClasses: {},
+    modelRuntimes: {},
+    models: [],
+    platform: "android" as const,
+    runtimes: ["35"],
+  };
+
+  it("requires classDefaults", () => {
+    expect(platformCatalogSchema.safeParse(entry).success).toBe(false);
+    expect(platformCatalogSchema.safeParse({ ...entry, classDefaults: {} }).success).toBe(true);
+  });
+
+  it("accepts a model name for a class", () => {
+    const parsed = platformCatalogSchema.parse({ ...entry, classDefaults: { phone: "Pixel 9" } });
+
+    expect(parsed.classDefaults).toEqual({ phone: "Pixel 9" });
+  });
+
+  it("refuses a key that is not a class", () => {
+    expect(
+      platformCatalogSchema.safeParse({ ...entry, classDefaults: { fridge: "Pixel 9" } }).success,
+    ).toBe(false);
+  });
+
+  it("refuses a model name longer than the catalog's name bound", () => {
+    expect(
+      platformCatalogSchema.safeParse({ ...entry, classDefaults: { phone: "x".repeat(257) } })
+        .success,
+    ).toBe(false);
   });
 });
