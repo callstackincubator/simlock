@@ -94,7 +94,8 @@ questions remain; the feature does not leave `feature:spec` until it is empty.
 **`technical`** (feature delivered as one PR): fill the Technical spec
 section. Before writing it, ask whether any decision here constrains more
 than one future change or would be expensive to reverse. Each such decision
-becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch, and
+becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch,
+with the diagrams `docs/internal/adr/README.md` asks for, and
 add its line to Decisions. Tell the maintainer the feature cannot leave
 `feature:spec` until that ADR is accepted. Write only what
 `docs/internal/agent-rules/always-in-scope.md` does not already cover. The
