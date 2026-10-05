@@ -191,6 +191,58 @@ describe("loadConfig", () => {
     }
   });
 
+  it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.eventLog).toEqual({
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    });
+    expect(configSchema.shape.eventLog.parse(config.eventLog)).toEqual(config.eventLog);
+  });
+
+  it("rejects a non-positive or fractional eventLog.retention and eventLog.maxBytes, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    for (const key of ["retention", "maxBytes"]) {
+      for (const value of [0, -1, 1.5]) {
+        await filesystem.writeFileAtomic(
+          configPath,
+          JSON.stringify({ eventLog: { [key]: value } }),
+        );
+        await expect(
+          loadConfig({ configPath, filesystem, systemStats: createStats() }),
+        ).rejects.toThrow(`eventLog.${key}`);
+      }
+    }
+  });
+
+  it("rejects a config with eventLog.maxBytes below twice eventLog.rotateBytes, naming the key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 1_999 } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("eventLog.maxBytes");
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ eventLog: { rotateBytes: 1_000, maxBytes: 2_000 } }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).resolves.toBeDefined();
+  });
+
   it("applies a file-level warm-pool quarantine override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

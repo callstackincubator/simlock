@@ -18,6 +18,7 @@ import {
   type EventEnvelope,
   EventHistory,
   readEventFile,
+  readEventHistory,
 } from "./index.js";
 
 const directories: string[] = [];
@@ -243,6 +244,73 @@ describe("readEventFile", () => {
     const result = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
 
     expect(result.map((entry) => entry.seq)).toEqual([2, 3]);
+  });
+
+  it("merges three generations and the current file in time order with no duplicate ids", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(7, 700), envelope(8, 800)),
+      "/data/events.jsonl.1": lines(envelope(5, 500), envelope(6, 600), envelope(8, 800)),
+      "/data/events.jsonl.2": lines(envelope(3, 300), envelope(4, 400)),
+      "/data/events.jsonl.3": lines(envelope(1, 100), envelope(2, 200)),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.id)).toEqual([
+      "evt_1",
+      "evt_2",
+      "evt_3",
+      "evt_4",
+      "evt_5",
+      "evt_6",
+      "evt_7",
+      "evt_8",
+    ]);
+  });
+
+  it("loses no event when a rotation shifts every generation between its reads of the current file and .1", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(4, 400)),
+      "/data/events.jsonl.1": lines(envelope(3, 300)),
+      "/data/events.jsonl.2": lines(envelope(2, 200)),
+      "/data/events.jsonl.3": lines(envelope(1, 100)),
+    });
+    const read = filesystem.readFile.bind(filesystem);
+    let rotated = false;
+    vi.spyOn(filesystem, "readFile").mockImplementation(async (path) => {
+      const contents = await read(path);
+      if (!rotated) {
+        rotated = true;
+        const files = ["", ".1", ".2", ".3"];
+        const held = await Promise.all(files.map((suffix) => read(`/data/events.jsonl${suffix}`)));
+        for (const [index, contentsOf] of held.entries()) {
+          await filesystem.writeFileAtomic(`/data/events.jsonl.${index + 1}`, contentsOf);
+        }
+        await filesystem.writeFileAtomic("/data/events.jsonl", lines(envelope(5, 500)));
+      }
+      return contents;
+    });
+
+    const result = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(result.map((entry) => entry.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("reports the oldest timestamp it holds, and undefined for an empty history", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(3, 300)),
+      "/data/events.jsonl.1": lines(envelope(2, 200)),
+      "/data/events.jsonl.2": lines(envelope(1, 100)),
+    });
+
+    const held = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 250 });
+    const empty = await readEventHistory(await filesystemWith({}), "/data/events.jsonl", {
+      sinceTs: 0,
+    });
+
+    expect(held.oldestTs).toBe(100);
+    expect(held.events.map((entry) => entry.seq)).toEqual([3]);
+    expect(empty.oldestTs).toBeUndefined();
   });
 
   it("skips a JSON line that is not an envelope and returns the lines around it", async () => {

@@ -465,4 +465,10 @@ export class EventBus {
   }
 }
 
-export { EVENT_FILE_NAME, EventHistory, eventKey, readEventFile } from "./event-file.js";
+export {
+  EVENT_FILE_NAME,
+  EventHistory,
+  eventKey,
+  readEventFile,
+  readEventHistory,
+} from "./event-file.js";

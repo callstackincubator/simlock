@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -203,5 +203,180 @@ describe("NodeFileLogSink", () => {
     expect(await readdir(directory)).toEqual(["daemon.log", "daemon.log.1"]);
     expect(await readFile(join(directory, "daemon.log.1"), "utf8")).toContain("bbbbbbbbbb");
     expect(await readFile(join(directory, "daemon.log.1"), "utf8")).not.toContain("aaaaaaaaaa");
+  });
+
+  describe("with a retention window and a total size cap", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    function stamped(timestamp: number, filler = ""): string {
+      return JSON.stringify({ timestamp, filler });
+    }
+
+    async function generations(directory: string): Promise<string[]> {
+      return (await readdir(directory)).sort();
+    }
+
+    it("a rotation renames the current file to .1 and shifts existing generations up by one", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const clock = new FakeClock(1_000);
+      const sink = new NodeFileLogSink({
+        clock,
+        maxBytes: 10,
+        path,
+        retentionMs: DAY,
+        totalMaxBytes: 1_000_000,
+      });
+
+      sink.write("aaaaaaaaaa");
+      sink.write("bbbbbbbbbb"); // rotates: a -> .1
+      sink.write("cccccccccc"); // rotates: a -> .2, b -> .1
+      sink.write("dddddddddd"); // rotates: a -> .3, b -> .2, c -> .1
+      sink.close();
+
+      expect(await generations(directory)).toEqual([
+        "events.jsonl",
+        "events.jsonl.1",
+        "events.jsonl.2",
+        "events.jsonl.3",
+      ]);
+      expect(await readFile(`${path}.1`, "utf8")).toBe("cccccccccc\n");
+      expect(await readFile(`${path}.2`, "utf8")).toBe("bbbbbbbbbb\n");
+      expect(await readFile(`${path}.3`, "utf8")).toBe("aaaaaaaaaa\n");
+      expect(await readFile(path, "utf8")).toBe("dddddddddd\n");
+    });
+
+    it("a generation whose newest line is older than the retention is deleted on the next rotation", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const clock = new FakeClock(0);
+      const sink = new NodeFileLogSink({
+        clock,
+        maxBytes: 40,
+        path,
+        retentionMs: 1_000,
+        totalMaxBytes: 1_000_000,
+      });
+
+      sink.write(stamped(0));
+      sink.write(stamped(9_500)); // rotates: the line at 0 -> .1
+      clock.advance(10_000);
+      sink.write(stamped(10_000)); // rotates: .1 -> .2, 9_500 -> .1; the sweep drops .2
+
+      sink.close();
+      expect(await generations(directory)).toEqual(["events.jsonl", "events.jsonl.1"]);
+      expect(await readFile(`${path}.1`, "utf8")).toContain('"timestamp":9500,');
+    });
+
+    it("keeps a generation whose newest line is still inside the retention, though it also holds old lines", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const clock = new FakeClock(0);
+      const sink = new NodeFileLogSink({
+        clock,
+        maxBytes: 200,
+        path,
+        retentionMs: 1_000,
+        totalMaxBytes: 1_000_000,
+      });
+
+      sink.write(stamped(0));
+      sink.write(stamped(9_500)); // the newest line of this generation is recent
+      clock.advance(10_000);
+      sink.write(stamped(10_000, "x".repeat(200))); // rotates: mixed generation -> .1
+
+      sink.close();
+      expect(await generations(directory)).toContain("events.jsonl.1");
+    });
+
+    it("when the generations exceed maxBytes the oldest are deleted until the total fits, and the current file is never deleted", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(1_000),
+        maxBytes: 10,
+        path,
+        retentionMs: DAY,
+        totalMaxBytes: 25,
+      });
+
+      for (const letter of ["a", "b", "c", "d", "e", "f"]) sink.write(letter.repeat(10));
+      sink.close();
+
+      // 11-byte files: the current one plus at most one generation fit in 25 bytes.
+      expect(await generations(directory)).toEqual(["events.jsonl", "events.jsonl.1"]);
+      expect(await readFile(path, "utf8")).toBe("ffffffffff\n");
+      expect(await readFile(`${path}.1`, "utf8")).toBe("eeeeeeeeee\n");
+    });
+
+    it("never deletes the current file even when it alone exceeds maxBytes", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(1_000),
+        maxBytes: 100,
+        path,
+        retentionMs: DAY,
+        totalMaxBytes: 5,
+      });
+
+      sink.write("a".repeat(50));
+      sink.close();
+
+      expect(await readFile(path, "utf8")).toBe(`${"a".repeat(50)}\n`);
+    });
+
+    it("a sink without retention options keeps one generation, as daemon.log does today", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "daemon.log");
+      const sink = new NodeFileLogSink({ maxBytes: 10, path });
+
+      for (const letter of ["a", "b", "c", "d"]) sink.write(letter.repeat(10));
+      sink.close();
+
+      expect(await generations(directory)).toEqual(["daemon.log", "daemon.log.1"]);
+    });
+
+    it("the sweep runs when the sink opens, so a generation past retention is deleted at daemon start without a rotation", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const writer = new NodeFileLogSink({ maxBytes: 10_000, path });
+      writer.write(stamped(5));
+      writer.close();
+      await rename(path, `${path}.1`);
+      await writeFile(path, `${stamped(9_000_000)}\n`);
+
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(10_000_000),
+        maxBytes: 10_000,
+        path,
+        retentionMs: 1_000,
+        totalMaxBytes: 1_000_000,
+      });
+      sink.close();
+
+      expect(await generations(directory)).toEqual(["events.jsonl"]);
+    });
+
+    it("deletes only the files it rotated beside its own path, never a neighbour", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      await writeFile(join(directory, "events.jsonl.backup"), "keep\n");
+      await writeFile(join(directory, "other.jsonl.1"), "keep\n");
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(1_000),
+        maxBytes: 10,
+        path,
+        retentionMs: 1,
+        totalMaxBytes: 12,
+      });
+
+      for (const letter of ["a", "b", "c", "d"]) sink.write(letter.repeat(10));
+      sink.close();
+
+      const kept = await generations(directory);
+      expect(kept).toContain("events.jsonl.backup");
+      expect(kept).toContain("other.jsonl.1");
+    });
   });
 });

@@ -33,6 +33,15 @@ export async function readEventFile(
   return envelopes.sort(byTimeThenSeq);
 }
 
+/** The events of {@link readEventFile} plus the oldest timestamp the files hold. */
+export async function readEventHistory(
+  _filesystem: Filesystem,
+  _path: string,
+  _options: { readonly sinceTs: number },
+): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+  return { events: [], oldestTs: 0 };
+}
+
 /** What identifies one event across the ring, the file and a live push: its `id` and nothing
  * else (ADR 0014). `seq` restarts with every daemon, so it never could. */
 export function eventKey(event: { readonly id: string }): string {
