@@ -76,6 +76,7 @@ function harness(
   const kick = vi.fn();
   const waitingDemand = vi.fn(options.waiting ?? (() => []));
   const shutdownCalls: string[] = [];
+  const shutdownArgs: unknown[][] = [];
   const bootCalls: string[] = [];
   const poolOptions: WarmPoolOptions = {
     acquisition: { kick, waitingDemand },
@@ -118,15 +119,14 @@ function harness(
         const claimed = claims.isClaimed(target.id) && claims.isActive(claim);
         const last = reservations.at(-1);
         if (last !== undefined) last.claimedAtBoot = claimed;
-        try {
-          if (options.boot !== undefined) return await options.boot(target);
-          return setState(target.id, "ready");
-        } finally {
-          claim.release();
-        }
+        // Unlike the real lifecycle this leaves the claim to the caller, so what the pool does
+        // about it is what the test sees.
+        if (options.boot !== undefined) return options.boot(target);
+        return setState(target.id, "ready");
       },
-      shutdown: async (target) => {
+      shutdown: async (target, ...rest) => {
         shutdownCalls.push(target.id);
+        shutdownArgs.push(rest);
         if (options.shutdown !== undefined) return options.shutdown(target);
         return setState(target.id, "shutdown");
       },
@@ -148,6 +148,7 @@ function harness(
     lease,
     pool,
     reservations,
+    shutdownArgs,
     shutdownCalls,
     sink,
     state,
@@ -205,6 +206,90 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
+    expect(rig.sink.records).toEqual([]);
+    expect(rig.kick).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a device alone whose lease appears before its state does", async () => {
+    let lease: () => void = () => undefined;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        shutdown: async (target) => {
+          // `b` gets a lease record while its snapshot state still reads `ready`.
+          lease();
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+    lease = () => void rig.state.leases.push(leaseOn("b"));
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("shuts down with the warm-pool initiator under the cleanup claim", async () => {
+    const rig = harness([device("a", "ready", 90 * minute), device("b", "ready", 80 * minute)], {
+      limit: 1,
+    });
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownArgs).toEqual([["warm-pool", "cleanup"]]);
+  });
+
+  it("does not kick when the lifecycle declines a shutdown or a boot", async () => {
+    const shutdown = harness([device("a", "ready", 90 * minute), device("b", "ready", 1_000)], {
+      limit: 1,
+      shutdown: async () => undefined,
+    });
+    const boot = harness([device("shut", "shutdown", 1_000)], { boot: async () => undefined });
+
+    await shutdown.pool.pass();
+    await boot.pool.pass();
+
+    expect(shutdown.shutdownCalls).toEqual(["a"]);
+    expect(shutdown.kick).not.toHaveBeenCalled();
+    expect(boot.bootCalls).toEqual(["shut"]);
+    expect(boot.kick).not.toHaveBeenCalled();
+  });
+
+  it("leaves a claimed device out of the budget's choice instead of proposing it and then skipping it", async () => {
+    const rig = harness(
+      [
+        device("claimed", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      { limit: 2 },
+    );
+    rig.claims.tryClaim("claimed", "eviction");
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["b"]);
+  });
+
+  it("still shuts down over the budget while a shut-down device is claimed for a boot", async () => {
+    const rig = harness(
+      [
+        device("a", "ready", 5_000),
+        device("b", "ready", 1_000),
+        device("s", "shutdown", 60 * minute),
+      ],
+      { limit: 1 },
+    );
+    rig.claims.tryClaim("s", "boot");
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
   it("holds a boot reservation and a boot claim through the boot, and releases the reservation when it commits", async () => {
@@ -230,6 +315,12 @@ describe("warm pool converger", () => {
     expect(rig.reservations).toHaveLength(1);
     expect(rig.reservations[0]?.released).toBe(1);
     expect(rig.claims.isClaimed("shut")).toBe(false);
+    const lines = rig.sink.records.filter((record) => record.level === "warn");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      fields: { deviceId: "shut", step: "boot" },
+      message: "warm pool boot of a device failed",
+    });
   });
 
   it("runs exactly one more pass for two triggers that arrive during one pass", async () => {
@@ -325,7 +416,10 @@ describe("warm pool converger", () => {
 
     const lines = rig.sink.records.filter((record) => record.level === "warn");
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.fields).toMatchObject({ deviceId: "a", step: "shutdown" });
+    expect(lines[0]).toMatchObject({
+      fields: { deviceId: "a", step: "shutdown" },
+      message: "warm pool shutdown of a device failed",
+    });
     expect(String(lines[0]?.fields?.["error"])).toContain("simctl shutdown failed");
     expect(rig.state.devices.find((item) => item.id === "a")?.state).toBe("ready");
     expect(rig.kick).toHaveBeenCalledTimes(1);

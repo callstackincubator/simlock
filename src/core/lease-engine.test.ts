@@ -2616,6 +2616,35 @@ describe("LeaseEngine warm pool", () => {
     expect(shutdowns[0]).toMatchObject({ payload: { initiator: "warm-pool" } });
   });
 
+  it("logs a warm pool shutdown that fails under the warm pool's own module and leaves the device ready", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    driver.failOn("shutdown", 1, new DriverCrashError("cannot stop it"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 1 },
+        maxRunning: 1,
+      },
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+    });
+    await seedReady(harness);
+    await seedReady(harness);
+
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await harness.engine.settle();
+
+    expect(sink.records.filter((record) => record.level === "warn")).toMatchObject([
+      { fields: { step: "shutdown" }, module: expect.stringContaining("warm-pool") },
+    ]);
+    expect(harness.registry.snapshot.devices.map((item) => item.state)).toEqual(["ready", "ready"]);
+  });
+
   it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({

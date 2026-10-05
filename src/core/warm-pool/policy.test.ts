@@ -312,6 +312,100 @@ describe("warm pool policy", () => {
     expect(proposals).toEqual([]);
   });
 
+  it("takes an over-budget platform's own least recently used device first, whatever the other platform holds", () => {
+    const android = (id: string, endedAgo: number) =>
+      device(id, "ready", {
+        endedAgo,
+        spec: { model: "Pixel 8", osVersion: "35", platform: "android" },
+      });
+    const oldestAndroid = android("android-old", 90 * minute);
+    const newerAndroid = android("android-new", 5 * minute);
+    const oldestIos = device("ios-old", "ready", { endedAgo: 80 * minute });
+    const newerIos = device("ios-new", "ready", { endedAgo: 2 * minute });
+    const devices = [oldestAndroid, newerAndroid, oldestIos, newerIos];
+
+    const iosOver = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { android: 5, global: 5, ios: 1 }),
+    });
+    const androidOver = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { android: 1, global: 5, ios: 5 }),
+    });
+    const globalOver = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { android: 5, global: 3, ios: 5 }),
+    });
+
+    expect(iosOver).toEqual([{ action: "shutdown", deviceId: "ios-old", reason: "over-budget" }]);
+    expect(androidOver).toEqual([
+      { action: "shutdown", deviceId: "android-old", reason: "over-budget" },
+    ]);
+    expect(globalOver).toEqual([
+      { action: "shutdown", deviceId: "android-old", reason: "over-budget" },
+    ]);
+  });
+
+  it("never proposes a device that has a lease, whatever its state says", () => {
+    const leasedReady = device("leased-ready", "ready", { endedAgo: 90 * minute });
+    const free = device("free", "ready", { endedAgo: 1_000 });
+
+    const proposals = evaluate(view([leasedReady, free], { limit: 1, leased: [leasedReady] }));
+
+    expect(proposals).toEqual([{ action: "shutdown", deviceId: "free", reason: "over-budget" }]);
+  });
+
+  it("boots one device for two waiting requests it serves, once", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 1_000 });
+
+    const proposals = evaluate(view([serving], { waiting: [classDemand(), classDemand()] }));
+
+    expect(proposals).toEqual([{ action: "boot", deviceId: "serving", reason: "waiting-request" }]);
+  });
+
+  it("proposes no boot for a waiting request when its platform has no room", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 1_000 });
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    const devices = [serving, busy];
+
+    const proposals = evaluate({
+      ...view(devices, { waiting: [classDemand()] }),
+      capacity: capacityOf(devices, { global: 5, ios: 1 }),
+    });
+
+    expect(proposals).toEqual([]);
+  });
+
+  it("holds the waiting request's own platform slot too, not only a global one", () => {
+    const tablet = device("tablet", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
+    const devices = [tablet];
+
+    // The request wants a phone, which no device serves, and the only iOS slot is its own.
+    const held = evaluate({
+      ...view(devices, { waiting: [classDemand()] }),
+      capacity: capacityOf(devices, { global: 5, ios: 1 }),
+    });
+    const free = evaluate({
+      ...view(devices),
+      capacity: capacityOf(devices, { global: 5, ios: 1 }),
+    });
+
+    expect(held).toEqual([]);
+    expect(free).toEqual([{ action: "boot", deviceId: "tablet", reason: "recently-released" }]);
+  });
+
+  it("proposes a device that serves a waiting request once, not again as a recently released one", () => {
+    const serving = device("serving", "shutdown", { endedAgo: 1_000 });
+    const other = device("other", "shutdown", { endedAgo: 2_000, spec: spec("iPad Pro") });
+
+    const proposals = evaluate(view([serving, other], { waiting: [classDemand()] }));
+
+    expect(proposals).toEqual([
+      { action: "boot", deviceId: "serving", reason: "waiting-request" },
+      { action: "boot", deviceId: "other", reason: "recently-released" },
+    ]);
+  });
+
   it("proposes no boot at the budget, and none for a claimed, leased or spent device", () => {
     const busy = device("busy", "leased");
     const claimed = device("claimed", "shutdown", { endedAgo: 1_000 });

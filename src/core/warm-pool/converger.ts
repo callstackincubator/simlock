@@ -99,7 +99,6 @@ export class WarmPool {
   }
 
   #armTick(): void {
-    if (this.#disposed) return;
     this.#tick = this.options.clock.setTimer(WARM_POOL_TICK_MS, () => {
       this.#trigger();
       this.#armTick();

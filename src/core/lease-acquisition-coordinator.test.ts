@@ -2395,6 +2395,33 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       });
     });
 
+    it("lists no waiting demand for a request whose class is still being resolved", async () => {
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const harness = await createHarness({
+        catalogReader: {
+          listCatalog: async () => {
+            await gate;
+            return [];
+          },
+        },
+        drivers: [iosDriver()],
+        preferences: iosPreferences,
+      });
+
+      const pending = harness.coordinator.request(phone, owner("agent"));
+      const settled = pending.catch(() => undefined);
+      await flush();
+      const whileResolving = harness.coordinator.waitingDemand();
+      open();
+      await settled;
+
+      expect(whileResolving).toEqual([]);
+      await expect(pending).rejects.toMatchObject({ name: "UnknownModelError" });
+    });
+
     it("fails a class request with UnknownModelError when the catalog reader answers no entry for the platform", async () => {
       const harness = await createHarness({
         catalogReader: { listCatalog: async () => [] },

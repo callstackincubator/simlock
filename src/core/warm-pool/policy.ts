@@ -62,18 +62,9 @@ export function evaluate(view: WarmPolicyView): readonly WarmProposal[] {
 
   const room = roomOf(view.capacity);
   const shutdowns = view.handoffInFlight ? [] : overBudget(view, running, room);
-  const shutdownIds = new Set(shutdowns.map((proposal) => proposal.deviceId));
-  for (const proposal of shutdowns) {
-    const device = view.devices.find((candidate) => candidate.id === proposal.deviceId);
-    if (device !== undefined) release(room, device);
-  }
 
   const bootable = view.devices.filter(
-    (device) =>
-      device.state === "shutdown" &&
-      mayBeGranted(device) &&
-      idle(device) &&
-      !shutdownIds.has(device.id),
+    (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
   return [...shutdowns, ...boots(view, running, bootable, room)];
 }
@@ -115,6 +106,7 @@ function serves(device: DeviceRecord, demand: WaitingDemand): boolean {
  * Shutdowns that bring every over-budget platform and the global count back under, least
  * recently used first, never a device that serves a waiting request. A platform that is over
  * takes its own devices first; the global count then takes the least recently used of any.
+ * Each proposal gives its slot back in `room`, which the boots then read.
  */
 function overBudget(
   view: WarmPolicyView,
@@ -125,14 +117,13 @@ function overBudget(
   const candidates = running.filter(
     (device) => !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
   );
-  const remaining = { ...room };
-  while (remaining.global < 0 || remaining.ios < 0 || remaining.android < 0) {
+  while (room.global < 0 || room.ios < 0 || room.android < 0) {
     const victim =
-      candidates.find((device) => remaining[device.spec.platform] < 0) ??
-      (remaining.global < 0 ? candidates[0] : undefined);
+      candidates.find((device) => room[device.spec.platform] < 0) ??
+      (room.global < 0 ? candidates[0] : undefined);
     if (victim === undefined) break;
     candidates.splice(candidates.indexOf(victim), 1);
-    release(remaining, victim);
+    release(room, victim);
     proposals.push({ action: "shutdown", deviceId: victim.id, reason: "over-budget" });
   }
   return proposals;
@@ -182,8 +173,8 @@ function boots(
     .filter(
       (device) =>
         !taken.has(device.id) &&
-        device.lastLeaseEndedAt !== undefined &&
-        view.now - device.lastLeaseEndedAt < view.config.shutdownAfterMs,
+        view.now - (device.lastLeaseEndedAt ?? Number.NEGATIVE_INFINITY) <
+          view.config.shutdownAfterMs,
     )
     .sort((left, right) => compareLeastRecentlyUsed(right, left));
   for (const device of recent) {
