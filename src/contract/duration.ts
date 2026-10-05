@@ -15,6 +15,9 @@ const UNIT_MS: Readonly<Record<string, number>> = {
 export function parseDurationMs(value: string): number | undefined {
   const match = /^(\d+)(ms|s|m|h|d)?$/.exec(value);
   if (match === null) return undefined;
-  const milliseconds = Number(match[1]) * (UNIT_MS[match[2] ?? "ms"] ?? 1);
+  const [, amount = "", unit = "ms"] = match;
+  const multiplier = UNIT_MS[unit];
+  if (multiplier === undefined) return undefined;
+  const milliseconds = Number(amount) * multiplier;
   return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 }

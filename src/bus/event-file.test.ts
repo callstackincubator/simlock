@@ -313,6 +313,27 @@ describe("readEventFile", () => {
     expect(empty.oldestTs).toBeUndefined();
   });
 
+  it("returns the generations when the current file is missing", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl.1": lines(envelope(1, 100)),
+      "/data/events.jsonl.2": lines(envelope(0, 50)),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.seq)).toEqual([0, 1]);
+  });
+
+  it("leaves out an event stamped exactly sinceTs", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(1, 100), envelope(2, 101)),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 100 });
+
+    expect(read.map((entry) => entry.seq)).toEqual([2]);
+  });
+
   it("skips a JSON line that is not an envelope and returns the lines around it", async () => {
     const filesystem = await filesystemWith({
       "/data/events.jsonl": `${lines(envelope(1, 100))}null\n[]\n{"seq":"2"}\n${lines(envelope(3, 300))}`,

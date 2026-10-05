@@ -236,7 +236,7 @@ describe("loadConfig", () => {
 
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("eventLog.maxBytes");
+    ).rejects.toThrow('"eventLog.maxBytes": expected at least twice eventLog.rotateBytes');
 
     await filesystem.writeFileAtomic(
       configPath,

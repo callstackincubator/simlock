@@ -247,7 +247,6 @@ export class NodeFileLogSink implements LogSink {
   }
 
   #sweep(): void {
-    if (this.#retentionMs === undefined && this.#totalMaxBytes === undefined) return;
     const sizes: number[] = [];
     while (existsSync(`${this.#path}.${sizes.length + 1}`)) {
       sizes.push(statSync(`${this.#path}.${sizes.length + 1}`).size);
@@ -263,8 +262,10 @@ export class NodeFileLogSink implements LogSink {
 
   /** How many of the `count` generations are not past `retentionMs`. */
   #withinRetention(count: number): number {
-    if (this.#retentionMs === undefined) return count;
-    const cutoff = this.#clock.now() - this.#retentionMs;
+    const cutoff =
+      this.#retentionMs === undefined
+        ? Number.NEGATIVE_INFINITY
+        : this.#clock.now() - this.#retentionMs;
     let keep = count;
     while (keep > 0 && this.#newestLine(`${this.#path}.${keep}`) < cutoff) keep -= 1;
     return keep;
@@ -275,8 +276,8 @@ export class NodeFileLogSink implements LogSink {
     if (this.#totalMaxBytes === undefined) return keep;
     // The current file is counted at its full size, not what it holds now: it is about to
     // fill, and the cap is a promise about the total once it has.
-    let total = Math.max(this.#bytesWritten, this.#maxBytes);
-    for (let index = 0; index < keep; index += 1) total += sizes[index] ?? 0;
+    let total = sizes.slice(0, keep).reduce((sum, size) => sum + size, 0);
+    total += Math.max(this.#bytesWritten, this.#maxBytes);
     let kept = keep;
     while (kept > 0 && total > this.#totalMaxBytes) {
       kept -= 1;
@@ -290,7 +291,8 @@ export class NodeFileLogSink implements LogSink {
     const lines = readTail(file).trimEnd().split("\n");
     try {
       const parsed: unknown = JSON.parse(lines[lines.length - 1] ?? "");
-      const timestamp = (parsed as { timestamp?: unknown } | null)?.timestamp;
+      // A `null` line throws here and is caught, like any other line that is not an object.
+      const timestamp = (parsed as { timestamp?: unknown }).timestamp;
       if (typeof timestamp === "number") return timestamp;
     } catch {
       // Not JSON: fall through to the file's own time.

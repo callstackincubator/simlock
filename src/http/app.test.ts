@@ -1777,6 +1777,7 @@ describe("operator-only listing routes", () => {
     };
     const response = await app.request("/v1/events?since=nonsense", { headers: operatorAuth });
     expect(response.status).toBe(400);
+    expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
   });
 
   it("GET /v1/events/stream dispatches events.subscribe then follows the raw event bus live", async () => {
