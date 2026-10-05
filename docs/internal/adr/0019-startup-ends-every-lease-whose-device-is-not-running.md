@@ -1,4 +1,4 @@
-# 0018. Startup ends every lease whose device is not running
+# 0019. Startup ends every lease whose device is not running
 
 - **Status:** Proposed
 - **Date:** 2026-10-05
@@ -11,8 +11,10 @@
   0003](0003-one-typed-daemon-contract-behind-every-frontend.md)'s
   `status.get`: four fields become optional.
 - **Depends on:** [ADR
-  0017](0017-leasing-is-one-module-and-every-module-is-entered-through-its-index.md)
-  for the leasing module that owns the reconciler.
+  0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md)
+  for the leasing module that owns the reconciler, and [ADR
+  0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) for the
+  device convergence that runs after it.
 
 ## Context
 
@@ -48,14 +50,16 @@ Startup runs in this order, all while health is `starting`:
 1. Settle every lease request still open, as today.
 2. Read each platform's devices once: one `listManaged` per driver, the
    read doctor's startup pass already makes. Doctor and the reconciler
-   share it; nothing polls twice. A platform with no driver, or whose
-   listing throws or times out, is *unreadable*. An unreadable platform
-   no longer fails startup.
+   share it; nothing polls twice. Each platform's read has a fixed limit
+   of 60 seconds. A platform with no driver, or whose listing throws or
+   passes the limit, is *unreadable*. An unreadable platform no longer
+   fails startup. Android's `adb devices` gets a command timeout of its
+   own, as its other adb calls have.
 3. Leasing's reconciler checks every lease against that read (§2).
 4. Kept leases get their expiry timers back, from their persisted
    deadlines.
-5. Core's device convergence runs as today: quarantine timers, interrupted
-   reclaims, spent devices, excess running devices.
+5. Core's device convergence runs as ADR 0017 leaves it: quarantine
+   timers, interrupted reclaims, spent devices.
 6. Health becomes `running`; parked requests proceed and the health
    monitor starts.
 
@@ -97,7 +101,13 @@ read says of its device:
 
 "Ended" is the ordinary release with reason `device-lost`, the reason the
 health monitor already uses, emitting `lease.released` post-commit. No
-release reason and no event is added. A device absent from its platform
+release reason and no event is added. Android reports `transitioning` also for an emulator it cannot tell apart
+from another serial this read, because `adb shell getprop` failed. Such a
+lease is ended like any other `transitioning` one. The maintainer accepted
+that cost: a daemon restart during an adb hiccup can end a lease on an
+emulator that is in use.
+
+A device absent from its platform
 has nothing to wipe: one registry write removes the lease and marks the
 device missing through doctor's missing-device fix (`device.deleted`,
 initiator `doctor`), and no reclaim starts for it.
@@ -125,14 +135,17 @@ console address) and `host`, and nothing else. `devices`, `leases`,
 `capacity`, `queueDepth`, `installs`, `waiting` and `workers` are absent,
 not empty: empty would claim the daemon holds nothing. `devices`,
 `leases`, `capacity` and `queueDepth` become optional in the contract, so
-the wire protocol moves to 17 (`{min: 17, max: 17}`); a peer on 16 would
-fail to parse a starting answer. HTTP's `GET /v1/status` follows the
+the wire protocol rises by one from whatever version is current when this
+lands; a peer on the previous version would fail to parse a starting
+answer. HTTP's `GET /v1/status` follows the
 operation. The CLI prints one line instead of the missing blocks, and the
 console shows the daemon as starting.
 
 A gateway builds a worker's view from `status.get`. While the worker is
-`starting`, the view carries its health and host only, and the fleet lease
-index takes nothing from it. Routing already skips a worker that is not
+`starting`, the view carries its health and host only: its `devices`,
+`leases`, `capacity`, `queueDepth`, `installs`, `waiting` and `catalog`
+are absent, so they become optional in the worker view schema too. The
+fleet lease index takes nothing from a starting worker. Routing already skips a worker that is not
 `running`.
 
 ### 4. A grant and its request's result are one write
@@ -143,18 +156,26 @@ granted with the lease's id. A crash can no longer separate them, and the
 first step of §1 never sees that request as open. A repeat of the request
 under the same key answers with the lease.
 
+A repeat answers the grant as recorded even when §2 has since ended that
+lease, as any repeat of a settled request does today after a release or
+an expiry. The holder's first renew answers `UNKNOWN_LEASE`, and it exits
+as for any `device-lost`.
+
 ## Consequences
 
 - An agent whose simulator was still booting at startup loses its lease,
   and the device is wiped. A Mac reboot makes that likely. This is the
   chosen trade: a lease nobody can use for minutes costs every other
   agent a slot.
-- A driver failure at startup ends every lease on that platform. Before
-  this ADR it failed startup instead.
+- A driver failure at startup, or a listing slower than 60 seconds, ends
+  every lease on that platform. Before this ADR a failure failed startup
+  instead, and a hung `adb devices` kept the daemon starting forever.
 - Startup is slower by one listing per platform before convergence, and by
   running doctor and device convergence one after the other.
 - The health monitor's runtime behaviour is unchanged: a device that stops
   after startup is still rebooted, and a missing one is still debounced.
+- Startup waits up to 60 seconds per platform for its read, read side by
+  side.
 - `StartupConverger` loses its lease work (settling requests, restoring
   timers) to leasing; its docblock, which still names a removed
   `#releaseOrphanedHeldLeases`, is rewritten.

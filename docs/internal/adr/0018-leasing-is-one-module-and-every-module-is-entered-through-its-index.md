@@ -1,4 +1,4 @@
-# 0017. Leasing is one module, and every module is entered through its index
+# 0018. Leasing is one module, and every module is entered through its index
 
 - **Status:** Proposed
 - **Date:** 2026-10-05
@@ -7,7 +7,10 @@
   §33: the gateway's allowed imports from `core` become named imports
   from two module indexes instead of a list of core files.
 - **Depends on:** [ADR 0006](0006-events-and-log-are-two-records.md) for
-  the event bus every lease fact goes out on.
+  the event bus every lease fact goes out on, and [ADR
+  0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) for the warm-pool module
+  and architecture rules 14 and 15. Amends rule 14 (§3) and replaces the
+  composition root ADR 0017 names, `LeaseEngine` (§2).
 
 ## Context
 
@@ -36,7 +39,7 @@ A new module, `src/leasing/`, holds: the lease request book, the wait
 queue, the acquisition planner and coordinator, the lease lifecycle, the
 expiry scheduler, the release coordinator, the leased-device health
 monitor, and the startup reconciler of
-[ADR 0018](0018-startup-ends-every-lease-whose-device-is-not-running.md).
+[ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md).
 
 `src/core/` keeps device management: the registry and its persistence,
 capacity, the provisioner, the managed device lifecycle, the warm pool,
@@ -68,8 +71,10 @@ it needs and leasing implements it. Nuke already works this way: it calls
 daemon wires the two together.
 
 `LeaseEngine` goes away. `createCore(...)` builds core's services,
-`createLeasing({ core, ... })` builds leasing's on top of them, and the
-daemon's `main.ts` calls both. The gateway stays a sibling: it imports
+including ADR 0017's warm-pool module, `createLeasing({ core, ... })`
+builds leasing's on top of them, and the daemon's `main.ts` calls both.
+The health monitor stays optional in rule 15's sense: leasing's required
+parts never import it, and `createLeasing` wires it or leaves it out. The gateway stays a sibling: it imports
 leasing's index for the request book, the queue and their errors, and
 core's index for the shapes they are typed against.
 
@@ -84,18 +89,31 @@ A module may also have a `testing.ts`: fakes and test wiring other modules'
 tests use, such as `FakeDriver` and today's `core/test-wiring.ts`. Only a
 `*.test.ts` file may import it. Production code that needs a fake is a bug.
 
+This amends architecture rule 14, which lets only a directory's own tests
+import a file inside it. Rule 14 gains two sentences: another component's
+tests may import its `testing.ts`, and `pnpm lint` enforces the rule.
+
 ### 4. One lint config holds every rule about a file's own imports
 
 `pnpm lint` enforces them through oxlint's
 `no-restricted-imports`, configured in `.oxlintrc.json`:
 
 - **Index only:** outside a module, any path into `leasing/`, `core/` or
-  `gateway/` other than `index.js` fails. In a `*.test.ts` file,
-  `testing.js` is allowed too.
+  `gateway/` other than `index.js` fails. The same holds one level down,
+  for every component directory rule 14 covers that has an index:
+  `core/capacity/`, `core/warm-pool/`, `drivers/ios/`, `drivers/android/`,
+  and any directory leasing grows. A file inside the directory imports
+  its siblings freely. In a `*.test.ts` file, `testing.js` is allowed
+  too. The two directories rule 14 names as predating it,
+  `core/cleanup/` and `gateway/routing/`, get their pattern in the change
+  that gives them an index.
 - **Direction:** a per-directory override says what each module may import.
   `src/core/**` may not import `leasing/`, a driver, `fs` or
   `child_process` (core reaches the filesystem and processes through
-  injected ports). `src/gateway/**` may not import `drivers/`, `http/`,
+  injected ports). `src/leasing/**` may not import a driver, `fs` or
+  `child_process`, for the same reason. `src/daemon/**` other than
+  `main.ts` may not import `gateway/`: the composition root is the only
+  daemon file that knows a gateway exists. `src/gateway/**` may not import `drivers/`, `http/`,
   `cli/` or `mcp/`, from `daemon/` only `dispatch.js`, and from core's index only the names its allow-list
   gives (`allowImportNames`). `src/contract/**` imports nothing outside
   itself.
@@ -105,8 +123,10 @@ stay as tests: `src/simlock-client/no-core-leak.test.ts`, which compiles the
 public package and reads the emitted declarations, and the gateway test
 that `daemon/dispatch.js` reaches no core module. Every other check in
 `src/core/boundary.test.ts`, `src/gateway/boundary.test.ts` and
-`src/contract/boundary.test.ts` moves to lint, and the test is deleted with
-it.
+`src/contract/boundary.test.ts` moves to lint, including the gateway file's
+check that daemon files do not import the gateway, and the test is deleted
+with it. Each rule that moves is proven by a lint fixture that fails
+without it.
 
 ### 5. Events stay observer-only
 
@@ -131,7 +151,7 @@ the event history and owner-routed pushes only observe.
   table.
 - The move is mechanical but wide: most of `src/core/lease-*`, its tests,
   and `main.ts`'s wiring change in one series of PRs. Behaviour does not
-  change except where ADR 0018 says so.
+  change except where ADR 0019 says so.
 
 ## Alternatives considered
 

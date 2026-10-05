@@ -95,7 +95,10 @@ grounds for rejecting a change even if it works.
 14. **A module's public surface is its `index.ts`.** A component that is a
     directory exports what others may use from `index.ts`, and nothing
     outside the directory imports a file inside it; the directory's own
-    tests may. `src/core/capacity/` is the model. A single-file component's
+    tests may, and another component's tests may import its `testing.ts`,
+    which holds fakes and test wiring and nothing production code uses.
+    `pnpm lint` enforces this (ADR 0018). `src/core/capacity/` is the
+    model. A single-file component's
     surface is what the file exports, and a component whose surface has
     grown past one file becomes a directory with an index, not a second
     file others reach into. The inventory in
