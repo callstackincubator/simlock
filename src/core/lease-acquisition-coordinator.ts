@@ -314,12 +314,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
           : await this.#resolveRanged(request, mode, range);
       // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
-      const resolved = await this.#resolveOrInstall(
-        waiter,
-        driver,
-        target.exact,
-        range === undefined ? options : { ...options, allowDownload: false },
-      );
+      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, {
+        ...options,
+        allowDownload: options.allowDownload === true && range === undefined,
+      });
       waiter.spec = checkedSpec(resolved, request, mode);
       waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
       waiter.classOf = target.classOf;
@@ -396,10 +394,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   ): Promise<ResolvedTarget> {
     if (request.model === undefined) return this.#resolveClass(request, mode, range);
     const entry = (await this.options.catalog.listCatalog(request.platform))[0];
-    const listed = entry === undefined ? undefined : findCatalogModel(entry, request.model);
-    if (entry === undefined || listed === undefined) {
-      throw new UnknownModelError(request.platform, request.model);
-    }
+    if (entry === undefined) throw new UnknownModelError(request.platform, request.model);
+    const listed = findCatalogModel(entry, request.model);
+    if (listed === undefined) throw new UnknownModelError(request.platform, request.model);
     return this.#rangedTarget(
       entry,
       listed,

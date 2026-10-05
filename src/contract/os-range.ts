@@ -46,10 +46,10 @@ export function parseOsConstraint(text: string): ParsedOsConstraint {
 
 /** `A - B` is `>=A <=B`. */
 function hyphenBounds(text: string): readonly Bound[] | undefined {
-  const [from, to, ...rest] = text.split(" - ");
-  if (from === undefined || to === undefined || rest.length > 0) return undefined;
-  if (!VERSION.test(from) || !VERSION.test(to)) return undefined;
-  return [comparatorBound(">=", segments(from)), comparatorBound("<=", segments(to))];
+  const parts = text.split(" - ");
+  if (parts.length !== 2 || !parts.every((part) => VERSION.test(part))) return undefined;
+  const [from, to] = parts.map(segments) as [readonly number[], readonly number[]];
+  return [comparatorBound(">=", from), comparatorBound("<=", to)];
 }
 
 /** One or more comparators joined by single spaces. */
@@ -57,8 +57,9 @@ function comparatorBounds(text: string): readonly Bound[] | undefined {
   const bounds: Bound[] = [];
   for (const token of text.split(" ")) {
     const operator = OPERATORS.find((candidate) => token.startsWith(candidate));
-    const version = operator === undefined ? "" : token.slice(operator.length);
-    if (operator === undefined || !VERSION.test(version)) return undefined;
+    if (operator === undefined) return undefined;
+    const version = token.slice(operator.length);
+    if (!VERSION.test(version)) return undefined;
     bounds.push(comparatorBound(operator, segments(version)));
   }
   return bounds;
@@ -108,9 +109,9 @@ export function compareVersions(left: string, right: string): number {
 
 function compareSegments(left: readonly number[], right: readonly number[]): number {
   const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
+  const differences = Array.from(
+    { length },
+    (_, index) => (left[index] ?? 0) - (right[index] ?? 0),
+  );
+  return differences.find((difference) => difference !== 0) ?? 0;
 }

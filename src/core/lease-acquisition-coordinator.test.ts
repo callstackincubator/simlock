@@ -2119,6 +2119,22 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       },
     );
 
+    it("picks the newest in-range runtime whatever order the catalog lists them in", async () => {
+      const harness = await classHarness(
+        rangeDriver({
+          availableOsVersions: ["18.4", "26.5", "9.3", "18.0"],
+          modelRuntimes: { "iPhone 16": ["18.4", "26.5", "9.3", "18.0"] },
+        }),
+      );
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 16", osVersion: "<26", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.spec.osVersion).toBe("18.4");
+    });
+
     it("takes the first class candidate that has an in-range pairing and its newest such runtime: <=18 creates an iPhone 16 on the newest 18.x", async () => {
       const harness = await classHarness(rangeDriver());
 

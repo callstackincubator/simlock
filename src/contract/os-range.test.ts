@@ -57,6 +57,21 @@ describe("parseOsConstraint", () => {
   });
 });
 
+describe("parseOsConstraint structure", () => {
+  it("keeps the text as typed and one bound per comparator", () => {
+    expect(parsed(">=18 <26")).toEqual({
+      bounds: [{ from: [18] }, { before: [26] }],
+      kind: "range",
+      text: ">=18 <26",
+    });
+    expect(parsed("18 - 26")).toEqual({
+      bounds: [{ from: [18] }, { before: [27] }],
+      kind: "range",
+      text: "18 - 26",
+    });
+  });
+});
+
 describe("satisfies", () => {
   it.each([
     [">=18", "18.0", true],
