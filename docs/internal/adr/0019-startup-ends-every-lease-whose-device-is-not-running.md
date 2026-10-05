@@ -4,6 +4,9 @@
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)
 - **Supersedes:** nothing. Narrows [ADR
+  0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md)
+  §4: the startup converger no longer settles open requests or restores
+  lease timers; leasing does (§1). Narrows [ADR
   0004](0004-ttl-first-leases-on-every-transport.md): its consequence
   "Startup restores every lease's TTL timer from its persisted deadline",
   and the "nothing is swept" reading of it, now hold only for a lease
@@ -57,7 +60,8 @@ Startup runs in this order, all while health is `starting`:
    passes the limit, is *unreadable*. An unreadable platform no longer
    fails startup. Android's `adb devices` gets a command timeout of its
    own, 30 seconds, below the startup limit.
-3. Leasing's reconciler checks every lease against that read (§2).
+3. Leasing's reconciler checks every lease against that read (§2),
+   expired ones included.
 4. Kept leases get their expiry timers back, from their persisted
    deadlines.
 5. Core's device convergence runs as ADR 0017 leaves it: quarantine
@@ -91,13 +95,16 @@ sequenceDiagram
 
 ### 2. What happens to each lease
 
-A lease whose deadline passed while no daemon ran expires through the
-ordinary expiry path, as today. Every other lease is judged by what the
-read says of its device:
+Every lease on disk is judged by what the read says of its device. A
+lease whose deadline passed while no daemon ran ends with `lease.expired`
+rather than `lease.released`, because that is what happened to it, and
+its device follows the same rows as an ended lease: reclaimed, marked
+missing, or left waiting. The table's "ended" means "released or
+expired" for the device column.
 
 | Device in the read | Lease | Device |
 |---|---|---|
-| running | kept | unchanged |
+| running | kept, or expired if its deadline passed | unchanged, or reclaimed after an expiry |
 | stopped | ended | wiped by the ordinary reclaim and returned to the pool |
 | transitioning (booting or shutting down) | ended | as stopped |
 | absent from a readable platform | ended | marked missing in the same write |
@@ -140,9 +147,10 @@ stateDiagram-v2
 
 While health is `starting`, `status.get` returns `daemon` (health, mode,
 console address) and `host`, and nothing else. `devices`, `leases`,
-`capacity`, `queueDepth`, `installs`, `waiting` and `workers` are absent,
-not empty: empty would claim the daemon holds nothing. `devices`,
-`leases`, `capacity` and `queueDepth` become optional in the contract, so
+`capacity`, `queueDepth`, `installs`, `waiting`, `workers` and ADR 0017
+§7's `warmPool` are absent, not empty: empty would claim the daemon holds
+nothing. `devices`, `leases`, `capacity`, `queueDepth` and `warmPool`
+become optional in the contract, so
 the wire protocol rises by one from whatever version is current when this
 lands; a peer on the previous version would fail to parse a starting
 answer. HTTP's `GET /v1/status` follows the
@@ -151,8 +159,8 @@ console shows the daemon as starting.
 
 A gateway builds a worker's view from `status.get`. While the worker is
 `starting`, the view carries its health and host only: its `devices`,
-`leases`, `capacity`, `queueDepth`, `installs`, `waiting` and `catalog`
-are absent, so they become optional in the worker view schema too. The
+`leases`, `capacity`, `queueDepth`, `installs`, `waiting`, `catalog` and
+`warmPool` are absent, so they become optional in the worker view schema too. The
 fleet lease index takes nothing from a starting worker. Routing already skips a worker that is not
 `running`.
 

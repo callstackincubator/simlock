@@ -42,9 +42,13 @@ monitor, and the startup reconciler of
 [ADR 0019](0019-startup-ends-every-lease-whose-device-is-not-running.md).
 
 `src/core/` keeps device management: the registry and its persistence,
-capacity, the provisioner, the managed device lifecycle, the warm pool,
-cleanup and the reaper, quarantine, nuke, doctor, the driver interface and
-catalog, and the device half of startup convergence. Lease records and lease request records stay in the registry, because a
+capacity, the provisioner, the managed device lifecycle, ADR 0017's
+reclaim coordinator and warm pool, cleanup and the reaper, quarantine,
+nuke, doctor, the driver interface and catalog, and the device half of
+startup convergence. The reclaim coordinator drives a driver and commits
+device state, which is core's work; the kick it gives acquisition once a
+device is back is a port core declares and leasing fills through
+`connect` (§2). Lease records and lease request records stay in the registry, because a
 grant and the device's move to `leased` are one `state.json` write, and
 ADR 0019 §4 makes the request's result part of it. The record types and
 the store interface the registry implements (`LeaseRequestStore`) stay in
@@ -134,7 +138,11 @@ tests may import its `testing.ts`, and `pnpm lint` enforces the rule.
   store, the wait queue, their errors and their types; never
   `createLeasing`, the acquisition coordinator, the lifecycle or the
   release coordinator. That keeps ADR 0005 §33's ban on the gateway
-  reaching the lifecycle enforced after the move. `src/contract/**` imports nothing outside
+  reaching the lifecycle enforced after the move, as a ban on names: the
+  index still loads the whole module, which is what an index does.
+  `src/leasing/**` may not import the warm pool's names from core's index
+  (`importNames`), which is how ADR 0017 §3's "no lease-transaction
+  component depends on the warm pool" is enforced. `src/contract/**` imports nothing outside
   itself.
 
 Lint checks one file's own imports. Two checks follow imports further and
