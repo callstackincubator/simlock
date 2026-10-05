@@ -235,7 +235,6 @@ export function createCore(options: CoreOptions): Core {
     prerequisiteChecks: options.prerequisiteChecks ?? [],
     quarantine,
     registry,
-    runningPlatforms: () => options.drivers.map((driver) => driver.platform),
   });
   const startup = new StartupConverger({
     capacity: capacityReader,
