@@ -53,8 +53,8 @@ restart because the file does.
 
 `lease.granted` gains `requestId`, the id of the request it served, and
 `source`: `warm` for a device that was ready, `booted` for one booted from
-shutdown, `provisioned` for one created for this request, including the
-cases where an idle device was evicted to make room. `lease.rejected` gains
+shutdown, `provisioned` for one created for this request. An eviction made
+to free room is not a source: the plan that grants after it is. `lease.rejected` gains
 `requestId` and `requester`, on every reason: the request id is minted
 before the admission checks, so a request refused as `killed` or
 `already-leased` has one although no `lease.requested` was emitted for it.
@@ -75,17 +75,20 @@ Nothing is inferred from timing alone.
 
 ### 3. Capacity and queue depth are events
 
-A worker emits `capacity.changed` after any committed change to the figures
-`status.get` reports under `capacity`: per platform running, maximum,
-reserved and warm, and the RAM budget's used and limit bytes when the
-strategy keeps one. A worker emits `queue.changed { depth }` when its wait
-queue's depth changes, and a gateway emits the same for its fleet queue.
-Each is one event per committed change, emitted post-commit (events rule 3),
-never on a timer.
+A worker emits `capacity.changed` whenever the figures `status.get` reports
+under `capacity` change: per platform running, maximum, reserved and warm,
+and the RAM budget's used and limit bytes when the strategy keeps one. One
+function builds those figures for `status.get` and for the observer that
+emits them, after every registry commit and every reservation taken or
+released. A worker emits `queue.changed { depth }` when its wait queue's
+depth changes, and a gateway emits the same for its fleet queue. Each is one
+event per change, emitted post-commit (events rule 3), never on a timer,
+and once at startup so every run begins with a step.
 
 Utilisation over time is the step function these events draw. Peak and
 time-weighted mean over a window come from the steps, and the step in force
-at the window's start comes from the last event before it.
+at the window's start comes from the last event before it. Where there is
+none, the time before the first step is unknown, not zero.
 
 ### 4. The event log keeps a window of time, bounded by size
 
@@ -98,8 +101,11 @@ When the current file passes `rotateBytes` it rotates, and the rotated
 generations are numbered from `.1`, the newest, upward. After a rotation,
 every generation whose newest line is older than `retention` is deleted,
 then the oldest generations are deleted until the total fits `maxBytes`.
-The current file is never deleted. The reader merges every generation and
-the current file, oldest first, deduplicating by id as it already does.
+Retention is judged per generation, so a line older than `retention` stays
+while a newer line shares its generation. The current file is never
+deleted. The reader reads the current file first, then the generations
+newest to oldest, and sorts and deduplicates by id as it already does, so a
+rotation that lands mid-read can repeat a generation but never lose one.
 
 Retention bounds every reader of the file: `simlock events --since`,
 `events.replay`, and `usage.get`.
@@ -122,9 +128,13 @@ apart. Request facts come from the gateway's own events, those without
 `workerId`: requests, queueing, waits, rejections and the fleet queue's
 depth. Device facts come from relayed events, those with `workerId`:
 grants, held time, provisioning, boots, capacity and device incidents, each
-attributed to its worker. A relayed `lease.requested`, `lease.queued`,
-`lease.rejected` or `queue.changed` is not counted; the gateway forwards
-every request as `noWait`, so a worker's queue never holds a fleet request.
+attributed to its worker. A relayed `lease.requested`, `lease.queued` or
+`queue.changed` is not counted; the gateway forwards every request as
+`noWait`, so a worker's queue never holds a fleet request. A relayed
+`lease.rejected` counts only when it settles a dispatched request: it comes
+from the worker that request went to, for its namespaced requester, at or
+after the dispatch, and carries the worker's reason. The gateway emits no
+rejection of its own for a request that failed on its worker.
 
 A fleet request is joined to its grant through `request.dispatched`: the
 gateway's request id names the worker and the requester, and the first
@@ -171,7 +181,8 @@ re-buckets.
   console refetches on events, so the daemon may compute often. The
   handler memoises its last answer by window and newest event id, so a call
   while nothing happened reads nothing, and the console's usage view
-  refetches on events and every 15 seconds rather than every second. A
+  refetches every 15 seconds and never more often. The per-request ledger
+  is returned only when asked for, so the console never carries it. A
   stats read still runs on the daemon; "costs an agent nothing" is a claim
   about the lease path.
 - A worker's own `usage.get` after it joined a fleet shows requests with the
