@@ -13,7 +13,9 @@
   the one place a requirement meets a device, but the warm pool's keep
   decision now uses it, with the pool-mode test, instead of `sameSpec`;
   `sameSpec` still names pool identity for reclaim and the idempotency
-  check.
+  check. Also narrows ADR 0015 §6's planner order (ready, then shutdown,
+  then provision) by one case: a device on its way that serves the request
+  is a reason to wait before provisioning (§6 below).
 - **Depends on:** [ADR 0015](0015-a-lease-request-is-a-set-of-constraints.md)
   for `fits`; the capacity strategies (ARCHITECTURE.md, "Running capacity")
   for every limit the pool asks about; architecture rules 14, 15 and 16.
@@ -98,10 +100,13 @@ No component of the lease transaction imports, calls or holds a port to the
 warm pool (architecture rule 15). The composition root (`LeaseEngine`) wires
 the pool with: a read-only registry snapshot, the capacity coordinator's
 questions and reservations, the acquisition coordinator's read-only
-`waitingRequests()`, the `DeviceModeReader` the dispatcher already gets
-(so the platform's default mode is still resolved in one place, ADR 0007
-§2), the device lifecycle and provisioner, the claims, the bus, the clock,
-and a `kick` into acquisition.
+`waitingRequests()` and its read-only `resolve(request)`, which turns a
+request's model, OS and mode into the create spec a driver would make for
+it, or a refusal (`RUNTIME_MISSING`, `UNKNOWN_MODEL`), the same way a lease
+request is resolved and in the same place (ADR 0007 §2, ADR 0015 §5): the
+driver still decides whether a slim request gets a slim spec, and the pool
+never stamps a mode itself. Then the device lifecycle and provisioner, the
+claims, the bus, the clock, and a `kick` into acquisition.
 
 The pool reacts to committed facts on the bus, as the reaper does:
 `daemon.started` (which fires after startup convergence), `device.reclaimed`,
@@ -166,9 +171,14 @@ slim device never serves a `full` request and a full device never serves a
    the reclaim left `ready` (Android) stays as it is unless step 1 took it.
 3. **Targets.** For each target below its count, boot a shut-down device of
    that kind if one exists, otherwise create one, up to the budget and the
-   boot cap. A target's kind is a platform, a model, an OS version (the
-   newest installed when absent), and a mode (when absent, the pool mode
-   that serves a request naming none, asked of the `DeviceModeReader`).
+   boot cap. A target is written the way a request is: a platform, an
+   exact model, an optional OS version or range, an optional mode. On every
+   pass the pool resolves each target through `resolve(request)` into a
+   create spec, so a runtime installed since the last pass takes effect
+   without a restart, and a target that resolves to a refusal is `short`
+   with that reason. Two targets that resolve to the same spec are one
+   target with the sum of their counts. A device is of a target's kind when
+   `sameSpec` holds between it and that create spec.
    Under `lease.identity: fresh` the created device has never served a
    lease, serves one, is deleted by the reclaim coordinator, and the next
    pass creates the next.
@@ -236,9 +246,9 @@ emit `device.shutdown` with initiator `warm-pool`; `device.ready` and
 
 Read at daemon start. `count` is a positive integer; a target with an
 unknown key, such as `class`, fails the load with an error naming the key.
-Two targets of the same kind are one target with the sum of their counts.
-A target may name a runtime that is not installed or a model the catalog
-does not list; both load and are reported by doctor.
+`osVersion` takes what a request's `--os` takes, a version or a range. A
+target may name a runtime that is not installed or a model the catalog does
+not list; both load and are reported by status and doctor.
 
 ## Consequences
 
@@ -253,8 +263,10 @@ does not list; both load and are reported by doctor.
 - Turning the pool off is one key, and the lease path does not change
   shape: the reclaim coordinator commits the driver's result either way.
 - The lease path imports nothing from the pool, so a change to the policy
-  cannot break a grant or a release, and the policy's tests run on a view
-  with no engine.
+  cannot change what a grant or a release does, and the policy's tests run
+  on a view with no engine. A request can still wait on a pool boot that
+  serves it (§6); if that boot fails, the request falls back to its own
+  plan on the next decision, bounded by the boot timeout and its deadline.
 - The startup converger loses one step and one copy of the budget rule.
 - A request for a device under a `boot` claim or in `provisioning` that
   serves it waits instead of creating another. The wait is bounded by the
