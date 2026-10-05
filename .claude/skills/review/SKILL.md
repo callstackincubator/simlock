@@ -1,7 +1,7 @@
 ---
 name: review
 description: Run the two blind pre-merge reviews from delivery rule 14 on a PR or branch — a spec review blind to the rules and a code review blind to the issue, each by a fresh Opus sub-agent — verify every blocking finding, pass the notes through, and hand back a fixed report block. Does not edit code. Use when the user says "review #N", "review this branch", "review PR N", or when the deliver orchestrator delegates review.
-model: sonnet
+model: opus
 effort: medium
 context: fork
 ---
@@ -15,8 +15,10 @@ passed on, never verified; two rounds at most. You do not edit code. You
 gather the inputs, start the reviewers, verify, and report; the implementer
 fixes.
 
-The two reviewers run on Opus (rule 14). This skill only gathers, starts
-and verifies, so it runs on Sonnet.
+The two reviewers are the `spec-reviewer` and `code-reviewer` agents in
+`.claude/agents/`, whose frontmatter pins their model and effort (rule 14).
+This skill runs on Opus too: verifying decides whether a reviewer's claim
+is real, and a wrong rejection merges a defect nobody else will catch.
 
 Arguments: a PR number, optionally `round 2` and which review to re-run
 (`spec`, `code`, or `both`). With a branch instead of a PR, find its PR
@@ -55,7 +57,9 @@ anyone believes the diff does.
 ## 2. Spawn both reviews, in the foreground
 
 Spawn the spec review and the code review in **one message**, as two Agent
-calls with `run_in_background: false` and `model: "opus"`. They run in
+calls with `run_in_background: false`: `subagent_type: "spec-reviewer"`
+and `subagent_type: "code-reviewer"`. Never pass a model: it overrides
+the agent's frontmatter. They run in
 parallel, and your turn cannot end while they run, so you never hand back
 before the findings are in. On `round 2`, spawn only the review named.
 
