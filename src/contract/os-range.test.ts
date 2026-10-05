@@ -9,25 +9,52 @@ function parsed(text: string) {
 }
 
 describe("parseOsConstraint", () => {
-  it.each([["18.4"], [">=18"], [">18"], ["<=26"], ["<26"], [">=18 <26"], ["18 - 26"]])(
-    "accepts %s",
-    (text) => {
-      expect(parseOsConstraint(text).ok).toBe(true);
-    },
-  );
+  it.each([
+    ["18.40"],
+    [">=18.4.2 <19.10"],
+    ["18.4 - 26.10.1"],
+    ["18.4"],
+    [">=18"],
+    [">18"],
+    ["<=26"],
+    ["<26"],
+    [">=18 <26"],
+    ["18 - 26"],
+  ])("accepts %s", (text) => {
+    expect(parseOsConstraint(text).ok).toBe(true);
+  });
 
-  it.each([["^18"], ["~18"], ["18.x"], ["*"], [">=18 || <17"], [">=18  <26"], [""]])(
-    "refuses %j with a message naming the accepted forms",
-    (text) => {
-      const result = parseOsConstraint(text);
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.message).toContain(">=");
-        expect(result.message).toContain("18 - 26");
-        expect(result.message).toContain("exact version");
-      }
-    },
-  );
+  it.each([
+    ["^18"],
+    ["~18"],
+    ["18.x"],
+    ["*"],
+    [">=18 || <17"],
+    [">=18  <26"],
+    [""],
+    ["x18"],
+    ["18x"],
+    [">=x18"],
+    [">=18x"],
+    [">= 18"],
+    ["x18 - 26"],
+    ["18x - 26"],
+    ["18 - x26"],
+    ["18 - 26x"],
+    ["18 - 26 - 30"],
+    ["18 -  26"],
+    [">=18 - 26"],
+    [" 18"],
+    ["18 "],
+  ])("refuses %j with a message naming the accepted forms", (text) => {
+    const result = parseOsConstraint(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain(">=");
+      expect(result.message).toContain("18 - 26");
+      expect(result.message).toContain("exact version");
+    }
+  });
 });
 
 describe("satisfies", () => {
@@ -66,5 +93,12 @@ describe("compareVersions", () => {
     expect(compareVersions("34", "35")).toBeLessThan(0);
     expect(compareVersions("35", "34")).toBeGreaterThan(0);
     expect(compareVersions("26.5", "26.5")).toBe(0);
+  });
+
+  it("reads a missing segment as 0 and compares segments as numbers", () => {
+    expect(compareVersions("26", "26.1")).toBeLessThan(0);
+    expect(compareVersions("26.0.1", "26")).toBeGreaterThan(0);
+    expect(compareVersions("26", "26.0")).toBe(0);
+    expect(compareVersions("1.10", "1.9")).toBeGreaterThan(0);
   });
 });

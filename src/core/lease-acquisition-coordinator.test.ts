@@ -22,6 +22,7 @@ import {
   type Driver,
   DriverCrashError,
   readyTransitionUpdate,
+  RuntimeMissingError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
@@ -2012,6 +2013,74 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
         ),
       ).rejects.toMatchObject({ model: "iPhone 99", name: "UnknownModelError" });
       expect(deviceWork(driver)).toBe(0);
+    });
+
+    it("grants an exact model with a range a ready idle device of that model in range, and not one of another model", async () => {
+      const harness = await classHarness(rangeDriver());
+      const other = await seedReady(harness, { ...iphone15, osVersion: "18.0" });
+      const same = await seedReady(harness, {
+        model: "iPhone 16",
+        osVersion: "18.0",
+        platform: "ios",
+      });
+      const before = deviceWork(harness.driver);
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 16", osVersion: ">=18 <26", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.id).toBe(same.id);
+      expect(granted.device.id).not.toBe(other.id);
+      expect(deviceWork(harness.driver)).toBe(before);
+    });
+
+    it("fails an exact model with a range at once with UnknownModelError when the platform lists no catalog", async () => {
+      const harness = await createHarness({
+        catalogReader: { listCatalog: async () => [] },
+        drivers: [rangeDriver()],
+      });
+
+      await expect(
+        harness.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          owner("agent"),
+        ),
+      ).rejects.toMatchObject({ model: "iPhone 16", name: "UnknownModelError" });
+    });
+
+    it("never installs for a range even when the driver then reports a downloadable runtime missing", async () => {
+      class Racing extends FakeDriver {
+        override async resolveSpec(): Promise<DeviceSpec> {
+          throw new RuntimeMissingError("ios", "18.4", { component: "18.4" });
+        }
+      }
+      const asked: unknown[] = [];
+      const harness = await createHarness({
+        components: {
+          install: async (call) => {
+            asked.push(call);
+            return { outcome: "installed", version: "18.4" };
+          },
+        },
+        drivers: [
+          new Racing({
+            availableOsVersions: ["18.4"],
+            clock: new FakeClock(1_000),
+            knownModels: ["iPhone 16"],
+            modelClasses: { "iPhone 16": "phone" },
+            platform: "ios",
+          }),
+        ],
+      });
+
+      await expect(
+        harness.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          { ...owner("agent"), allowDownload: true },
+        ),
+      ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+      expect(asked).toEqual([]);
     });
 
     it("creates an exact model with a range on the newest listed pairing in range", async () => {

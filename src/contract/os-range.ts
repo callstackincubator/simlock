@@ -34,33 +34,41 @@ const ACCEPTED_FORMS =
   "followed by a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`)";
 
 const VERSION = /^\d+(?:\.\d+)*$/;
-const COMPARATOR = /^(>=|>|<=|<)(\d+(?:\.\d+)*)$/;
-const HYPHEN = /^(\d+(?:\.\d+)*) - (\d+(?:\.\d+)*)$/;
+const OPERATORS = [">=", ">", "<=", "<"] as const;
 
 export function parseOsConstraint(text: string): ParsedOsConstraint {
   if (VERSION.test(text)) return { constraint: { kind: "exact", version: text }, ok: true };
-  const hyphen = HYPHEN.exec(text);
-  if (hyphen !== null) {
-    const bounds = [
-      comparatorBound(">=", segments(hyphen[1] ?? "")),
-      comparatorBound("<=", segments(hyphen[2] ?? "")),
-    ];
-    return { constraint: { bounds, kind: "range", text }, ok: true };
-  }
+  const bounds = hyphenBounds(text) ?? comparatorBounds(text);
+  return bounds === undefined
+    ? refused(text)
+    : { constraint: { bounds, kind: "range", text }, ok: true };
+}
+
+/** `A - B` is `>=A <=B`. */
+function hyphenBounds(text: string): readonly Bound[] | undefined {
+  const [from, to, ...rest] = text.split(" - ");
+  if (from === undefined || to === undefined || rest.length > 0) return undefined;
+  if (!VERSION.test(from) || !VERSION.test(to)) return undefined;
+  return [comparatorBound(">=", segments(from)), comparatorBound("<=", segments(to))];
+}
+
+/** One or more comparators joined by single spaces. */
+function comparatorBounds(text: string): readonly Bound[] | undefined {
   const bounds: Bound[] = [];
   for (const token of text.split(" ")) {
-    const match = COMPARATOR.exec(token);
-    if (match === null) return refused(text);
-    bounds.push(comparatorBound(match[1] ?? "", segments(match[2] ?? "")));
+    const operator = OPERATORS.find((candidate) => token.startsWith(candidate));
+    const version = operator === undefined ? "" : token.slice(operator.length);
+    if (operator === undefined || !VERSION.test(version)) return undefined;
+    bounds.push(comparatorBound(operator, segments(version)));
   }
-  return { constraint: { bounds, kind: "range", text }, ok: true };
+  return bounds;
 }
 
 function refused(text: string): ParsedOsConstraint {
   return { message: `Invalid OS constraint ${JSON.stringify(text)}: ${ACCEPTED_FORMS}`, ok: false };
 }
 
-function comparatorBound(operator: string, version: readonly number[]): Bound {
+function comparatorBound(operator: (typeof OPERATORS)[number], version: readonly number[]): Bound {
   switch (operator) {
     case ">=":
       return { from: version };
@@ -85,7 +93,6 @@ function segments(version: string): readonly number[] {
 /** Whether a device OS satisfies a constraint; a bare version is string equality. */
 export function satisfies(version: string, constraint: OsConstraint): boolean {
   if (constraint.kind === "exact") return constraint.version === version;
-  if (!VERSION.test(version)) return false;
   const parts = segments(version);
   return constraint.bounds.every(
     (bound) =>

@@ -420,13 +420,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     range: OsRange | undefined,
   ): ResolvedTarget {
     const { class: _class, model: _model, ...rest } = request;
-    const runtimes = matchingRuntimes(entry, model, request, range);
-    const newest = [...runtimes].sort(compareVersions).at(-1);
-    if (newest === undefined) {
-      throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
-    }
     return {
-      exact: { ...rest, mode, model, ...(range === undefined ? {} : { osVersion: newest }) },
+      exact: {
+        ...rest,
+        mode,
+        model,
+        ...(range === undefined ? {} : { osVersion: newestRuntime(entry, model, request, range) }),
+      },
       requirement: {
         imageTag: request.imageTag,
         osVersion: requiredOs(entry, request, range),
@@ -1021,7 +1021,7 @@ function matchingRuntimes(
   model: string,
   { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
   range: OsRange | undefined,
-): readonly string[] {
+): string[] {
   return pairedRuntimes(entry, model).filter(
     (runtime) =>
       (range === undefined
@@ -1030,6 +1030,18 @@ function matchingRuntimes(
       (imageTag === undefined ||
         (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
   );
+}
+
+/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
+function newestRuntime(
+  entry: DriverCatalogEntry,
+  model: string,
+  request: DeviceRequest,
+  range: OsRange,
+): string {
+  const newest = matchingRuntimes(entry, model, request, range).sort(compareVersions).at(-1);
+  if (newest === undefined) throw new RuntimeMissingError(request.platform, range.text);
+  return newest;
 }
 
 /** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
