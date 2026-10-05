@@ -2826,8 +2826,9 @@ describe("Dispatcher: device.exec", () => {
       return { passthrough: () => ({ args: ["-e", script], command: process.execPath, env: {} }) };
     }
     // The 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
-    // case waits out the real 5 s `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` by design, and a 10 s guard
-    // left one slow child-process spawn on a busy machine between it and a false failure.
+    // cases pass a 100 ms exit deferral cap to the real runner instead of waiting out its 5 s
+    // default, and a short guard would leave one slow child-process spawn on a busy machine
+    // between it and a false failure.
 
     it("delivers every chunk in full, in order, even when one delivery stalls past the exit grace window", async () => {
       const seen: string[] = [];
@@ -2840,7 +2841,7 @@ describe("Dispatcher: device.exec", () => {
           "process.stdout.write('before-exit-A');" +
             "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
         ),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitGraceMs: 300 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2857,7 +2858,7 @@ describe("Dispatcher: device.exec", () => {
         }),
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       let settledEarly = false;
       void pending.then(() => {
         settledEarly = true;
@@ -2876,7 +2877,7 @@ describe("Dispatcher: device.exec", () => {
     it("fails device.exec loudly, rather than answering a truncated exit code, when a chunk's delivery never resolves", async () => {
       const { dispatcher, leaseId } = await withLease({
         passthroughOverride: realCommand("process.stdout.write('stuck'); process.exit(0);"),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitDeferralCapMs: 100 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2904,7 +2905,7 @@ describe("Dispatcher: device.exec", () => {
       const { clock, dispatcher, leaseId } = await withLease({
         exec: { timeoutMs: 50 },
         passthroughOverride: realCommand("process.stdout.write('x'); setInterval(() => {}, 1000);"),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitDeferralCapMs: 100 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2924,9 +2925,13 @@ describe("Dispatcher: device.exec", () => {
       // Let the real child actually spawn and write its one chunk before the timeout fires,
       // so the pending delivery this test depends on genuinely exists.
       await new Promise((resolve) => setTimeout(resolve, 200));
+      const advancedAt = Date.now();
       clock.advance(50);
 
       await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+      expect(Date.now() - advancedAt, "rejected only after the default 5 s cap").toBeLessThan(
+        2_500,
+      );
     }, 30_000);
   });
 });
