@@ -41,6 +41,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, role: "admin" },
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -112,6 +113,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, effect: "read" },
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, effect: "read" },
   { name: "token.create", input: { role: "agent" }, effect: "write" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
   {
@@ -909,5 +911,27 @@ describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () =
     expect(requestedClass({ class: "tv" })).toBe("tv");
     expect(requestedClass({})).toBe("phone");
     expect(requestedClass({ model: "iPhone 16" })).toBeUndefined();
+  });
+});
+
+describe("usage.get input", () => {
+  const parse = (input: unknown) => OPERATIONS["usage.get"].input.safeParse(input);
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("takes epoch milliseconds with from before to, up to ninety days apart", () => {
+    expect(parse({ from: 0, to: 1 }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_000 + 90 * DAY }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_001 + 90 * DAY }).success).toBe(false);
+    expect(parse({ from: 5, to: 5 }).success).toBe(false);
+    expect(parse({ from: 6, to: 5 }).success).toBe(false);
+  });
+
+  it("refuses a bound that is not an integer, is negative, or no date can hold", () => {
+    expect(parse({ from: 0.5, to: 10 }).success).toBe(false);
+    expect(parse({ from: -1, to: 10 }).success).toBe(false);
+    expect(parse({ from: 0, to: 8.64e15 + 1 }).success).toBe(false);
+    expect(parse({ from: 8.64e15 - 1, to: 8.64e15 }).success).toBe(true);
+    expect(parse({ from: "0", to: 10 }).success).toBe(false);
+    expect(parse({ from: 0 }).success).toBe(false);
   });
 });

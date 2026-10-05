@@ -1,6 +1,6 @@
 import { type Filesystem, isMissingPathError, type Logger, type LogSink } from "../ports/index.js";
 import { EVENT_ID_PATTERN } from "../contract/schemas.js";
-import type { EventBus, EventEnvelope } from "./index.js";
+import type { EventBus, EventEnvelope, EventName } from "./index.js";
 import { byTimeThenSeq } from "./order.js";
 
 /** The durable record of every business event, in the data directory (ADR 0006). */
@@ -20,7 +20,7 @@ export const EVENT_FILE_NAME = "events.jsonl";
 export async function readEventFile(
   filesystem: Filesystem,
   path: string,
-  options: { readonly sinceTs: number },
+  options: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
 ): Promise<EventEnvelope[]> {
   return (await readEventHistory(filesystem, path, options)).events;
 }
@@ -33,7 +33,7 @@ export async function readEventFile(
 export async function readEventHistory(
   filesystem: Filesystem,
   path: string,
-  { sinceTs }: { readonly sinceTs: number },
+  { sinceTs }: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
 ): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
   const generations = await readGenerations(filesystem, path);
   const seen = new Set<string>();
@@ -144,7 +144,9 @@ export class EventHistory {
    * Without `sinceTs`, the ring, as `simlock events` has always answered. With it, the event
    * file while the writer is writing; the ring when there is no file to trust.
    */
-  async replay(input: { readonly sinceTs?: number } = {}): Promise<EventEnvelope[]> {
+  async replay(
+    input: { readonly sinceTs?: number; readonly carry?: readonly EventName[] } = {},
+  ): Promise<EventEnvelope[]> {
     const { bus, filesystem, logger, path } = this.#options;
     if (input.sinceTs === undefined) return bus.replay();
     if (!this.#writing) return bus.replay({ sinceTs: input.sinceTs });
@@ -157,5 +159,16 @@ export class EventHistory {
       });
       return bus.replay({ sinceTs: input.sinceTs });
     }
+  }
+
+  async read(_input: {
+    readonly sinceTs: number;
+    readonly carry: readonly EventName[];
+  }): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+    return { events: [], oldestTs: undefined };
+  }
+
+  latestId(): string | undefined {
+    return undefined;
   }
 }

@@ -103,7 +103,7 @@ export interface DispatcherOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
   /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
@@ -260,6 +260,7 @@ export class Dispatcher {
       "nuke.run": this.#nukeRun,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -628,6 +629,10 @@ export class Dispatcher {
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+
+  #usageGet: Handler<"usage.get"> = () => {
+    throw new DispatchError("INTERNAL", "usage.get is not implemented");
+  };
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

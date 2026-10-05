@@ -36,6 +36,8 @@ import {
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  usageOutputSchema,
+  usageWindowSchema,
   waitingRequestSchema,
   workerViewSchema,
 } from "./schemas.js";
@@ -641,6 +643,22 @@ export const eventsReplay = defineOperation({
   output: z.array(eventEnvelopeSchema),
 });
 
+// ---- usage.get ----------------------------------------------------------------------------
+
+/**
+ * ADR 0016 §1: the figures for a window, computed from the event history when asked. Admin-only,
+ * as `events.replay` is: it reads the same history. A window that ends before the oldest held
+ * event is refused with `HISTORY_NOT_KEPT`.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const usageGet = defineOperation({
+  name: "usage.get",
+  role: "admin",
+  effect: "read",
+  input: usageWindowSchema,
+  output: usageOutputSchema,
+});
+
 // ---- events.subscribe ---------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -947,6 +965,7 @@ export const OPERATIONS = {
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
+  "usage.get": usageGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,

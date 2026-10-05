@@ -96,7 +96,7 @@ export interface GatewayDispatcherOptions {
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
   readonly workers: WorkerRegistry;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
@@ -164,6 +164,7 @@ export class GatewayDispatcher {
       "status.get": this.#statusGet,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -262,6 +263,10 @@ export class GatewayDispatcher {
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+
+  #usageGet: Handler<"usage.get"> = () => {
+    throw new DispatchError("INTERNAL", "usage.get is not implemented");
+  };
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

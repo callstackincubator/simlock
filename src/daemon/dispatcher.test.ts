@@ -91,8 +91,8 @@ function stallOptions(
 function resolveEventHistoryOverride(
   eventBus: EventBus,
   filesystem: MemoryFilesystem,
-  override: Pick<EventHistory, "replay"> | undefined,
-): Pick<EventHistory, "replay"> {
+  override: Pick<EventHistory, "latestId" | "read" | "replay"> | undefined,
+): Pick<EventHistory, "latestId" | "read" | "replay"> {
   return (
     override ??
     new EventHistory({ bus: eventBus, filesystem, logger: new NoopLogger(), path: "/events.jsonl" })
@@ -189,7 +189,7 @@ async function buildDispatcher(
      * takes no `--set`), rather than `ScriptedProcessRunner`'s scripted chunks. */
     readonly passthroughOverride?: PassthroughResolver;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
-    readonly eventHistory?: Pick<EventHistory, "replay">;
+    readonly eventHistory?: Pick<EventHistory, "latestId" | "read" | "replay">;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
@@ -1093,6 +1093,7 @@ describe("Dispatcher: events.replay", () => {
     const asked: unknown[] = [];
     const { dispatcher } = await buildDispatcher({
       eventHistory: {
+        ...noUsageHistory,
         replay: async (input) => {
           asked.push(input);
           return fromHistory;
@@ -1104,6 +1105,116 @@ describe("Dispatcher: events.replay", () => {
       dispatcher.dispatch("events.replay", { sinceTs: 10 }, session({ role: "admin" })),
     ).resolves.toEqual(fromHistory);
     expect(asked).toEqual([{ sinceTs: 10 }]);
+  });
+});
+
+/** The parts of the history `usage.get` reads, for a test that is not about it. */
+const noUsageHistory = {
+  latestId: () => undefined,
+  read: async () => ({ events: [], oldestTs: undefined }),
+};
+
+describe("Dispatcher: usage.get", () => {
+  const HOUR = 3_600_000;
+  const WINDOW = { from: 10 * HOUR, to: 11 * HOUR };
+
+  /** A history that counts its reads and whose newest event the test moves. */
+  function countingHistory(oldestTs: number | undefined = undefined) {
+    const state = { newest: "evt_1" as string | undefined, reads: 0 };
+    const history = {
+      latestId: () => state.newest,
+      read: async () => {
+        state.reads += 1;
+        return { events: [], oldestTs };
+      },
+      replay: async () => [],
+    };
+    return { history, state };
+  }
+
+  it("the worker handler answers a second call inside the same bucket from the memo without reading the history, and reads again after an event arrives or the bucket moves", async () => {
+    const { history, state } = countingHistory();
+    const { dispatcher } = await buildDispatcher({ eventHistory: history });
+    const call = (window: { from: number; to: number }) =>
+      dispatcher.dispatch("usage.get", window, session({ role: "admin" }));
+
+    const first = await call(WINDOW);
+    const second = await call({ from: WINDOW.from + 30_000, to: WINDOW.to + 30_000 });
+
+    expect(state.reads).toBe(1);
+    expect(second).toEqual(first);
+    // The answer's window is the rounded one, not the one asked for.
+    expect(second.window).toEqual(WINDOW);
+
+    state.newest = "evt_2";
+    await call(WINDOW);
+    expect(state.reads).toBe(2);
+
+    await call({ from: WINDOW.from + 60_000, to: WINDOW.to + 60_000 });
+    expect(state.reads).toBe(3);
+  });
+
+  it("the worker handler answers HISTORY_NOT_KEPT with the oldest held timestamp when the window ends before it", async () => {
+    const { history } = countingHistory(WINDOW.to + 5 * HOUR);
+    const { dispatcher } = await buildDispatcher({ eventHistory: history });
+
+    await expect(
+      dispatcher.dispatch("usage.get", WINDOW, session({ role: "admin" })),
+    ).rejects.toMatchObject({
+      code: "HISTORY_NOT_KEPT",
+      details: { oldestTs: WINDOW.to + 5 * HOUR },
+    });
+  });
+
+  it("the worker handler answers for itself as one worker, with the token label beside a requester it knows", async () => {
+    const { dispatcher, eventBus, tokens } = await buildDispatcher();
+    const { record } = await tokens.create("agent", "ci-bot");
+    eventBus.emit(
+      "lease.requested",
+      {
+        requestId: "req_1",
+        requestSpec: { platform: "ios" },
+        requester: record.id,
+        waitPolicy: "wait",
+      },
+      "test",
+    );
+
+    const usage = await dispatcher.dispatch(
+      "usage.get",
+      { from: 0, to: 600_000 },
+      session({ role: "admin" }),
+    );
+
+    expect(usage.requesters).toEqual([
+      { granted: 0, heldTotalMs: 0, id: record.id, label: "ci-bot", rejected: 0, requests: 1 },
+    ]);
+    expect(usage.workers.map((worker) => worker.id)).toEqual(["instance-1"]);
+    expect(usage.totals.requests).toBe(1);
+  });
+
+  it("usage.get is an admin operation an agent token cannot call", async () => {
+    const { history, state } = countingHistory();
+    const { dispatcher } = await buildDispatcher({ eventHistory: history });
+
+    await expect(
+      dispatcher.dispatch("usage.get", WINDOW, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(state.reads).toBe(0);
+  });
+
+  it("refuses a window that is not ordered or is longer than ninety days as a bad request", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const call = (window: unknown) =>
+      dispatcher.dispatch("usage.get", window, session({ role: "admin" }));
+
+    await expect(call({ from: 5, to: 5 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(call({ from: 0, to: 91 * 24 * HOUR })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    await expect(call({ from: 0, to: 90 * 24 * HOUR })).resolves.toMatchObject({
+      window: { from: 0 },
+    });
   });
 });
 

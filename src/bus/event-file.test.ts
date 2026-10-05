@@ -198,6 +198,53 @@ describe("EventHistory", () => {
       { reason: "memory only" },
     ]);
   });
+
+  it("reads the events and the oldest timestamp the file holds in one call, carrying the step in force", async () => {
+    const path = await eventFilePath();
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const sink = new NodeFileLogSink({ path });
+    const events = history({ bus, path, sink });
+    const early = bus.emit("queue.changed", { depth: 2 }, "wait-queue");
+    clock.advance(1_000);
+    bus.emit("daemon.stopping", { reason: "a" }, "daemon");
+    clock.advance(1_000);
+    const late = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+    sink.close();
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_500 });
+
+    expect(read.oldestTs).toBe(1_000);
+    expect(read.events).toEqual([early, late]);
+  });
+
+  it("reads from the ring, with the carried step and its oldest timestamp, when there is no sink", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    const early = bus.emit("queue.changed", { depth: 2 }, "wait-queue");
+    clock.advance(2_000);
+    const late = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
+
+    expect(read).toEqual({ events: [early, late], oldestTs: 1_000 });
+    expect(await events.replay({ carry: ["queue.changed"], sinceTs: 2_000 })).toEqual([
+      early,
+      late,
+    ]);
+  });
+
+  it("names the newest event's id, and none before the first event", () => {
+    const bus = new EventBus(new FakeClock(1_000));
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    expect(events.latestId()).toBeUndefined();
+
+    bus.emit("daemon.stopping", { reason: "a" }, "daemon");
+    const last = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+
+    expect(events.latestId()).toBe(last.id);
+  });
 });
 
 describe("readEventFile", () => {
@@ -441,5 +488,73 @@ describe("readEventFile", () => {
     const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
 
     expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+
+  it("readEventFile with carry returns the latest capacity.changed and queue.changed at or before sinceTs, one per worker id, and none when there is none", async () => {
+    const step = (
+      seq: number,
+      timestamp: number,
+      event: "capacity.changed" | "queue.changed",
+      workerId?: string,
+    ): EventEnvelope =>
+      ({
+        event,
+        id: `evt_${seq}`,
+        module: "test",
+        payload: {
+          ...(event === "queue.changed" ? { depth: seq } : {}),
+          ...(workerId === undefined ? {} : { workerId }),
+        },
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        step(1, 100, "capacity.changed"),
+        step(2, 200, "capacity.changed"),
+        step(3, 150, "queue.changed", "w1"),
+        step(4, 180, "queue.changed", "w2"),
+        step(5, 190, "queue.changed", "w1"),
+        envelope(6, 250),
+        envelope(7, 400),
+        step(8, 500, "capacity.changed"),
+      ),
+    });
+    const carry = ["capacity.changed", "queue.changed"] as const;
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { carry, sinceTs: 300 });
+    const none = await readEventFile(filesystem, "/data/events.jsonl", { carry, sinceTs: 50 });
+    const plain = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 300 });
+
+    // The newest step of each kind and worker at or before 300, then everything after it.
+    expect(read.map((entry) => entry.id)).toEqual(["evt_4", "evt_5", "evt_2", "evt_7", "evt_8"]);
+    expect(plain.map((entry) => entry.id)).toEqual(["evt_7", "evt_8"]);
+    // Nothing is at or before 50, so nothing is carried and nothing is repeated.
+    expect(none.map((entry) => entry.id)).toEqual([
+      "evt_1",
+      "evt_2",
+      "evt_3",
+      "evt_4",
+      "evt_5",
+      "evt_6",
+      "evt_7",
+      "evt_8",
+    ]);
+  });
+
+  it("carries a step stamped exactly sinceTs, and counts it once", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines({
+        ...envelope(1, 300),
+        event: "capacity.changed",
+      } as unknown as EventEnvelope),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["capacity.changed"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.id)).toEqual(["evt_1"]);
   });
 });

@@ -218,6 +218,53 @@ describe("connectSimlock: handshake", () => {
     await expect(callPromise).resolves.toEqual(answer);
   });
 
+  it("asks usage.get for a window from an admin client and returns the daemon's answer, refusing a window the contract bounds before sending it", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const none = { count: 0, max: null, p50: null, p95: null };
+    const figures = {
+      boot: none,
+      bySource: { booted: 0, provisioned: 0, warm: 0 },
+      errors: { byCode: {} },
+      granted: 0,
+      held: none,
+      incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+      provisioning: none,
+      queue: { meanDepth: null, peakDepth: null },
+      rejected: { byReason: {}, total: 0 },
+      requests: 0,
+      turnaround: none,
+      utilisation: { slots: { max: null, mean: null, peak: null } },
+      wait: none,
+    };
+    const answer = {
+      bucketMs: 60_000,
+      coversFrom: 1_000,
+      partial: false,
+      platforms: { android: figures, ios: figures },
+      requesters: [],
+      series: [],
+      totals: figures,
+      window: { from: 1_000, to: 3_601_000 },
+      workers: [],
+    };
+
+    const callPromise = client.usage({ from: 1_000, to: 3_601_000 });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("usage.get")!;
+    expect(call.payload).toEqual({ from: 1_000, to: 3_601_000 });
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+
+    const sentBefore = connection.sent.length;
+    await expect(client.usage({ from: 5, to: 5 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(connection.sent).toHaveLength(sentBefore);
+  });
+
   it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
