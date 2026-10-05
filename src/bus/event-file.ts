@@ -8,6 +8,9 @@ export const EVENT_FILE_NAME = "events.jsonl";
 
 /**
  * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5).
+ * With `carry`, also the latest envelope of each named event at or before `sinceTs` -- one per
+ * `workerId` where the payload names one -- so a reader of a step function (ADR 0016 §3) is told
+ * the step in force when its window opens.
  * The current file is read first, then its generations `<path>.1`, `<path>.2` and so on until
  * one is missing (ADR 0016 §4). Newest first means a rotation landing mid-read can only make a
  * generation show up twice -- never make one go missing -- and the repeat is dropped by `id`.
@@ -33,22 +36,43 @@ export async function readEventFile(
 export async function readEventHistory(
   filesystem: Filesystem,
   path: string,
-  { sinceTs }: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
+  { sinceTs, carry = [] }: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
 ): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
   const generations = await readGenerations(filesystem, path);
   const seen = new Set<string>();
   const events: EventEnvelope[] = [];
+  const carried = new Map<string, EventEnvelope>();
   let oldestTs: number | undefined;
   // Oldest generation first, so events that tie on time and seq keep the order they were written.
   for (const line of generations.reverse().flat()) {
     const envelope = parseEnvelope(line);
     if (envelope === undefined) continue;
     oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
-    if (envelope.timestamp <= sinceTs || seen.has(eventKey(envelope))) continue;
+    if (envelope.timestamp <= sinceTs) {
+      keepIfCarried(carried, envelope, carry);
+      continue;
+    }
+    if (seen.has(eventKey(envelope))) continue;
     seen.add(eventKey(envelope));
     events.push(envelope);
   }
-  return { events: events.sort(byTimeThenSeq), oldestTs };
+  return { events: [...carried.values(), ...events].sort(byTimeThenSeq), oldestTs };
+}
+
+/**
+ * Keeps `envelope` as the step in force for its event and worker when it is a named event and no
+ * later one is kept already. Ties on time and seq go to the one met last, the one written last.
+ */
+function keepIfCarried(
+  carried: Map<string, EventEnvelope>,
+  envelope: EventEnvelope,
+  carry: readonly EventName[],
+): void {
+  if (!carry.includes(envelope.event)) return;
+  const workerId = (envelope.payload as { readonly workerId?: unknown }).workerId;
+  const key = `${envelope.event}\u0000${typeof workerId === "string" ? workerId : ""}`;
+  const kept = carried.get(key);
+  if (kept === undefined || byTimeThenSeq(kept, envelope) <= 0) carried.set(key, envelope);
 }
 
 /** The lines of the current file, then of each generation, newest first, until two in a row are missing. */
@@ -142,33 +166,58 @@ export class EventHistory {
 
   /**
    * Without `sinceTs`, the ring, as `simlock events` has always answered. With it, the event
-   * file while the writer is writing; the ring when there is no file to trust.
+   * file while the writer is writing; the ring when there is no file to trust. `carry` adds
+   * the step in force for each named event at `sinceTs` (see `readEventFile`).
    */
   async replay(
     input: { readonly sinceTs?: number; readonly carry?: readonly EventName[] } = {},
   ): Promise<EventEnvelope[]> {
-    const { bus, filesystem, logger, path } = this.#options;
-    if (input.sinceTs === undefined) return bus.replay();
-    if (!this.#writing) return bus.replay({ sinceTs: input.sinceTs });
+    if (input.sinceTs === undefined) return this.#options.bus.replay();
+    return (await this.read({ carry: input.carry ?? [], sinceTs: input.sinceTs })).events;
+  }
+
+  /**
+   * What `replay` answers for `sinceTs`, with the oldest timestamp the history holds -- not only
+   * what is newer than `sinceTs` -- so a reader can say how far back the history reaches (ADR
+   * 0016 §5). From the ring when there is no file to trust, and then it is the ring's oldest.
+   */
+  async read(input: {
+    readonly sinceTs: number;
+    readonly carry: readonly EventName[];
+  }): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+    const { filesystem, logger, path } = this.#options;
+    if (!this.#writing) return this.#readRing(input);
     try {
-      return await readEventFile(filesystem, path, { sinceTs: input.sinceTs });
+      return await readEventHistory(filesystem, path, input);
     } catch (error: unknown) {
       logger.warn("Event file read failed; replaying from memory", {
         error: error instanceof Error ? error.message : String(error),
         path,
       });
-      return bus.replay({ sinceTs: input.sinceTs });
+      return this.#readRing(input);
     }
   }
 
-  async read(_input: {
-    readonly sinceTs: number;
-    readonly carry: readonly EventName[];
-  }): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
-    return { events: [], oldestTs: undefined };
+  /** The id of the event published last, `undefined` before the first. */
+  latestId(): string | undefined {
+    return this.#options.bus.latestId();
   }
 
-  latestId(): string | undefined {
-    return undefined;
+  #readRing({
+    sinceTs,
+    carry,
+  }: {
+    readonly sinceTs: number;
+    readonly carry: readonly EventName[];
+  }): { readonly events: EventEnvelope[]; readonly oldestTs: number | undefined } {
+    const ring = this.#options.bus.replay();
+    const carried = new Map<string, EventEnvelope>();
+    let oldestTs: number | undefined;
+    for (const envelope of ring) {
+      oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
+      if (envelope.timestamp <= sinceTs) keepIfCarried(carried, envelope, carry);
+    }
+    const newer = ring.filter((envelope) => envelope.timestamp > sinceTs);
+    return { events: [...carried.values(), ...newer].sort(byTimeThenSeq), oldestTs };
   }
 }

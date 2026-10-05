@@ -376,6 +376,7 @@ export class EventBus {
   readonly #events: Array<EventEnvelope | undefined>;
   #nextEventIndex = 0;
   #eventCount = 0;
+  #latestId: string | undefined;
 
   constructor(
     private readonly clock: Clock,
@@ -461,7 +462,13 @@ export class EventBus {
       .sort(byTimeThenSeq);
   }
 
+  /** The id of the envelope published last, by arrival; `undefined` before the first. */
+  latestId(): string | undefined {
+    return this.#latestId;
+  }
+
   #append(envelope: EventEnvelope): void {
+    this.#latestId = envelope.id;
     this.#events[this.#nextEventIndex] = envelope;
     this.#nextEventIndex = (this.#nextEventIndex + 1) % this.capacity;
     if (this.#eventCount < this.capacity) {

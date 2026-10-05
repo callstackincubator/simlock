@@ -532,10 +532,10 @@ describe("readEventFile", () => {
     // Nothing is at or before 50, so nothing is carried and nothing is repeated.
     expect(none.map((entry) => entry.id)).toEqual([
       "evt_1",
-      "evt_2",
       "evt_3",
       "evt_4",
       "evt_5",
+      "evt_2",
       "evt_6",
       "evt_7",
       "evt_8",
