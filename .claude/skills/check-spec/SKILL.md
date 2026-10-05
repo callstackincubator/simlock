@@ -1,6 +1,6 @@
 ---
 name: check-spec
-description: Check a feature or task spec as posted on GitHub, with a fresh context, before its approval box is ticked or its ready label is set — read the body, its parent or its tasks, the ADRs it names, the agent rules and the code it points at — and report contradictions, lines nobody could check, failure modes no line answers, overlapping tasks without a Depends on, and real-device lines with no slow-lane test, in a fixed block. Read-only. Use when spec-session reaches the end of technical or split mode, or when the user says "check the spec of #N".
+description: Check a feature or task spec as posted on GitHub, with a fresh context, before its approval box is ticked or its ready label is set — read the body, its parent or its tasks, the ADRs it names, the agent rules and the code it points at — and report contradictions, lines nobody could check, failure modes no line answers, overlapping tasks without a Depends on, real-device lines with no slow-lane test, and terms a rule depends on that nobody defined, in a fixed block. Read-only. Use when spec-session reaches the end of technical or split mode, or when the user says "check the spec of #N".
 model: opus
 effort: high
 context: fork
@@ -73,6 +73,13 @@ Report a finding for each of these, and nothing else:
 5. **hardware.** A Done when line that needs a real simulator or emulator
    but does not say so in its own words ("on a Mac with an iOS runtime:
    ..."), or does not name the slow-lane test that proves it.
+6. **undefined.** A term a grammar, parser, filter or match rule depends on
+   that the body uses but never defines with examples: "bare version",
+   "exact match", "a valid name". Two readers would build two rules from
+   it. A line that says behaviour stays "as today" or "unchanged" is one
+   when the change could still alter it: name the inputs `main` accepts now
+   (run the command or grep the parser) and say which of them the new rule
+   would reject or reinterpret.
 
 What a rule, an accepted ADR or `always-in-scope.md` already answers is not
 a gap. "Nothing shows the suite is green" is never a finding: CI proves it.
@@ -85,7 +92,7 @@ End with exactly this block, nothing after it:
 
 ```
 Issue: #N  Checked: <#N and each task read>  Findings: n
-- [contradiction|unverifiable|failure-mode|overlap|hardware] #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
+- [contradiction|unverifiable|failure-mode|overlap|hardware|undefined] #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
 Verdict: ready | fix first
 ```
 

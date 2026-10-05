@@ -11,9 +11,25 @@ Part of #NNN.
 <!-- The slice of the parent's outcome this task delivers: what a user can do
 after this PR merges that they could not after the previous one. -->
 
+## In short
+
+<!-- Two or three plain sentences: what changes for the user after this PR,
+then a small Mermaid diagram of the flow it touches, with the changed step
+marked. Define any new term here with an example. When the task changes
+what input is accepted or what the tool prints, add the user's session
+(commands and output, before and after) and an inputs table with today's
+result beside the new one. End with one line: what a user would notice if
+this task goes wrong. -->
+
 ## Technical spec
 
 ### Modules touched
+
+<!-- A Mermaid flowchart of the modules this changes and the ones they call,
+changed ones marked, arrows pointing from caller to callee. When the change
+crosses a process or a network hop (CLI, daemon, driver, gateway, worker,
+HTTP or MCP client), add a Mermaid sequence diagram of one request through
+it, including the failure reply. Skip a diagram that would show one box. -->
 
 ### Contract and event changes
 

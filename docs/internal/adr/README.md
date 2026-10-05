@@ -9,6 +9,14 @@ accepted. Numbers are never reused, and an ADR is never edited to say
 something different — a decision that changes gets a new ADR that supersedes
 the old one, and the old one's Status is updated to point at it.
 
+Show the decision, not only describe it. Where it helps the reader, add
+Mermaid diagrams: a flowchart of the modules or processes involved and how
+they depend on each other, before and after the decision; a sequence
+diagram of a request or flow the decision changes, failure paths included;
+a state diagram when it changes the states a lease, device or worker can
+be in. Each diagram has at most about ten boxes, and the text still states
+the decision on its own.
+
 Status values:
 
 - **Proposed** — under discussion, not binding.

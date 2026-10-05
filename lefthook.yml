@@ -10,7 +10,11 @@ pre-commit:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+
+# fallow audits the whole branch against main and takes minutes, so it runs
+# once per push rather than on every checkpoint commit.
+pre-push:
+  commands:
     fallow:
-      glob: "*.{ts,tsx,js,mjs,mts,cts}"
-      run: pnpm exec fallow audit --base HEAD --format compact
+      run: pnpm exec fallow audit --base origin/main --format compact
       fail_text: "Fallow found issues in your changes. Run 'pnpm fallow' to see details."
