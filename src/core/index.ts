@@ -115,13 +115,7 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
-export {
-  type Core,
-  type CoreOptions,
-  CorePortMissingError,
-  type CorePorts,
-  createCore,
-} from "./create-core.js";
+export { type Core, createCore } from "./create-core.js";
 export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
@@ -136,7 +130,7 @@ export {
 } from "./domain.js";
 export { classCandidates } from "./catalog-match.js";
 export { ComponentBeingRemovedError } from "./component-installer.js";
-export { type AcquisitionMaintenance, type LeaseMaintenance } from "./nuke-service.js";
+export { type AcquisitionMaintenance } from "./nuke-service.js";
 export { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
 export { type ReleasedLease } from "./registry.js";
 export { stableError } from "./stable-error.js";

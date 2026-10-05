@@ -24,7 +24,7 @@ import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
-export interface CoreOptions {
+interface CoreOptions {
   readonly clock: Clock;
   /**
    * The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
@@ -57,7 +57,7 @@ export interface CoreOptions {
  * What core needs from leasing and cannot import (ADR 0018 §2). Leasing implements each one and
  * the composition root hands them over through `Core#connect`.
  */
-export interface CorePorts {
+interface CorePorts {
   /**
    * The fences an operator reset puts around acquisition and around release, and the release of
    * every lease it runs between them (`NukeService`).
@@ -73,7 +73,7 @@ export interface CorePorts {
 }
 
 /** A core service reached a port that `Core#connect` has not been given yet. */
-export class CorePortMissingError extends Error {
+class CorePortMissingError extends Error {
   constructor(readonly port: keyof CorePorts) {
     super(`A core service was called before connect() supplied the "${port}" port`);
     this.name = "CorePortMissingError";

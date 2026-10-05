@@ -61,11 +61,6 @@ import {
 } from "./wait-queue.js";
 
 export type { LeaseRequestOptions } from "./wait-queue.js";
-export {
-  QueueTimeoutError,
-  RequestCancelledError,
-  RequesterAlreadyLeasedError,
-} from "./wait-queue.js";
 
 export class NoCapacityError extends Error {
   constructor() {
