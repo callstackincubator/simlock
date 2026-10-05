@@ -72,6 +72,18 @@ an end-to-end test can verify against main. -->
 
 - ADR NNNN — <title>: <one line on what it fixes for this feature>
 
+## Tasks
+
+<!-- Added when the feature is split; replaces the Technical spec. First a
+Mermaid flowchart of the tasks in the order they depend on each other. Then
+one entry per task, in that order:
+
+- #NNN <title> — <one plain sentence: what the user can do after it>.
+  Risk: <what a user would notice if it goes wrong>.
+
+Do not write task states here: GitHub's sub-issue list shows them and
+stays current. -->
+
 ## Technical spec
 
 <!-- Only for a feature delivered as one PR. Delete this section when the

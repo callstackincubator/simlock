@@ -125,8 +125,9 @@ gh api graphql -F parent="<feature node id>" -F child="<task node id>" -f query=
 
 Get a node id with `gh issue view <n> --json id -q .id`. Run the spec check
 (step 5) on the feature, which reads every task you created. Then remove the
-Technical spec section from the feature body, add a Tasks section listing the
-sub-issues in order, and change the label:
+Technical spec section from the feature body, add the Tasks section the
+feature template describes (the order as a diagram, then one entry per task
+with what it changes for the user and its risk), and change the label:
 
 ```bash
 gh issue edit <feature> --add-label feature:planned --remove-label feature:spec
