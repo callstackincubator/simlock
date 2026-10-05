@@ -307,7 +307,9 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     );
 
     const startedAt = Date.now();
-    await expect(handle.wait()).rejects.toThrow(ExecOutputDeliveryStalledError);
+    const error = await handle.wait().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExecOutputDeliveryStalledError);
+    expect((error as Error).message).toContain("still unresolved 100ms later");
     expect(Date.now() - startedAt, "rejected only after the default 5 s cap").toBeLessThan(2_500);
     expect(seen).toEqual(["stuck"]);
   }, 10_000);
