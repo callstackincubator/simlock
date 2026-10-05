@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testComponentWiring } from "./test-wiring.js";
+import { capacityChangedPayload, testComponentWiring } from "./testing.js";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import {
@@ -15,7 +15,6 @@ import {
   type CapacityLimits,
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
-import { capacityChangedPayload } from "./capacity/testing.js";
 import type { ModelPreferences } from "./driver-catalog.js";
 import {
   BootTimeoutError,

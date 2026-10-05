@@ -10,20 +10,24 @@
       {
         "patterns": [
           {
-            "group": ["**/core/**", "!**/core/index.js"],
+            "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
             "message": "core is entered through its index.js"
           },
           {
-            "group": ["**/gateway/**", "!**/gateway/index.js"],
+            "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
             "message": "gateway is entered through its index.js"
           },
           {
-            "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+            "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
             "message": "drivers/ios is entered through its index.js"
           },
           {
-            "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+            "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
             "message": "drivers/android is entered through its index.js"
+          },
+          {
+            "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+            "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
           }
         ]
       }
@@ -38,15 +42,15 @@
           {
             "patterns": [
               {
-                "group": ["**/gateway/**", "!**/gateway/index.js"],
+                "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "gateway is entered through its index.js"
               },
               {
-                "group": ["**/capacity/**", "!**/capacity/index.js"],
+                "regex": "(?:^|/)capacity/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "capacity is entered through its index.js"
               },
               {
-                "group": ["**/drivers/**"],
+                "regex": "(?:^|/)drivers/",
                 "message": "platform behaviour reaches this module only through the Driver interface"
               },
               {
@@ -61,6 +65,10 @@
                   "node:child_process/**"
                 ],
                 "message": "core and leasing reach the filesystem and processes only through injected ports"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
               }
             ]
           }
@@ -75,8 +83,8 @@
           {
             "patterns": [
               {
-                "regex": "core/(?:[^i]|i[^n]|in[^d]|ind[^e]|inde[^x]|index[^.]|index\\.[^j]|index\\.j[^s]|index\\.js.).*",
-                "message": "core is entered through index.js"
+                "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "core is entered through its index.js"
               },
               {
                 "group": ["**/core/index.js"],
@@ -112,8 +120,12 @@
                 "message": "the gateway imports no driver, HTTP, CLI or MCP module"
               },
               {
-                "group": ["**/daemon/**", "!**/daemon/dispatch.js"],
+                "regex": "(?:^|/)daemon/(?:$|[^d]|d(?:$|[^i]|i(?:$|[^s]|s(?:$|[^p]|p(?:$|[^a]|a(?:$|[^t]|t(?:$|[^c]|c(?:$|[^h]|h(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))))))",
                 "message": "the gateway imports only the daemon's dispatch contract"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
               }
             ]
           }
@@ -129,20 +141,24 @@
           {
             "patterns": [
               {
-                "group": ["**/core/**", "!**/core/index.js"],
+                "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "core is entered through its index.js"
               },
               {
-                "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+                "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "drivers/ios is entered through its index.js"
               },
               {
-                "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+                "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "drivers/android is entered through its index.js"
               },
               {
-                "group": ["**/gateway/**"],
+                "regex": "(?:^|/)gateway/",
                 "message": "only the composition root, main.ts, knows a gateway exists"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
               }
             ]
           }
@@ -157,8 +173,12 @@
           {
             "patterns": [
               {
-                "group": ["../**", "./../**"],
+                "regex": "^/|(?:^|/)\\.\\.(?:/|$)",
                 "message": "the contract imports nothing outside src/contract/"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
               }
             ]
           }
@@ -166,30 +186,30 @@
       }
     },
     {
-      "files": ["**/*.test.ts", "**/test-*.ts", "**/testing.ts"],
+      "files": ["**/*.test.ts", "**/test-*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**/core/**", "!**/core/testing.js", "!**/core/index.js"],
-                "message": "core is entered through its index.js"
+                "regex": "(?:^|/)core/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
+                "message": "core is entered through its index.js, or testing.js from a test file"
               },
               {
-                "group": ["**/gateway/**", "!**/gateway/index.js"],
+                "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "gateway is entered through its index.js"
               },
               {
-                "group": ["**/capacity/**", "!**/capacity/testing.js", "!**/capacity/index.js"],
-                "message": "capacity is entered through its index.js"
+                "regex": "(?:^|/)capacity/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
+                "message": "capacity is entered through its index.js, or testing.js from a test file"
               },
               {
-                "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+                "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "drivers/ios is entered through its index.js"
               },
               {
-                "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+                "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "drivers/android is entered through its index.js"
               }
             ]

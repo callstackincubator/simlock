@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "./test-wiring.js";
+import { testComponentWiring } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import {
