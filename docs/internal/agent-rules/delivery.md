@@ -212,9 +212,10 @@ is open, done means closed as completed.
     verification is (rule 9). The PR opens as a draft as soon as the spec's
     tests are committed red, so CI runs from the first push and the PR body
     can carry the work's status. It leaves draft only after two reviews of
-    the diff against `main`, each by a fresh sub-agent on Opus (never a
-    smaller model chosen for speed), and each blind to the implementer and to
-    the other reviewer. `.agents/scripts/review-inputs.sh` builds what each
+    the diff against `main`, each by a fresh sub-agent defined in
+    `.claude/agents/`, whose frontmatter pins the model and effort (never a
+    smaller model chosen for speed), and each blind to the implementer and
+    to the other reviewer. `.agents/scripts/review-inputs.sh` builds what each
     one reads.
     The *spec review* gets the issue body, its parent feature, the ADRs it
     names, the files under Rules in play, `always-in-scope.md`, a bug's

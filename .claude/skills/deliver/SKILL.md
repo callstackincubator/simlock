@@ -1,6 +1,8 @@
 ---
 name: deliver
 description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:ready feature (spec its tasks, then walk them in dependency order, two at a time). Claims, delegates implement, review and hardware checks to their forked skills, reasons only over their report blocks, and merges each PR through the gate. Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
+model: opus
+effort: medium
 ---
 
 # Deliver

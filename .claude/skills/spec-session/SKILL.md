@@ -1,6 +1,8 @@
 ---
 name: spec-session
 description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues; technical and split end with the forked check-spec skill reading the posted body, and its findings are fixed before any approval box is ticked or ready label set. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
+model: opus
+effort: medium
 ---
 
 # Spec session

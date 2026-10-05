@@ -135,12 +135,16 @@ waiting.
 ## Review, verification and merge
 
 `deliver` never writes code itself. It hands each stage to a forked skill
-that runs on the model its frontmatter pins — `implement` and `review` on
-Sonnet, `triage-bug` and `check-spec` on Opus — and reasons only over the
-fixed report each one returns. `implement` commits the spec's tests red
-first and opens a draft PR, so CI runs from the first push; it then turns
-them green in commits that each lower the failing count, and runs `pnpm
-mutate` so every changed line is shown to matter before anyone reviews it.
+that runs on the model and effort its frontmatter pins — `implement` on
+Sonnet, `review`, `triage-bug` and `check-spec` on Opus — and reasons only
+over the fixed report each one returns. `deliver` and `spec-session` run in
+the session that invoked them; their frontmatter pins Opus only until the
+next message, so an unattended run keeps it and an attended one returns to
+the session's model after the first reply. `implement` commits the spec's
+tests red first and opens a draft PR, so CI runs from the first push; it
+then turns them green in commits that each lower the failing count, and
+runs `pnpm mutate` so every changed line is shown to matter before anyone
+reviews it.
 
 A spec never answers every question. What any change includes without
 asking — docs it makes false, both `EVENTS.md` files, a test for every new
@@ -155,8 +159,9 @@ ADR, or a choice a user would notice that nobody made.
 
 A PR leaves draft reviewed; it is not reviewed on arrival. The `review`
 skill builds the reviewers' inputs with `.agents/scripts/review-inputs.sh`
-and spawns two reviewers on Opus. Neither has seen the delivering session,
-and neither sees what the other sees. The spec reviewer gets the issue, its
+and spawns the two reviewer agents in `.claude/agents/`, which pin Opus
+at high effort and limit the tools each may use. Neither has seen the
+delivering session, and neither sees what the other sees. The spec reviewer gets the issue, its
 parent, its ADRs, `always-in-scope.md`, the PR's `Assumption:` lines and
 the diff, and answers whether every line of the spec is delivered, whether
 the diff does anything the spec did not ask for, whether each test proves
