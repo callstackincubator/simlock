@@ -9,7 +9,11 @@ import type {
   Platform,
 } from "./domain.js";
 
-export interface DeviceRequest {
+/**
+ * What a driver resolves (ADR 0015 §5): a request with the exact model the core settled on. A
+ * driver never sees a class.
+ */
+export interface ExactDeviceRequest {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion?: string;
@@ -26,6 +30,16 @@ export interface DeviceRequest {
    * image of that tag, never to a download.
    */
   readonly imageTag?: string;
+}
+
+/**
+ * A lease request as it arrived (ADR 0015 §1): an exact model, a class, or neither, which means
+ * `phone`. Transports carry it unfilled; the acquisition coordinator resolves it into the exact
+ * request a driver takes.
+ */
+export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+  readonly model?: string;
+  readonly class?: DeviceClass;
 }
 
 export interface DriverDevice {
@@ -257,7 +271,7 @@ export interface Driver {
    * `RuntimeMissingError` with `downloadable: true` and `component`, the string to hand to
    * `installComponent` -- the core never decides whether to download from inside a driver.
    */
-  resolveSpec(request: DeviceRequest): Promise<DeviceSpec>;
+  resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec>;
   /**
    * A read: the installed component that satisfies `component`, with its exact version and its
    * receipt, or `undefined`. Never downloads. A string that is not a version, such as the
@@ -745,12 +759,28 @@ export class UnsupportedRequestOptionError extends Error {
 }
 
 export class UnknownModelError extends Error {
+  /** The class a request named or meant when no model of it is listed on this host. */
+  readonly class: DeviceClass | undefined;
+  readonly model: string | undefined;
+
+  /**
+   * An exact model the host does not list, or, with `deviceClass` and no model, a class with no
+   * model on this host: the message then names the config key to set.
+   */
   constructor(
     readonly platform: Platform,
-    readonly model: string,
+    model: string | undefined,
+    deviceClass?: DeviceClass,
   ) {
-    super(`Unknown ${platform} model: ${model}`);
+    super(
+      deviceClass === undefined
+        ? `Unknown ${platform} model: ${String(model)}`
+        : `No ${platform} model of class ${deviceClass} is listed on this host; ` +
+            `name one in ${platform}.defaultModels.${deviceClass}`,
+    );
     this.name = "UnknownModelError";
+    this.model = model;
+    this.class = deviceClass;
   }
 }
 

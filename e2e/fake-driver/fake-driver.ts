@@ -13,7 +13,7 @@ import {
   type InstalledComponent,
   RuntimeMissingError,
   UnknownModelError,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
   type DriverComponent,
@@ -242,7 +242,7 @@ export class OutOfProcessFakeDriver implements Driver {
     await this.#beforeCall("revalidateRoot", []);
   }
 
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     const script = await this.#beforeCall("resolveSpec", [request]);
     this.#assertKnownModel(request.model, script);
     const osVersion =

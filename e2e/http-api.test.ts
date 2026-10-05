@@ -313,13 +313,13 @@ describe("HTTP API", () => {
     const port = await reservePort();
     const env = await withDaemon({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-    });
-    await env.driverScript.set({
-      ios: {
-        availableOsVersions: ["18.4"],
-        defaultModels: { phone: ["iPhone 16"] },
-        knownModels: ["iPhone 16"],
-        modelClasses: { "iPhone 16": "phone" },
+      driverScript: {
+        ios: {
+          availableOsVersions: ["18.4"],
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+        },
       },
     });
     const baseUrl = `http://127.0.0.1:${port}`;

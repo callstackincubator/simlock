@@ -1,17 +1,26 @@
 import type { EventBus } from "../bus/index.js";
+import { requestedClass } from "../contract/index.js";
 import { type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
-import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
+import {
+  type AcquisitionPlan,
+  type AcquisitionPlanner,
+  type AcquisitionPlannerInput,
+} from "./acquisition-planner.js";
 import {
   type DeviceOperationClaim,
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
+import { findCatalogModel } from "./catalog-match.js";
 import {
+  type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
+  type DeviceRequirement,
   type DeviceSpec,
+  exactRequirement,
   type LeaseRecord,
   type Platform,
   sameSpec,
@@ -25,9 +34,13 @@ import {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
+  type ExactDeviceRequest,
   RuntimeMissingError,
+  UnknownModelError,
 } from "./driver.js";
-import { type DriverCatalog } from "./driver-catalog.js";
+import { type DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
+import { type CatalogReader } from "./lease-ports.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import type { AcquisitionMaintenance } from "./nuke-service.js";
 import {
@@ -98,6 +111,8 @@ export type AcquisitionQueue = Pick<
 >;
 
 export interface LeaseAcquisitionCoordinatorOptions {
+  /** Read for a request that names a class: which models the host lists, and which runtimes. */
+  readonly catalog: Pick<CatalogReader, "listCatalog">;
   readonly claims: AcquisitionClaims;
   /**
    * The one installer in the core (ADR 0010 §3). A request whose runtime is missing and that
@@ -117,6 +132,11 @@ export interface LeaseAcquisitionCoordinatorOptions {
     ManagedDeviceLifecycle,
     "bootForLease" | "destroy" | "dispose" | "shutdown"
   >;
+  /**
+   * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
+   * built at the composition root. This coordinator holds no model name of its own.
+   */
+  readonly modelPreferences: ModelPreferences;
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
@@ -128,6 +148,9 @@ export interface LeaseAcquisitionCoordinatorOptions {
 
 interface AcquisitionWaiter extends Waiter {
   failures: number;
+  /** What an idle device must satisfy besides its pool mode, kept beside `spec` (ADR 0015 §5). */
+  classOf?: (model: string) => DeviceClass | undefined;
+  requirement?: DeviceRequirement;
   spec?: DeviceSpec;
   timing: LeaseTiming;
 }
@@ -281,20 +304,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      // The one place a request with no mode gets the worker's default (ADR 0007 §2).
-      const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
-      const resolved = await this.#resolveOrInstall(waiter, driver, { ...request, mode }, options);
-      // The image tag is the request's, or none: a driver that returns another, or one the
-      // request did not name, would plan the device into a pool the request did not ask for.
-      if (resolved.imageTag !== request.imageTag) {
-        throw new Error(
-          `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
-            `for a request naming ${String(request.imageTag)}`,
-        );
-      }
-      // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
-      // driver that returns the wrong thing still cannot put a full request on a slim device.
-      waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
+      await this.#settleSpec(waiter, driver, request, options);
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -303,6 +313,79 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
+  }
+
+  /**
+   * Resolves the request into the waiter's spec and requirement, or throws what made it
+   * unresolvable. The one place a request with no mode gets the worker's default (ADR 0007 §2).
+   */
+  async #settleSpec(
+    waiter: AcquisitionWaiter,
+    driver: Driver,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): Promise<void> {
+    const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
+    // An exact model awaits nothing here, so its path takes no extra turn of the event loop.
+    const { class: _class, model, ...rest } = request;
+    const target: ResolvedTarget =
+      model === undefined
+        ? await this.#resolveClass(request, mode)
+        : { exact: { ...rest, mode, model } };
+    const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, options);
+    // The image tag is the request's, or none: a driver that returns another, or one the
+    // request did not name, would plan the device into a pool the request did not ask for.
+    if (resolved.imageTag !== request.imageTag) {
+      throw new Error(
+        `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
+          `for a request naming ${String(request.imageTag)}`,
+      );
+    }
+    // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
+    // driver that returns the wrong thing still cannot put a full request on a slim device.
+    waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
+    waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
+    if (target.classOf !== undefined) waiter.classOf = target.classOf;
+  }
+
+  /**
+   * Turns a request that names no model into the exact one a driver resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model on its preference
+   * list that this host's catalog lists, classes as that class, and pairs with an installed
+   * runtime (of the requested image tag, when it names one); the catalog is read, and nothing is
+   * downloaded. A class with no listed model fails as `UnknownModelError`, and one whose listed
+   * models pair with no runtime as a `RuntimeMissingError` no download can fix.
+   */
+  async #resolveClass(request: DeviceRequest, mode: DeviceMode): Promise<ResolvedTarget> {
+    const { class: _class, model: _model, ...rest } = request;
+    const deviceClass = requestedClass({ class: request.class });
+    const entry = (await this.options.catalog.listCatalog(request.platform))[0];
+    if (entry === undefined) throw new UnknownModelError(request.platform, undefined, deviceClass);
+    const candidates = (
+      this.options.modelPreferences[request.platform]?.[deviceClass] ?? []
+    ).flatMap((name) => {
+      const listed = findCatalogModel(entry, name);
+      return listed !== undefined && classOfModel(entry, listed) === deviceClass ? [listed] : [];
+    });
+    if (candidates.length === 0) {
+      throw new UnknownModelError(request.platform, undefined, deviceClass);
+    }
+    const chosen = candidates.find((candidate) => pairs(entry, candidate, request.imageTag));
+    if (chosen === undefined) {
+      throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
+    }
+    return {
+      classOf: (candidate) => classOfModel(entry, candidate),
+      exact: { ...rest, mode, model: chosen },
+      requirement: {
+        imageTag: request.imageTag,
+        osVersion:
+          request.osVersion === undefined
+            ? { kind: "installed", versions: entry.runtimes }
+            : { kind: "exact", version: request.osVersion },
+        platform: request.platform,
+        target: { class: deviceClass, kind: "class" },
+      },
+    };
   }
 
   /**
@@ -319,7 +402,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #resolveOrInstall(
     waiter: AcquisitionWaiter,
     driver: Driver,
-    request: DeviceRequest,
+    request: ExactDeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<DeviceSpec> {
     try {
@@ -506,6 +589,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       noWait: waiter.options.noWait ?? false,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
+      ...fitInput(waiter),
     });
   }
 
@@ -852,4 +936,39 @@ function downloadingProgress(
 /** Both reports are for the one component a `#resolveOrInstall` call downloads. */
 function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
   return left.waiting === right.waiting && left.percent === right.percent;
+}
+
+/** What the planner needs, beside the spec, to find an idle device that fits the request. */
+function fitInput(
+  waiter: AcquisitionWaiter,
+): Pick<AcquisitionPlannerInput, "classOf" | "requirement"> {
+  return {
+    ...(waiter.requirement === undefined ? {} : { requirement: waiter.requirement }),
+    ...(waiter.classOf === undefined ? {} : { classOf: waiter.classOf }),
+  };
+}
+
+/** What `#resolveClass` settles on; an exact request has only `exact`. */
+interface ResolvedTarget {
+  readonly exact: ExactDeviceRequest;
+  readonly requirement?: DeviceRequirement;
+  readonly classOf?: (model: string) => DeviceClass | undefined;
+}
+
+/** A model's class in a catalog entry; an inherited key like `constructor` is no class. */
+function classOfModel(entry: DriverCatalogEntry, model: string): DeviceClass | undefined {
+  return Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+}
+
+/**
+ * Whether a model pairs with an installed runtime, counting only runtimes that have an image of
+ * the requested tag when the request names one (the rule the gateway's `matchRequest` applies).
+ */
+function pairs(entry: DriverCatalogEntry, model: string, imageTag: string | undefined): boolean {
+  const runtimes = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : [];
+  return (runtimes ?? []).some(
+    (runtime) =>
+      imageTag === undefined ||
+      (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag),
+  );
 }

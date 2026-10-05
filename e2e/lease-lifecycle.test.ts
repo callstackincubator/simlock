@@ -94,7 +94,10 @@ describe("lease lifecycle across both frontends", () => {
   describe("a request names a class or nothing", () => {
     const iosScript = {
       availableOsVersions: ["18.4", "26.0"],
-      defaultModels: { phone: ["iPhone 17", "iPhone 16", "iPhone 15"] },
+      defaultModels: {
+        phone: ["iPhone 17", "iPhone 16", "iPhone 15"],
+        watch: ["Apple Watch Series 11"],
+      },
       knownModels: ["Apple Watch Series 11", "iPhone 15", "iPhone 16", "iPhone 17"],
       modelClasses: {
         "Apple Watch Series 11": "watch",
@@ -131,14 +134,18 @@ describe("lease lifecycle across both frontends", () => {
       return result;
     }
 
+    /** The grant a `simlock lease` printed, after proving it exited 0. */
+    function granted(result: { code: number | null; stderr: string; json: unknown }): Granted {
+      expect(result.code, result.stderr).toBe(0);
+      return result.json as Granted;
+    }
+
     /** Leases and releases an exact device, leaving it warm and idle. */
     async function warm(env: Awaited<ReturnType<typeof withDaemon>>, model: string) {
-      const result = await lease(env, "warmer", ["--device", model, "--os", "18.4"]);
-      expect(result.code, result.stderr).toBe(0);
-      const granted = result.json as Granted;
-      await env.cli(["release", granted.lease.id]);
-      await waitForDeviceState(env, granted.device.driverDeviceId, "ready");
-      return granted.device;
+      const warmed = granted(await lease(env, "warmer", ["--device", model, "--os", "18.4"]));
+      await env.cli(["release", warmed.lease.id]);
+      await waitForDeviceState(env, warmed.device.driverDeviceId, "ready");
+      return warmed.device;
     }
 
     async function deviceWork(env: Awaited<ReturnType<typeof withDaemon>>) {
@@ -153,7 +160,7 @@ describe("lease lifecycle across both frontends", () => {
       const result = await lease(env, "agent", []);
 
       expect(result.code, result.stderr).toBe(0);
-      expect((result.json as Granted).device.spec).toMatchObject({
+      expect(granted(result).device.spec).toMatchObject({
         model: "iPhone 17",
         osVersion: "26.0",
       });
@@ -166,13 +173,13 @@ describe("lease lifecycle across both frontends", () => {
 
       const byClass = await lease(env, "by-class", ["--class", "phone"]);
       expect(byClass.code, byClass.stderr).toBe(0);
-      expect((byClass.json as Granted).device.id).toBe(warmed.id);
+      expect(granted(byClass).device.id).toBe(warmed.id);
       expect(await deviceWork(env)).toBe(0);
 
       const exact = await lease(env, "exact", ["--device", "iPhone 16"]);
       expect(exact.code, exact.stderr).toBe(0);
-      expect((exact.json as Granted).device.id).not.toBe(warmed.id);
-      expect((exact.json as Granted).device.spec.model).toBe("iPhone 16");
+      expect(granted(exact).device.id).not.toBe(warmed.id);
+      expect(granted(exact).device.spec.model).toBe("iPhone 16");
     });
 
     it("does not grant a request with no class an idle Apple Watch, and grants --class watch it", async () => {
@@ -183,16 +190,16 @@ describe("lease lifecycle across both frontends", () => {
         "--os",
         "18.4",
       ]);
-      const watchDevice = (watch.json as Granted).device;
-      await env.cli(["release", (watch.json as Granted).lease.id]);
+      const watchDevice = granted(watch).device;
+      await env.cli(["release", granted(watch).lease.id]);
       await waitForDeviceState(env, watchDevice.driverDeviceId, "ready");
 
       const noClass = await lease(env, "no-class", []);
-      expect((noClass.json as Granted).device.id).not.toBe(watchDevice.id);
-      await env.cli(["release", (noClass.json as Granted).lease.id]);
+      expect(granted(noClass).device.id).not.toBe(watchDevice.id);
+      await env.cli(["release", granted(noClass).lease.id]);
 
       const byClass = await lease(env, "by-class", ["--class", "watch"]);
-      expect((byClass.json as Granted).device.id).toBe(watchDevice.id);
+      expect(granted(byClass).device.id).toBe(watchDevice.id);
     });
 
     it("never grants a --mode full request a slim device, and a worker defaulting to full never grants one to a request with no mode", async () => {
@@ -208,16 +215,16 @@ describe("lease lifecycle across both frontends", () => {
         "--mode",
         "slim",
       ]);
-      const slimDevice = (slim.json as Granted).device;
-      await env.cli(["release", (slim.json as Granted).lease.id]);
+      const slimDevice = granted(slim).device;
+      await env.cli(["release", granted(slim).lease.id]);
       await waitForDeviceState(env, slimDevice.driverDeviceId, "ready");
 
       const full = await lease(env, "full", ["--class", "phone", "--mode", "full"]);
-      expect((full.json as Granted).device.id).not.toBe(slimDevice.id);
-      await env.cli(["release", (full.json as Granted).lease.id]);
+      expect(granted(full).device.id).not.toBe(slimDevice.id);
+      await env.cli(["release", granted(full).lease.id]);
 
       const noMode = await lease(env, "no-mode", ["--class", "phone"]);
-      expect((noMode.json as Granted).device.id).not.toBe(slimDevice.id);
+      expect(granted(noMode).device.id).not.toBe(slimDevice.id);
     });
 
     it("never grants an --image-tag request a device of another tag", async () => {
@@ -225,6 +232,7 @@ describe("lease lifecycle across both frontends", () => {
         driverScript: {
           android: {
             availableOsVersions: ["34"],
+            defaultModels: { phone: ["Pixel 8"] },
             images: [
               { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
               { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
@@ -246,8 +254,8 @@ describe("lease lifecycle across both frontends", () => {
         "one",
         "--detach",
       ]);
-      const firstDevice = (first.json as Granted).device;
-      await env.cli(["release", (first.json as Granted).lease.id]);
+      const firstDevice = granted(first).device;
+      await env.cli(["release", granted(first).lease.id]);
       await waitForDeviceState(env, firstDevice.driverDeviceId, "ready");
 
       const second = await env.cli([
@@ -264,7 +272,7 @@ describe("lease lifecycle across both frontends", () => {
       ]);
 
       expect(second.code, second.stderr).toBe(0);
-      expect((second.json as Granted).device.id).not.toBe(firstDevice.id);
+      expect(granted(second).device.id).not.toBe(firstDevice.id);
     });
 
     it("refuses --class beside --device with BAD_REQUEST", async () => {
@@ -292,7 +300,7 @@ describe("lease lifecycle across both frontends", () => {
         const result = await lease(env, "agent", ["--class", "phone"]);
 
         expect(result.code, result.stderr).toBe(0);
-        expect((result.json as Granted).device.spec).toMatchObject({
+        expect(granted(result).device.spec).toMatchObject({
           model: created,
           osVersion: "26.0",
         });

@@ -8,7 +8,7 @@ import {
   type ComponentReceipt,
   type ComponentRemoval,
   COMPONENT_REMOVAL_TIMEOUT_MS,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
@@ -759,7 +759,7 @@ export class AndroidDriver implements Driver {
    * naming an image tag resolves only to an installed image of that tag, and never names a
    * component, so it can never lead to a download.
    */
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
     }

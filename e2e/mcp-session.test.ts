@@ -203,13 +203,14 @@ describe("MCP session semantics", () => {
   });
 
   it("lease_simulator accepts a class or only a platform and grants a device naming its model, and refuses a class beside a model", async () => {
-    const env = await withDaemon();
-    await env.driverScript.set({
-      ios: {
-        availableOsVersions: ["18.4"],
-        defaultModels: { phone: ["iPhone 16"] },
-        knownModels: ["iPhone 16"],
-        modelClasses: { "iPhone 16": "phone" },
+    const env = await withDaemon({
+      driverScript: {
+        ios: {
+          availableOsVersions: ["18.4"],
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+        },
       },
     });
     const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "class-agent" } });

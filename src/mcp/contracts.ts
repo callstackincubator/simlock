@@ -13,7 +13,12 @@
  */
 import { z } from "zod";
 
-import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
+import {
+  leaseRecordSchema,
+  leaseRequestFields,
+  OPERATIONS,
+  refuseModelWithClass,
+} from "../contract/index.js";
 
 // ---- lease_simulator ---------------------------------------------------------------------
 
@@ -25,11 +30,13 @@ import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
  * inherits it from the contract like every other field -- `lease.defaultTtlMs` when the caller
  * names none, `BAD_REQUEST` above `lease.maxTtlMs`. `mode` is the device mode, inherited the
  * same way: `slim` or `full`, absent for the worker's default, anything else `BAD_REQUEST`.
- * `imageTag` is inherited too, bounded by the contract.
+ * `imageTag` is inherited too, bounded by the contract. `model` and `class` are both optional and
+ * refused together (ADR 0015 §1) by the contract's own refinement, applied here again because a
+ * refined schema cannot be `.omit`ted.
  */
-export const leaseSimulatorInputSchema = OPERATIONS["lease.request"].input.omit({
-  requesterId: true,
-});
+export const leaseSimulatorInputSchema = leaseRequestFields
+  .omit({ requesterId: true })
+  .superRefine(refuseModelWithClass);
 
 /** `lease.request`'s output verbatim -- the device/lease/timing grant. */
 export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;

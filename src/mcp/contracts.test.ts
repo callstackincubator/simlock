@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS } from "../contract/index.js";
+import { leaseRequestFields } from "../contract/index.js";
 import {
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
@@ -54,9 +54,8 @@ describe("MCP contracts", () => {
   });
 
   it("is the same schema the contract validates lease.request input against, minus requesterId", () => {
-    const full = OPERATIONS["lease.request"].input;
-    expect(Object.keys(leaseSimulatorInputSchema.shape).sort()).toEqual(
-      Object.keys(full.shape)
+    expect(Object.keys(leaseSimulatorInputSchema.innerType().shape).sort()).toEqual(
+      Object.keys(leaseRequestFields.shape)
         .filter((key) => key !== "requesterId")
         .sort(),
     );

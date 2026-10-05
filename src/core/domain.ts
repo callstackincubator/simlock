@@ -61,6 +61,62 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
 }
 
 /**
+ * The OS a requirement accepts (ADR 0015 §5). `exact` is one version, the one an exact request
+ * resolves to or one the request named; `installed` is any runtime the catalog lists as installed,
+ * which is what a class request with no OS accepts.
+ */
+export type OsConstraint =
+  | { readonly kind: "exact"; readonly version: string }
+  | { readonly kind: "installed"; readonly versions: readonly string[] };
+
+/**
+ * What an existing device must satisfy to serve a request (ADR 0015 §5): the platform, the
+ * model or the class, the OS, and the image tag. The mode is not part of it; the planner
+ * compares pool mode beside `fits` (§6).
+ */
+export interface DeviceRequirement {
+  readonly platform: Platform;
+  readonly target:
+    | { readonly kind: "model"; readonly model: string }
+    | { readonly kind: "class"; readonly class: DeviceClass };
+  readonly osVersion: OsConstraint;
+  readonly imageTag: string | undefined;
+}
+
+/** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
+export function exactRequirement(spec: DeviceSpec): DeviceRequirement {
+  return {
+    imageTag: spec.imageTag,
+    osVersion: { kind: "exact", version: spec.osVersion },
+    platform: spec.platform,
+    target: { kind: "model", model: spec.model },
+  };
+}
+
+/**
+ * The one place a requirement meets a device (ADR 0015 §6; architecture rule 10). Holds when the
+ * platform is equal, the model is equal or `classOf` says the device's model is the requested
+ * class, the OS satisfies the constraint, and the image tag is equal or both absent. It does not
+ * read the mode. `sameSpec` stays what names pool identity everywhere else.
+ */
+export function fits(
+  requirement: DeviceRequirement,
+  spec: DeviceSpec,
+  classOf: (model: string) => DeviceClass | undefined,
+): boolean {
+  if (requirement.platform !== spec.platform || requirement.imageTag !== spec.imageTag) {
+    return false;
+  }
+  const { target, osVersion } = requirement;
+  const targetFits =
+    target.kind === "model" ? target.model === spec.model : classOf(spec.model) === target.class;
+  if (!targetFits) return false;
+  return osVersion.kind === "exact"
+    ? osVersion.version === spec.osVersion
+    : osVersion.versions.includes(spec.osVersion);
+}
+
+/**
  * Whether a device may serve more than one lease. `reusable` devices are purged and returned to
  * the pool after each lease; a `fresh` device serves exactly one lease and is then deleted. Read
  * from `lease.identity.<platform>` when the device is created and fixed on its record from then on.

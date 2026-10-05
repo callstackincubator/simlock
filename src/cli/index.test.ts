@@ -5181,8 +5181,8 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     device: {
       driverDeviceId: "dev_1",
       id: "dev_1",
-      mode: "full",
-      spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+      mode: "full" as const,
+      spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" as const },
     },
     environment: {},
     lease: {

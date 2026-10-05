@@ -184,6 +184,7 @@ export class LeaseEngine {
       store: options.registry,
     });
     this.#acquisition = new LeaseAcquisitionCoordinator({
+      catalog: this.#drivers,
       claims: this.#claims,
       components: options.components,
       decisions: this.#decisions,
@@ -192,6 +193,7 @@ export class LeaseEngine {
       eventBus: options.eventBus,
       leases: this.#leases,
       lifecycle: this.#deviceLifecycle,
+      modelPreferences: options.modelPreferences ?? {},
       planner: this.#planner,
       provisioner: this.#provisioner,
       queue: this.#queue,

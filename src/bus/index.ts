@@ -5,6 +5,8 @@ export interface EventMap {
   "lease.requested": {
     /** The stored request's id, so an observer can correlate this event with its record. */
     readonly requestId: string;
+    /** The request as it arrived (ADR 0015 §9): `class` when it named one, and `model` only when
+     * it did. A request naming neither carries neither; the class it means is `phone`. */
     readonly requestSpec: unknown;
     readonly requester: string;
     readonly waitPolicy: string;
@@ -45,6 +47,8 @@ export interface EventMap {
     readonly ownerId: string;
   };
   "lease.rejected": {
+    /** The request as it arrived, as on `lease.requested`: `class` when it named one, `model`
+     * only when it did (ADR 0015 §9). */
     readonly requestSpec: unknown;
     readonly reason:
       | "timeout"

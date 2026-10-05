@@ -37,6 +37,7 @@ export {
   type ComponentRemoval,
   COMPONENT_REMOVAL_TIMEOUT_MS,
   type DeviceRequest,
+  type ExactDeviceRequest,
   DiskSpaceGuard,
   type Driver,
   type DriverAdvisory,

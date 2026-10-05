@@ -9,7 +9,7 @@
  * still has its own `DAEMON_ERROR_EXIT_CODES` map and HTTP its own `mapError`, both untouched
  * by this PR -- wiring them to this table is follow-up work called out in the PR description).
  */
-import type { Platform } from "./schemas.js";
+import type { DeviceClass, Platform } from "./schemas.js";
 
 export type ErrorKind = "transport" | "protocol" | "domain";
 
@@ -51,7 +51,11 @@ export interface ErrorDetailsMap {
     readonly osVersion: string;
     readonly downloadable: boolean;
   };
-  UNKNOWN_MODEL: { readonly platform: Platform; readonly model: string };
+  UNKNOWN_MODEL: {
+    readonly platform: Platform;
+    readonly model?: string;
+    readonly class?: DeviceClass;
+  };
   INSUFFICIENT_DISK_SPACE: {
     readonly platform: Platform;
     readonly requiredBytes: number;
