@@ -358,7 +358,11 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
           [...aliases.values()].sort().slice(0, CATALOG_LIST_LIMITS.aliasesPerModel),
         ]),
     ),
-    modelClasses: Object.fromEntries(bucket.modelClasses),
+    modelClasses: Object.fromEntries(
+      [...bucket.modelClasses]
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, CATALOG_LIST_LIMITS.aliasedModels),
+    ),
     modelRuntimes: Object.fromEntries(
       [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),
     ),

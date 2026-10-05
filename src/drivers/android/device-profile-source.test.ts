@@ -746,15 +746,15 @@ describe("parseAvdmanagerDeviceProfiles", () => {
   it("keeps the Tag line of the entry it belongs to and reads none before the first id", () => {
     const output =
       "Available devices:\n    Tag : android-wear\n" +
-      'id: 0 or "a"\n    Name: A\n    Tag : android-tv\n---------\n' +
-      'id: 1 or "b"\n    Name: B\n' +
+      'id: 0 or "a"\n    Name: A\n---------\n' +
+      'id: 1 or "b"\n    Name: B\n    Tag : android-tv\n' +
       'id: 2 or "c"\n    Name: C\n    Tag: android-desktop\n' +
       'id: 3 or "d"\n    Name: D\n    Tag  :android-wear\n' +
       'id: 4 or "e"\n    Name: E\n    Some Tag : android-tv\n';
 
     expect(parseAvdmanagerDeviceProfiles(output).map((p) => [p.name, p.tag])).toEqual([
-      ["A", "android-tv"],
-      ["B", undefined],
+      ["A", undefined],
+      ["B", "android-tv"],
       ["C", "android-desktop"],
       ["D", "android-wear"],
       ["E", undefined],

@@ -390,6 +390,17 @@ describe("aggregateCatalog", () => {
     expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
   });
 
+  it("drops a model class for a name the worker does not list", () => {
+    const catalog = aggregateCatalog([
+      view({
+        catalog: [{ ...iosOnB, modelClasses: { Ghost: "tv", "iPhone 17": "phone" } }],
+        id: "wrk_a",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+  });
+
   it("keeps a default runtime only when every worker agrees on it", () => {
     const agreed = aggregateCatalog([
       view({ catalog: [iosOnA], id: "wrk_a" }),
@@ -561,6 +572,7 @@ describe("aggregateCatalog", () => {
         images: { runtime: string; tag: string; abi: string }[];
         runtimes: string[];
         customModels: string[];
+        modelClasses: Record<string, "phone">;
       }>,
     ) => {
       const models = overrides.models ?? ["Pixel 8"];
@@ -569,7 +581,7 @@ describe("aggregateCatalog", () => {
         ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
-        modelClasses: {},
+        modelClasses: overrides.modelClasses ?? {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
         models,
         platform: "android" as const,
@@ -689,6 +701,9 @@ describe("aggregateCatalog", () => {
             "Pixel 8": names(prefix, 32),
           },
           customModels: ["Pixel 8", ...names(`${prefix}m`, 4095)],
+          modelClasses: Object.fromEntries(
+            ["Pixel 8", ...names(`${prefix}m`, 4095)].map((model) => [model, "phone" as const]),
+          ),
           models: ["Pixel 8", ...names(`${prefix}m`, 4095)],
         });
       const valid = [worker("a"), worker("b")];
@@ -710,6 +725,7 @@ describe("aggregateCatalog", () => {
       expect(aliasedModels).toHaveLength(4096);
       expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
+      expect(Object.keys(platform?.modelClasses ?? {})).toHaveLength(4096);
       expect(platform?.customModels).toHaveLength(4096);
       expect(platform?.customModels?.filter((model) => model.startsWith("bm"))).toEqual([]);
     });

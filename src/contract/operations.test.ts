@@ -599,6 +599,8 @@ describe("operation input/output round trips", () => {
     const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);
     const aliasedModels = (count: number) =>
       Object.fromEntries(names(count).map((name) => [name, ["a"]]));
+    const classedModels = (count: number) =>
+      Object.fromEntries(names(count).map((name) => [name, "phone"]));
     // Each pair is the largest value accepted and the smallest one refused.
     const bounds = [
       [
@@ -611,6 +613,11 @@ describe("operation input/output round trips", () => {
       ],
       [{ modelAliases: { "Pixel 8": names(32) } }, { modelAliases: { "Pixel 8": names(33) } }],
       [{ modelAliases: aliasedModels(4096) }, { modelAliases: aliasedModels(4097) }],
+      [
+        { modelClasses: { ["x".repeat(256)]: "phone" } },
+        { modelClasses: { ["x".repeat(257)]: "phone" } },
+      ],
+      [{ modelClasses: classedModels(4096) }, { modelClasses: classedModels(4097) }],
       [{ customModels: ["x".repeat(256)] }, { customModels: ["x".repeat(257)] }],
       [{ customModels: names(4096) }, { customModels: names(4097) }],
       [

@@ -44,6 +44,7 @@ interface AndroidCatalogOutput {
     readonly platform: string;
     readonly models: readonly string[];
     readonly runtimes: readonly string[];
+    readonly modelClasses: Readonly<Record<string, string>>;
     readonly modelAliases: Readonly<Record<string, readonly string[]>>;
     readonly images?: readonly { runtime: string; tag: string; abi: string }[];
   }[];
@@ -60,6 +61,9 @@ function avdIdFromCatalog(output: AndroidCatalogOutput): string {
     throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
   }
   expect(android.models.length).toBeGreaterThan(0);
+  // The class comes from the device profile's tag, read off this host's avdmanager.
+  expect(android.modelClasses["Pixel 8"]).toBe("phone");
+  expect(android.modelClasses["Television (1080p)"]).toBe("tv");
 
   const images = android.images ?? [];
   expect(images.length, "expected the installed system images to be listed").toBeGreaterThan(0);
