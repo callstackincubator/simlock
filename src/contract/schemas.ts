@@ -70,6 +70,9 @@ export const deviceRecordSchema = z.object({
   state: deviceStateSchema,
   driverData: z.unknown(),
   createdAt: z.number(),
+  /** An absolute time, not an age: when the device entered its current state. Absent when the
+   * record does not know. */
+  stateEnteredAt: z.number().optional(),
   lastLeaseEndedAt: z.number().optional(),
   foreignStateDetectedAt: z.number().optional(),
   foreignProvenanceDetectedAt: z.number().optional(),
@@ -129,6 +132,9 @@ export const statusDeviceSchema = z.object({
   state: deviceStateSchema,
   /** The device mode (see `DeviceRecord.mode`) -- not the daemon's own `worker`/`gateway` mode. */
   mode: deviceModeSchema,
+  /** An absolute time, not an age: when the device entered its current state. Absent when the
+   * record does not know. */
+  stateEnteredAt: z.number().optional(),
   foreignStateDetectedAt: z.number().optional(),
   foreignProvenanceDetectedAt: z.number().optional(),
   quarantineAttempts: z.number().optional(),

@@ -7,7 +7,6 @@ import {
   type DeviceState,
   mayBeGranted,
   type Platform,
-  transitionEnteredAt,
 } from "./domain.js";
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type {
@@ -813,8 +812,8 @@ function slowestReclaimEstimateMs(driver: Pick<Driver, "estimate">, spec: Device
  * `minimumThresholdMs` (see `stallThresholdMs`): not `estimate` itself, because the
  * estimate is tuned for a routine run and real-world variance (a cold Android boot, a
  * loaded host) can legitimately run well past it without anything having stalled. No
- * driver for the device's platform, or no recorded entry time (defensive; see
- * `transitionEnteredAt`), means there is nothing to compare against, so no stall rather
+ * driver for the device's platform, or no recorded entry time (`stateEnteredAt`; absent
+ * means unknown), means there is nothing to compare against, so no stall rather
  * than a guess.
  *
  * A device this daemon holds an operation claim on is excluded outright, before any
@@ -842,7 +841,7 @@ export function isStalledTransition(input: StallInput): boolean {
   if (claims?.isClaimed(device.id) === true) {
     return false;
   }
-  const enteredAt = transitionEnteredAt(device);
+  const enteredAt = device.stateEnteredAt;
   if (enteredAt === undefined || driver === undefined) {
     return false;
   }
@@ -887,7 +886,7 @@ function stalledTransitionFinding(
   }
   // Narrowing only: `isStalledTransition` holds just for a device in one of these two states,
   // with an entry time and a driver.
-  const enteredAt = transitionEnteredAt(device);
+  const enteredAt = device.stateEnteredAt;
   if (
     driver === undefined ||
     enteredAt === undefined ||

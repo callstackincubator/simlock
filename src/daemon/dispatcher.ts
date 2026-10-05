@@ -18,7 +18,6 @@ import {
   type StallInput,
   effectiveAllowDownload,
   RuntimeMissingError,
-  transitionEnteredAt,
   UnknownLeaseError,
 } from "../core/index.js";
 import type {
@@ -827,8 +826,13 @@ export class Dispatcher {
   #decorateDevice(
     device: DeviceRecord,
   ): DeviceRecord & { readonly transitionAgeMs?: number; readonly stalled?: true } {
-    const enteredAt = transitionEnteredAt(device);
-    if (enteredAt === undefined) return device;
+    const enteredAt = device.stateEnteredAt;
+    if (
+      enteredAt === undefined ||
+      (device.state !== "provisioning" && device.state !== "reclaiming")
+    ) {
+      return device;
+    }
     const now = this.options.clock.now();
     return {
       ...device,

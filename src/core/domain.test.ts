@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type DeviceRecord, IllegalTransition, transition, transitionEnteredAt } from "./index.js";
+import { type DeviceRecord, IllegalTransition, transition } from "./index.js";
 import { type DeviceSpec, mayBeGranted, sameSpec } from "./domain.js";
 
 const baseDevice: Omit<DeviceRecord, "state"> = {
@@ -19,10 +19,12 @@ describe("transition", () => {
     ["provisioning", "quarantined"],
     ["ready", "leased"],
     ["ready", "shutdown"],
+    ["ready", "deleted"],
     ["leased", "reclaiming"],
     ["reclaiming", "ready"],
     ["reclaiming", "shutdown"],
     ["reclaiming", "quarantined"],
+    ["reclaiming", "deleted"],
     ["quarantined", "ready"],
     ["quarantined", "shutdown"],
     ["quarantined", "deleted"],
@@ -30,13 +32,47 @@ describe("transition", () => {
     ["shutdown", "deleted"],
     ["shutdown", "quarantined"],
   ] as const)("allows %s -> %s", (from, to) => {
-    const result = transition({ ...baseDevice, state: from }, to);
+    const result = transition({ ...baseDevice, state: from }, to, 5_000);
 
-    expect(result).toEqual({ ...baseDevice, state: to });
+    expect(result).toEqual({ ...baseDevice, state: to, stateEnteredAt: 5_000 });
+  });
+
+  it("transition stamps stateEnteredAt with the time it is given, on every legal edge", () => {
+    const states = [
+      "provisioning",
+      "ready",
+      "leased",
+      "reclaiming",
+      "quarantined",
+      "shutdown",
+      "deleted",
+    ] as const;
+    let legalEdges = 0;
+    for (const from of states) {
+      for (const to of states) {
+        let result: DeviceRecord;
+        try {
+          result = transition({ ...baseDevice, state: from, stateEnteredAt: 1_500 }, to, 7_777);
+        } catch (error) {
+          expect(error).toBeInstanceOf(IllegalTransition);
+          continue;
+        }
+        legalEdges += 1;
+        expect(result.stateEnteredAt).toBe(7_777);
+      }
+    }
+    expect(legalEdges).toBe(17);
+  });
+
+  it("ready -> deleted and reclaiming -> deleted are legal, and leased -> deleted is not", () => {
+    expect(transition({ ...baseDevice, state: "ready" }, "deleted", 9).state).toBe("deleted");
+    expect(transition({ ...baseDevice, state: "reclaiming" }, "deleted", 9).state).toBe("deleted");
+    expect(() => transition({ ...baseDevice, state: "leased" }, "deleted", 9)).toThrow(
+      IllegalTransition,
+    );
   });
 
   it.each([
-    ["ready", "deleted"],
     ["leased", "shutdown"],
     ["deleted", "ready"],
     // A leased device can only reach `quarantined` by first going through
@@ -46,16 +82,16 @@ describe("transition", () => {
     ["leased", "quarantined"],
     ["quarantined", "leased"],
   ] as const)("rejects %s -> %s", (from, to) => {
-    expect(() => transition({ ...baseDevice, state: from }, to)).toThrow(IllegalTransition);
+    expect(() => transition({ ...baseDevice, state: from }, to, 5_000)).toThrow(IllegalTransition);
   });
 
   it.each([
     ["ready", "shutdown"],
     ["reclaiming", "shutdown"],
   ] as const)("drops the address on %s -> %s, since nothing listens there any more", (from, to) => {
-    const result = transition({ ...baseDevice, address: "emulator-5586", state: from }, to);
+    const result = transition({ ...baseDevice, address: "emulator-5586", state: from }, to, 5_000);
 
-    expect(result).toEqual({ ...baseDevice, state: to });
+    expect(result).toEqual({ ...baseDevice, state: to, stateEnteredAt: 5_000 });
     expect(result).not.toHaveProperty("address");
   });
 
@@ -69,7 +105,7 @@ describe("transition", () => {
     ["reclaiming", "quarantined"],
     ["provisioning", "quarantined"],
   ] as const)("keeps the address on %s -> %s, since recovery cannot re-supply one", (from, to) => {
-    const result = transition({ ...baseDevice, address: "emulator-5586", state: from }, to);
+    const result = transition({ ...baseDevice, address: "emulator-5586", state: from }, to, 5_000);
 
     expect(result.address).toBe("emulator-5586");
   });
@@ -78,51 +114,36 @@ describe("transition", () => {
     const quarantined = transition(
       { ...baseDevice, address: "emulator-5586", state: "reclaiming" },
       "quarantined",
+      5_000,
     );
 
     // Exactly what `Registry.recoverFromQuarantine` does: no `DeviceTransitionUpdate`, because
     // the driver's reclaim result has no address to give it.
-    expect(transition(quarantined, "ready").address).toBe("emulator-5586");
+    expect(transition(quarantined, "ready", 6_000).address).toBe("emulator-5586");
   });
 
   it("keeps the address across transitions between running states", () => {
     const leased = transition(
       { ...baseDevice, address: "emulator-5586", state: "ready" },
       "leased",
+      5_000,
     );
 
     expect(leased.address).toBe("emulator-5586");
-    expect(transition(leased, "reclaiming").address).toBe("emulator-5586");
+    expect(transition(leased, "reclaiming", 6_000).address).toBe("emulator-5586");
   });
 
   it("takes the address a stop supplies over the one it drops", () => {
-    const result = transition({ ...baseDevice, address: "old", state: "ready" }, "shutdown", {
-      address: "new",
-    });
+    const result = transition(
+      { ...baseDevice, address: "old", state: "ready" },
+      "shutdown",
+      5_000,
+      {
+        address: "new",
+      },
+    );
 
     expect(result.address).toBe("new");
-  });
-});
-
-describe("transitionEnteredAt", () => {
-  it("reads provisioning's entry time off createdAt", () => {
-    expect(transitionEnteredAt({ ...baseDevice, state: "provisioning" })).toBe(1_000);
-  });
-
-  it("reads reclaiming's entry time off lastLeaseEndedAt", () => {
-    expect(
-      transitionEnteredAt({ ...baseDevice, lastLeaseEndedAt: 2_000, state: "reclaiming" }),
-    ).toBe(2_000);
-  });
-
-  it("is undefined for reclaiming with no recorded release (defensive, should not occur)", () => {
-    expect(transitionEnteredAt({ ...baseDevice, state: "reclaiming" })).toBeUndefined();
-  });
-
-  it("is undefined for every other state", () => {
-    for (const state of ["ready", "leased", "quarantined", "shutdown", "deleted"] as const) {
-      expect(transitionEnteredAt({ ...baseDevice, state })).toBeUndefined();
-    }
   });
 });
 

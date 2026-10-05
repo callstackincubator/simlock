@@ -51,7 +51,10 @@ device) is granted `"full"`, and a `"full"` request is never granted
 `"slim"`. A slim device lacks some system features — push notifications,
 Spotlight, StoreKit sheets, universal links, system pickers — so check it
 before treating such a failure as a bug. Every device in `getStatus()` and in
-an admin's `list({ kind: "devices" })` carries the same `mode`.
+an admin's `list({ kind: "devices" })` carries the same `mode`, and
+`stateEnteredAt`, the time in milliseconds since the epoch at which the device
+entered its current state. `stateEnteredAt` is absent when the daemon does not
+know it.
 
 On Android, `requestLease` also takes an optional `imageTag`: the system image
 type to create the device from, such as `"google_apis_playstore"`, as

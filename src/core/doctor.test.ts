@@ -7,6 +7,7 @@ import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { Doctor, type DoctorFinding, type DoctorReport, isStalledTransition } from "./doctor.js";
 import { DriverCatalog } from "./driver-catalog.js";
+import type { DeviceState } from "./domain.js";
 import type { DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
@@ -788,6 +789,43 @@ describe("Doctor", () => {
       // The same device, the same age, is a stall once no live operation accounts for it.
       claim?.release();
       expect(stalled()).toBe(true);
+    });
+
+    it("a provisioning or reclaiming device past its threshold is stalled, and a ready device that entered its state long ago is not", () => {
+      const clock = new FakeClock(100_000);
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000, reclaim: 4_000 },
+        platform: "ios",
+      });
+      // `createdAt` and `lastLeaseEndedAt` are recent; only `stateEnteredAt` is old, so a check
+      // that reads either of them reports no stall.
+      const base = {
+        createdAt: 99_000,
+        driverData: {},
+        driverDeviceId: "d",
+        id: "dev_1",
+        lastLeaseEndedAt: 99_000,
+        mode: "full" as const,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" as const },
+        stateEnteredAt: 1_000,
+      };
+      const stalled = (state: DeviceState, stateEnteredAt = base.stateEnteredAt) =>
+        isStalledTransition({
+          claims: undefined,
+          config: config().stalledTransition,
+          device: { ...base, state, stateEnteredAt },
+          driver,
+          now: 100_000,
+        });
+
+      expect(stalled("provisioning")).toBe(true);
+      expect(stalled("reclaiming")).toBe(true);
+      expect(stalled("provisioning", 99_000)).toBe(false);
+      expect(stalled("ready")).toBe(false);
+      expect(stalled("leased")).toBe(false);
+      expect(stalled("shutdown")).toBe(false);
+      expect(stalled("quarantined")).toBe(false);
     });
 
     it("the doctor's stalled-transition finding is unchanged", async () => {

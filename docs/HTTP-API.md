@@ -216,7 +216,11 @@ device, oldest first, in the shape
 [`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
 sends it, empty when nothing waits; an older daemon leaves it out.
 
-A device in `devices` that is `provisioning` or `reclaiming` carries
+A device in `devices` carries **`stateEnteredAt`**, the moment it entered
+its current state, in milliseconds since the epoch. It is absent when the
+daemon does not know: a device recorded by an older daemon that is `ready`,
+`leased` or `shutdown` has none until its next change of state. A device in
+`devices` that is `provisioning` or `reclaiming` also carries
 `transitionAgeMs`, how long it has been in that state. One that has been there
 past its threshold with nothing working on it also carries
 **`stalled: true`**: the same devices `simlock doctor` reports as stalled (see
@@ -224,7 +228,7 @@ past its threshold with nothing working on it also carries
 device has no `stalled` field, and an older daemon sends none.
 
 ```json
-{ "id": "dev_7", "state": "provisioning", "mode": "full", "transitionAgeMs": 412000, "stalled": true,
+{ "id": "dev_7", "state": "provisioning", "mode": "full", "stateEnteredAt": 1790864071200, "transitionAgeMs": 412000, "stalled": true,
   "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" } }
 ```
 
@@ -1116,7 +1120,8 @@ the worker's and the gateway's, so you can see which side to upgrade. A worker
 too old to overlap is the ordinary upgrade path, not a fault, and its view
 carries no `host`, since the gateway asks it nothing.
 
-`connection` is `connected`, `disconnected`, or `incompatible`. A worker view is
+`connection` is `connected`, `disconnected`, or `incompatible`. Each device in a
+worker view carries `stateEnteredAt` when the worker reports it. A worker view is
 rebuilt over the uplink and never persisted, so these are current facts, not
 a registry: a worker appears by connecting, and there is deliberately no
 route that *adds* one.
@@ -1182,7 +1187,7 @@ an all-or-nothing that leaves the operator guessing.
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
 - `GET /v1/lease-requests` — every request waiting for a device
   (`simlock list --requests`); see below.
-- `GET /v1/devices` — every managed device, with state,
+- `GET /v1/devices` — every managed device, with state, `stateEnteredAt`,
   `transitionAgeMs` and `stalled` as [`GET /v1/status`](#get-v1status)
   describes them (`simlock list --devices`).
 - `GET /v1/events?since=<duration>` — replay business events newer than

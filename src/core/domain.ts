@@ -68,6 +68,13 @@ export interface DeviceRecord {
   readonly state: DeviceState;
   readonly driverData: unknown;
   readonly createdAt: number;
+  /**
+   * The wall-clock moment the device entered its current `state`. `transition` stamps it on every
+   * move and `registerDevice` on registration. Absent means unknown: a record written before this
+   * field loads it only where an existing timestamp is exactly the entry time (see `parseDevice`
+   * in `registry.ts`), and never guesses.
+   */
+  readonly stateEnteredAt?: number;
   readonly lastLeaseEndedAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
@@ -218,13 +225,15 @@ export function isSettled(record: Pick<LeaseRequestRecord<unknown>, "state">): b
  * `shutdown -> quarantined` is a spent fresh device whose delete failed after its
  * lease-end shutdown committed -- each its own entry into the same state rather than a
  * second one. Exits: `ready` on a successful retry, `deleted` on a successful retried
- * delete, `shutdown`/`deleted` on giving up.
+ * delete, `shutdown`/`deleted` on giving up. `ready -> deleted` and `reclaiming -> deleted` are
+ * the doctor's missing-device delete (`Registry.markDeviceMissing`); a `leased` device never
+ * reaches it, because the lease check refuses first.
  */
 const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = {
   provisioning: ["ready", "deleted", "quarantined"],
-  ready: ["leased", "shutdown"],
+  ready: ["leased", "shutdown", "deleted"],
   leased: ["reclaiming"],
-  reclaiming: ["ready", "shutdown", "quarantined"],
+  reclaiming: ["ready", "shutdown", "quarantined", "deleted"],
   quarantined: ["ready", "shutdown", "deleted"],
   shutdown: ["ready", "deleted", "quarantined"],
   deleted: [],
@@ -250,6 +259,7 @@ export interface DeviceTransitionUpdate {
 export function transition(
   record: DeviceRecord,
   to: DeviceState,
+  at: number,
   update?: DeviceTransitionUpdate,
 ): DeviceRecord {
   if (!legalTransitions[record.state].includes(to)) {
@@ -271,30 +281,8 @@ export function transition(
     // boot's console port in `driverData.port`, and after a daemon restart only a recovery
     // boot reuses it (see `ManagedDeviceLifecycle.recoverLeased`); any other takes a new one.
     const { address: _stale, ...stopped } = record;
-    return { ...stopped, ...update, state: to };
+    return { ...stopped, ...update, state: to, stateEnteredAt: at };
   }
 
-  return { ...record, ...update, state: to };
-}
-
-/**
- * The wall-clock moment a `provisioning` or `reclaiming` device most recently entered
- * that state -- `undefined` for every other state, which either isn't mid-transition
- * or already has its own dedicated timestamp for the same purpose (`quarantinedAt`).
- * No dedicated field was added for this: `createdAt` already doubles as provisioning's
- * entry time, since nothing ever transitions back into `provisioning` (see
- * `legalTransitions`), and `lastLeaseEndedAt` already doubles as reclaiming's, since
- * `beginRelease` is reclaiming's only entry point and stamps it fresh on every entry.
- * Used by Doctor to age a mid-transition device against a driver-derived stall
- * threshold.
- */
-export function transitionEnteredAt(record: DeviceRecord): number | undefined {
-  switch (record.state) {
-    case "provisioning":
-      return record.createdAt;
-    case "reclaiming":
-      return record.lastLeaseEndedAt;
-    default:
-      return undefined;
-  }
+  return { ...record, ...update, state: to, stateEnteredAt: at };
 }

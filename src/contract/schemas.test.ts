@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { OPERATIONS } from "./operations.js";
 import {
   deviceRecordSchema,
   fitHostFacts,
@@ -358,5 +359,54 @@ describe("leaseRequestRecordSchema", () => {
 
     expect(leaseRequestRecordSchema.safeParse(record).success).toBe(false);
     expect(grantedDeviceSchema.safeParse(device).success).toBe(false);
+  });
+});
+
+describe("stateEnteredAt on the wire", () => {
+  const device = {
+    id: "device-1",
+    mode: "full",
+    spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+    state: "ready",
+  };
+
+  it("the status.get and list.get output schemas keep stateEnteredAt on a device that has one and omit it on one that does not", () => {
+    const known = { ...device, stateEnteredAt: 1_234 };
+    const status = OPERATIONS["status.get"].output;
+
+    expect(statusDeviceSchema.parse(known)).toHaveProperty("stateEnteredAt", 1_234);
+    expect(statusDeviceSchema.parse(device)).not.toHaveProperty("stateEnteredAt");
+    expect(
+      deviceRecordSchema.parse({
+        ...known,
+        createdAt: 1,
+        driverData: {},
+        driverDeviceId: "SIM-1",
+      }),
+    ).toHaveProperty("stateEnteredAt", 1_234);
+    expect(OPERATIONS["list.get"].output.parse([known])).toEqual([known]);
+    expect(OPERATIONS["list.get"].output.parse([device])).toEqual([device]);
+    expect(status.shape.devices.parse([known])).toEqual([known]);
+  });
+
+  it("a gateway's GET /v1/devices and GET /v1/workers carry a worker device's stateEnteredAt", () => {
+    const known = { ...device, stateEnteredAt: 1_234 };
+    const list = OPERATIONS["list.get"].output.parse([{ ...known, workerId: "wrk_1" }]);
+    const workers = OPERATIONS["worker.list"].output.parse({
+      workers: [
+        {
+          catalog: [],
+          connection: "connected",
+          devices: [known, device],
+          drained: false,
+          id: "wrk_1",
+          lastSeenAt: 1,
+          leases: [],
+        },
+      ],
+    });
+
+    expect(list).toEqual([{ ...known, workerId: "wrk_1" }]);
+    expect(workers.workers[0]?.devices).toEqual([known, device]);
   });
 });
