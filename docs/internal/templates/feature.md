@@ -24,9 +24,26 @@ behaviour only. -->
 ## How it works for the user
 
 <!-- A Mermaid flowchart or sequence diagram of what the user does and sees,
-step by step, including the failure paths. Then one short example: the
-command or request before this feature and after it, with its real output.
-GitHub renders ```mermaid blocks. -->
+step by step, including the failure paths. GitHub renders ```mermaid
+blocks. Then the user's session: the exact commands a user types and what
+the tool prints back, before this feature and after it, error output
+included. -->
+
+## Examples
+
+<!-- For any rule that accepts, rejects or matches input: a table of inputs
+and results, with today's result beside the new one, so a changed answer is
+visible. Include the odd cases (names, ranges, empty, unknown).
+
+| Input | Today | After |
+|---|---|---|
+| `--os 18.4` | accepted | accepted |
+| `--os Baklava` | accepted | accepted | -->
+
+## What could go wrong
+
+<!-- Two to five plain lines: what a user would notice if this goes wrong,
+and how likely it is. No code terms. -->
 
 ## Words used
 

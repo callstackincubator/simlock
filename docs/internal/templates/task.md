@@ -15,7 +15,11 @@ after this PR merges that they could not after the previous one. -->
 
 <!-- Two or three plain sentences: what changes for the user after this PR,
 then a small Mermaid diagram of the flow it touches, with the changed step
-marked. Define any new term here with an example. -->
+marked. Define any new term here with an example. When the task changes
+what input is accepted or what the tool prints, add the user's session
+(commands and output, before and after) and an inputs table with today's
+result beside the new one. End with one line: what a user would notice if
+this task goes wrong. -->
 
 ## Technical spec
 

@@ -155,13 +155,18 @@ so explain before you ask, and show before you explain:
   the code, an ADR or a rule appears, say what it means in plain words with
   an example, and add it to the body's Words used section. Never cite a
   rule or ADR number as the reason for something; say the reason.
-- Keep each question to one decision. If answering needs context the
-  maintainer may not have, give it in three lines or fewer.
+- Keep each question to one decision and about five lines plus its
+  picture. If it does not fit, split it. Context the maintainer may not
+  have gets three lines or fewer.
+- When a rule accepts, rejects or matches input, show a table of example
+  inputs with today's result and the proposed one, odd cases included, and
+  check today's column by running the tool on `main`.
 - Before writing the body, play the result back: the user flow diagram,
   the example, and a list of what will and will not change. Write only
   after the maintainer says it matches what they meant.
-- In the body, fill "How it works for the user" and "Words used" (feature)
-  or "In short" (task) as the template says. A diagram has at most about
+- In the body, fill "How it works for the user", "Examples", "What could
+  go wrong" and "Words used" (feature) or "In short" (task) as the template
+  says. A diagram has at most about
   ten boxes; split a bigger flow.
 
 Write the spec the way rule 12 asks for everything else: short sentences,
