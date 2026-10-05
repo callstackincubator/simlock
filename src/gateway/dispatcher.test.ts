@@ -49,8 +49,11 @@ const gatewayConfig = {
   },
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
-  ios: { defaultMode: "full" as const, slim: { bootTimeoutMs: 1 } },
-  android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+  ios: { defaultMode: "full" as const, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+  android: {
+    defaultModels: {},
+    emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+  },
   lease: {
     defaultTtlMs: 900_000,
     maxTtlMs: 3_600_000,
@@ -347,6 +350,7 @@ describe("GatewayDispatcher", () => {
       catalog: [
         {
           modelAliases: {},
+          classDefaults: {},
           modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           models: ["iPhone 17"],

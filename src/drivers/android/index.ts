@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, join } from "node:path";
 
-import type { DeviceSpec } from "../../core/domain.js";
+import type { DeviceClass, DeviceSpec } from "../../core/domain.js";
 import {
   BootTimeoutError,
   type ComponentInstallProgress,
@@ -253,6 +253,18 @@ interface SystemImage {
  */
 export const ANDROID_PASSTHROUGH_TOOL = "adb";
 
+/**
+ * ADR 0015 §4: the models Simlock tries for each class on Android when the operator names none
+ * first, newest first. A profile is never `tablet` or `vision` on Android, so neither has a list.
+ */
+const ANDROID_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
+  auto: ["Automotive (1080p landscape)", "Automotive (1024p landscape)"],
+  desktop: ["Medium Desktop", "Large Desktop"],
+  phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"],
+  tv: ["Television (1080p)", "Television (4K)"],
+  watch: ["Wear OS Large Round", "Wear OS Small Round"],
+};
+
 /** Every refusal ends the same way: the Simlock command that does it safely. */
 const RECLAIM_INSTEAD =
   "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
@@ -429,6 +441,7 @@ function containsSequence(args: readonly string[], sequence: readonly string[]):
 
 export class AndroidDriver implements Driver {
   readonly platform = "android" as const;
+  readonly defaultModels = ANDROID_DEFAULT_MODELS;
   readonly #adbServer: AdbServerSupervisor;
   readonly #adbServerPort: number;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;

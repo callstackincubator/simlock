@@ -1,5 +1,6 @@
 import { type Logger, NoopLogger } from "../ports/index.js";
-import type { DeviceSpec, Platform } from "./domain.js";
+import { findCatalogModel } from "./catalog-match.js";
+import { DEVICE_CLASSES, type DeviceClass, type DeviceSpec, type Platform } from "./domain.js";
 import type {
   DeviceRequest,
   Driver,
@@ -25,18 +26,36 @@ export class UnknownPassthroughToolError extends Error {
   }
 }
 
+/**
+ * The model names to try for each class, per platform, most preferred first: the operator's own
+ * list followed by the driver's built-in one (ADR 0015 §4). Built once, by the composition root.
+ */
+export type ModelPreferences = Readonly<
+  Partial<Record<Platform, Readonly<Partial<Record<DeviceClass, readonly string[]>>>>>
+>;
+
 /** One registered driver's catalog entry, tagged with its platform. */
 export interface PlatformCatalog extends DriverCatalogEntry {
   readonly platform: Platform;
+  /** ADR 0015 §4: the model Simlock would create for each class on this host. */
+  readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
 }
 
 /** Immutable platform-to-driver lookup used by the lease path. */
 export class DriverCatalog {
   readonly #drivers: ReadonlyMap<Platform, Driver>;
   readonly #logger: Logger;
+  readonly #preferences: ModelPreferences;
 
-  constructor(drivers: readonly Driver[], options: { readonly logger?: Logger | undefined } = {}) {
+  constructor(
+    drivers: readonly Driver[],
+    options: {
+      readonly logger?: Logger | undefined;
+      readonly preferences?: ModelPreferences | undefined;
+    } = {},
+  ) {
     this.#drivers = new Map(drivers.map((driver) => [driver.platform, driver]));
+    this.#preferences = options.preferences ?? {};
     this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
   }
 
@@ -87,7 +106,12 @@ export class DriverCatalog {
     const listed = await Promise.all(
       this.select(platform).map(async (driver): Promise<PlatformCatalog | undefined> => {
         try {
-          return { platform: driver.platform, ...(await driver.listCatalog()) };
+          const entry = await driver.listCatalog();
+          return {
+            platform: driver.platform,
+            ...entry,
+            classDefaults: this.#classDefaults(driver.platform, entry),
+          };
         } catch (error: unknown) {
           if (platform !== undefined) throw error;
           this.#logger.warn("A driver could not read its catalog", {
@@ -102,6 +126,28 @@ export class DriverCatalog {
   }
 
   /**
+   * For each class, the model Simlock would create on this host (ADR 0015 §4): of the names on
+   * the class's preference list that the entry lists and that are of that class, the first that
+   * pairs with an installed runtime, else the first of them. A class in which no name counts has
+   * no entry.
+   */
+  #classDefaults(
+    platform: Platform,
+    entry: DriverCatalogEntry,
+  ): Partial<Record<DeviceClass, string>> {
+    const defaults: Partial<Record<DeviceClass, string>> = {};
+    for (const deviceClass of DEVICE_CLASSES) {
+      const counted = (this.#preferences[platform]?.[deviceClass] ?? []).flatMap((name) => {
+        const model = findCatalogModel(entry, name);
+        return model !== undefined && classOf(entry, model) === deviceClass ? [model] : [];
+      });
+      const chosen = counted.find((model) => pairedRuntimes(entry, model).length > 0) ?? counted[0];
+      if (chosen !== undefined) defaults[deviceClass] = chosen;
+    }
+    return defaults;
+  }
+
+  /**
    * Every registered driver, or only the given platform's. A platform with no registered driver
    * gives none rather than raising `NoDriverError`: a read across platforms leaves it out.
    */
@@ -110,4 +156,14 @@ export class DriverCatalog {
     const driver = this.#drivers.get(platform);
     return driver === undefined ? [] : [driver];
   }
+}
+
+/** A model's class, reading own keys only so a model named `constructor` reads nothing. */
+function classOf(entry: DriverCatalogEntry, model: string): DeviceClass | undefined {
+  return Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+}
+
+/** The installed runtimes a model pairs with, reading own keys only. */
+function pairedRuntimes(entry: DriverCatalogEntry, model: string): readonly string[] {
+  return (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ?? [];
 }

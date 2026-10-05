@@ -104,15 +104,21 @@ export function deviceFixture(
 /**
  * A worker's catalog. An entry without `modelRuntimes` pairs each of its models with every one of
  * its runtimes -- a single worker's answer, so this is never the fleet cross product. An entry
- * without `modelAliases` lists no other names, and one without `modelClasses` classes no model.
+ * without `modelAliases` lists no other names, one without `modelClasses` classes no model, and one without `classDefaults` has no class default.
  */
 export function catalogFixture(
-  entries: readonly (Omit<PlatformCatalog, "modelRuntimes" | "modelAliases" | "modelClasses"> &
-    Partial<Pick<PlatformCatalog, "modelRuntimes" | "modelAliases" | "modelClasses">>)[],
+  entries: readonly (Omit<
+    PlatformCatalog,
+    "modelRuntimes" | "modelAliases" | "modelClasses" | "classDefaults"
+  > &
+    Partial<
+      Pick<PlatformCatalog, "modelRuntimes" | "modelAliases" | "modelClasses" | "classDefaults">
+    >)[],
 ): CatalogOutput {
   return {
     platforms: entries.map((entry) => ({
       ...entry,
+      classDefaults: entry.classDefaults ?? {},
       modelAliases: entry.modelAliases ?? {},
       modelClasses: entry.modelClasses ?? {},
       modelRuntimes:

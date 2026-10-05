@@ -222,6 +222,12 @@ export interface DriverToolVersion {
 export interface Driver {
   readonly platform: Platform;
   /**
+   * ADR 0015 §4: the model names this driver's platform offers for each class, newest first.
+   * The core merges it behind the operator's own list and holds no model name itself; a class
+   * with no list has no entry.
+   */
+  readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
+  /**
    * Absolute path of the root this driver owns and scopes every platform command to.
    * Membership in it is what proves a device is Simlock's; the core carries the string
    * around without interpreting it, the same way it carries `address`.

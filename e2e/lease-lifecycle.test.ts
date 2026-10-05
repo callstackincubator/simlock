@@ -64,4 +64,30 @@ describe("lease lifecycle across both frontends", () => {
 
     await env.expectEvents(["lease.requested", "lease.granted", "lease.released"]);
   });
+
+  it("catalog shows each class's default model: the configured name before the driver's list, skipped when the catalog does not list it", async () => {
+    const script = {
+      ios: {
+        availableOsVersions: ["26.0"],
+        defaultModels: { phone: ["iPhone 17", "iPhone 16"], tablet: ["iPad Pro"] },
+        knownModels: ["iPhone 15", "iPhone 16", "iPad Pro"],
+        modelClasses: { "iPad Pro": "tablet", "iPhone 15": "phone", "iPhone 16": "phone" },
+      },
+    } as const;
+    const defaultsWith = async (phone: string | undefined) => {
+      const env = await withDaemon({
+        configOverrides: phone === undefined ? {} : { ios: { defaultModels: { phone } } },
+        driverScript: script,
+      });
+      const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
+      expect(catalog.code, catalog.stderr).toBe(0);
+      return (catalog.json as { platforms: { classDefaults: unknown }[] }).platforms[0]
+        ?.classDefaults;
+    };
+
+    // The driver's list alone: iPhone 17 is not listed, so iPhone 16 is the first that counts.
+    expect(await defaultsWith(undefined)).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
+    expect(await defaultsWith("iPhone 15")).toEqual({ phone: "iPhone 15", tablet: "iPad Pro" });
+    expect(await defaultsWith("iPhone 99")).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
+  });
 });

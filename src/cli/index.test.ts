@@ -1889,6 +1889,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  classDefaults: {},
                   modelClasses: {},
                   modelRuntimes: {},
                   models: ["constructor"],
@@ -1915,6 +1916,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  classDefaults: {},
                   modelClasses: {},
                   modelRuntimes: {},
                   models: [],
@@ -1944,6 +1946,7 @@ describe("CLI: catalog", () => {
                 {
                   defaultRuntime: "26.0",
                   modelAliases: {},
+                  classDefaults: {},
                   modelClasses: {},
                   modelRuntimes: {
                     "iPhone 16": ["18.4", "26.0"],
@@ -2061,6 +2064,7 @@ describe("CLI: catalog", () => {
   it("carries modelClasses in --json as received", async () => {
     const catalog = {
       modelAliases: {},
+      classDefaults: {},
       modelClasses: { "Pixel 8": "phone" as const, "Odd One": "tv" as const },
       modelRuntimes: {},
       models: ["Pixel 8"],
@@ -2089,6 +2093,7 @@ describe("CLI: catalog", () => {
                 {
                   images: [],
                   modelAliases: {},
+                  classDefaults: {},
                   modelClasses: {},
                   modelRuntimes: {},
                   models: [],
@@ -2128,6 +2133,7 @@ describe("CLI: catalog", () => {
                     { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
                   ],
                   modelAliases: { "Pixel 8": ["pixel_8"] },
+                  classDefaults: {},
                   modelClasses: { "Pixel 8": "phone" },
                   modelRuntimes: { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
                   models: ["My Tablet", "Pixel 8"],
@@ -2146,7 +2152,7 @@ describe("CLI: catalog", () => {
         "Platform: android",
         "  Runtimes: 34, 35 (default: 35)",
         "  Models:",
-        "    phone:",
+        "    phone (default: none):",
         "      Pixel 8: 34, 35",
         "        Other names: pixel_8",
         "    (no class):",
@@ -2171,6 +2177,7 @@ describe("CLI: catalog", () => {
                   customModels: ["My Tablet"],
                   defaultRuntime: "35",
                   modelAliases: {},
+                  classDefaults: {},
                   modelClasses: {},
                   modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
                   models: ["My Tablet", "Pixel 8"],
@@ -5056,8 +5063,11 @@ function testConfig(): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       defaultTtlMs: 60_000,

@@ -11,7 +11,7 @@ import {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
-import type { DeviceMode, LeaseIdentity } from "./domain.js";
+import { DEVICE_CLASSES, type DeviceClass, type DeviceMode, type LeaseIdentity } from "./domain.js";
 import {
   booleanValue,
   ConfigError,
@@ -204,6 +204,8 @@ export interface Config {
      * Default `"full"`. Every worker makes both kinds of device whatever this says.
      */
     readonly defaultMode: DeviceMode;
+    /** The operator's own preference list per class, ahead of the driver's built-in one. */
+    readonly defaultModels: DefaultModels;
     /** How a slim device is made, whatever the default mode is. */
     readonly slim: {
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
@@ -220,6 +222,8 @@ export interface Config {
    * next boot.
    */
   readonly android: {
+    /** The operator's own preference list per class, ahead of the driver's built-in one. */
+    readonly defaultModels: DefaultModels;
     readonly emulator: {
       readonly headless: boolean;
       /** An emulator GPU mode; `"auto"` leaves the emulator's own default. */
@@ -664,11 +668,13 @@ function defaultConfig(
     },
     ios: {
       defaultMode: "full",
+      defaultModels: {},
       slim: {
         bootTimeoutMs: 600_000,
       },
     },
     android: {
+      defaultModels: {},
       emulator: {
         headless: false,
         gpu: "auto",
@@ -806,12 +812,14 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     }),
     ios: objectValidator({
       defaultMode: stringUnion(["slim", "full"]),
+      defaultModels: defaultModelsValidator,
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
       }),
     }),
     android: objectValidator({
+      defaultModels: defaultModelsValidator,
       emulator: objectValidator({
         headless: booleanValue,
         gpu: nonEmptyString,
@@ -824,6 +832,40 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       minimumThresholdMs: nonNegativeNumber,
     }),
   };
+}
+
+/**
+ * An operator's model preference per device class (ADR 0015 §4): for each class, the model
+ * names to try first, most preferred first. A class with no key has none.
+ */
+export type DefaultModels = Partial<Record<DeviceClass, readonly string[]>>;
+
+/**
+ * Each key is a device class and each value one non-empty model name or a non-empty list of
+ * them, stored as a list. Any other key is refused rather than warned about: a misspelled class
+ * would otherwise leave the operator's preference silently unused.
+ */
+const defaultModelsValidator: Validator = (value, path) => {
+  const object = requireObject(value, path);
+  const result: Record<string, readonly string[]> = {};
+
+  for (const [key, names] of Object.entries(object)) {
+    const keyPath = `${path}.${key}`;
+    if (!(DEVICE_CLASSES as readonly string[]).includes(key)) {
+      throw invalidValue(keyPath, `a device class (${DEVICE_CLASSES.join(", ")})`);
+    }
+    const list = typeof names === "string" ? [names] : names;
+    if (!Array.isArray(list) || list.length === 0 || !list.every(isNonEmptyString)) {
+      throw invalidValue(keyPath, "a model name or a non-empty list of model names");
+    }
+    result[key] = list;
+  }
+
+  return result;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /**

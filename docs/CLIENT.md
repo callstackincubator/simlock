@@ -243,7 +243,8 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 //    defaultRuntime: "26.0",
 //    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
 //    modelAliases: {},
-//    modelClasses: { "iPhone 16": "phone", "iPhone XS": "phone" } }]
+//    modelClasses: { "iPhone 16": "phone", "iPhone XS": "phone" },
+//    classDefaults: { phone: "iPhone 16" } }]
 ```
 
 - `models` and `runtimes` are what is installed. A model and a runtime that
@@ -259,6 +260,11 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 - `modelClasses` maps a model to its class, one of `"phone"`, `"tablet"`,
   `"watch"`, `"tv"`, `"vision"`, `"auto"` or `"desktop"`, when its tooling
   reports one. A model with no entry is still listed and leasable by name.
+- `classDefaults` maps a class to the model Simlock would create for it on
+  this machine: the first name on the class's preference list that is listed,
+  is of the class and pairs with an installed runtime. The list is the names
+  in `ios.defaultModels.<class>` or `android.defaultModels.<class>`, then
+  Simlock's own. A class in which no listed name counts has no entry.
 - `images` is on Android entries only: every installed system image as
   `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
   image whose ABI the host cannot run natively is listed too.
@@ -280,7 +286,8 @@ model is paired with a runtime when at least one worker pairs them, and
 runtime. The gateway sends a request only to a worker that pairs the model
 with the runtime. `modelAliases` and `images` are the unions of each
 worker's own, and so is `modelClasses`: when two workers class a model
-differently, the worker with the smallest id wins. A model is in `customModels` when any worker that lists it
+differently, the worker with the smallest id wins. A class has a `classDefaults`
+entry only when every connected worker reports the same model for it. A model is in `customModels` when any worker that lists it
 marks it custom; each worker's own list is in its catalog on
 `listWorkers()` from the admin client. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.

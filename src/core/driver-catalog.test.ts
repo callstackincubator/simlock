@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeClock, type Logger } from "../ports/index.js";
 import { PassthroughRefusedError } from "./driver.js";
@@ -320,6 +320,32 @@ describe("DriverCatalog", () => {
           tabletPreferences: ["iPad Pro"],
         }),
       ).resolves.toEqual({});
+    });
+
+    it("reads only a model's own class and runtimes: a model named constructor has neither, and a listed model with no runtimes entry pairs with nothing", async () => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(),
+        platform: "ios",
+      });
+      vi.spyOn(driver, "listCatalog").mockResolvedValue({
+        defaultRuntime: "26.5",
+        modelAliases: {},
+        modelClasses: { "iPhone 15": "phone", "iPhone 16": "phone" },
+        modelRuntimes: { "iPhone 16": ["26.5"] },
+        models: ["constructor", "iPhone 15", "iPhone 16"],
+        runtimes: ["26.5"],
+      });
+      const catalog = new DriverCatalog([driver], {
+        preferences: {
+          ios: { phone: ["constructor", "iPhone 15", "iPhone 16"], tablet: ["constructor"] },
+        },
+      });
+
+      const [entry] = await catalog.listCatalog();
+
+      // `constructor` has no class of its own, `iPhone 15` has no runtimes entry.
+      expect(entry?.classDefaults).toEqual({ phone: "iPhone 16" });
     });
 
     it("has no entry for a class that has no preference list", async () => {

@@ -285,6 +285,16 @@ entry, and is still listed and leasable by name. On a gateway it is the union
 over the connected workers; when two workers class a model differently, the
 worker with the smallest id wins.
 
+Each entry also carries `classDefaults`: for a class, the model Simlock would
+create for it on that machine. It is the first name on the class's preference
+list (the names in `ios.defaultModels.<class>` or `android.defaultModels.<class>`,
+then Simlock's own list for the platform) that `models` lists, that is a model
+of the class, and that pairs with an installed runtime; when none pairs, the
+first of those that are listed and of the class. A class in which no listed
+name counts has no entry. On a gateway a class's entry is kept only when every
+connected worker reports the same model for it, and a worker with none for that
+class counts as disagreeing.
+
 An entry may also carry `customModels`: the names from `models` that exist
 because of something on that machine rather than the platform's tools. On
 Android that is a profile made with Android Studio's device manager, read
@@ -302,7 +312,8 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "defaultRuntime": "26.0",
     "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
     "modelAliases": {},
-    "modelClasses": { "iPhone 16": "phone", "iPhone XS": "phone" }
+    "modelClasses": { "iPhone 16": "phone", "iPhone XS": "phone" },
+    "classDefaults": { "phone": "iPhone 16" }
   }, {
     "platform": "android",
     "models": ["My Tablet", "Pixel 8"],
@@ -311,6 +322,7 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
     "modelAliases": { "Pixel 8": ["pixel_8"] },
     "modelClasses": { "My Tablet": "phone", "Pixel 8": "phone" },
+    "classDefaults": { "phone": "Pixel 8" },
     "customModels": ["My Tablet"],
     "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
                 { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]
@@ -1063,7 +1075,8 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "defaultRuntime": "26.0",
           "modelRuntimes": {"iPhone 16": ["18.4"]},
           "modelAliases": {},
-          "modelClasses": {"iPhone 16": "phone"}
+          "modelClasses": {"iPhone 16": "phone"},
+          "classDefaults": {"phone": "iPhone 16"}
         },
         {
           "platform": "android",
@@ -1073,6 +1086,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "modelRuntimes": {},
           "modelAliases": {},
           "modelClasses": {},
+          "classDefaults": {},
           "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],

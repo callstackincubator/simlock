@@ -91,6 +91,8 @@ export interface FakeDriverOptions {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** The built-in preference lists the driver carries, per class; none unless a test says otherwise. */
+  readonly defaultModels?: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
   /** What `listCatalog` reports as each model's class; empty unless a test says otherwise. */
   readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
   /**
@@ -137,6 +139,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 
 export class FakeDriver implements Driver {
   readonly platform: Platform;
+  readonly #defaultModels: FakeDriverOptions["defaultModels"];
   readonly deviceRoot: string;
   readonly #availableOsVersions: Set<string>;
   /** One receipt per installed version; an install replaces it with a new one. */
@@ -197,6 +200,7 @@ export class FakeDriver implements Driver {
     this.#modelRuntimes = options.modelRuntimes;
     this.#modelAliases = options.modelAliases;
     this.#modelClasses = options.modelClasses;
+    this.#defaultModels = options.defaultModels;
     this.#images = options.images;
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
@@ -218,6 +222,10 @@ export class FakeDriver implements Driver {
 
   get calls(): readonly FakeDriverCall[] {
     return this.#calls.map((call) => ({ ...call, arguments: [...call.arguments] }));
+  }
+
+  get defaultModels(): Readonly<Partial<Record<DeviceClass, readonly string[]>>> {
+    return this.#defaultModels ?? {};
   }
 
   /**
