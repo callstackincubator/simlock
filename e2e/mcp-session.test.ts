@@ -215,7 +215,11 @@ describe("MCP session semantics", () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.content)).toContain("18 - 26");
+      const payload = JSON.parse(
+        (result.content as { text: string }[])[0]?.text ?? "{}",
+      ) as McpErrorPayload;
+      expect(payload.code).toBe("BAD_REQUEST");
+      expect(payload.message).toContain("18 - 26");
     } finally {
       await mcp.close();
     }

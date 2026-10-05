@@ -32,8 +32,6 @@ describe("parseOsConstraint", () => {
     [">=18 || <17"],
     [">=18  <26"],
     [""],
-    ["x18"],
-    ["18x"],
     [">=x18"],
     [">=18x"],
     [">= 18"],
@@ -44,8 +42,6 @@ describe("parseOsConstraint", () => {
     ["18 - 26 - 30"],
     ["18 -  26"],
     [">=18 - 26"],
-    [" 18"],
-    ["18 "],
   ])("refuses %j with a message naming the accepted forms", (text) => {
     const result = parseOsConstraint(text);
     expect(result.ok).toBe(false);
@@ -54,6 +50,21 @@ describe("parseOsConstraint", () => {
       expect(result.message).toContain("18 - 26");
       expect(result.message).toContain("exact version");
     }
+  });
+});
+
+describe("a string that is not range-like", () => {
+  it.each([["Baklava"], ["34-ext12"], ["26.5-beta"], ["x18"], ["18x"], [" 18"], ["18 "]])(
+    "is a bare version and stays exact: %j",
+    (text) => {
+      expect(parsed(text)).toEqual({ kind: "exact", version: text });
+    },
+  );
+
+  it("satisfies no range when the version is not dotted integers", () => {
+    expect(satisfies("Baklava", parsed(">=18"))).toBe(false);
+    expect(satisfies("34-ext12", parsed("<=40"))).toBe(false);
+    expect(satisfies("Baklava", parsed("Baklava"))).toBe(true);
   });
 });
 

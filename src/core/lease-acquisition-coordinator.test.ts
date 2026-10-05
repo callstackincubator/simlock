@@ -2119,6 +2119,31 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       },
     );
 
+    it.each([["Baklava"], ["34-ext12"]])(
+      "reaches resolveSpec with the bare version %s exact, as without ranges, and a range never picks it",
+      async (name) => {
+        const driver = rangeDriver({
+          availableOsVersions: ["18.4", name],
+          modelRuntimes: { "iPhone 16": ["18.4", name] },
+        });
+        const harness = await classHarness(driver);
+
+        await harness.coordinator.request(
+          { model: "iPhone 16", osVersion: name, platform: "ios" },
+          owner("agent"),
+        );
+        const resolved = driver.calls.find((call) => call.operation === "resolveSpec");
+        expect(resolved?.arguments[0]).toMatchObject({ osVersion: name });
+
+        const ranged = await classHarness(driver);
+        const granted = await ranged.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          owner("agent"),
+        );
+        expect(granted.device.spec.osVersion).toBe("18.4");
+      },
+    );
+
     it("picks the newest in-range runtime whatever order the catalog lists them in", async () => {
       const harness = await classHarness(
         rangeDriver({

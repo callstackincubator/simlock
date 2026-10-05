@@ -144,12 +144,6 @@ export const statusGet = defineOperation({
   }),
 });
 
-/** `osVersion` and the HTTP `os`: an exact version or a range of the one grammar (ADR 0015 §2). */
-const osConstraintSchema = z.string().superRefine((text, context) => {
-  const parsed = parseOsConstraint(text);
-  if (!parsed.ok) context.addIssue({ code: z.ZodIssueCode.custom, message: parsed.message });
-});
-
 // ---- lease.request --------------------------------------------------------------------------
 
 /**
@@ -172,8 +166,12 @@ const leaseRequestBaseSchema = z
     model: z.string().min(1).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
-    /** ADR 0015 §2: an exact version or a range, refused here when it is neither. */
-    osVersion: osConstraintSchema.optional(),
+    /**
+     * ADR 0015 §2: an exact version or a range. A plain string here, checked by
+     * `refuseBadOsVersion` beside it: a refined field would be checked by the MCP SDK before the
+     * handler, and its own error would stand in for `BAD_REQUEST`.
+     */
+    osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
     requesterId: z.string().optional(),
@@ -234,10 +232,30 @@ export function refuseModelWithClass(
   };
 }
 
+/** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
+export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.osVersion === undefined) return;
+    const parsed = parseOsConstraint(input.osVersion);
+    if (!parsed.ok) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: parsed.message,
+        path: ["osVersion"],
+      });
+    }
+  };
+}
+
 /** The fields of `lease.request` without the model-or-class refinement, for schemas derived from it. */
 export const leaseRequestFields = leaseRequestBaseSchema;
 
-const leaseRequestInputSchema = leaseRequestBaseSchema.superRefine(refuseModelWithClass());
+const leaseRequestInputSchema = leaseRequestBaseSchema
+  .superRefine(refuseModelWithClass())
+  .superRefine(refuseBadOsVersion());
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({

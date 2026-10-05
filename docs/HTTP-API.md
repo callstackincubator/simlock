@@ -362,7 +362,7 @@ range, is `400 BAD_REQUEST` for now. `os` is an exact version (`"18.4"`) or a
 range: one or more of `>=`, `>`, `<=`, `<` followed by a version, joined by single
 spaces (`">=18 <26"`), or a hyphen range (`"18 - 26"`); a short version covers
 everything under it, so `">=18"` is 18.0 and newer and `"<=26"` includes every
-26.x. Any other form is `400 BAD_REQUEST`, and the message names these forms. A
+26.x. Anything written like a range but outside those forms (`^18`, `~18`, `18.x`, `*`, `||`) is `400 BAD_REQUEST`, and the message names these forms; any other string, such as `Baklava` or `34-ext12`, is an exact version. A
 range is granted an idle device whose OS satisfies it, or else a new device on the
 newest installed runtime in it; one no installed runtime satisfies fails at once
 with `422 RUNTIME_MISSING`, `downloadable: false` and the range as `osVersion`,

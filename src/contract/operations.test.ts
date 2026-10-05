@@ -213,11 +213,14 @@ describe("lease.request osVersion", () => {
   const parse = (osVersion: string) =>
     OPERATIONS["lease.request"].input.safeParse({ model: "iPhone 17", osVersion, platform: "ios" });
 
-  it.each([["18.4"], [">=18"], [">=18 <26"], ["18 - 26"]])("accepts %s", (osVersion) => {
-    expect(parse(osVersion).success).toBe(true);
-  });
+  it.each([["18.4"], ["Baklava"], ["34-ext12"], [">=18"], [">=18 <26"], ["18 - 26"]])(
+    "accepts %s",
+    (osVersion) => {
+      expect(parse(osVersion).success).toBe(true);
+    },
+  );
 
-  it.each([["^18"], ["18.x"], [">=18 || <17"], [""]])(
+  it.each([["^18"], ["~18"], ["18.x"], ["18.X"], ["*"], [">=18 || <17"], [""]])(
     "refuses %j with a message naming the accepted forms",
     (osVersion) => {
       const result = parse(osVersion);

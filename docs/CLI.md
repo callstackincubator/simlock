@@ -195,8 +195,10 @@ granted.
   of `>=`, `>`, `<=`, `<` followed by a version, joined by single spaces
   (`>=18 <26`), or a hyphen range (`18 - 26`). A short version covers
   everything under it: `>=18` is 18.0 and newer, `<=26` includes every 26.x,
-  `>26` excludes them, `18 - 26` is `>=18 <=26`. Any other form (`^18`,
-  `18.x`, `*`) is `BAD_REQUEST` (exit 2) and the message names these forms.
+  `>26` excludes them, `18 - 26` is `>=18 <=26`. Anything written like
+  a range but outside these forms (`^18`, `~18`, `18.x`, `*`, `||`) is
+  `BAD_REQUEST` (exit 2) and the message names these forms; any other string,
+  such as the Android runtimes `Baklava` or `34-ext12`, is an exact version.
   A range is served by a fitting idle device first, or else by a new device
   on the newest installed runtime in the range; when no installed runtime is
   in the range the lease fails at once with `RUNTIME_MISSING` (exit 12), with

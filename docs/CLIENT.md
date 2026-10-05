@@ -77,7 +77,7 @@ the newest API level that has one.
 `osVersion` is an exact version (`"18.4"`) or a range: one or more of `>=`,
 `>`, `<=`, `<` followed by a version, joined by single spaces (`">=18 <26"`),
 or a hyphen range (`"18 - 26"`). A short version covers everything under it, so
-`">=18"` is 18.0 and newer. Any other form is `BAD_REQUEST`. A range is served
+`">=18"` is 18.0 and newer. Anything written like a range but outside those forms (`^18`, `~18`, `18.x`, `*`, `||`) is `BAD_REQUEST`; any other string, such as `Baklava` or `34-ext12`, is an exact version. A range is served
 by an idle device whose OS satisfies it or by a new device on the newest
 installed runtime in it, and when none is installed it fails at once with
 `RUNTIME_MISSING`, whatever `allowDownload` says. Through a gateway a range is

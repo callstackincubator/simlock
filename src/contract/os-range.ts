@@ -36,8 +36,23 @@ const ACCEPTED_FORMS =
 const VERSION = /^\d+(?:\.\d+)*$/;
 const OPERATORS = [">=", ">", "<=", "<"] as const;
 
+/**
+ * Whether a string is written as a range rather than a version: it starts with a comparator, or
+ * has a hyphen range, a caret, a tilde, a star, `||`, or an `x` segment. Anything else is a bare
+ * version, which stays exact as on `main`, so a runtime a driver lists as `Baklava` or `34-ext12`
+ * still names itself.
+ */
+function looksLikeRange(text: string): boolean {
+  return (
+    /^[<>=]/.test(text) ||
+    / - |\^|~|\*|\|\|/.test(text) ||
+    text.split(".").some((segment) => segment === "x" || segment === "X")
+  );
+}
+
 export function parseOsConstraint(text: string): ParsedOsConstraint {
-  if (VERSION.test(text)) return { constraint: { kind: "exact", version: text }, ok: true };
+  if (text === "") return refused(text);
+  if (!looksLikeRange(text)) return { constraint: { kind: "exact", version: text }, ok: true };
   const bounds = hyphenBounds(text) ?? comparatorBounds(text);
   return bounds === undefined
     ? refused(text)
@@ -91,9 +106,13 @@ function segments(version: string): readonly number[] {
   return version.split(".").map(Number);
 }
 
-/** Whether a device OS satisfies a constraint; a bare version is string equality. */
+/**
+ * Whether a device OS satisfies a constraint; a bare version is string equality, and a version
+ * that is not dotted integers (`Baklava`) satisfies no range.
+ */
 export function satisfies(version: string, constraint: OsConstraint): boolean {
   if (constraint.kind === "exact") return constraint.version === version;
+  if (!VERSION.test(version)) return false;
   const parts = segments(version);
   return constraint.bounds.every(
     (bound) =>

@@ -17,6 +17,7 @@ import {
   leaseRecordSchema,
   leaseRequestFields,
   OPERATIONS,
+  refuseBadOsVersion,
   refuseModelWithClass,
 } from "../contract/index.js";
 
@@ -41,8 +42,9 @@ export const leaseSimulatorInputSchema = leaseRequestFields.omit({ requesterId: 
  * The tool's input with the contract's model-or-class check on top, for the handler to run
  * before asking: the SDK lists and validates the plain object above, which is all it can read.
  */
-export const leaseSimulatorCheckedInputSchema =
-  leaseSimulatorInputSchema.superRefine(refuseModelWithClass());
+export const leaseSimulatorCheckedInputSchema = leaseSimulatorInputSchema
+  .superRefine(refuseModelWithClass())
+  .superRefine(refuseBadOsVersion());
 
 /** `lease.request`'s output verbatim -- the device/lease/timing grant. */
 export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;
