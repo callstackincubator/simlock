@@ -10,11 +10,25 @@ pre-commit:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+    # A change can break the files that call it, so this checks the whole project; it takes seconds.
+    typecheck:
+      glob: "*.{ts,tsx,mts,cts}"
+      run: pnpm run typecheck
 
-# fallow audits the whole branch against main and takes minutes, so it runs
-# once per push rather than on every checkpoint commit.
+# These audit the whole branch against main and take minutes, so they run once per push
+# rather than on every checkpoint commit, in order: fallow, the e2e typecheck, then mutants.
 pre-push:
+  piped: true
   commands:
     fallow:
+      priority: 1
       run: pnpm exec fallow audit --base origin/main --format compact
       fail_text: "Fallow found issues in your changes. Run 'pnpm fallow' to see details."
+    typecheck-e2e:
+      priority: 2
+      run: pnpm run typecheck:e2e
+    # Mutants only on the source lines this branch changed. A survivor does not block the push:
+    # an equivalent mutant cannot be killed, so each survivor is killed or explained in the PR body.
+    mutate:
+      priority: 3
+      run: pnpm run mutate || echo "Mutants survived (listed above). Kill each one, or explain it in the PR body."

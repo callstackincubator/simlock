@@ -23,7 +23,7 @@ import type { WorkerView } from "./worker-registry.js";
  * `lease.renew`, `lease.release`, `lease.cancel`, `device.exec`, and `lease.list` for the
  * reconnect rebuild) is one that session can already make. It returns `undefined` before
  * `start()` has completed or after `close()`. #118 may narrow this to purpose-built methods
- * if the wider shape proves too permissive for `boundary.test.ts`.
+ * if the wider shape proves too permissive.
  *
  * `reachable` is false once the uplink is closing or closed. Answering a forwarded call for
  * an unreachable worker is #119's `WORKER_UNREACHABLE`, not this PR's concern.

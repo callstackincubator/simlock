@@ -1,6 +1,6 @@
 ---
 name: spec-session
-description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues; technical and split end with the forked check-spec skill reading the posted body, and its findings are fixed before any approval box is ticked or ready label set. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
+description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues; technical and split end with the spec-checker agent reading the posted body, and its findings are fixed before any approval box is ticked or ready label set. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
 model: opus
 effort: medium
 ---
@@ -33,6 +33,13 @@ when:
   check finding (step 5) the accepted business sections do not settle.
 
 ## 1. Load the issue
+
+Once the issue and mode are known, rename the session to
+`[Spec #N, <mode>] <issue title>` with
+`mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it
+with ToolSearch first). Skip it when the arguments say `unattended` (a delivery
+run owns the title then), and when the tool is missing or the rename is declined: the title
+is never a reason to stop or ask.
 
 ```bash
 read -r OWNER REPO < <(gh repo view --json owner,name -q '"\(.owner.login) \(.name)"')
@@ -206,9 +213,9 @@ comment. Never edit a `request:new` or `bug:*` body.
 
 The spec check reads the body as posted, so it runs after the body is on
 GitHub: at the end of `technical`, and in `split` once every task exists.
-Invoke the `check-spec` skill with the issue number (the feature, for a
-split). It is forked: it reads with a fresh context and hands back only its
-report block.
+Start the `spec-checker` agent with the Agent tool, `run_in_background:
+false`, and the issue number (the feature, for a split) as its prompt. It
+reads with a fresh context and hands back only its report block.
 
 Fix each finding in the body it names, then run the check once more if you
 changed anything. There is no third run: what the second one reports is

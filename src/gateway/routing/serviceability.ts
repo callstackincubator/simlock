@@ -4,7 +4,7 @@
  * it and acts on the answer, and the stages never see a request this table has rejected.
  */
 import type { Platform } from "../../contract/index.js";
-import type { DeviceClass } from "../../core/domain.js";
+import type { DeviceClass } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 import { hasPlatform, listsModel, matchRequest, wantedClass } from "./request-match.js";

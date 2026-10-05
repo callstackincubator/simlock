@@ -134,17 +134,23 @@ waiting.
 
 ## Review, verification and merge
 
-`deliver` never writes code itself. It hands each stage to a forked skill
-that runs on the model and effort its frontmatter pins — `implement` on
-Sonnet, `review`, `triage-bug` and `check-spec` on Opus — and reasons only
-over the fixed report each one returns. `deliver` and `spec-session` run in
+`deliver` never writes code itself. It hands each stage to a background
+agent in `.claude/agents/` that runs on the model and effort its
+frontmatter pins — `implementer` on Sonnet, `reviewer`, `bug-triager` and
+`spec-checker` on Opus — up to two issues at once, and reasons only over the
+fixed report each one returns. The stage skills of the same names are thin
+wrappers that start those agents when a person invokes them, after renaming the session
+so its title names the issue or PR. `deliver` and `spec-session` run in
 the session that invoked them; their frontmatter pins Opus only until the
 next message, so an unattended run keeps it and an attended one returns to
 the session's model after the first reply. `implement` commits the spec's
 tests red first and opens a draft PR, so CI runs from the first push; it
-then turns them green in commits that each lower the failing count, and
-runs `pnpm mutate` so every changed line is shown to matter before anyone
-reviews it.
+then turns them green in commits that each lower the failing count. It
+runs only the tests its change can reach — `pnpm test:changed` and the e2e
+files it touched. Every other check runs on its own: format, lint and
+typecheck on commit; Fallow, the e2e typecheck and `pnpm mutate` (mutants
+on the changed lines only, so every changed line is shown to matter before
+anyone reviews it) on push; the full suite in CI.
 
 A spec never answers every question. What any change includes without
 asking — docs it makes false, both `EVENTS.md` files, a test for every new
@@ -174,7 +180,7 @@ or interleaving makes each changed function wrong and whether a rule is
 broken. It works in its own worktree and proves claims with the affected
 test file only, breaking code at most three times on its riskiest claims;
 `pnpm check`, `pnpm mutate` and the browser and slow lanes are left to the
-implementer and CI. The two are blind to each other on purpose: a reviewer
+git hooks and CI. The two are blind to each other on purpose: a reviewer
 holding both the spec and the rules resolves a conflict between them
 silently, and the maintainer wants to see that conflict, because it usually
 means the spec is missing a line.
@@ -292,9 +298,12 @@ when it closes. See [adr/README.md](adr/README.md).
 - Labels: `.github/labels.json`, synced by `.github/workflows/labels.yml`
 - Automation: `.github/workflows/issue-state.yml`
 - Skills: `.claude/skills/spec-session`, `.claude/skills/triage-bug`,
-  `.claude/skills/deliver` (orchestrator), and the forked stages
+  `.claude/skills/deliver` (orchestrator), and the stage wrappers
   `.claude/skills/check-spec`, `.claude/skills/implement`,
   `.claude/skills/review`, `.claude/skills/verify-hardware`
+- Agents: `.claude/agents/` — `implementer`, `reviewer`,
+  `hardware-verifier`, `spec-checker`, `bug-triager` (the stage
+  instructions), and `spec-reviewer`, `code-reviewer`
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
   `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
   hook; installs the pinned pnpm into a cache when PATH lacks it),

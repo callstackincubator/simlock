@@ -27,8 +27,10 @@ import {
   type PassthroughContext,
   PassthroughRefusedError,
   removeListedComponent,
-} from "../../dist/core/driver.js";
-import type { DeviceClass, DeviceSpec, Platform } from "../../dist/core/domain.js";
+  type DeviceClass,
+  type DeviceSpec,
+  type Platform,
+} from "../../dist/core/index.js";
 import type {
   FakeDriverErrorSpec,
   FakeDriverOperation,

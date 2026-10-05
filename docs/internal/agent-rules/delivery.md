@@ -237,7 +237,7 @@ is open, done means closed as completed.
     break code to see what stays green (testing rules 2 and 3) at most three
     times, on its riskiest claims, and restores the tree afterwards. It does
     not run `pnpm check`, `pnpm mutate`, the whole fast e2e suite, the
-    console lane or the slow lane: the implementer and CI run those.
+    console lane or the slow lane: the git hooks and CI run those.
     Each review returns findings, one per defect: a claim, the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
     finding is blocking when it breaks behaviour, leaves wrong state, or
@@ -317,10 +317,10 @@ gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 
 The repo's own skills encode these procedures; use them rather than
 retyping the steps. `deliver` is the orchestrator: it claims, then hands
-each stage to a forked skill — `implement`, `review`, `verify-hardware` —
-that runs on the model its frontmatter pins and returns a fixed report.
+each stage to a background agent — `implementer`, `reviewer`,
+`hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` ends its
-technical and split modes with the forked `check-spec` (rule 7).
+technical and split modes with the `spec-checker` agent (rule 7).
 
 ## Automation
 

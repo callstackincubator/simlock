@@ -228,7 +228,7 @@ Every daemon operation is declared exactly once, in `src/contract/`: a name
 output schema, and an optional `authorize` hook. Public TypeScript types are
 inferred from those schemas, never hand-written a second time. The contract
 module imports nothing from `core`, `daemon`, or `drivers` (enforced by
-`src/contract/boundary.test.ts`) — core's own domain records
+`pnpm lint`, `.oxlintrc.json`) — core's own domain records
 (`DeviceRecord`, `LeaseRecord`, `LeaseGrant`) stay private, and the daemon
 maps them onto the contract's shapes in exactly one place
 (`src/daemon/dispatcher.ts`'s handlers). If a core type's shape changes
@@ -971,8 +971,8 @@ unchanged.
 `src/gateway/` **imports nothing from `drivers`** — it has no concept of a
 UDID, an AVD, a snapshot, or an adb port — and from `core` only the
 platform-agnostic queue and bus modules it reuses, never the registry,
-capacity, or lifecycle modules. A boundary test in the same shape as
-`src/contract/boundary.test.ts` enforces it. The rule is not stylistic: a
+capacity, or lifecycle modules. `pnpm lint` enforces it (`.oxlintrc.json`: the gateway
+override allows only the core names its allow-list gives). The rule is not stylistic: a
 gateway that could reach a registry module is a gateway that could grow a
 device-state opinion, and the safety argument above rests on it having none.
 

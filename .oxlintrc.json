@@ -4,7 +4,220 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+            "message": "core is entered through its index.js"
+          },
+          {
+            "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+            "message": "gateway is entered through its index.js"
+          },
+          {
+            "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+            "message": "drivers/ios is entered through its index.js"
+          },
+          {
+            "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+            "message": "drivers/android is entered through its index.js"
+          },
+          {
+            "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+            "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/core/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "gateway is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)capacity/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "capacity is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)drivers/",
+                "message": "platform behaviour reaches this module only through the Driver interface"
+              },
+              {
+                "group": [
+                  "fs",
+                  "fs/**",
+                  "node:fs",
+                  "node:fs/**",
+                  "child_process",
+                  "child_process/**",
+                  "node:child_process",
+                  "node:child_process/**"
+                ],
+                "message": "core and leasing reach the filesystem and processes only through injected ports"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/gateway/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "core is entered through its index.js"
+              },
+              {
+                "group": ["**/core/index.js"],
+                "allowImportNames": [
+                  "DeviceClass",
+                  "DeviceRequest",
+                  "DeviceRequirement",
+                  "DeviceSpec",
+                  "InMemoryLeaseRequestStore",
+                  "LeaseProgress",
+                  "LeaseRecord",
+                  "LeaseRequestBook",
+                  "LeaseRequestFailure",
+                  "LeaseRequestLimits",
+                  "LeaseRequestOptions",
+                  "QueuePlace",
+                  "RequestCancelledError",
+                  "RequesterAlreadyLeasedError",
+                  "SerializedDecision",
+                  "WaitQueue",
+                  "WaiterState",
+                  "WaitingRequest",
+                  "findCatalogModel",
+                  "fits",
+                  "modelClass",
+                  "newLeaseRequestId",
+                  "pairedRuntimes"
+                ],
+                "message": "the gateway may import only the names its allow-list gives"
+              },
+              {
+                "group": ["**/drivers/**", "**/http/**", "**/cli/**", "**/mcp/**"],
+                "message": "the gateway imports no driver, HTTP, CLI or MCP module"
+              },
+              {
+                "regex": "(?:^|/)daemon/(?:$|[^d]|d(?:$|[^i]|i(?:$|[^s]|s(?:$|[^p]|p(?:$|[^a]|a(?:$|[^t]|t(?:$|[^c]|c(?:$|[^h]|h(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))))))",
+                "message": "the gateway imports only the daemon's dispatch contract"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/daemon/**"],
+      "excludeFiles": ["src/daemon/main.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "core is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/ios is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/android is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)gateway/",
+                "message": "only the composition root, main.ts, knows a gateway exists"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/contract/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^/|(?:^|/)\\.\\.(?:/|$)",
+                "message": "the contract imports nothing outside src/contract/"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/test-*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(?:^|/)core/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
+                "message": "core is entered through its index.js, or testing.js from a test file"
+              },
+              {
+                "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "gateway is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)capacity/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
+                "message": "capacity is entered through its index.js, or testing.js from a test file"
+              },
+              {
+                "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/ios is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/android is entered through its index.js"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
   "env": {
     "builtin": true
   }

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  DriverCrashError,
-  type Driver,
-  FakeDriver,
-  FakeDriverUnknownDeviceError,
-  UnknownModelError,
-} from "./index.js";
+import { DriverCrashError, type Driver, UnknownModelError } from "./index.js";
+import { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
+import * as publicIndex from "./index.js";
+import * as testing from "./testing.js";
 import { FakeClock } from "../ports/index.js";
 
 describe("FakeDriver", () => {
+  it("is exported from core/testing.ts and not from the public index", () => {
+    expect(testing.FakeDriver).toBe(FakeDriver);
+    expect("FakeDriver" in publicIndex).toBe(false);
+    expect("FakeDriverUnknownDeviceError" in publicIndex).toBe(false);
+  });
+
   it("surfaces a scripted typed failure on the selected provision call", async () => {
     const driver = new FakeDriver({ clock: new FakeClock(), platform: "android" });
     const crash = new DriverCrashError("emulator exited");

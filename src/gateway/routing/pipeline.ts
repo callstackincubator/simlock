@@ -5,7 +5,7 @@
  * touches that stage and the list in `routing.ts`, and no other stage.
  */
 import type { Platform } from "../../contract/index.js";
-import type { DeviceClass } from "../../core/domain.js";
+import type { DeviceClass } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 
 export interface RoutableRequest {

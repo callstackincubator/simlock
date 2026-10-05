@@ -15,15 +15,13 @@ import {
   type Nuke,
   redactConfig,
   UnknownPassthroughToolError,
+  type CapacityReader,
+  type DeviceModeReader,
+  type CatalogReader,
+  type LeaseCommands,
+  type PassthroughResolver,
+  type QueueControl,
 } from "../core/index.js";
-import type {
-  CapacityReader,
-  DeviceModeReader,
-  CatalogReader,
-  LeaseCommands,
-  PassthroughResolver,
-  QueueControl,
-} from "../core/lease-ports.js";
 import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";

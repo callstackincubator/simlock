@@ -18,6 +18,7 @@ export {
   type DeviceSpec,
   type LeaseRecord,
   type LeaseRequestFailure,
+  type Platform,
   IllegalTransition,
   transition,
   transitionEnteredAt,
@@ -98,7 +99,6 @@ export {
   ReplayedLeaseRequestError,
 } from "./lease-request-book.js";
 export { Nuke } from "./nuke.js";
-export { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
 export {
   ComponentInstaller,
@@ -106,3 +106,33 @@ export {
   type ComponentInstallerProgress,
 } from "./component-installer.js";
 export { SerializedDecision } from "./serialized-decision.js";
+export {
+  type CapacityReader,
+  type CatalogReader,
+  type DeviceModeReader,
+  type LeaseCommands,
+  type PassthroughResolver,
+  type QueueControl,
+} from "./lease-ports.js";
+export {
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  type LeaseRequestLimits,
+  newLeaseRequestId,
+  type WaitingRequest,
+} from "./lease-request-book.js";
+export {
+  type LeaseRequestOptions,
+  type QueuePlace,
+  type WaiterState,
+  WaitQueue,
+} from "./wait-queue.js";
+export { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
+export { type DeviceRequirement, fits, type LeaseGrant } from "./domain.js";
+export {
+  type DriverCatalogImage,
+  type MissingPrerequisite,
+  type ObservedMark,
+  type PassthroughContext,
+  type ReclaimResult,
+} from "./driver.js";

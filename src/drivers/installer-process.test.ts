@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ComponentInstallProgress } from "../core/driver.js";
+import type { ComponentInstallProgress } from "../core/index.js";
 import { FakeClock, ScriptedProcessRunner } from "../ports/index.js";
 import { runInstallerProcess } from "./installer-process.js";
 

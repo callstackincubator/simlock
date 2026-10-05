@@ -11,18 +11,20 @@ recovery. Anything provable in-process belongs in a unit test instead.
 
 ## Lanes
 
-| Lane | Command                  | What it uses                      | Where it runs          |
-| ---- | ------------------------ | --------------------------------- | ---------------------- |
-| fast | `pnpm run test:e2e`      | scriptable fake driver, no SDKs   | every `pnpm run check` |
-| slow | `pnpm run test:e2e:slow` | real `simctl` / `adb` / emulators | manual, pre-release    |
+| Lane | Command                  | What it uses                      | Where it runs       |
+| ---- | ------------------------ | --------------------------------- | ------------------- |
+| fast | `pnpm run test:e2e`      | scriptable fake driver, no SDKs   | `pnpm run test`, CI |
+| slow | `pnpm run test:e2e:slow` | real `simctl` / `adb` / emulators | manual, pre-release |
 
 The slow flows are tagged `slow` plus `ios`/`android`, so the fast lane excludes
 them with `--tags-filter='!slow'`. Each also gates itself at runtime with
 `describe.skipIf` on platform and SDK availability. Filter further with, for
 example, `pnpm exec vitest run --project e2e --tags-filter='ios && !android'`.
 
-Flows run sequentially (`fileParallelism: false`) — they share one machine, and
-the daemon owns real OS resources.
+The fast lane runs four files at once: each flow has its own `SIMLOCK_HOME`, so
+nothing on disk or on a socket is shared. The slow lane runs one file at a time
+(`--no-file-parallelism`), because its flows share the machine's real simulators
+and emulators.
 
 ## How isolation works
 

@@ -1,7 +1,12 @@
 import { dirname, isAbsolute, join } from "node:path";
 
-import type { DeviceClass, DeviceSpec } from "../../core/domain.js";
 import {
+  ensureOwnedRoot,
+  type EnsureOwnedRootOptions,
+  type LegacyDevice,
+  OwnedRootError,
+  type DeviceClass,
+  type DeviceSpec,
   BootTimeoutError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
@@ -29,12 +34,6 @@ import {
   removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
-} from "../../core/driver.js";
-import {
-  ensureOwnedRoot,
-  type EnsureOwnedRootOptions,
-  type LegacyDevice,
-  OwnedRootError,
 } from "../../core/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
@@ -2454,3 +2453,4 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   allocationsByRunner.set(processRunner, allocator);
   return allocator;
 }
+export { androidPrerequisites } from "./prerequisites.js";

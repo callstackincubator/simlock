@@ -5,12 +5,12 @@ import {
   DEFAULT_CAPACITY_STRATEGY,
   defaultCapacityOptions,
   isCapacityStrategyName,
+  resourceOptionValidators,
   type CapacityConfig,
   type CapacityLimits,
   type CapacityStrategyName,
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
-import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
 import { DEVICE_CLASSES, type DeviceClass, type DeviceMode, type LeaseIdentity } from "./domain.js";
 import {
   booleanValue,

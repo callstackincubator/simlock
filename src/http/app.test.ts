@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { NoCapacityError, RequesterAlreadyLeasedError, UnknownLeaseError } from "../core/index.js";
+import {
+  NoCapacityError,
+  RequesterAlreadyLeasedError,
+  UnknownLeaseError,
+  LeaseRequestBook,
+  Registry,
+  SerializedDecision,
+  RequestCancelledError,
+} from "../core/index.js";
 import { runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
-import { LeaseRequestBook } from "../core/lease-request-book.js";
-import { Registry } from "../core/registry.js";
-import { SerializedDecision } from "../core/serialized-decision.js";
-import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
