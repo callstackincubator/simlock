@@ -357,8 +357,16 @@ class's preference list that the machine lists (see
 with no listed model fails with `422 UNKNOWN_MODEL`, naming the config key, and
 one whose listed models pair with no installed runtime fails with `RUNTIME_MISSING`.
 The granted lease's `device`, `os`, `mode` and `imageTag` always name the device
-you got. Through a gateway a request that names no `device` is `400 BAD_REQUEST`
-for now. `os` defaults to the newest installed runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
+you got. Through a gateway a request that names no `device`, or whose `os` is a
+range, is `400 BAD_REQUEST` for now. `os` is an exact version (`"18.4"`) or a
+range: one or more of `>=`, `>`, `<=`, `<` followed by a version, joined by single
+spaces (`">=18 <26"`), or a hyphen range (`"18 - 26"`); a short version covers
+everything under it, so `">=18"` is 18.0 and newer and `"<=26"` includes every
+26.x. Any other form is `400 BAD_REQUEST`, and the message names these forms. A
+range is granted an idle device whose OS satisfies it, or else a new device on the
+newest installed runtime in it; one no installed runtime satisfies fails at once
+with `422 RUNTIME_MISSING`, `downloadable: false` and the range as `osVersion`,
+whatever `allowDownload` says. `os` defaults to the newest installed runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
 above `lease.maxTtlMs`; `timeoutMs` (optional) is enforced daemon-side so a
 vanished client can't hold a queue slot forever. `mode` (optional, `"slim"`
 or `"full"`) is the device mode the request asks for; without it the request

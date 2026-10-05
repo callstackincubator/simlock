@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import { parseOsConstraint } from "./os-range.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   cleanupRuleSummarySchema,
@@ -143,6 +144,12 @@ export const statusGet = defineOperation({
   }),
 });
 
+/** `osVersion` and the HTTP `os`: an exact version or a range of the one grammar (ADR 0015 §2). */
+const osConstraintSchema = z.string().superRefine((text, context) => {
+  const parsed = parseOsConstraint(text);
+  if (!parsed.ok) context.addIssue({ code: z.ZodIssueCode.custom, message: parsed.message });
+});
+
 // ---- lease.request --------------------------------------------------------------------------
 
 /**
@@ -165,7 +172,8 @@ const leaseRequestBaseSchema = z
     model: z.string().min(1).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
-    osVersion: z.string().optional(),
+    /** ADR 0015 §2: an exact version or a range, refused here when it is neither. */
+    osVersion: osConstraintSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
     requesterId: z.string().optional(),

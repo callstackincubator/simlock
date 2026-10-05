@@ -175,7 +175,7 @@ a timer and releasing it when it exits.
 
 ```
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
-              [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+              [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
               [--timeout <duration>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -191,6 +191,16 @@ granted.
   or `desktop`); with neither, the lease asks for a `phone`. Naming both is a
   `BAD_REQUEST` (exit 2). `--os` defaults to the newest runtime already
   installed for that platform. See [What a lease asks for](#what-a-lease-asks-for).
+- `--os <version|range>` — an exact version (`18.4`), or a range: one or more
+  of `>=`, `>`, `<=`, `<` followed by a version, joined by single spaces
+  (`>=18 <26`), or a hyphen range (`18 - 26`). A short version covers
+  everything under it: `>=18` is 18.0 and newer, `<=26` includes every 26.x,
+  `>26` excludes them, `18 - 26` is `>=18 <=26`. Any other form (`^18`,
+  `18.x`, `*`) is `BAD_REQUEST` (exit 2) and the message names these forms.
+  A range is served by a fitting idle device first, or else by a new device
+  on the newest installed runtime in the range; when no installed runtime is
+  in the range the lease fails at once with `RUNTIME_MISSING` (exit 12), with
+  or without `--allow-download`, because a range never downloads.
 - `--class <class>` — the kind of device to lease, in place of a model. See
   [What a lease asks for](#what-a-lease-asks-for).
 - `--agent-id` — this invocation's requester identity; see
@@ -445,7 +455,8 @@ A class lease is served by the first of these that applies: an idle device
 that is already running and fits, then an idle device that is shut down and
 fits (it is booted), then a new device. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
-lease fits a device on any installed runtime, `--mode full` and `--image-tag`
+lease fits a device on any installed runtime, with `--os` a device whose OS
+satisfies it, `--mode full` and `--image-tag`
 are never relaxed, and a lease that names no mode fits only the worker's
 default mode. When several devices fit, which one is granted is not promised.
 
