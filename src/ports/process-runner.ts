@@ -174,7 +174,26 @@ export interface ProcessRunner {
   ): StreamingProcessHandle;
 }
 
+export interface NodeProcessRunnerOptions {
+  /** How long `run()` waits after a timeout-triggered SIGTERM before sending SIGKILL. */
+  readonly sigkillGraceMs?: number;
+  /** The most the runner defers settling after a child's `exit` while output or a delivery is outstanding. */
+  readonly exitDeferralCapMs?: number;
+  /** How long the pipes must stay quiet after a child's `exit` before the runner stops waiting for `close`. */
+  readonly exitGraceMs?: number;
+}
+
 export class NodeProcessRunner implements ProcessRunner {
+  readonly sigkillGraceMs: number;
+  readonly exitDeferralCapMs: number;
+  readonly exitGraceMs: number;
+
+  constructor(options: NodeProcessRunnerOptions = {}) {
+    this.sigkillGraceMs = options.sigkillGraceMs ?? SIGTERM_TO_SIGKILL_GRACE_MS;
+    this.exitDeferralCapMs = options.exitDeferralCapMs ?? EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
+    this.exitGraceMs = options.exitGraceMs ?? EXIT_TO_CLOSE_GRACE_MS;
+  }
+
   async run(
     command: string,
     args: readonly string[],
@@ -202,7 +221,7 @@ export class NodeProcessRunner implements ProcessRunner {
               } catch {
                 // The child may have exited between the timer firing and the kill.
               }
-            }, SIGTERM_TO_SIGKILL_GRACE_MS);
+            }, this.sigkillGraceMs);
           }, options.timeoutMs);
 
     try {
@@ -239,7 +258,13 @@ export class NodeProcessRunner implements ProcessRunner {
       child.stdin?.end(options.input);
     }
 
-    return new NodeProcessHandle(child, child.pid, options.lineEnd ?? "newline");
+    return new NodeProcessHandle(
+      child,
+      child.pid,
+      options.lineEnd ?? "newline",
+      this.exitDeferralCapMs,
+      this.exitGraceMs,
+    );
   }
 
   spawnStreaming(
@@ -261,7 +286,13 @@ export class NodeProcessRunner implements ProcessRunner {
       throw new ProcessSpawnError(command, args);
     }
 
-    const handle = new NodeStreamingProcessHandle(child, child.pid, options.onChunk);
+    const handle = new NodeStreamingProcessHandle(
+      child,
+      child.pid,
+      options.onChunk,
+      this.exitDeferralCapMs,
+      this.exitGraceMs,
+    );
     if (options.input !== undefined) {
       // One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
       // then EOF. `end` is safe even if the child already exited -- the EPIPE that produces is
@@ -284,10 +315,10 @@ export class NodeProcessRunner implements ProcessRunner {
  * `EXEC_TIMEOUT` already is on both transports -- not a clean exit that quietly drops a tail.
  */
 export class ExecOutputDeliveryStalledError extends Error {
-  constructor() {
+  constructor(deferralCapMs: number = EXIT_TO_CLOSE_MAX_DEFERRAL_MS) {
     super(
       "The command exited, but delivering one of its output chunks was still unresolved " +
-        `${String(EXIT_TO_CLOSE_MAX_DEFERRAL_MS)}ms later; treating this as a clean exit could ` +
+        `${String(deferralCapMs)}ms later; treating this as a clean exit could ` +
         "have reported an exit code while silently dropping the tail of the command's output.",
     );
     this.name = "ExecOutputDeliveryStalledError";
@@ -347,6 +378,8 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     private readonly child: ChildProcess,
     pid: number,
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
+    private readonly exitDeferralCapMs: number,
+    private readonly exitGraceMs: number,
   ) {
     this.pid = pid;
     this.#forward(child.stdout, "stdout", onChunk);
@@ -380,7 +413,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         }
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
-          fail(new ExecOutputDeliveryStalledError());
+          fail(new ExecOutputDeliveryStalledError(this.exitDeferralCapMs));
           return;
         }
         let deadlineTimer: NodeJS.Timeout | undefined;
@@ -395,10 +428,10 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
       };
 
       child.once("close", (code, signal) => {
-        settleWhenDrained(Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS, () => settle(code, signal));
+        settleWhenDrained(Date.now() + this.exitDeferralCapMs, () => settle(code, signal));
       });
       child.once("exit", (code, signal) => {
-        const deadline = Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
+        const deadline = Date.now() + this.exitDeferralCapMs;
         const armGrace = (chunksAtArm: number): void => {
           const timer = setTimeout(() => {
             if (settled) return;
@@ -414,7 +447,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
               return;
             }
             settleWhenDrained(deadline, () => settle(code, signal));
-          }, EXIT_TO_CLOSE_GRACE_MS);
+          }, this.exitGraceMs);
           timer.unref();
         };
         armGrace(this.#chunkCount);
@@ -536,6 +569,8 @@ class NodeProcessHandle implements ProcessHandle {
     private readonly child: ChildProcess,
     pid: number,
     lineEnd: LineEnd,
+    private readonly exitDeferralCapMs: number,
+    private readonly exitGraceMs: number,
   ) {
     this.pid = pid;
     captureLines(child.stdout, this.stdout, this.#stdoutChunks, lineEnd);
@@ -556,7 +591,7 @@ class NodeProcessHandle implements ProcessHandle {
         settle(code);
       });
       child.once("exit", (code) => {
-        const deadline = Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
+        const deadline = Date.now() + this.exitDeferralCapMs;
         const capturedSoFar = (): number => this.#stdoutChunks.length + this.#stderrChunks.length;
         const armGrace = (chunksAtArm: number): void => {
           const timer = setTimeout(() => {
@@ -565,7 +600,7 @@ class NodeProcessHandle implements ProcessHandle {
               return;
             }
             settle(code);
-          }, EXIT_TO_CLOSE_GRACE_MS);
+          }, this.exitGraceMs);
           // A pending grace timer must never keep the Node process alive on its own.
           timer.unref();
         };
