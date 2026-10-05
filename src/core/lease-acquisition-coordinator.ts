@@ -304,7 +304,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      await this.#settleSpec(waiter, driver, request, options);
+      // The one place a request with no mode gets the worker's default (ADR 0007 §2).
+      const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
+      const target = this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode));
+      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, options);
+      waiter.spec = checkedSpec(resolved, request, mode);
+      waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
+      if (target.classOf !== undefined) waiter.classOf = target.classOf;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -316,36 +322,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Resolves the request into the waiter's spec and requirement, or throws what made it
-   * unresolvable. The one place a request with no mode gets the worker's default (ADR 0007 §2).
+   * The exact request an exact-model request already is, answered without awaiting anything so
+   * its path takes no extra turn of the event loop; `undefined` for one that names no model.
    */
-  async #settleSpec(
-    waiter: AcquisitionWaiter,
-    driver: Driver,
-    request: DeviceRequest,
-    options: LeaseRequestOptions,
-  ): Promise<void> {
-    const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
-    // An exact model awaits nothing here, so its path takes no extra turn of the event loop.
+  #exactTarget(request: DeviceRequest, mode: DeviceMode): ResolvedTarget | undefined {
     const { class: _class, model, ...rest } = request;
-    const target: ResolvedTarget =
-      model === undefined
-        ? await this.#resolveClass(request, mode)
-        : { exact: { ...rest, mode, model } };
-    const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, options);
-    // The image tag is the request's, or none: a driver that returns another, or one the
-    // request did not name, would plan the device into a pool the request did not ask for.
-    if (resolved.imageTag !== request.imageTag) {
-      throw new Error(
-        `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
-          `for a request naming ${String(request.imageTag)}`,
-      );
-    }
-    // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
-    // driver that returns the wrong thing still cannot put a full request on a slim device.
-    waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
-    waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
-    if (target.classOf !== undefined) waiter.classOf = target.classOf;
+    return model === undefined ? undefined : { exact: { ...rest, mode, model } };
   }
 
   /**
@@ -936,6 +918,23 @@ function downloadingProgress(
 /** Both reports are for the one component a `#resolveOrInstall` call downloads. */
 function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
   return left.waiting === right.waiting && left.percent === right.percent;
+}
+
+/**
+ * The spec a driver resolved, held to what the request asked. The image tag is the request's, or
+ * none: a driver that returns another, or one the request did not name, would plan the device
+ * into a pool the request did not ask for. Full is a guarantee (ADR 0007 §5): a slim spec is
+ * accepted only for a slim request, so a driver that returns the wrong thing still cannot put a
+ * full request on a slim device.
+ */
+function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceMode): DeviceSpec {
+  if (resolved.imageTag !== request.imageTag) {
+    throw new Error(
+      `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
+        `for a request naming ${String(request.imageTag)}`,
+    );
+  }
+  return mode === "slim" ? resolved : fullSpec(resolved);
 }
 
 /** What the planner needs, beside the spec, to find an idle device that fits the request. */
