@@ -9,10 +9,25 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import { type Core, createCore, DriverCrashError, loadConfig, Registry } from "./index.js";
+import {
+  type Core,
+  createCore,
+  type DriverRejection,
+  DriverCrashError,
+  loadConfig,
+  type PrerequisiteCheck,
+  Registry,
+} from "./index.js";
 import { FakeDriver, testComponentWiring } from "./testing.js";
 
-async function build(options: { readonly logger?: Logger; readonly fresh?: boolean } = {}) {
+async function build(
+  options: {
+    readonly logger?: Logger;
+    readonly fresh?: boolean;
+    readonly driverRejections?: readonly DriverRejection[];
+    readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
@@ -33,8 +48,10 @@ async function build(options: { readonly logger?: Logger; readonly fresh?: boole
     clock,
     config: await loadConfig({ filesystem, systemStats }),
     drivers: [driver],
+    driverRejections: options.driverRejections,
     eventBus,
     logger: options.logger,
+    prerequisiteChecks: options.prerequisiteChecks,
     registry,
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
@@ -140,6 +157,44 @@ describe("createCore", () => {
 
     expect(order).toEqual(["queueHeadDemand", "notifyAvailability"]);
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "ready" }]);
+  });
+
+  it("doctor reports no finding on an empty registry when core was given no rejections and no checks", async () => {
+    const { core } = await build();
+
+    const report = await core.doctor.reconcile({ prerequisites: true });
+
+    expect(report.findings).toEqual([]);
+  });
+
+  it("doctor reports the driver rejections core was given", async () => {
+    const { core } = await build({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "android", reason: "missing-marker", root: "/Devices" },
+          platform: "android",
+          reason: "missing-marker",
+          summary: "Refusing the android device root /Devices: it carries no marker",
+        },
+      ],
+    });
+
+    const report = await core.doctor.reconcile();
+
+    expect(report.findings).toMatchObject([{ kind: "driver-unavailable", platform: "android" }]);
+  });
+
+  it("doctor asks for a daemon restart on a platform whose prerequisites hold but whose driver core was not given", async () => {
+    const { core } = await build({
+      prerequisiteChecks: [{ check: async () => [], platform: "android" }],
+    });
+
+    const report = await core.doctor.reconcile({ prerequisites: true });
+
+    expect(report.findings).toMatchObject([
+      { kind: "prerequisite-missing", platform: "android", prerequisite: "daemon-restart" },
+    ]);
   });
 
   it("doctor expires a lease past its deadline through the connected leaseExpirer port", async () => {

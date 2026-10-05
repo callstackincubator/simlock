@@ -2815,6 +2815,22 @@ describe("createLeasing wiring", () => {
     await harness.engine.cancelPending("waiter");
   });
 
+  it("hands core a leaseExpirer that expires through leasing: doctor --fix ends a lease past its deadline", async () => {
+    const harness = await createHarness();
+    const grant = await harness.engine.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    // No timer may expire it first: only doctor's finding does.
+    harness.engine.dispose();
+    harness.clock.advance(10 * 60_000 * 60);
+
+    await harness.engine.core.doctor.reconcile({ fix: true });
+
+    expect(harness.registry.snapshot.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    expect(harness.bus.replay().map((event) => event.event)).toContain("lease.expired");
+  });
+
   it("does not connect core itself: building a second leasing leaves the first one's ports in place", async () => {
     const harness = await createHarness();
     const connect = vi.spyOn(harness.engine.core, "connect");
