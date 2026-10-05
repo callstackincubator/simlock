@@ -228,4 +228,73 @@ describe("warm-hit", () => {
       expect(warmHit.score(view(catalog, "18.0"), request)).toBe(0);
     });
   });
+
+  describe("a class or range request", () => {
+    const catalog = {
+      defaultRuntime: "26.0",
+      modelClasses: { "iPad Pro": "tablet", "iPhone 15": "phone", "iPhone 17": "phone" },
+      models: ["iPad Pro", "iPhone 15", "iPhone 17"],
+      platform: "ios" as const,
+      runtimes: ["18.0", "26.0"],
+    };
+    const view = (
+      spec: Partial<WorkerView["devices"][number]["spec"]>,
+      device: Partial<ReturnType<typeof deviceFixture>> = {},
+    ): WorkerView => {
+      const ready = deviceFixture("d", "ready");
+      return {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([catalog]).platforms,
+        connection: "connected",
+        devices: [{ ...ready, ...device, spec: { ...ready.spec, ...spec } }],
+        drained: false,
+        id: "wrk_a",
+        lastSeenAt: 1,
+        leases: [],
+      };
+    };
+    const phone = { class: "phone" as const, platform: "ios" as const };
+
+    it("counts a ready device of another model in the requested class as warm, and one of another class as not", () => {
+      expect(warmHit.score(view({ model: "iPhone 15" }), phone)).toBe(1);
+      expect(warmHit.score(view({ model: "iPad Pro" }), phone)).toBe(0);
+      expect(warmHit.score(view({ model: "iPad Pro" }), { ...phone, class: "tablet" })).toBe(1);
+      expect(warmHit.score(view({ model: "iPhone 15" }), { platform: "ios" })).toBe(1);
+      expect(warmHit.score(view({ model: "iPad Pro" }), { platform: "ios" })).toBe(0);
+    });
+
+    it("counts a ready device on any version as warm for a class request naming none", () => {
+      expect(warmHit.score(view({ osVersion: "18.0" }), phone)).toBe(1);
+      expect(warmHit.score(view({ osVersion: "26.0" }), phone)).toBe(1);
+    });
+
+    it("does not count a ready device whose OS is outside the range as warm", () => {
+      expect(warmHit.score(view({ osVersion: "18.0" }), { ...phone, osVersion: ">=26" })).toBe(0);
+      expect(warmHit.score(view({ osVersion: "26.0" }), { ...phone, osVersion: ">=26" })).toBe(1);
+      expect(warmHit.score(view({ osVersion: "26.0" }), { ...phone, osVersion: "<=18" })).toBe(0);
+      expect(warmHit.score(view({ osVersion: "18.0" }), { ...phone, osVersion: "18 - 19" })).toBe(
+        1,
+      );
+    });
+
+    it("does not count a device in a mode the request refuses as warm", () => {
+      const slim = deviceFixture("d", "ready", "slim", false);
+
+      expect(warmHit.score(view({}, slim), { ...phone, mode: "full" })).toBe(0);
+      expect(warmHit.score(view({}, slim), phone)).toBe(0);
+      expect(warmHit.score(view({}, slim), { ...phone, mode: "slim" })).toBe(1);
+    });
+
+    it("does not count a device of another image tag as warm for a class request", () => {
+      expect(warmHit.score(view({ imageTag: "x" }), phone)).toBe(0);
+    });
+
+    it("counts a ready device of the model a request names as warm inside a range, and none outside it", () => {
+      const exact = { model: "iPhone 17", platform: "ios" as const };
+
+      expect(warmHit.score(view({}), { ...exact, osVersion: ">=26" })).toBe(1);
+      expect(warmHit.score(view({}), { ...exact, osVersion: "<26" })).toBe(0);
+      expect(warmHit.score(view({ model: "iPhone 15" }), { ...exact, osVersion: ">=18" })).toBe(0);
+    });
+  });
 });

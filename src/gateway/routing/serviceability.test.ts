@@ -169,4 +169,52 @@ describe("assess", () => {
 
     expect(rejectionOf([incompatible, other], REQUEST).code).toBe("UNKNOWN_MODEL");
   });
+
+  describe("a class request", () => {
+    const PHONE: CatalogEntry = {
+      modelClasses: { "iPhone 17": "phone" },
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    };
+    const request = { class: "phone" as const, platform: "ios" as const };
+
+    it("row 3: when no known worker lists a model of the class, says UNKNOWN_MODEL with the class in its details", () => {
+      expect(rejectionOf([view("wrk_a", PHONE)], { ...request, class: "watch" })).toMatchObject({
+        code: "UNKNOWN_MODEL",
+        details: { class: "watch", platform: "ios" },
+        reason: "unresolvable-spec",
+      });
+      const details = rejectionOf([view("wrk_a", PHONE)], { ...request, class: "watch" }).details;
+      expect(details).not.toHaveProperty("model");
+    });
+
+    it("row 3: treats a request naming neither model nor class as phone", () => {
+      const tablets: CatalogEntry = {
+        modelClasses: { "iPad Pro": "tablet" },
+        models: ["iPad Pro"],
+        platform: "ios",
+        runtimes: ["26.0"],
+      };
+
+      expect(rejectionOf([view("wrk_a", tablets)], { platform: "ios" })).toMatchObject({
+        code: "UNKNOWN_MODEL",
+        details: { class: "phone", platform: "ios" },
+      });
+    });
+
+    it("row 4: when models of the class pair with no runtime in the range, says RUNTIME_MISSING with the range as typed", () => {
+      expect(rejectionOf([view("wrk_a", PHONE)], { ...request, osVersion: "<=17" })).toMatchObject({
+        code: "RUNTIME_MISSING",
+        details: { downloadable: false, osVersion: "<=17", platform: "ios" },
+        message: "Runtime missing for ios <=17",
+      });
+    });
+
+    it("row 6: routes a class request a worker can serve", () => {
+      expect(assess({ ...request, osVersion: ">=18" }, [view("wrk_a", PHONE)]).kind).toBe(
+        "route-or-wait",
+      );
+    });
+  });
 });
