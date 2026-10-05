@@ -33,6 +33,7 @@ interface Figures {
 interface Usage {
   readonly window: { readonly from: number; readonly to: number };
   readonly partial: boolean;
+  readonly coversFrom: number;
   readonly totals: Figures;
   readonly workers: readonly (Figures & { readonly id: string; readonly label?: string })[];
   readonly requesters: readonly { readonly id: string; readonly requests: number }[];
