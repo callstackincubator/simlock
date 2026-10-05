@@ -492,6 +492,35 @@ describe("NodeFileLogSink", () => {
       expect(await generations(directory)).toEqual(["events.jsonl"]);
     });
 
+    it("keeps a generation whose last line carries no timestamp while its file time is within retention", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      const freshFile = new Date(9_999_500);
+      for (const [generation, lastLine] of [
+        [1, '{"other":1}'],
+        [2, "null"],
+        [3, "not json"],
+      ] as const) {
+        await writeFile(`${path}.${generation}`, `${lastLine}\n`);
+        await utimes(`${path}.${generation}`, freshFile, freshFile);
+      }
+
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(10_000_000),
+        maxBytes: 10_000,
+        path,
+        retentionMs: 1_000,
+      });
+      sink.close();
+
+      expect(await generations(directory)).toEqual([
+        "events.jsonl",
+        "events.jsonl.1",
+        "events.jsonl.2",
+        "events.jsonl.3",
+      ]);
+    });
+
     it("deletes only the files it rotated beside its own path, never a neighbour", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");

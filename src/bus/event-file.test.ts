@@ -296,6 +296,32 @@ describe("readEventFile", () => {
     expect(result.map((entry) => entry.seq)).toEqual([1, 2, 3, 4]);
   });
 
+  it("loses no generation when a rotation has renamed .1 away and not yet renamed the current file into it", async () => {
+    // The state between a rotation's renames: .1 -> .2 and .2 -> .3 are done, current -> .1 is not.
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(4, 400)),
+      "/data/events.jsonl.2": lines(envelope(3, 300)),
+      "/data/events.jsonl.3": lines(envelope(2, 200)),
+      "/data/events.jsonl.4": lines(envelope(1, 100)),
+    });
+
+    const result = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(result.map((entry) => entry.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("ends at the first place two generations in a row are missing", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(envelope(3, 300)),
+      "/data/events.jsonl.1": lines(envelope(2, 200)),
+      "/data/events.jsonl.4": lines(envelope(1, 100)),
+    });
+
+    const result = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(result.map((entry) => entry.seq)).toEqual([2, 3]);
+  });
+
   it("reports the oldest timestamp it holds, and undefined for an empty history", async () => {
     const filesystem = await filesystemWith({
       "/data/events.jsonl": lines(envelope(3, 300)),

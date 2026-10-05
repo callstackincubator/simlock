@@ -10,8 +10,10 @@ export const EVENT_FILE_NAME = "events.jsonl";
  * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5).
  * The current file is read first, then its generations `<path>.1`, `<path>.2` and so on until
  * one is missing (ADR 0016 §4). Newest first means a rotation landing mid-read can only make a
- * generation show up twice -- never make one go missing -- and the repeat is dropped by `id`; a
- * generation missing when it is opened is empty and ends the walk. A line that is not JSON (a
+ * generation show up twice -- never make one go missing -- and the repeat is dropped by `id`.
+ * A rotation renames the generations one at a time, so for an instant one number is missing
+ * with the ones above it still there: the walk ends only at a missing generation whose next
+ * number is missing too. A line that is not JSON (a
  * write cut short by a crash), or has no `id` of the shape the envelope contract accepts
  * (written before events had one, ADR 0014), is skipped; a file that is not there is empty.
  */
@@ -56,8 +58,14 @@ async function readGenerations(filesystem: Filesystem, path: string): Promise<st
     const lines = await readLines(filesystem, generation === 0 ? path : `${path}.${generation}`);
     if (lines !== undefined) generations.push(lines);
     // The current file may be missing while generations exist (a rotation caught between its
-    // rename and its re-open); only a missing *generation* ends the walk.
-    else if (generation > 0) return generations;
+    // rename and its re-open). A missing generation is one rotation step caught mid-shift when
+    // the next number exists; only two in a row end the walk.
+    else if (
+      generation > 0 &&
+      (await readLines(filesystem, `${path}.${generation + 1}`)) === undefined
+    ) {
+      return generations;
+    }
   }
 }
 
