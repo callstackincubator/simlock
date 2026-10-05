@@ -173,6 +173,11 @@ export class WaitQueue {
     );
   }
 
+  /** Every waiter not yet granted or rejected, in arrival order. A snapshot copy, not a live view. */
+  pending(): readonly Waiter[] {
+    return [...this.#pendingWaiters];
+  }
+
   hasPendingRequester(requesterId: string): boolean {
     return this.#pendingRequesters.has(requesterId);
   }

@@ -85,6 +85,18 @@ export interface DeviceRequirement {
   readonly imageTag: string | undefined;
 }
 
+/**
+ * A lease request still waiting for a device (`new` or `queued`), reduced to what decides whether
+ * a device serves it: its platform, what a device must satisfy, and the pool mode its spec
+ * resolved to. `classOf` is the catalog's model-to-class lookup the requirement may need.
+ */
+export interface WaitingDemand {
+  readonly platform: Platform;
+  readonly requirement: DeviceRequirement;
+  readonly mode: DeviceMode;
+  readonly classOf: (model: string) => DeviceClass | undefined;
+}
+
 /** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
 export function exactRequirement(spec: DeviceSpec): DeviceRequirement {
   return {

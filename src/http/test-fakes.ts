@@ -82,6 +82,7 @@ export function testConfig(
     },
     stalledTransition: { minimumThresholdMs: 60_000, thresholdMultiplier: 3 },
     warmPool: {
+      enabled: true,
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

@@ -34,7 +34,7 @@ const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
-function config(overrides: Partial<Config["lease"]> = {}): Config {
+function config(overrides: Partial<Config["lease"]> = {}, warmPoolEnabled = true): Config {
   return {
     mode: "worker",
     exec: { timeoutMs: 600_000 },
@@ -90,6 +90,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: warmPoolEnabled,
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -147,6 +148,7 @@ async function createHarness(
     readonly modelPreferences?: ModelPreferences;
     readonly ramBudget?: ResourceStrategyOptions["ramBudget"];
     readonly totalRamBytes?: number;
+    readonly warmPoolEnabled?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -163,10 +165,13 @@ async function createHarness(
     ...(options.identity === undefined ? {} : { leaseIdentity: options.identity }),
     statePath,
   });
-  const baseConfig = config({
-    ...options.lease,
-    ...(options.identity === undefined ? {} : { identity: options.identity }),
-  });
+  const baseConfig = config(
+    {
+      ...options.lease,
+      ...(options.identity === undefined ? {} : { identity: options.identity }),
+    },
+    options.warmPoolEnabled ?? true,
+  );
   const engineConfig: Config = {
     ...baseConfig,
     capacity: capacityConfig(baseConfig, options),
@@ -2587,4 +2592,156 @@ describe("LeaseEngine: lease.rejected names its request", () => {
       });
     },
   );
+});
+
+describe("LeaseEngine warm pool", () => {
+  const androidSpec = { model: "Pixel 9", osVersion: "36", platform: "android" } as const;
+
+  it("shuts down one of three ready devices with initiator warm-pool after daemon.started when maxRunning is 2", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 3, maxRunning: 2 },
+        maxRunning: 2,
+      },
+    });
+    await seedReady(harness);
+    await seedReady(harness);
+    await seedReady(harness);
+
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await harness.engine.settle();
+
+    const states = harness.registry.snapshot.devices.map((item) => item.state);
+    expect(states.filter((state) => state === "ready")).toHaveLength(2);
+    expect(states.filter((state) => state === "shutdown")).toHaveLength(1);
+    const shutdowns = harness.bus.replay().filter((event) => event.event === "device.shutdown");
+    expect(shutdowns).toHaveLength(1);
+    expect(shutdowns[0]).toMatchObject({ payload: { initiator: "warm-pool" } });
+  });
+
+  it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.0"],
+      clock,
+      knownModels: ["iPhone 15", "iPhone 17"],
+      modelClasses: { "iPhone 15": "phone", "iPhone 17": "phone" },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 1 },
+        maxRunning: 1,
+      },
+      modelPreferences: { ios: { phone: ["iPhone 17", "iPhone 15"] } },
+    });
+    const iphone15 = await seedReady(harness, {
+      model: "iPhone 15",
+      osVersion: "26.0",
+      platform: "ios",
+    });
+    const holder = await harness.engine.request(
+      { model: "iPhone 15", osVersion: "26.0", platform: "ios" },
+      { ownerId: "holder", requesterId: "holder" },
+    );
+    expect(holder.device.id).toBe(iphone15.id);
+    const waiter = harness.engine.request(
+      { class: "phone", platform: "ios" },
+      { ownerId: "waiter", requesterId: "waiter" },
+    );
+    await flush();
+    expect(harness.engine.queueDepth).toBe(1);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    const granted = await waiter;
+    await harness.engine.settle();
+
+    expect(granted.device.id).toBe(iphone15.id);
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "device.provisioned")
+        .map((event) => event.payload.deviceId),
+    ).toEqual([iphone15.id]);
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+  });
+
+  it("boots a released iOS device back to ready when the running limit has room", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(
+      harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
+    ).toBe("ready");
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+  });
+
+  it("with warmPool disabled a released fake iOS device is shutdown and a released fake Android device is shutdown after its snapshot reclaim", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const android = new FakeDriver({
+      availableOsVersions: ["36"],
+      clock,
+      platform: "android",
+      reclaimResult: "ready",
+      reclaimStrategy: "snapshot",
+    });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 4,
+      },
+      warmPoolEnabled: false,
+    });
+    const iosLease = await harness.engine.request(request, { ownerId: "i", requesterId: "i" });
+    const androidLease = await harness.engine.request(androidSpec, {
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    await harness.engine.release(iosLease.lease.id, "explicit");
+    await harness.engine.release(androidLease.lease.id, "explicit");
+    await harness.engine.settle();
+
+    const state = (id: string) =>
+      harness.registry.snapshot.devices.find((item) => item.id === id)?.state;
+    expect(state(iosLease.device.id)).toBe("shutdown");
+    expect(state(androidLease.device.id)).toBe("shutdown");
+    const events = harness.bus.replay();
+    const reclaimed = events.findIndex(
+      (event) =>
+        event.event === "device.reclaimed" &&
+        event.payload.deviceId === androidLease.device.id &&
+        event.payload.strategy === "snapshot",
+    );
+    const shutdown = events.findIndex(
+      (event) =>
+        event.event === "device.shutdown" &&
+        event.payload.deviceId === androidLease.device.id &&
+        event.payload.initiator === "warm-pool",
+    );
+    expect(reclaimed).toBeGreaterThanOrEqual(0);
+    expect(shutdown).toBeGreaterThan(reclaimed);
+  });
 });

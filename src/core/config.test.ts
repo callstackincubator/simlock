@@ -115,6 +115,7 @@ describe("loadConfig", () => {
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
       http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
+        enabled: true,
         quarantine: {
           maxRetries: 3,
           retryBackoffMs: 30_000,
@@ -262,6 +263,30 @@ describe("loadConfig", () => {
       retryBackoffMultiplier: 2,
       maxRetryBackoffMs: 5 * 60_000,
     });
+  });
+
+  it("keeps the warm pool on by default and applies a file-level warmPool.enabled override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    expect(
+      (await loadConfig({ configPath, filesystem, systemStats: createStats() })).warmPool.enabled,
+    ).toBe(true);
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ warmPool: { enabled: false } }));
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.warmPool.enabled).toBe(false);
+    expect(config.warmPool.quarantine.maxRetries).toBe(3);
+  });
+
+  it("rejects a warmPool.enabled that is not a boolean", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ warmPool: { enabled: "no" } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("warmPool.enabled");
   });
 
   it("rejects a non-positive-integer quarantine retry count", async () => {
