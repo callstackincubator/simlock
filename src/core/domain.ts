@@ -1,6 +1,22 @@
+import { type OsConstraint as RequestedOs, satisfies } from "../contract/os-range.js";
 import type { DeviceRequest } from "./driver.js";
 
 export type Platform = "ios" | "android";
+
+/**
+ * ADR 0015 §3: the kind of device a model is. Declared here beside `Platform` rather than
+ * imported from the contract; which family or tag is which class is the driver's to say.
+ */
+export const DEVICE_CLASSES = [
+  "phone",
+  "tablet",
+  "watch",
+  "tv",
+  "vision",
+  "auto",
+  "desktop",
+] as const;
+export type DeviceClass = (typeof DEVICE_CLASSES)[number];
 
 /** The mode a device actually has: slimmed by its driver, or not. */
 export type DeviceMode = "slim" | "full";
@@ -43,6 +59,79 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
     specMode(left) === specMode(right) &&
     left.imageTag === right.imageTag
   );
+}
+
+/**
+ * The OS a requirement accepts (ADR 0015 §5). `exact` is one version, the one an exact request
+ * resolves to or one the request named; `installed` is any runtime the catalog lists as installed,
+ * which is what a class request with no OS accepts. A `range` is the request's own range, parsed
+ * by the contract's `os-range`, the one grammar.
+ */
+export type OsRequirement =
+  | RequestedOs
+  | { readonly kind: "installed"; readonly versions: readonly string[] };
+
+/**
+ * What an existing device must satisfy to serve a request (ADR 0015 §5): the platform, the
+ * model or the class, the OS, and the image tag. The mode is not part of it; the planner
+ * compares pool mode beside `fits` (§6).
+ */
+export interface DeviceRequirement {
+  readonly platform: Platform;
+  readonly target:
+    | { readonly kind: "model"; readonly model: string }
+    | { readonly kind: "class"; readonly class: DeviceClass };
+  readonly osVersion: OsRequirement;
+  readonly imageTag: string | undefined;
+}
+
+/** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
+export function exactRequirement(spec: DeviceSpec): DeviceRequirement {
+  return {
+    imageTag: spec.imageTag,
+    osVersion: { kind: "exact", version: spec.osVersion },
+    platform: spec.platform,
+    target: { kind: "model", model: spec.model },
+  };
+}
+
+/**
+ * The one place a requirement meets a device (ADR 0015 §6; architecture rule 10). Holds when the
+ * platform is equal, the model is equal or `classOf` says the device's model is the requested
+ * class, the OS satisfies the constraint, and the image tag is equal or both absent. It does not
+ * read the mode. `sameSpec` stays what names pool identity everywhere else.
+ */
+export function fits(
+  requirement: DeviceRequirement,
+  spec: DeviceSpec,
+  classOf: (model: string) => DeviceClass | undefined,
+): boolean {
+  if (requirement.platform !== spec.platform || requirement.imageTag !== spec.imageTag) {
+    return false;
+  }
+  return (
+    fitsTarget(requirement.target, spec.model, classOf) &&
+    satisfiesOs(requirement.osVersion, spec.osVersion)
+  );
+}
+
+function fitsTarget(
+  target: DeviceRequirement["target"],
+  model: string,
+  classOf: (model: string) => DeviceClass | undefined,
+): boolean {
+  switch (target.kind) {
+    case "model":
+      return target.model === model;
+    case "class":
+      return classOf(model) === target.class;
+  }
+}
+
+function satisfiesOs(constraint: OsRequirement, osVersion: string): boolean {
+  return constraint.kind === "installed"
+    ? constraint.versions.includes(osVersion)
+    : satisfies(osVersion, constraint);
 }
 
 /**

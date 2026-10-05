@@ -7,8 +7,10 @@ import type { z } from "zod";
 
 import {
   CATALOG_LIST_LIMITS,
+  deviceClassSchema,
   INSTALL_LIST_LIMIT,
   OPERATIONS,
+  type DeviceClass,
   type Platform,
 } from "../contract/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
@@ -189,7 +191,8 @@ function sumRamBudget(
  * §4). It is never built from the fleet's `models` and `runtimes`: one worker having a model and
  * another having a runtime does not make the pair leasable anywhere.
  *
- * `customModels` lists a model when any worker that lists it marks it custom, and is absent when
+ * `modelClasses` is the union over workers; when two class one model differently, the first
+ * worker in id order wins. `customModels` lists a model when any worker that lists it marks it custom, and is absent when
  * none does. `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
  * runtime, tag, and ABI, and is absent when no worker reports the field at all. Each worker's
  * lists fit the contract's bounds but their union may not, so both are cut to those bounds after
@@ -217,11 +220,15 @@ interface CatalogBucket {
   readonly modelRuntimes: Map<string, Set<string>>;
   /** Each model's other names, keyed by the name lower-cased so a spelling is listed once. */
   readonly modelAliases: Map<string, Map<string, string>>;
+  /** Each model's class, as the first worker in id order that classes it says. */
+  readonly modelClasses: Map<string, DeviceClass>;
   /** Every image reported, keyed by runtime, tag, and ABI; `undefined` until one worker has the field. */
   images: Map<string, CatalogImage> | undefined;
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
   readonly defaults: Set<string | undefined>;
+  /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
+  readonly classDefaults: Partial<Record<DeviceClass, string>>[];
 }
 
 function indexCatalogs(
@@ -229,7 +236,9 @@ function indexCatalogs(
   platform: Platform | undefined,
 ): Map<Platform, CatalogBucket> {
   const byPlatform = new Map<Platform, CatalogBucket>();
-  for (const view of views) {
+  // In id order, so a model two workers class differently keeps the first worker's class.
+  const inIdOrder = [...views].sort((left, right) => left.id.localeCompare(right.id));
+  for (const view of inIdOrder) {
     if (view.connection !== "connected") continue;
     for (const entry of view.catalog) {
       if (platform === undefined || entry.platform === platform) {
@@ -247,10 +256,12 @@ function addCatalogEntry(
   workerId: string,
 ): void {
   const bucket = byPlatform.get(entry.platform) ?? {
+    classDefaults: [],
     customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
     images: undefined,
     modelAliases: new Map<string, Map<string, string>>(),
+    modelClasses: new Map<string, DeviceClass>(),
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
@@ -260,9 +271,24 @@ function addCatalogEntry(
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
   for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
   for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+  addModelClasses(bucket.modelClasses, entry);
   addCustomModels(bucket.customModels, entry);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+/**
+ * A worker's class defaults with any naming a model the worker does not list itself dropped, so
+ * the fleet never shows a default nobody can lease; a dropped class counts as the worker having none.
+ */
+function listedClassDefaults(entry: PlatformCatalog): Partial<Record<DeviceClass, string>> {
+  const listed: Partial<Record<DeviceClass, string>> = {};
+  for (const deviceClass of deviceClassSchema.options) {
+    const model = entry.classDefaults[deviceClass];
+    if (model !== undefined && entry.models.includes(model)) listed[deviceClass] = model;
+  }
+  return listed;
 }
 
 /** Folds one worker's other names for `model` into the fleet's, once per spelling ignoring case. */
@@ -279,6 +305,17 @@ function addAliases(
     if (key !== model.toLocaleLowerCase() && !aliases.has(key)) aliases.set(key, alias);
   }
   if (aliases.size > 0) index.set(model, aliases);
+}
+
+/**
+ * Folds one worker's model classes into the fleet's. A model already classed by an earlier
+ * worker keeps that class, so the caller feeds workers in id order; a class for a name the
+ * worker does not list itself is dropped.
+ */
+function addModelClasses(index: Map<string, DeviceClass>, entry: PlatformCatalog): void {
+  for (const [model, deviceClass] of Object.entries(entry.modelClasses)) {
+    if (entry.models.includes(model) && !index.has(model)) index.set(model, deviceClass);
+  }
 }
 
 /** Folds one worker's custom models into the fleet's; a name the worker does not list itself is dropped. */
@@ -313,10 +350,27 @@ function addPairings(index: Map<string, Set<string>>, entry: PlatformCatalog, mo
   index.set(model, paired);
 }
 
+/**
+ * A class's default is kept when every worker reports the same model for it, as `defaultRuntime`
+ * is; a worker with no entry for the class counts as disagreeing.
+ */
+function agreedClassDefaults(
+  workers: readonly Partial<Record<DeviceClass, string>>[],
+): Partial<Record<DeviceClass, string>> {
+  const agreed: Partial<Record<DeviceClass, string>> = {};
+  for (const deviceClass of deviceClassSchema.options) {
+    const reported = new Set(workers.map((worker) => worker[deviceClass]));
+    const [only] = reported;
+    if (reported.size === 1 && only !== undefined) agreed[deviceClass] = only;
+  }
+  return agreed;
+}
+
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
+    classDefaults: agreedClassDefaults(bucket.classDefaults),
     ...(bucket.customModels.size === 0
       ? {}
       : {
@@ -338,6 +392,11 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
           model,
           [...aliases.values()].sort().slice(0, CATALOG_LIST_LIMITS.aliasesPerModel),
         ]),
+    ),
+    modelClasses: Object.fromEntries(
+      [...bucket.modelClasses]
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, CATALOG_LIST_LIMITS.aliasedModels),
     ),
     modelRuntimes: Object.fromEntries(
       [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),

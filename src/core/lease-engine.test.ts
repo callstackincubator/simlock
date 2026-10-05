@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { testComponentWiring } from "./test-wiring.js";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventMap } from "../bus/index.js";
 import {
   FakeClock,
   FakeSystemStats,
@@ -10,7 +10,13 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import type { CapacityLimits, ResourceStrategyOptions } from "./capacity/index.js";
+import {
+  buildCapacityFigures,
+  type CapacityLimits,
+  type ResourceStrategyOptions,
+} from "./capacity/index.js";
+import { capacityChangedPayload } from "./capacity/observer.js";
+import type { ModelPreferences } from "./driver-catalog.js";
 import {
   BootTimeoutError,
   type ComponentInstaller,
@@ -45,8 +51,11 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -77,7 +86,11 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,
@@ -106,6 +119,20 @@ function withCapacity(
   };
 }
 
+/** The harness's capacity block: the one a test names, or the resource strategy with overrides. */
+function capacityConfig(
+  base: Config,
+  options: Partial<ResourceStrategyOptions> & { readonly capacity?: Config["capacity"] },
+): Config["capacity"] {
+  return (
+    options.capacity ?? {
+      strategy: "resource",
+      config: withCapacity(resourceOptions(base), options),
+    }
+  );
+}
+
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
@@ -116,8 +143,10 @@ async function createHarness(
     readonly filesystem?: MemoryFilesystem;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
+    readonly capacity?: Config["capacity"];
     readonly limits?: CapacityLimits;
     readonly logger?: Logger;
+    readonly modelPreferences?: ModelPreferences;
     readonly ramBudget?: ResourceStrategyOptions["ramBudget"];
     readonly totalRamBytes?: number;
   } = {},
@@ -142,7 +171,7 @@ async function createHarness(
   });
   const engineConfig: Config = {
     ...baseConfig,
-    capacity: { strategy: "resource", config: withCapacity(resourceOptions(baseConfig), options) },
+    capacity: capacityConfig(baseConfig, options),
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const drivers = options.drivers ?? [driver];
@@ -160,6 +189,9 @@ async function createHarness(
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.modelPreferences === undefined
+      ? {}
+      : { modelPreferences: options.modelPreferences }),
     registry,
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
@@ -2281,7 +2313,14 @@ describe("LeaseEngine restart recovery of stored lease requests", () => {
         .replay()
         .filter((event) => event.event === "lease.rejected")
         .map((event) => event.payload),
-    ).toEqual([{ reason: "daemon-restarted", requestSpec: request }]);
+    ).toEqual([
+      {
+        reason: "daemon-restarted",
+        requestId: expect.stringMatching(/^req_/),
+        requester: "agent",
+        requestSpec: request,
+      },
+    ]);
     await expect(
       after.engine.request(request, {
         idempotencyKey: "key-1",
@@ -2298,4 +2337,363 @@ describe("LeaseEngine restart recovery of stored lease requests", () => {
       after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
     ).toMatchObject({ state: "failed" });
   });
+});
+
+describe("LeaseEngine class requests", () => {
+  it("creates the first model on the class's preference list the catalog lists, for a request naming a class", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 15", "iPhone 16"],
+      modelClasses: { "iPhone 15": "phone", "iPhone 16": "phone" },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17", "iPhone 16", "iPhone 15"] } },
+    });
+
+    const granted = await harness.engine.request(
+      { class: "phone", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec.model).toBe("iPhone 16");
+  });
+
+  it("creates the first listed model that pairs with the requested OS version, not one that pairs with another", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 16", "iPhone 17"],
+      modelClasses: { "iPhone 16": "phone", "iPhone 17": "phone" },
+      modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17": ["26.5"] },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17", "iPhone 16"] } },
+    });
+
+    const granted = await harness.engine.request(
+      { class: "phone", osVersion: "18.4", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec).toMatchObject({ model: "iPhone 16", osVersion: "18.4" });
+  });
+
+  it("refuses a class request naming an OS that is not installed as RUNTIME_MISSING without calling the installer, whatever allowDownload says", async () => {
+    const asked: unknown[] = [];
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 17"],
+      modelClasses: { "iPhone 17": "phone" },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      components: {
+        claimProvision: () => () => undefined,
+        install: async (call) => {
+          asked.push(call);
+          return { outcome: "installed", version: "18.4" };
+        },
+      },
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17"] } },
+    });
+
+    await expect(
+      harness.engine.request(
+        { class: "phone", osVersion: "18.4", platform: "ios" },
+        { allowDownload: true, ownerId: "agent", requesterId: "agent" },
+      ),
+    ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+    expect(asked).toEqual([]);
+  });
+});
+describe("LeaseEngine: capacity.changed and queue.changed", () => {
+  type CapacityEvent = EventMap["capacity.changed"];
+
+  function capacityEvents(harness: Awaited<ReturnType<typeof createHarness>>): CapacityEvent[] {
+    return harness.bus
+      .replay()
+      .filter((event) => event.event === "capacity.changed")
+      .map((event) => event.payload as CapacityEvent);
+  }
+
+  function queueEvents(harness: Awaited<ReturnType<typeof createHarness>>): number[] {
+    return harness.bus
+      .replay()
+      .filter((event) => event.event === "queue.changed")
+      .map((event) => (event.payload as EventMap["queue.changed"]).depth);
+  }
+
+  function currentFigures(harness: Awaited<ReturnType<typeof createHarness>>): CapacityEvent {
+    return capacityChangedPayload(
+      buildCapacityFigures(harness.registry.snapshot.devices, harness.engine),
+    );
+  }
+
+  it("emits capacity.changed and queue.changed once when the daemon has started, and none before", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    expect([capacityEvents(harness), queueEvents(harness)]).toEqual([[], []]);
+
+    await harness.engine.convergeRunningCapacity();
+
+    expect(capacityEvents(harness)).toEqual([currentFigures(harness)]);
+    expect(capacityEvents(harness)[0]).toMatchObject({ global: { warm: 1 }, ios: { warm: 1 } });
+    expect(queueEvents(harness)).toEqual([0]);
+  });
+
+  it("emits capacity.changed after a provision commits, with the figures status.get reports at that moment", async () => {
+    const harness = await createHarness();
+    await harness.engine.convergeRunningCapacity();
+    const before = capacityEvents(harness).length;
+    const seen: Array<{ event: CapacityEvent; figures: CapacityEvent }> = [];
+    harness.bus.subscribe("capacity.changed", (envelope) =>
+      seen.push({ event: envelope.payload, figures: currentFigures(harness) }),
+    );
+
+    await harness.registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "sim-1",
+      provisionDuration: 0,
+      spec: request,
+    });
+
+    expect(capacityEvents(harness)).toHaveLength(before + 1);
+    expect(seen).toEqual([{ event: currentFigures(harness), figures: currentFigures(harness) }]);
+    expect(seen[0]?.event.ramBudget?.usedBytes).toBeGreaterThan(0);
+  });
+
+  it("emits capacity.changed when a provisioning reservation is taken, before any registry commit, and when it is released", async () => {
+    const harness = await createHarness();
+    await harness.engine.convergeRunningCapacity();
+    const seen: Array<{ reserved: number; devices: number }> = [];
+    harness.bus.subscribe("capacity.changed", (envelope) =>
+      seen.push({
+        devices: harness.registry.snapshot.devices.length,
+        reserved: envelope.payload.ios.reserved,
+      }),
+    );
+    harness.driver.hangMakeReady();
+
+    const pending = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    await flush();
+    expect(seen[0]).toEqual({ devices: 0, reserved: 1 });
+    harness.driver.releaseMakeReady();
+    await pending;
+    await flush();
+
+    expect(seen.at(-1)?.reserved).toBe(0);
+    expect(capacityEvents(harness).at(-1)).toEqual(currentFigures(harness));
+  });
+
+  it("emits capacity.changed after a device is deleted and after a lease releases a warm device", async () => {
+    const harness = await createHarness();
+    const grant = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    await harness.engine.convergeRunningCapacity();
+    expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 0, running: 1 } });
+
+    await harness.engine.release(grant.lease.id, "explicit");
+    await flush();
+    expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 1, running: 1 } });
+
+    await harness.registry.markDeviceMissing(grant.device.id, "test");
+    expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 0, running: 0 } });
+    expect(capacityEvents(harness).at(-1)).toEqual(currentFigures(harness));
+  });
+
+  it("emits no capacity.changed when a commit leaves the capacity figures unchanged", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    await harness.engine.convergeRunningCapacity();
+    const before = capacityEvents(harness).length;
+
+    await harness.registry.createLeaseRequest({
+      ownerId: "a",
+      request,
+      requesterId: "a",
+    });
+    await harness.registry.markForeignStateDetected(harness.registry.snapshot.devices[0]!.id, 1);
+
+    expect(capacityEvents(harness)).toHaveLength(before);
+  });
+
+  it("never emits two consecutive capacity.changed events with equal figures across a whole lease", async () => {
+    const harness = await createHarness();
+    await harness.engine.convergeRunningCapacity();
+    const grant = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    await harness.engine.release(grant.lease.id, "explicit");
+    await flush();
+
+    const events = capacityEvents(harness);
+    expect(events.length).toBeGreaterThan(3);
+    events.slice(1).forEach((event, index) => expect(event).not.toEqual(events[index]));
+  });
+
+  it("carries ramBudget under the resource strategy and omits it under the fixed strategy", async () => {
+    const resource = await createHarness();
+    await resource.engine.convergeRunningCapacity();
+    const fixed = await createHarness({
+      capacity: { strategy: "fixed", config: { maxRunning: 2 } },
+    });
+    await fixed.engine.convergeRunningCapacity();
+
+    expect(capacityEvents(resource)[0]?.ramBudget).toEqual({
+      limitBytes: expect.any(Number),
+      usedBytes: 0,
+    });
+    expect(capacityEvents(fixed)).toHaveLength(1);
+    expect(capacityEvents(fixed)[0]).not.toHaveProperty("ramBudget");
+  });
+
+  it("emits queue.changed when a request joins the worker's queue and when it leaves, with the new depth", async () => {
+    const harness = await createHarness();
+    await harness.engine.convergeRunningCapacity();
+    const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    const queued = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
+    await flush();
+    expect(queueEvents(harness)).toEqual([0, 1]);
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await queued;
+
+    expect(queueEvents(harness)).toEqual([0, 1, 0]);
+  });
+});
+
+describe("LeaseEngine: lease.rejected names its request", () => {
+  type Reason = EventMap["lease.rejected"]["reason"];
+  type Rejection = EventMap["lease.rejected"];
+  type Harness = Awaited<ReturnType<typeof createHarness>>;
+
+  /** What a case settles: the harness whose bus saw the rejection, and who it was for. */
+  interface Outcome {
+    readonly harness: Harness;
+    readonly requester: string;
+    /** The stored request's id, when the request was stored; refused requests never were. */
+    readonly requestId?: string | undefined;
+  }
+
+  const holder = { ownerId: "holder", requesterId: "holder" };
+
+  async function admittedId(harness: Harness, requesterId: string): Promise<string | undefined> {
+    return harness.registry.leaseRequests().find((record) => record.requesterId === requesterId)
+      ?.id;
+  }
+
+  /** One case per reason in `EventMap`, so a reason added there without a case fails typecheck. */
+  const cases: Record<Reason, (() => Promise<Outcome>) | "gateway"> = {
+    timeout: async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      const timedOut = harness.engine.request(request, {
+        ownerId: "late",
+        requesterId: "late",
+        timeoutMs: 10,
+      });
+      await flush();
+      harness.clock.advance(10);
+      await settledOrPending(timedOut);
+      return { harness, requestId: await admittedId(harness, "late"), requester: "late" };
+    },
+    "no-wait": async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      await settledOrPending(
+        harness.engine.request(request, { noWait: true, ownerId: "now", requesterId: "now" }),
+      );
+      return { harness, requestId: await admittedId(harness, "now"), requester: "now" };
+    },
+    "unresolvable-spec": async () => {
+      const harness = await createHarness();
+      await settledOrPending(
+        harness.engine.request(
+          { ...request, osVersion: "1.0" },
+          { ownerId: "odd", requesterId: "odd" },
+        ),
+      );
+      return { harness, requestId: await admittedId(harness, "odd"), requester: "odd" };
+    },
+    "no-worker": "gateway",
+    "already-leased": async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      await settledOrPending(harness.engine.request(request, holder));
+      return { harness, requester: "holder" };
+    },
+    "boot-timeout": async () => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(1_000),
+        platform: "ios",
+      });
+      driver.failOn("makeReady", 1, new Error("boot failed"));
+      const harness = await createHarness({ driver });
+      await settledOrPending(
+        harness.engine.request(request, { ownerId: "slow", requesterId: "slow" }),
+      );
+      return { harness, requestId: await admittedId(harness, "slow"), requester: "slow" };
+    },
+    killed: async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      const queued = harness.engine.request(request, { ownerId: "next", requesterId: "next" });
+      void queued.catch(() => undefined);
+      await flush();
+      await harness.engine.nuke(false);
+      return { harness, requestId: await admittedId(harness, "next"), requester: "next" };
+    },
+    cancelled: async () => {
+      const harness = await createHarness();
+      await harness.engine.request(request, holder);
+      void harness.engine
+        .request(request, { ownerId: "next", requesterId: "next" })
+        .catch(() => undefined);
+      await flush();
+      await harness.engine.cancelPending("next");
+      return { harness, requestId: await admittedId(harness, "next"), requester: "next" };
+    },
+    "daemon-restarted": async () => {
+      const before = await createHarness();
+      await before.engine.request(request, holder);
+      void before.engine
+        .request(request, { ownerId: "agent", requesterId: "agent" })
+        .catch(() => undefined);
+      await expect.poll(() => admittedId(before, "agent")).toEqual(expect.stringMatching(/^req_/));
+      const requestId = await admittedId(before, "agent");
+      const harness = await createHarness({ filesystem: before.filesystem });
+      await harness.engine.convergeRunningCapacity();
+      return { harness, requestId, requester: "agent" };
+    },
+  };
+
+  const workerReasons = (Object.keys(cases) as Reason[]).filter(
+    (reason) => cases[reason] !== "gateway",
+  );
+
+  it.each(workerReasons)(
+    "includes the request id and the requester when it rejects with %s",
+    async (reason) => {
+      const run = cases[reason];
+      if (run === "gateway") throw new Error(`${reason} is the gateway's`);
+
+      const { harness, requestId, requester } = await run();
+
+      const rejections = harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload as Rejection)
+        .filter((payload) => payload.reason === reason);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0]).toMatchObject({
+        requestId: requestId ?? expect.stringMatching(/^req_/),
+        requester,
+      });
+    },
+  );
 });

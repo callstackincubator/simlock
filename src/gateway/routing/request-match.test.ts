@@ -85,6 +85,7 @@ describe("matchRequest", () => {
   it("reads no inherited key as a pairing or an alias", () => {
     const view = worker({
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: {},
       models: ["constructor"],
       platform: "ios",
@@ -97,6 +98,7 @@ describe("matchRequest", () => {
     // alias list for the model and moves on to the next one.
     const withNext = worker({
       modelAliases: {},
+      modelClasses: {},
       models: ["constructor", "iPhone 17"],
       platform: "ios",
       runtimes: ["26.0"],

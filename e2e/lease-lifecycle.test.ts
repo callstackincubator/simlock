@@ -64,4 +64,298 @@ describe("lease lifecycle across both frontends", () => {
 
     await env.expectEvents(["lease.requested", "lease.granted", "lease.released"]);
   });
+
+  it("catalog shows each class's default model: the configured name before the driver's list, skipped when the catalog does not list it", async () => {
+    const script = {
+      ios: {
+        availableOsVersions: ["26.0"],
+        defaultModels: { phone: ["iPhone 17", "iPhone 16"], tablet: ["iPad Pro"] },
+        knownModels: ["iPhone 15", "iPhone 16", "iPad Pro"],
+        modelClasses: { "iPad Pro": "tablet", "iPhone 15": "phone", "iPhone 16": "phone" },
+      },
+    } as const;
+    const defaultsWith = async (phone: string | undefined) => {
+      const env = await withDaemon({
+        configOverrides: phone === undefined ? {} : { ios: { defaultModels: { phone } } },
+        driverScript: script,
+      });
+      const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
+      expect(catalog.code, catalog.stderr).toBe(0);
+      return (catalog.json as { platforms: { classDefaults: unknown }[] }).platforms[0]
+        ?.classDefaults;
+    };
+
+    // The driver's list alone: iPhone 17 is not listed, so iPhone 16 is the first that counts.
+    expect(await defaultsWith(undefined)).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
+    expect(await defaultsWith("iPhone 15")).toEqual({ phone: "iPhone 15", tablet: "iPad Pro" });
+    expect(await defaultsWith("iPhone 99")).toEqual({ phone: "iPhone 16", tablet: "iPad Pro" });
+  });
+
+  describe("a request names a class or nothing", () => {
+    const iosScript = {
+      availableOsVersions: ["18.4", "26.0"],
+      defaultModels: {
+        phone: ["iPhone 17", "iPhone 16", "iPhone 15"],
+        watch: ["Apple Watch Series 11"],
+      },
+      knownModels: ["Apple Watch Series 11", "iPhone 15", "iPhone 16", "iPhone 17"],
+      modelClasses: {
+        "Apple Watch Series 11": "watch",
+        "iPhone 15": "phone",
+        "iPhone 16": "phone",
+        "iPhone 17": "phone",
+      },
+    } as const;
+
+    interface Granted {
+      lease: { id: string };
+      device: {
+        id: string;
+        driverDeviceId: string;
+        mode: string;
+        spec: { model: string; osVersion: string };
+      };
+    }
+
+    async function lease(
+      env: Awaited<ReturnType<typeof withDaemon>>,
+      agent: string,
+      args: string[],
+    ) {
+      const result = await env.cli([
+        "lease",
+        "--platform",
+        "ios",
+        ...args,
+        "--agent-id",
+        agent,
+        "--detach",
+      ]);
+      return result;
+    }
+
+    /** The grant a `simlock lease` printed, after proving it exited 0. */
+    function granted(result: { code: number | null; stderr: string; json: unknown }): Granted {
+      expect(result.code, result.stderr).toBe(0);
+      return result.json as Granted;
+    }
+
+    /** Leases and releases an exact device, leaving it warm and idle. */
+    async function warm(env: Awaited<ReturnType<typeof withDaemon>>, model: string, os = "18.4") {
+      const warmed = granted(await lease(env, "warmer", ["--device", model, "--os", os]));
+      await env.cli(["release", warmed.lease.id]);
+      await waitForDeviceState(env, warmed.device.driverDeviceId, "ready");
+      return warmed.device;
+    }
+
+    async function deviceWork(env: Awaited<ReturnType<typeof withDaemon>>) {
+      return (await env.driverLog.calls()).filter((call) =>
+        ["provision", "makeReady"].includes(call.operation),
+      ).length;
+    }
+
+    it("grants a lease with no --device and no --class a phone, the grant naming its model and OS", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+
+      const result = await lease(env, "agent", []);
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(granted(result).device.spec).toMatchObject({
+        model: "iPhone 17",
+        osVersion: "26.0",
+      });
+    });
+
+    it("grants --class phone a ready idle iPhone 15 without provisioning or booting, and not to an exact iPhone 16 request", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+      const warmed = await warm(env, "iPhone 15", "26.0");
+      await env.driverLog.clear();
+
+      const byClass = await lease(env, "by-class", ["--class", "phone"]);
+      expect(byClass.code, byClass.stderr).toBe(0);
+      expect(granted(byClass).device.id).toBe(warmed.id);
+      expect(await deviceWork(env)).toBe(0);
+      await env.cli(["release", granted(byClass).lease.id]);
+      await waitForDeviceState(env, warmed.driverDeviceId, "ready");
+
+      const exact = await lease(env, "exact", ["--device", "iPhone 16"]);
+      expect(exact.code, exact.stderr).toBe(0);
+      expect(granted(exact).device.id).not.toBe(warmed.id);
+      expect(granted(exact).device.spec.model).toBe("iPhone 16");
+    });
+
+    it("does not grant a request with no class an idle Apple Watch, and grants --class watch it", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+      const watch = await lease(env, "warmer", [
+        "--device",
+        "Apple Watch Series 11",
+        "--os",
+        "18.4",
+      ]);
+      const watchDevice = granted(watch).device;
+      await env.cli(["release", granted(watch).lease.id]);
+      await waitForDeviceState(env, watchDevice.driverDeviceId, "ready");
+
+      const noClass = await lease(env, "no-class", []);
+      expect(granted(noClass).device.id).not.toBe(watchDevice.id);
+      await env.cli(["release", granted(noClass).lease.id]);
+
+      const byClass = await lease(env, "by-class", ["--class", "watch"]);
+      expect(granted(byClass).device.id).toBe(watchDevice.id);
+    });
+
+    it("never grants a --mode full request a slim device, and a worker defaulting to full never grants one to a request with no mode", async () => {
+      const env = await withDaemon({
+        configOverrides: { ios: { defaultMode: "full" } },
+        driverScript: { ios: { ...iosScript, slimmableOsVersions: ["26.0"] } },
+      });
+      const slim = await lease(env, "slim", [
+        "--device",
+        "iPhone 15",
+        "--os",
+        "26.0",
+        "--mode",
+        "slim",
+      ]);
+      const slimDevice = granted(slim).device;
+      await env.cli(["release", granted(slim).lease.id]);
+      await waitForDeviceState(env, slimDevice.driverDeviceId, "ready");
+
+      const full = await lease(env, "full", ["--class", "phone", "--mode", "full"]);
+      expect(granted(full).device.id).not.toBe(slimDevice.id);
+      await env.cli(["release", granted(full).lease.id]);
+
+      const noMode = await lease(env, "no-mode", ["--class", "phone"]);
+      expect(granted(noMode).device.id).not.toBe(slimDevice.id);
+    });
+
+    it("never grants an --image-tag request a device of another tag", async () => {
+      const env = await withDaemon({
+        driverScript: {
+          android: {
+            availableOsVersions: ["34"],
+            defaultModels: { phone: ["Pixel 8"] },
+            images: [
+              { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+              { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+            ],
+            knownModels: ["Pixel 8"],
+            modelClasses: { "Pixel 8": "phone" },
+          },
+        },
+      });
+      const first = await env.cli([
+        "lease",
+        "--platform",
+        "android",
+        "--class",
+        "phone",
+        "--image-tag",
+        "google_apis",
+        "--agent-id",
+        "one",
+        "--detach",
+      ]);
+      const firstDevice = granted(first).device;
+      await env.cli(["release", granted(first).lease.id]);
+      await waitForDeviceState(env, firstDevice.driverDeviceId, "ready");
+
+      const second = await env.cli([
+        "lease",
+        "--platform",
+        "android",
+        "--class",
+        "phone",
+        "--image-tag",
+        "google_apis_playstore",
+        "--agent-id",
+        "two",
+        "--detach",
+      ]);
+
+      expect(second.code, second.stderr).toBe(0);
+      expect(granted(second).device.id).not.toBe(firstDevice.id);
+    });
+
+    it("refuses --class beside --device with BAD_REQUEST", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+
+      const result = await lease(env, "agent", ["--class", "phone", "--device", "iPhone 16"]);
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("BAD_REQUEST");
+    });
+
+    it("grants --os '>=18' a device on 18.0 or newer, fails --os '<=17' at once with RUNTIME_MISSING with and without --allow-download, and refuses --os '^18' with BAD_REQUEST naming the accepted forms", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+
+      const inRange = await lease(env, "in-range", ["--os", ">=18"]);
+      expect(inRange.code, inRange.stderr).toBe(0);
+      expect(Number.parseFloat(granted(inRange).device.spec.osVersion)).toBeGreaterThanOrEqual(18);
+      await env.cli(["release", granted(inRange).lease.id]);
+
+      await env.driverLog.clear();
+      for (const extra of [[], ["--allow-download"]]) {
+        const missing = await lease(env, "missing", ["--os", "<=17", ...extra]);
+        expect(missing.code).toBe(12);
+        expect(missing.stderr).toContain("RUNTIME_MISSING");
+      }
+      expect(
+        (await env.driverLog.calls()).filter((call) => call.operation === "installComponent"),
+      ).toEqual([]);
+
+      const malformed = await lease(env, "malformed", ["--os", "^18"]);
+      expect(malformed.code).not.toBe(0);
+      expect(malformed.stderr).toContain("BAD_REQUEST");
+      expect(malformed.stderr).toContain("18 - 26");
+    });
+
+    it.each([
+      [undefined, "iPhone 17"],
+      ["iPhone 15", "iPhone 15"],
+      ["iPhone 99", "iPhone 17"],
+    ])(
+      "with ios.defaultModels.phone set to %s and nothing idle, --class phone creates %s on the newest runtime",
+      async (configured, created) => {
+        const env = await withDaemon({
+          configOverrides:
+            configured === undefined ? {} : { ios: { defaultModels: { phone: configured } } },
+          driverScript: { ios: iosScript },
+        });
+
+        const result = await lease(env, "agent", ["--class", "phone"]);
+
+        expect(result.code, result.stderr).toBe(0);
+        expect(granted(result).device.spec).toMatchObject({
+          model: created,
+          osVersion: "26.0",
+        });
+      },
+    );
+
+    it("fails an Android --class tablet at once with UNKNOWN_MODEL naming android.defaultModels.tablet", async () => {
+      const env = await withDaemon({
+        driverScript: {
+          android: {
+            availableOsVersions: ["34"],
+            knownModels: ["Pixel 8"],
+            modelClasses: { "Pixel 8": "phone" },
+          },
+        },
+      });
+
+      const result = await env.cli([
+        "lease",
+        "--platform",
+        "android",
+        "--class",
+        "tablet",
+        "--detach",
+      ]);
+
+      expect(result.code).toBe(12);
+      expect(result.stderr).toContain("UNKNOWN_MODEL");
+      expect(result.stderr).toContain("android.defaultModels.tablet");
+    });
+  });
 });

@@ -254,7 +254,7 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-Five changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+Six changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
@@ -267,9 +267,10 @@ gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. ADR 0014 gives every
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
-required capacity field, taking it to 11, and a device's `servesDefaultMode`, required
-too, takes it to 12. So the range both
-sides advertise is `{min: 12, max: 12}`, an older client and a current daemon simply
+required capacity field, taking it to 11, and ADR 0015 §3 makes
+`modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
+`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15). So the range both
+sides advertise is `{min: 16, max: 16}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -838,8 +839,12 @@ annotated with the workers that have it. A model's `modelRuntimes` is the
 union of what each connected worker pairs it with, never the cross product
 of fleet models and fleet runtimes: one worker with the model and another
 with the runtime is not a leasable pair. `modelAliases` is the union per
-model, deduplicated ignoring case, and `images` the union by runtime, tag,
-and ABI, absent when no worker reports the field. `customModels` lists a
+model, deduplicated ignoring case, `modelClasses` the union over workers
+(ADR 0015 §3: when two class a model differently, the first worker in id
+order wins), `classDefaults` a class's model only when every connected worker
+reports the same one for it (a worker with none counts as disagreeing, ADR 0015 §4),
+and `images` the union by runtime, tag, and ABI, absent when no
+worker reports the field. `customModels` lists a
 model when any worker that lists it marks it custom; a name a worker marks
 but does not list is dropped. Each worker's lists are
 within the contract's bounds but their union may not be, so the gateway
@@ -912,8 +917,9 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `{min: 8, max: 8}`, because a lease request chooses it, and ADR 0010 to
   `{min: 9, max: 9}`, because the gateway is to relay `component.install` to workers, and
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
-  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, then to
-  `{min: 12, max: 12}`, because a device's `servesDefaultMode` is; a
+  ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
+  ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
+  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
@@ -1907,21 +1913,51 @@ Business facts live in the bus's two records. The ring buffer
 `EventHistory` (`src/bus/event-file.ts`) subscribes to every event and writes
 each envelope as one JSON line to `events.jsonl` in the data directory,
 through a second `NodeFileLogSink` that `startDaemon` opens right after the
-bus with `config.eventLog.rotateBytes`. That file is the durable record and
+bus with `config.eventLog.rotateBytes`, plus `eventLog.retention` and
+`eventLog.maxBytes` (ADR 0016 §4): rotation keeps numbered generations and
+deletes those past retention, then the oldest until the total fits. That file is the durable record and
 the audit trail: it survives restarts and crashes, rotates independently of
 `daemon.log`, and on a gateway holds the relayed fleet events too. A file
 that cannot be opened, or a write that fails, costs the history and never the
 daemon or the emitter: one error line, writing stops, and replay falls back
 to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
 `sinceTs` it answers from the ring, with `sinceTs` from the file (current
-file, then its rotated generation, deduplicated by `id`).
+file, then `.1`, `.2` and so on until two in a row are missing, deduplicated by `id`).
 The CLI reads the file itself only for `simlock events --since` when no
 daemon answers; `--follow` subscribes first, replays, and drops replayed
 pushes, so the join neither loses nor repeats an event.
 
 ## Device requests
 
-Required to identify a device: **platform + device model + OS version**.
+A request names a device in one of three forms (ADR 0015 §1): an exact
+model, a class, or neither, which the contract's `requestedClass` reads as
+`phone`; naming both is `BAD_REQUEST`, decided by the schema so every
+transport answers alike. `LeaseAcquisitionCoordinator` resolves it once,
+before planning, into the exact request a driver takes (a driver never sees
+a class: the first name on the class's preference list that the catalog
+lists, classes alike, and pairs with an installed runtime, of the requested
+image tag if one is named) and a `DeviceRequirement` kept on the waiter
+beside its spec. `fits` in `domain.ts` is the one place a requirement meets
+a device (platform, model or class, OS, image tag); the planner adds the
+pool-mode comparison and looks for a `ready` device that fits, then a
+`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+still names pool identity for the warm pool, reclaim and the idempotency
+check. A class is read from the catalog entry (`modelClasses`) at the moment
+a fit is decided; a device record stores none.
+
+`osVersion` is an exact version or an OS range (ADR 0015 §2). The one grammar
+is `src/contract/os-range.ts`: the contract schema refines `osVersion`
+through its parser (a refinement over the request object, so the MCP SDK's own
+field validation never answers first), so a malformed range is `BAD_REQUEST` on
+every transport; a string that is not range-like is a bare version and stays
+exact, as `Baklava` or `34-ext12` on Android,
+and the core and the gateway import `satisfies` and `compareVersions` from it.
+For a range the coordinator picks the newest `modelRuntimes` entry in range
+(of the requested image tag) for the exact model, or for the first class
+candidate that has one, and hands the driver that exact version; none is
+`RUNTIME_MISSING` with `downloadable: false`, and a range never installs.
+
+For an exact model: **platform + device model + OS version**.
 OS defaults to the newest runtime already installed on the machine that can
 actually run the requested model — for iOS specifically, the newest
 installed runtime that both falls inside the device type's supported range

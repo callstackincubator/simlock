@@ -52,11 +52,12 @@ import {
 } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { LeaseRequestFailure } from "../core/domain.js";
-import type { DeviceRequest } from "../core/driver.js";
+import type { ExactDeviceRequest } from "../core/driver.js";
 import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
   type LeaseRequestLimits,
+  newLeaseRequestId,
   type WaitingRequest,
 } from "../core/lease-request-book.js";
 import { SerializedDecision } from "../core/serialized-decision.js";
@@ -127,7 +128,12 @@ export interface FleetLeaseCoordinatorOptions {
   readonly logger?: Logger;
 }
 
-type FleetEventName = "lease.requested" | "lease.queued" | "lease.rejected" | "request.dispatched";
+type FleetEventName =
+  | "lease.requested"
+  | "lease.queued"
+  | "lease.rejected"
+  | "queue.changed"
+  | "request.dispatched";
 
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
@@ -176,10 +182,10 @@ export class FleetLeaseCoordinator {
     this.#queue = new FleetQueue({
       clock: options.clock,
       idGenerator: options.idGenerator,
+      onDepthChange: (depth) => this.#emit("queue.changed", { depth }),
       // The rejection itself already happened inside `WaitQueue#armTimeout` by the time this
       // fires (see `queue.ts`); this only reports the gateway's own fact for it.
-      onTimeout: (waiter) =>
-        this.#emit("lease.rejected", { requestSpec: waiter.request, reason: "timeout" }),
+      onTimeout: (waiter) => this.#emitRejected(waiter, "timeout"),
     });
     this.requests = new LeaseRequestBook({
       decisions: this.#decisions,
@@ -195,6 +201,12 @@ export class FleetLeaseCoordinator {
 
   get queueDepth(): number {
     return this.#queue.depth;
+  }
+
+  /** Reports the fleet queue's depth once, as the gateway starts, so every run begins with a
+   * `queue.changed` step. */
+  start(): void {
+    this.#emit("queue.changed", { depth: this.#queue.depth });
   }
 
   /** Every request waiting in the fleet queue, or being dispatched, oldest first. Read by the
@@ -226,17 +238,19 @@ export class FleetLeaseCoordinator {
    * Everything past admission -- reaching a worker at all -- is I/O and stays outside it.
    */
   async request(
-    deviceRequest: DeviceRequest,
+    deviceRequest: ExactDeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
     const admitted = await this.#decisions.run(async () => {
       const replay = this.requests.replay(deviceRequest, options);
       if (replay !== undefined) return { replay };
-      this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId);
+      const requestId = newLeaseRequestId(this.options.idGenerator);
+      this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
       const { id, started: created } = await this.requests.admit(
         deviceRequest,
         options,
         (id, onProgress) => this.#queue.create(deviceRequest, { ...options, onProgress }, id),
+        requestId,
       );
       this.#createdAt.set(created, this.options.clock.now());
       this.#emit("lease.requested", {
@@ -253,22 +267,30 @@ export class FleetLeaseCoordinator {
   }
 
   /** One lease or pending request per requester, fleet-wide (§14). */
-  #refuseIfAlreadyLeased(deviceRequest: DeviceRequest, requesterId: string): void {
+  #refuseIfAlreadyLeased(
+    deviceRequest: ExactDeviceRequest,
+    requesterId: string,
+    requestId: string,
+  ): void {
     const existingLeaseId = this.options.leaseIndex.existingLeaseId(requesterId);
     if (existingLeaseId !== undefined || this.#queue.hasPendingRequester(requesterId)) {
-      this.#emit("lease.rejected", { requestSpec: deviceRequest, reason: "already-leased" });
+      this.#emit("lease.rejected", {
+        requestId,
+        requester: requesterId,
+        requestSpec: deviceRequest,
+        reason: "already-leased",
+      });
       throw new RequesterAlreadyLeasedError(requesterId, existingLeaseId);
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`#leaseCancel`); the audit cannot follow a call through a structural type.
   async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.#decisions.run(async () => {
       const waiter = this.#queue.findPendingWaiter(requesterId);
       if (waiter === undefined) return "not-found";
       if (waiter.state !== "queued") return "not-cancellable";
       if (this.#queue.reject(waiter, new RequestCancelledError(waiter.id))) {
-        this.#emit("lease.rejected", { requestSpec: waiter.request, reason: "cancelled" });
+        this.#emitRejected(waiter, "cancelled");
       }
       return "cancelled";
     });
@@ -780,7 +802,7 @@ export class FleetLeaseCoordinator {
     if (last !== undefined) {
       const wasQueued = this.#queue.isQueued(waiter);
       if (this.#queue.reject(waiter, last) && wasQueued) {
-        this.#emit("lease.rejected", { requestSpec: waiter.request, reason: "unresolvable-spec" });
+        this.#emitRejected(waiter, "unresolvable-spec");
       }
       return;
     }
@@ -1084,8 +1106,17 @@ export class FleetLeaseCoordinator {
     reason: Rejection["reason"] | "no-wait" | "cancelled" | "timeout",
   ): void {
     if (this.#queue.reject(waiter, error)) {
-      this.#emit("lease.rejected", { requestSpec: waiter.request, reason });
+      this.#emitRejected(waiter, reason);
     }
+  }
+
+  #emitRejected(waiter: FleetWaiter, reason: EventMap["lease.rejected"]["reason"]): void {
+    this.#emit("lease.rejected", {
+      requestId: waiter.id,
+      requester: waiter.options.requesterId,
+      requestSpec: waiter.request,
+      reason,
+    });
   }
 
   // ---- forwarding and views -------------------------------------------------------------------

@@ -11,6 +11,8 @@ export {
   redactConfig,
 } from "./config.js";
 export {
+  DEVICE_CLASSES,
+  type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
@@ -20,6 +22,7 @@ export {
   transition,
   transitionEnteredAt,
 } from "./domain.js";
+export { buildCapacityFigures } from "./capacity/index.js";
 export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
@@ -35,6 +38,7 @@ export {
   type ComponentRemoval,
   COMPONENT_REMOVAL_TIMEOUT_MS,
   type DeviceRequest,
+  type ExactDeviceRequest,
   DiskSpaceGuard,
   type Driver,
   type DriverAdvisory,
@@ -61,7 +65,11 @@ export {
   UnknownModelError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
-export { DriverCatalog, UnknownPassthroughToolError } from "./driver-catalog.js";
+export {
+  DriverCatalog,
+  type ModelPreferences,
+  UnknownPassthroughToolError,
+} from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor, isStalledTransition, type StallInput } from "./doctor.js";

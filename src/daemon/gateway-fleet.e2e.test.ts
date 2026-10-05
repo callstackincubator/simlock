@@ -220,6 +220,20 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     return { daemon, directory, filesystem };
   }
 
+  it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {
+    const gateway = await startGateway();
+
+    const events = (await gateway.dispatch("events.replay", {}, adminSession())) as Array<{
+      readonly event: string;
+      readonly payload: unknown;
+    }>;
+
+    expect(events.filter((entry) => entry.event === "queue.changed")).toMatchObject([
+      { payload: { depth: 0 } },
+    ]);
+    expect(events.some((entry) => entry.event === "capacity.changed")).toBe(false);
+  });
+
   it("leases a device on the right worker and execs a real command against it through the gateway", async () => {
     const gateway = await startGateway();
     const { secret: tokenA } = await gateway.dispatch(

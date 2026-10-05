@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { type DeviceRecord, IllegalTransition, transition, transitionEnteredAt } from "./index.js";
-import { type DeviceSpec, mayBeGranted, sameSpec } from "./domain.js";
+import {
+  type DeviceClass,
+  type DeviceRequirement,
+  type DeviceSpec,
+  fits,
+  mayBeGranted,
+  sameSpec,
+} from "./domain.js";
 
 const baseDevice: Omit<DeviceRecord, "state"> = {
   createdAt: 1_000,
@@ -167,5 +174,70 @@ describe("sameSpec", () => {
     expect(sameSpec(spec, { ...spec, model: "iPhone 15" })).toBe(false);
     expect(sameSpec(spec, { ...spec, osVersion: "26.4" })).toBe(false);
     expect(sameSpec(spec, { ...spec, platform: "android" })).toBe(false);
+  });
+});
+
+describe("fits (ADR 0015 §6)", () => {
+  const spec: DeviceSpec = { model: "iPhone 15", osVersion: "18.4", platform: "ios" };
+  const classes: Record<string, DeviceClass> = { "iPhone 15": "phone", "iPad Pro": "tablet" };
+  const classOf = (model: string) => classes[model];
+  const exact: DeviceRequirement = {
+    imageTag: undefined,
+    osVersion: { kind: "exact", version: "18.4" },
+    platform: "ios",
+    target: { kind: "model", model: "iPhone 15" },
+  };
+
+  it("holds for a device that satisfies every part of the requirement", () => {
+    expect(fits(exact, spec, classOf)).toBe(true);
+    expect(fits({ ...exact, target: { class: "phone", kind: "class" } }, spec, classOf)).toBe(true);
+  });
+
+  it("fails when the platform differs, and only then", () => {
+    expect(fits({ ...exact, platform: "android" }, spec, classOf)).toBe(false);
+  });
+
+  it("fails when the model differs, and only then", () => {
+    expect(fits({ ...exact, target: { kind: "model", model: "iPhone 16" } }, spec, classOf)).toBe(
+      false,
+    );
+  });
+
+  it("fails when the device's model is of another class, and only then", () => {
+    expect(fits({ ...exact, target: { class: "tablet", kind: "class" } }, spec, classOf)).toBe(
+      false,
+    );
+  });
+
+  it("fails for a device whose model has no class when a class is requested", () => {
+    const unclassed: DeviceSpec = { ...spec, model: "Custom Phone" };
+    expect(fits({ ...exact, target: { class: "phone", kind: "class" } }, unclassed, classOf)).toBe(
+      false,
+    );
+  });
+
+  it("fails when an exact OS differs, and only then", () => {
+    expect(fits({ ...exact, osVersion: { kind: "exact", version: "26.0" } }, spec, classOf)).toBe(
+      false,
+    );
+  });
+
+  it("holds for any OS the catalog lists as installed, and fails for one it does not", () => {
+    const anyInstalled = (versions: readonly string[]) =>
+      ({ ...exact, osVersion: { kind: "installed", versions } }) as const;
+    expect(fits(anyInstalled(["17.0", "18.4"]), spec, classOf)).toBe(true);
+    expect(fits(anyInstalled(["17.0", "26.0"]), spec, classOf)).toBe(false);
+  });
+
+  it("fails when the image tag differs, one side has none, and only then", () => {
+    const tagged = { ...spec, imageTag: "google_apis" };
+    expect(fits({ ...exact, imageTag: "google_apis" }, tagged, classOf)).toBe(true);
+    expect(fits({ ...exact, imageTag: "google_apis" }, spec, classOf)).toBe(false);
+    expect(fits(exact, tagged, classOf)).toBe(false);
+    expect(fits({ ...exact, imageTag: "default" }, tagged, classOf)).toBe(false);
+  });
+
+  it("does not read the mode, which the planner compares", () => {
+    expect(fits(exact, { ...spec, mode: "slim" }, classOf)).toBe(true);
   });
 });

@@ -1,5 +1,12 @@
-import type { EventBus } from "../bus/index.js";
-import { type Logger, NoopLogger } from "../ports/index.js";
+import type { EventBus, EventMap } from "../bus/index.js";
+import { requestedClass } from "../contract/index.js";
+import {
+  compareVersions,
+  type OsRange,
+  parseOsConstraint,
+  satisfies,
+} from "../contract/os-range.js";
+import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
@@ -7,11 +14,15 @@ import {
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
-import { type LeaseRequestBook } from "./lease-request-book.js";
+import { type LeaseRequestBook, newLeaseRequestId } from "./lease-request-book.js";
+import { classCandidates, findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 import {
+  type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
+  type DeviceRequirement,
   type DeviceSpec,
+  exactRequirement,
   type LeaseRecord,
   type Platform,
   sameSpec,
@@ -26,9 +37,13 @@ import {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
+  type ExactDeviceRequest,
   RuntimeMissingError,
+  UnknownModelError,
 } from "./driver.js";
-import { type DriverCatalog } from "./driver-catalog.js";
+import { type DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
+import { type CatalogReader } from "./lease-ports.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import type { AcquisitionMaintenance } from "./nuke-service.js";
 import {
@@ -99,6 +114,8 @@ export type AcquisitionQueue = Pick<
 >;
 
 export interface LeaseAcquisitionCoordinatorOptions {
+  /** Read for a request that names a class: which models the host lists, and which runtimes. */
+  readonly catalog: Pick<CatalogReader, "listCatalog">;
   readonly claims: AcquisitionClaims;
   /**
    * The one installer in the core (ADR 0010 §3). A request whose runtime is missing and that
@@ -113,11 +130,18 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
+  /** Mints a request's id before admission checks, so a request refused there still has one. */
+  readonly idGenerator: IdGenerator;
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
     "bootForLease" | "destroy" | "dispose" | "shutdown"
   >;
+  /**
+   * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
+   * built at the composition root. This coordinator holds no model name of its own.
+   */
+  readonly modelPreferences: ModelPreferences;
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
@@ -129,9 +153,22 @@ export interface LeaseAcquisitionCoordinatorOptions {
 
 interface AcquisitionWaiter extends Waiter {
   failures: number;
+  /** What an idle device must satisfy besides its pool mode, kept beside `spec` (ADR 0015 §5). */
+  classOf?: ((model: string) => DeviceClass | undefined) | undefined;
+  requirement?: DeviceRequirement | undefined;
   spec?: DeviceSpec;
   timing: LeaseTiming;
 }
+
+/** The kinds of plan that end in a grant. An eviction never does: the plan made after it does. */
+type GrantingPlanKind = "grant-ready" | "boot-shutdown" | "provision";
+
+/** The one place a plan's kind becomes the `source` a `lease.granted` reports. */
+const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
+  "boot-shutdown": "booted",
+  "grant-ready": "warm",
+  provision: "provisioned",
+};
 
 type OperationPlan = Exclude<
   AcquisitionPlan,
@@ -205,10 +242,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       admitted = await this.options.decisions.run(async () => {
         const replay = this.options.requests.replay(request, options);
         if (replay !== undefined) return { replay };
+        const requestId = newLeaseRequestId(this.options.idGenerator);
         if (this.#admissionClosed) {
           this.options.eventBus.emit(
             "lease.rejected",
-            { requestSpec: request, reason: "killed" },
+            {
+              requestId,
+              requester: options.requesterId,
+              requestSpec: request,
+              reason: "killed",
+            },
             "lease-acquisition-coordinator",
           );
           throw new NukeCancelledError();
@@ -222,7 +265,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         ) {
           this.options.eventBus.emit(
             "lease.rejected",
-            { requestSpec: request, reason: "already-leased" },
+            {
+              requestId,
+              requester: options.requesterId,
+              requestSpec: request,
+              reason: "already-leased",
+            },
             "lease-acquisition-coordinator",
           );
           throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
@@ -231,6 +279,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           request,
           options,
           (id, onProgress) => this.#newWaiter(request, { ...options, onProgress }, id),
+          requestId,
         );
         this.options.eventBus.emit(
           "lease.requested",
@@ -262,7 +311,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       for (const waiter of this.options.queue.cancelAll(() => new NukeCancelledError())) {
         this.options.eventBus.emit(
           "lease.rejected",
-          { requestSpec: waiter.request, reason: "killed" },
+          {
+            requestId: waiter.id,
+            requester: waiter.options.requesterId,
+            requestSpec: waiter.request,
+            reason: "killed",
+          },
           "lease-acquisition-coordinator",
         );
       }
@@ -297,18 +351,19 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
       const mode = request.mode ?? this.#defaultMode(request.platform);
-      const resolved = await this.#resolveOrInstall(waiter, driver, { ...request, mode }, options);
-      // The image tag is the request's, or none: a driver that returns another, or one the
-      // request did not name, would plan the device into a pool the request did not ask for.
-      if (resolved.imageTag !== request.imageTag) {
-        throw new Error(
-          `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
-            `for a request naming ${String(request.imageTag)}`,
-        );
-      }
-      // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
-      // driver that returns the wrong thing still cannot put a full request on a slim device.
-      waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
+      const range = requestedRange(request);
+      const target =
+        range === undefined
+          ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
+          : await this.#resolveRanged(request, mode, range);
+      // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
+      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, {
+        ...options,
+        allowDownload: options.allowDownload === true && range === undefined,
+      });
+      waiter.spec = checkedSpec(resolved, request, mode);
+      waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
+      waiter.classOf = target.classOf;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -317,6 +372,108 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
+  }
+
+  /**
+   * The exact request an exact-model request already is, answered without awaiting anything so
+   * its path takes no extra turn of the event loop; `undefined` for one that names no model.
+   */
+  #exactTarget(request: DeviceRequest, mode: DeviceMode): ResolvedTarget | undefined {
+    const { class: _class, model, ...rest } = request;
+    return model === undefined ? undefined : { exact: { ...rest, mode, model } };
+  }
+
+  /**
+   * Turns a request that names no model, or names an OS range, into the exact one a driver
+   * resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model
+   * on its preference list that this host's catalog lists, classes as that class, and pairs with
+   * an installed runtime (of the requested image tag, and in the requested range, when it names
+   * them); an exact model with a range must be listed, or the request fails as
+   * `UnknownModelError`. With a range the runtime is the newest paired one in it, passed on as an
+   * exact version. The catalog is read, and nothing is downloaded. A class with no listed model
+   * fails as `UnknownModelError`, and a model or class with no pairing as a `RuntimeMissingError`
+   * no download can fix.
+   */
+  async #resolveClass(
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range?: OsRange,
+  ): Promise<ResolvedTarget> {
+    const deviceClass = requestedClass({ class: request.class });
+    const entry = (await this.options.catalog.listCatalog(request.platform))[0];
+    if (entry === undefined) throw new UnknownModelError(request.platform, undefined, deviceClass);
+    const candidates = classCandidates(
+      entry,
+      deviceClass,
+      this.options.modelPreferences[request.platform]?.[deviceClass] ?? [],
+    );
+    if (candidates.length === 0) {
+      throw new UnknownModelError(request.platform, undefined, deviceClass);
+    }
+    const chosen = candidates.find(
+      (candidate) => matchingRuntimes(entry, candidate, request, range).length > 0,
+    );
+    if (chosen === undefined) {
+      throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
+    }
+    return {
+      ...this.#rangedTarget(
+        entry,
+        chosen,
+        { class: deviceClass, kind: "class" },
+        request,
+        mode,
+        range,
+      ),
+      classOf: (candidate) => modelClass(entry, candidate),
+    };
+  }
+
+  /** A request that names a model and an OS range: the model must be listed (ADR 0015 §5). */
+  async #resolveRanged(
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range: OsRange,
+  ): Promise<ResolvedTarget> {
+    if (request.model === undefined) return this.#resolveClass(request, mode, range);
+    const entry = (await this.options.catalog.listCatalog(request.platform))[0];
+    if (entry === undefined) throw new UnknownModelError(request.platform, request.model);
+    const listed = findCatalogModel(entry, request.model);
+    if (listed === undefined) throw new UnknownModelError(request.platform, request.model);
+    return this.#rangedTarget(
+      entry,
+      listed,
+      { kind: "model", model: listed },
+      request,
+      mode,
+      range,
+    );
+  }
+
+  /** The target for `model` once the request's runtime constraints are settled against `entry`. */
+  #rangedTarget(
+    entry: DriverCatalogEntry,
+    model: string,
+    target: DeviceRequirement["target"],
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range: OsRange | undefined,
+  ): ResolvedTarget {
+    const { class: _class, model: _model, ...rest } = request;
+    return {
+      exact: {
+        ...rest,
+        mode,
+        model,
+        ...(range === undefined ? {} : { osVersion: newestRuntime(entry, model, request, range) }),
+      },
+      requirement: {
+        imageTag: request.imageTag,
+        osVersion: requiredOs(entry, request, range),
+        platform: request.platform,
+        target,
+      },
+    };
   }
 
   /**
@@ -333,7 +490,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #resolveOrInstall(
     waiter: AcquisitionWaiter,
     driver: Driver,
-    request: DeviceRequest,
+    request: ExactDeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<DeviceSpec> {
     try {
@@ -481,7 +638,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       }
       return;
     }
-    await this.#grantHandoff(waiter, handoff);
+    await this.#grantHandoff(waiter, handoff, "provision");
   }
 
   async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
@@ -496,7 +653,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.options.drivers.get(plan.device.spec.platform),
         plan.device.spec,
       );
-      await this.#grant(waiter, plan.device.id);
+      await this.#grant(waiter, plan.device.id, plan.kind);
       return undefined;
     }
     const operation = operationPlan(plan);
@@ -520,6 +677,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       noWait: waiter.options.noWait ?? false,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
+      requirement: waiter.requirement,
+      classOf: waiter.classOf,
     });
   }
 
@@ -528,11 +687,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
    * through it, so there is no second construction site to keep in step.
    */
-  async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
+  async #grant(waiter: AcquisitionWaiter, deviceId: string, kind: GrantingPlanKind): Promise<void> {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
       ownerId: waiter.options.ownerId,
+      requestId: waiter.id,
       requesterId: waiter.options.requesterId,
+      source: GRANT_SOURCE[kind],
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
     this.options.queue.resolve(waiter, {
@@ -676,7 +837,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       if (destroyed) this.#wakeQueue();
       return;
     }
-    await this.#grantHandoff(waiter, handoff, capacityReservation);
+    await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
   }
 
   #defer(waiter: AcquisitionWaiter): void {
@@ -718,12 +879,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #grantHandoff(
     waiter: AcquisitionWaiter,
     handoff: ReadyDeviceHandoff,
+    kind: GrantingPlanKind,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
-        await this.#grant(waiter, handoff.device.id);
+        await this.#grant(waiter, handoff.device.id, kind);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
@@ -758,7 +920,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (this.options.queue.reject(waiter, error)) {
       this.options.eventBus.emit(
         "lease.rejected",
-        { requestSpec: waiter.request, reason },
+        {
+          requestId: waiter.id,
+          requester: waiter.options.requesterId,
+          requestSpec: waiter.request,
+          reason,
+        },
         "lease-acquisition-coordinator",
       );
     }
@@ -866,4 +1033,80 @@ function downloadingProgress(
 /** Both reports are for the one component a `#resolveOrInstall` call downloads. */
 function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
   return left.waiting === right.waiting && left.percent === right.percent;
+}
+
+/**
+ * The spec a driver resolved, held to what the request asked. The image tag is the request's, or
+ * none: a driver that returns another, or one the request did not name, would plan the device
+ * into a pool the request did not ask for. Full is a guarantee (ADR 0007 §5): a slim spec is
+ * accepted only for a slim request, so a driver that returns the wrong thing still cannot put a
+ * full request on a slim device.
+ */
+function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceMode): DeviceSpec {
+  if (resolved.imageTag !== request.imageTag) {
+    throw new Error(
+      `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
+        `for a request naming ${String(request.imageTag)}`,
+    );
+  }
+  return mode === "slim" ? resolved : fullSpec(resolved);
+}
+
+/** What `#resolveClass` settles on; an exact request has only `exact`. */
+interface ResolvedTarget {
+  readonly exact: ExactDeviceRequest;
+  readonly requirement?: DeviceRequirement;
+  readonly classOf?: (model: string) => DeviceClass | undefined;
+}
+
+/**
+ * The installed runtimes a model pairs with that the request accepts: the one it names, or those
+ * in its range, or any when it names none; and only runtimes that have an image of the requested
+ * tag when it names one (the rule the gateway's `matchRequest` applies).
+ */
+function matchingRuntimes(
+  entry: DriverCatalogEntry,
+  model: string,
+  { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
+  range: OsRange | undefined,
+): string[] {
+  return pairedRuntimes(entry, model).filter(
+    (runtime) =>
+      (range === undefined
+        ? osVersion === undefined || runtime === osVersion
+        : satisfies(runtime, range)) &&
+      (imageTag === undefined ||
+        (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
+  );
+}
+
+/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
+function newestRuntime(
+  entry: DriverCatalogEntry,
+  model: string,
+  request: DeviceRequest,
+  range: OsRange,
+): string {
+  const newest = matchingRuntimes(entry, model, request, range).sort(compareVersions).at(-1);
+  if (newest === undefined) throw new RuntimeMissingError(request.platform, range.text);
+  return newest;
+}
+
+/** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
+function requiredOs(
+  entry: DriverCatalogEntry,
+  { osVersion }: DeviceRequest,
+  range: OsRange | undefined,
+): DeviceRequirement["osVersion"] {
+  if (range !== undefined) return range;
+  return osVersion === undefined
+    ? { kind: "installed", versions: entry.runtimes }
+    : { kind: "exact", version: osVersion };
+}
+
+/** The request's OS range, when its `osVersion` is one rather than an exact version. */
+function requestedRange(request: DeviceRequest): OsRange | undefined {
+  if (request.osVersion === undefined) return undefined;
+  const parsed = parseOsConstraint(request.osVersion);
+  return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
 }

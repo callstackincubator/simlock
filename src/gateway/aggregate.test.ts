@@ -332,6 +332,8 @@ describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    classDefaults: {},
+    modelClasses: {},
     modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
     platform: "ios" as const,
@@ -341,6 +343,8 @@ describe("aggregateCatalog", () => {
   const iosOnB = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    classDefaults: {},
+    modelClasses: {},
     modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
     platform: "ios" as const,
@@ -362,6 +366,94 @@ describe("aggregateCatalog", () => {
       runtimes: ["25.4", "26.0"],
       runtimeWorkers: { "25.4": ["wrk_b"], "26.0": ["wrk_a", "wrk_b"] },
     });
+  });
+
+  it("carries the union of the connected workers' model classes, and keeps the class of the first worker in id order when two disagree", () => {
+    const classed = (modelClasses: Record<string, "phone" | "tablet" | "tv">) => ({
+      ...iosOnB,
+      modelClasses,
+    });
+
+    // Listed with the later id first, so the answer cannot come from input order.
+    const catalog = aggregateCatalog([
+      view({ catalog: [classed({ "iPad Pro": "phone", "iPhone 17": "tv" })], id: "wrk_b" }),
+      view({ catalog: [classed({ "iPhone 17": "phone" })], id: "wrk_a" }),
+      view({
+        catalog: [classed({ "iPad Pro": "tablet" })],
+        connection: "disconnected",
+        id: "wrk_0",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({
+      "iPad Pro": "phone",
+      "iPhone 17": "phone",
+    });
+    expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+  });
+
+  it("drops a model class for a name the worker does not list", () => {
+    const catalog = aggregateCatalog([
+      view({
+        catalog: [{ ...iosOnB, modelClasses: { Ghost: "tv", "iPhone 17": "phone" } }],
+        id: "wrk_a",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({ "iPhone 17": "phone" });
+  });
+
+  it("carries a class default only when every connected worker reports the same one", () => {
+    // Every default names a model its worker lists, so a disagreement reaches agreedClassDefaults.
+    const withDefaults = (
+      classDefaults: Record<string, string>,
+      base: typeof iosOnA | typeof iosOnB = iosOnA,
+    ) => ({
+      ...base,
+      classDefaults,
+      models: [...new Set([...base.models, "iPad Pro", "iPad (A16)"])],
+    });
+
+    const agreed = aggregateCatalog([
+      view({ catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad Pro" })], id: "wrk_a" }),
+      view({
+        catalog: [withDefaults({ phone: "iPhone 17", tablet: "iPad (A16)" }, iosOnB)],
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(agreed.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
+    expect(() => OPERATIONS["catalog.get"].output.parse(agreed)).not.toThrow();
+  });
+
+  it("drops a class default when a connected worker has none for that class", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({ catalog: [{ ...iosOnB, classDefaults: {} }], id: "wrk_b" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
+  it("drops a class default naming a model the worker does not list", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnB, classDefaults: { phone: "Ghost" } }], id: "wrk_a" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
+  it("keeps a class default a lone connected worker reports, and ignores a disconnected worker's", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),
+      view({
+        catalog: [{ ...iosOnB, classDefaults: { phone: "iPhone 16" } }],
+        connection: "disconnected",
+        id: "wrk_b",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({ phone: "iPhone 17" });
   });
 
   it("keeps a default runtime only when every worker agrees on it", () => {
@@ -397,6 +489,8 @@ describe("aggregateCatalog", () => {
   it("pairs a model with a runtime when at least one connected worker pairs them", () => {
     const iosOnC = {
       modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -427,6 +521,8 @@ describe("aggregateCatalog", () => {
   it("ignores the pairings of disconnected and incompatible workers", () => {
     const pairsOld = {
       modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -444,6 +540,8 @@ describe("aggregateCatalog", () => {
   it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
     const unpaired = {
       modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone XS": [] },
       models: ["iPhone XS"],
       platform: "ios" as const,
@@ -468,6 +566,8 @@ describe("aggregateCatalog", () => {
       platforms: [
         {
           modelAliases: {},
+          classDefaults: {},
+          modelClasses: {},
           modelRuntimes: {},
           models: ["constructor"],
           platform: "ios",
@@ -484,6 +584,8 @@ describe("aggregateCatalog", () => {
   it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
     const claimsMore = {
       modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -506,6 +608,8 @@ describe("aggregateCatalog", () => {
             iosOnA,
             {
               modelAliases: {},
+              classDefaults: {},
+              modelClasses: {},
               modelRuntimes: { "Pixel 9": ["35"] },
               models: ["Pixel 9"],
               platform: "android",
@@ -529,6 +633,8 @@ describe("aggregateCatalog", () => {
         images: { runtime: string; tag: string; abi: string }[];
         runtimes: string[];
         customModels: string[];
+        classDefaults: {};
+        modelClasses: Record<string, "phone">;
       }>,
     ) => {
       const models = overrides.models ?? ["Pixel 8"];
@@ -537,6 +643,8 @@ describe("aggregateCatalog", () => {
         ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
+        classDefaults: {},
+        modelClasses: overrides.modelClasses ?? {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
         models,
         platform: "android" as const,
@@ -656,6 +764,10 @@ describe("aggregateCatalog", () => {
             "Pixel 8": names(prefix, 32),
           },
           customModels: ["Pixel 8", ...names(`${prefix}m`, 4095)],
+          classDefaults: {},
+          modelClasses: Object.fromEntries(
+            ["Pixel 8", ...names(`${prefix}m`, 4095)].map((model) => [model, "phone" as const]),
+          ),
           models: ["Pixel 8", ...names(`${prefix}m`, 4095)],
         });
       const valid = [worker("a"), worker("b")];
@@ -677,8 +789,32 @@ describe("aggregateCatalog", () => {
       expect(aliasedModels).toHaveLength(4096);
       expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
+      const classedModels = Object.keys(platform?.modelClasses ?? {});
+      expect(classedModels).toHaveLength(4096);
+      expect(classedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.customModels).toHaveLength(4096);
       expect(platform?.customModels?.filter((model) => model.startsWith("bm"))).toEqual([]);
+    });
+
+    it("cuts the fleet's model classes by sort order, not arrival order, when the union is over the bound", () => {
+      const names = (prefix: string) =>
+        Array.from({ length: 4096 }, (_, index) => `${prefix}${index}`);
+      const worker = (prefix: string) =>
+        androidOn({
+          classDefaults: {},
+          modelClasses: Object.fromEntries(names(prefix).map((model) => [model, "phone" as const])),
+          models: names(prefix),
+        });
+
+      // The worker first in id order holds the names that sort last.
+      const catalog = aggregateCatalog([
+        view({ catalog: [worker("zm")], id: "wrk_a" }),
+        view({ catalog: [worker("am")], id: "wrk_b" }),
+      ]);
+
+      const classed = Object.keys(catalog.platforms[0]?.modelClasses ?? {});
+      expect(classed).toHaveLength(4096);
+      expect(classed.every((model) => model.startsWith("am"))).toBe(true);
     });
 
     it("marks a model custom when one worker marks it and another lists it as built-in", () => {

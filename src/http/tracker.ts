@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import { leaseRequestRecordSchema } from "../contract/index.js";
+import { type DeviceClass, leaseRequestRecordSchema } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import { buildHttpSession } from "./dispatcher-session.js";
 import type { HttpDispatch } from "./dispatcher-session.js";
@@ -8,7 +8,9 @@ import type { TokenIdentity } from "./token-store.js";
 
 export interface LeaseRequestInput {
   readonly platform: "ios" | "android";
-  readonly device: string;
+  /** The exact model; absent for a request that names a class or nothing (ADR 0015 §1). */
+  readonly device?: string;
+  readonly class?: DeviceClass;
   readonly os?: string;
   readonly ttlMs?: number;
   readonly timeoutMs?: number;
@@ -94,7 +96,8 @@ export function buildLeasePayload(
  */
 function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: string | undefined) {
   return {
-    model: body.device,
+    ...(body.device === undefined ? {} : { model: body.device }),
+    ...(body.class === undefined ? {} : { class: body.class }),
     platform: body.platform,
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),

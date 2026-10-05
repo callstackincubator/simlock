@@ -24,6 +24,7 @@ interface WorkerView {
     readonly models: readonly string[];
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
     readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly modelClasses: Readonly<Record<string, string>>;
     readonly customModels?: readonly string[];
     readonly images?: readonly {
       readonly runtime: string;
@@ -97,6 +98,12 @@ function iosModels(json: unknown): readonly string[] {
 }
 
 /** A worker's iOS catalog entry, by the worker's label. */
+/** The label of the worker with the smallest id: the one whose catalog wins a disagreement. */
+function firstWorkerLabel(workers: readonly WorkerView[]): string {
+  const first = [...workers].sort((left, right) => (left.id < right.id ? -1 : 1))[0];
+  return first?.label ?? "";
+}
+
 function iosEntryOf(views: readonly WorkerView[], label: string) {
   return views
     .find((view) => view.label === label)
@@ -290,6 +297,7 @@ describe("gateway fleet", () => {
           images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
           knownModels: ["iPhone 16"],
           modelAliases: { "iPhone 16": ["iphone-16-a"] },
+          modelClasses: { "iPhone 16": "phone" },
           modelRuntimes: { "iPhone 16": ["18.4"] },
           toolVersions: [{ build: "16F6", name: "xcode", version: "16.4" }],
         },
@@ -306,6 +314,7 @@ describe("gateway fleet", () => {
           ],
           knownModels: ["iPhone 16"],
           modelAliases: { "iPhone 16": ["iphone-16-b"] },
+          modelClasses: { "iPhone 16": "tablet" },
           modelRuntimes: { "iPhone 16": ["26.0"] },
           toolVersions: [{ build: "17A324", name: "xcode", version: "26.0" }],
         },
@@ -323,6 +332,7 @@ describe("gateway fleet", () => {
     expect(entryOf("worker-a")).toMatchObject({
       images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
       modelAliases: { "iPhone 16": ["iphone-16-a"] },
+      modelClasses: { "iPhone 16": "phone" },
       modelRuntimes: { "iPhone 16": ["18.4"] },
     });
     expect(entryOf("worker-b")).toMatchObject({
@@ -331,6 +341,7 @@ describe("gateway fleet", () => {
         { abi: "x86_64", runtime: "26.0", tag: "default" },
       ],
       modelAliases: { "iPhone 16": ["iphone-16-b"] },
+      modelClasses: { "iPhone 16": "tablet" },
       modelRuntimes: { "iPhone 16": ["26.0"] },
     });
 
@@ -369,6 +380,13 @@ describe("gateway fleet", () => {
     );
     expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
     expect(ios?.modelAliases).toEqual({ "iPhone 16": ["iphone-16-a", "iphone-16-b"] });
+    // The two workers class the model differently; the first worker in id order wins, so the
+    // fleet's class is the one the worker with the smaller id reported.
+    const classOfLabel: Record<string, string | undefined> = {
+      "worker-a": "phone",
+      "worker-b": "tablet",
+    };
+    expect(ios?.modelClasses).toEqual({ "iPhone 16": classOfLabel[firstWorkerLabel(workers)] });
     expect(ios?.images).toEqual([
       { abi: "arm64", runtime: "26.0", tag: "default" },
       { abi: "x86_64", runtime: "26.0", tag: "default" },

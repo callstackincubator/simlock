@@ -55,8 +55,11 @@ export function testConfig(
     },
     http: { enabled: true, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     lease: {
       defaultTtlMs: 900_000,
       maxTtlMs: 14_400_000,
@@ -66,7 +69,11 @@ export function testConfig(
       ...overrides,
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5_242_880,
+      retention: 604_800_000,
+      maxBytes: 268_435_456,
+    },
     stalledTransition: { minimumThresholdMs: 60_000, thresholdMultiplier: 3 },
     warmPool: {
       quarantine: {

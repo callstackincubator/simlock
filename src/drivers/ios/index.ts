@@ -7,7 +7,7 @@ import {
   type ComponentReceipt,
   type ComponentRemoval,
   COMPONENT_REMOVAL_TIMEOUT_MS,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverAdvisory,
   type DriverToolVersion,
@@ -33,7 +33,7 @@ import {
   UnsupportedRequestOptionError,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
-import type { DeviceMode, DeviceSpec } from "../../core/index.js";
+import type { DeviceClass, DeviceMode, DeviceSpec } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -90,6 +90,28 @@ const MARK_FILE_NAME = "simlock-mark.json";
  * SDK.
  */
 export const IOS_PASSTHROUGH_TOOL = "simctl";
+
+/**
+ * ADR 0015 §4: the models Simlock tries for each class on iOS when the operator names none
+ * first, newest first. `auto` and `desktop` have no iOS device type, so they have no list.
+ */
+const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
+  phone: ["iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14", "iPhone 13"],
+  tablet: [
+    "iPad Pro 11-inch (M5)",
+    "iPad Pro 11-inch (M4)",
+    "iPad Air 11-inch (M3)",
+    "iPad (A16)",
+    "iPad (10th generation)",
+  ],
+  tv: ["Apple TV 4K (3rd generation)", "Apple TV"],
+  vision: ["Apple Vision Pro"],
+  watch: [
+    "Apple Watch Series 11 (46mm)",
+    "Apple Watch Series 10 (46mm)",
+    "Apple Watch Series 9 (45mm)",
+  ],
+};
 
 /**
  * Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
@@ -255,6 +277,18 @@ type SlimApplyOutcome =
     }
   | { readonly kind: "failed"; readonly detail: string };
 
+/**
+ * ADR 0015 §3: which simctl product family is which device class. A family not listed here has
+ * no class, and its models stay in the catalog without one.
+ */
+const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new Map([
+  ["iPhone", "phone"],
+  ["iPad", "tablet"],
+  ["Apple Watch", "watch"],
+  ["Apple TV", "tv"],
+  ["Apple Vision", "vision"],
+]);
+
 interface DeviceType {
   readonly identifier: string;
   readonly name: string;
@@ -262,6 +296,8 @@ interface DeviceType {
   readonly minRuntimeVersion: number;
   /** Same encoding; `UNBOUNDED_VERSION` means "no upper bound". */
   readonly maxRuntimeVersion: number;
+  /** simctl's `productFamily` ("iPhone", "iPad", ...), absent when simctl names none. */
+  readonly productFamily: string | undefined;
 }
 
 interface Runtime {
@@ -307,6 +343,7 @@ type ProcessOutcome =
 /** iOS simulator implementation. Its simctl details remain opaque to the core. */
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
+  readonly defaultModels = IOS_DEFAULT_MODELS;
   readonly #clock: Clock;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly #filesystem: Filesystem;
@@ -382,7 +419,7 @@ export class IosSimctlDriver implements Driver {
    * Never downloads: a runtime a download could supply throws, naming it as the component. An iOS
    * runtime comes in one type, so a request naming an image tag is refused.
    */
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
     if (request.imageTag !== undefined) {
       throw new UnsupportedRequestOptionError("ios", "imageTag");
@@ -1274,6 +1311,12 @@ export class IosSimctlDriver implements Driver {
       // so two device types that differ only in letter case both list the first one's runtimes.
       // A device type answers to its name only, in any letter case (`findDeviceType`).
       modelAliases: {},
+      modelClasses: Object.fromEntries(
+        catalog.deviceTypes.flatMap((deviceType) => {
+          const deviceClass = PRODUCT_FAMILY_CLASSES.get(deviceType.productFamily);
+          return deviceClass === undefined ? [] : [[deviceType.name, deviceClass]];
+        }),
+      ),
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, pairedVersions(catalog, findDeviceType(catalog, model))]),
       ),
@@ -2008,6 +2051,7 @@ function parseDeviceType(value: unknown): readonly DeviceType[] {
       maxRuntimeVersion: versionIntOr(value.maxRuntimeVersion, UNBOUNDED_VERSION),
       minRuntimeVersion: versionIntOr(value.minRuntimeVersion, 0),
       name: value.name,
+      productFamily: typeof value.productFamily === "string" ? value.productFamily : undefined,
     },
   ];
 }

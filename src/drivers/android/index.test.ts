@@ -1200,6 +1200,7 @@ describe("AndroidDriver", () => {
         { abi: "x86_64", runtime: "35", tag: "google_apis" },
       ],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "Pixel 8": "phone" },
       modelRuntimes: { "Pixel 8": ["34", "35"] },
       models: ["Pixel 8"],
       runtimes: ["34", "35"],
@@ -1264,6 +1265,7 @@ describe("AndroidDriver", () => {
       defaultRuntime: undefined,
       images: [],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "Pixel 8": "phone" },
       modelRuntimes: { "Pixel 8": [] },
       models: ["Pixel 8"],
       runtimes: [],
@@ -3672,6 +3674,32 @@ async function provisionedHarness(
  * paths are covered against the supervisor itself in `adb-server.test.ts`, and end to end
  * in this file's own `AndroidDriver.create` block.
  */
+describe("AndroidDriver defaultModels", () => {
+  it("lists the built-in Android preference list per class, newest first, with phone starting at Pixel 9", async () => {
+    const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
+
+    expect(driver.defaultModels).toEqual({
+      auto: ["Automotive (1080p landscape)", "Automotive (1024p landscape)"],
+      desktop: ["Medium Desktop", "Large Desktop"],
+      phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"],
+      tv: ["Television (1080p)", "Television (4K)"],
+      watch: ["Wear OS Large Round", "Wear OS Small Round"],
+    });
+  });
+
+  it("has no Android list for tablet or vision", async () => {
+    const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
+
+    expect(Object.keys(driver.defaultModels).sort()).toEqual([
+      "auto",
+      "desktop",
+      "phone",
+      "tv",
+      "watch",
+    ]);
+  });
+});
+
 describe("AndroidDriver toolVersions()", () => {
   it("reports emulator, platform-tools, and command-line tools revisions from each package's source.properties", async () => {
     const filesystem = await androidFilesystem();

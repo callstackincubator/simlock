@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventMap } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
 import { QueueTimeoutError } from "../core/wait-queue.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -3043,5 +3043,189 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
       expect(events).toEqual([]);
     });
+  });
+});
+
+describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
+  type Reason = EventMap["lease.rejected"]["reason"];
+  type Fleet = ReturnType<typeof harness>;
+
+  interface Outcome {
+    readonly fleet: Fleet;
+    readonly requester: string;
+    /** The id the request was stored under, when it was stored. */
+    readonly requestId?: string | undefined;
+  }
+
+  /** Asks for a device as `requesterId` and settles whatever the request ends with. */
+  async function ask(
+    fleet: Fleet,
+    overrides: Parameters<typeof requestOptions>[0] & { readonly request?: typeof REQUEST },
+  ): Promise<string | undefined> {
+    let requestId: string | undefined;
+    const { request = REQUEST, ...options } = overrides;
+    void fleet.coordinator
+      .request(request, requestOptions({ ...options, onAdmitted: (id) => (requestId = id) }))
+      .catch(() => undefined);
+    await tick();
+    return requestId;
+  }
+
+  const holderGrant = () => ({ grant: grantFixture(), kind: "grant" as const });
+
+  /** A fleet whose one worker is serving `agent-1`, saturated for everyone after. */
+  async function busyFleet(): Promise<Fleet> {
+    const fleet = harness();
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    connectWorker(fleet.workers, "wrk_a");
+    client.requestLeaseQueue.push(holderGrant());
+    await fleet.coordinator.request(REQUEST, requestOptions());
+    connectWorker(fleet.workers, "wrk_a", { capacity: saturatedIos() });
+    return fleet;
+  }
+
+  /** One case per reason in `EventMap`, so a reason added there without a case fails typecheck. */
+  const cases: Record<Reason, (() => Promise<Outcome>) | "worker"> = {
+    timeout: async () => {
+      const fleet = await busyFleet();
+      const requestId = await ask(fleet, {
+        ownerId: "agent-2",
+        requesterId: "agent-2",
+        timeoutMs: 60_000,
+      });
+      fleet.clock.advance(60_000);
+      await tick();
+      return { fleet, requestId, requester: "agent-2" };
+    },
+    "no-wait": async () => {
+      const fleet = await busyFleet();
+      const requestId = await ask(fleet, {
+        noWait: true,
+        ownerId: "agent-2",
+        requesterId: "agent-2",
+      });
+      return { fleet, requestId, requester: "agent-2" };
+    },
+    "unresolvable-spec": async () => {
+      const fleet = harness();
+      connectWorker(fleet.workers, "wrk_a");
+      const requestId = await ask(fleet, {
+        request: { ...REQUEST, model: "iPhone 99" },
+        requesterId: "agent-9",
+      });
+      return { fleet, requestId, requester: "agent-9" };
+    },
+    "no-worker": async () => {
+      const fleet = harness();
+      const requestId = await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requestId, requester: "agent-9" };
+    },
+    "already-leased": async () => {
+      const fleet = await busyFleet();
+      await ask(fleet, { requesterId: "agent-1" });
+      return { fleet, requester: "agent-1" };
+    },
+    cancelled: async () => {
+      const fleet = await busyFleet();
+      const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
+      await fleet.coordinator.cancelPending("agent-2");
+      return { fleet, requestId, requester: "agent-2" };
+    },
+    "boot-timeout": "worker",
+    killed: "worker",
+    "daemon-restarted": "worker",
+  };
+
+  const gatewayReasons = (Object.keys(cases) as Reason[]).filter(
+    (reason) => cases[reason] !== "worker",
+  );
+
+  it.each(gatewayReasons)(
+    "includes the request id and the requester when it rejects with %s",
+    async (reason) => {
+      const run = cases[reason];
+      if (run === "worker") throw new Error(`${reason} is the worker's`);
+      const events: Array<EventMap["lease.rejected"]> = [];
+
+      const outcome = await (async () => {
+        const result = await run();
+        for (const event of result.fleet.eventBus.replay()) {
+          if (event.event === "lease.rejected") events.push(event.payload as never);
+        }
+        return result;
+      })();
+
+      const rejections = events.filter((payload) => payload.reason === reason);
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0]).toMatchObject({
+        requestId: outcome.requestId ?? expect.stringMatching(/^req_/),
+        requester: outcome.requester,
+      });
+    },
+  );
+
+  it("gives a request refused as already-leased the id it would have been stored under, and no lease.requested precedes it", async () => {
+    const fleet = await busyFleet();
+    const requested: string[] = [];
+    fleet.eventBus.subscribe("lease.requested", (envelope) =>
+      requested.push(envelope.payload.requestId),
+    );
+    const rejected: Array<EventMap["lease.rejected"]> = [];
+    fleet.eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    await ask(fleet, { requesterId: "agent-1" });
+    const admittedId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
+
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "already-leased", requester: "agent-1" }),
+    ]);
+    // Each request mints one id, in order: the refused one took the one before the admitted one.
+    expect(requested).toEqual([admittedId]);
+    expect(rejected[0]?.requestId).toMatch(/^req_/);
+    expect(rejected[0]?.requestId).not.toBe(admittedId);
+    expect(Number(rejected[0]?.requestId.replace("req_", ""))).toBe(
+      Number(admittedId?.replace("req_", "")) - 1,
+    );
+  });
+});
+
+describe("FleetLeaseCoordinator: queue.changed", () => {
+  function depths(eventBus: EventBus): number[] {
+    return eventBus
+      .replay()
+      .filter((event) => event.event === "queue.changed")
+      .map((event) => (event.payload as EventMap["queue.changed"]).depth);
+  }
+
+  it("emits queue.changed once when started, with the depth then", () => {
+    const { coordinator, eventBus } = harness();
+    expect(depths(eventBus)).toEqual([]);
+
+    coordinator.start();
+
+    expect(depths(eventBus)).toEqual([0]);
+  });
+
+  it("emits queue.changed for the fleet queue when a request joins it and when it leaves, with the new depth", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    coordinator.start();
+
+    void coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+    await tick();
+    expect(depths(eventBus)).toEqual([0, 1]);
+
+    await coordinator.cancelPending("agent-1");
+
+    expect(depths(eventBus)).toEqual([0, 1, 0]);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "queue.changed")
+        .map((event) => event.module),
+    ).toEqual(["fleet-lease-coordinator", "fleet-lease-coordinator", "fleet-lease-coordinator"]);
   });
 });

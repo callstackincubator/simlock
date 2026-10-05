@@ -11,7 +11,7 @@ import {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
-import type { DeviceMode, LeaseIdentity } from "./domain.js";
+import { DEVICE_CLASSES, type DeviceClass, type DeviceMode, type LeaseIdentity } from "./domain.js";
 import {
   booleanValue,
   ConfigError,
@@ -183,8 +183,17 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
-  /** The event file (`events.jsonl`): its size before it rotates, one generation kept. */
-  readonly eventLog: { readonly rotateBytes: number };
+  /**
+   * The event file (`events.jsonl`): `rotateBytes` is one generation's size before it rotates,
+   * `retention` how long (milliseconds) a generation is kept after its newest line, and
+   * `maxBytes` the total size of every generation, the backstop when events arrive faster than
+   * `retention` ages them out.
+   */
+  readonly eventLog: {
+    readonly rotateBytes: number;
+    readonly retention: number;
+    readonly maxBytes: number;
+  };
   readonly http: {
     readonly enabled: boolean;
     readonly host: string;
@@ -204,6 +213,8 @@ export interface Config {
      * Default `"full"`. Every worker makes both kinds of device whatever this says.
      */
     readonly defaultMode: DeviceMode;
+    /** The operator's own preference list per class, ahead of the driver's built-in one. */
+    readonly defaultModels: DefaultModels;
     /** How a slim device is made, whatever the default mode is. */
     readonly slim: {
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
@@ -220,6 +231,8 @@ export interface Config {
    * next boot.
    */
   readonly android: {
+    /** The operator's own preference list per class, ahead of the driver's built-in one. */
+    readonly defaultModels: DefaultModels;
     readonly emulator: {
       readonly headless: boolean;
       /** An emulator GPU mode; `"auto"` leaves the emulator's own default. */
@@ -380,6 +393,7 @@ export async function loadConfig({
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
+  validateEventLogBounds(merged);
   if (mode === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
     requireGatewayHttp(merged);
@@ -416,6 +430,16 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 function validateLeaseTtls(config: Config): void {
   if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
     throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
+  }
+}
+
+/**
+ * Cross-field check: the size cap has to hold the current file and at least one full rotated
+ * generation, or the sweep would delete the history the moment it rotates.
+ */
+function validateEventLogBounds(config: Config): void {
+  if (config.eventLog.maxBytes < 2 * config.eventLog.rotateBytes) {
+    throw invalidValue("eventLog.maxBytes", "at least twice eventLog.rotateBytes");
   }
 }
 
@@ -649,7 +673,11 @@ function defaultConfig(
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
@@ -664,11 +692,13 @@ function defaultConfig(
     },
     ios: {
       defaultMode: "full",
+      defaultModels: {},
       slim: {
         bootTimeoutMs: 600_000,
       },
     },
     android: {
+      defaultModels: {},
       emulator: {
         headless: false,
         gpu: "auto",
@@ -790,7 +820,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
-    eventLog: objectValidator({ rotateBytes: positiveInteger }),
+    eventLog: objectValidator({
+      rotateBytes: positiveInteger,
+      retention: positiveInteger,
+      maxBytes: positiveInteger,
+    }),
     http: objectValidator({
       enabled: booleanValue,
       host: stringValue,
@@ -806,12 +840,14 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     }),
     ios: objectValidator({
       defaultMode: stringUnion(["slim", "full"]),
+      defaultModels: defaultModelsValidator,
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
       }),
     }),
     android: objectValidator({
+      defaultModels: defaultModelsValidator,
       emulator: objectValidator({
         headless: booleanValue,
         gpu: nonEmptyString,
@@ -824,6 +860,40 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       minimumThresholdMs: nonNegativeNumber,
     }),
   };
+}
+
+/**
+ * An operator's model preference per device class (ADR 0015 §4): for each class, the model
+ * names to try first, most preferred first. A class with no key has none.
+ */
+export type DefaultModels = Partial<Record<DeviceClass, readonly string[]>>;
+
+/**
+ * Each key is a device class and each value one non-empty model name or a non-empty list of
+ * them, stored as a list. Any other key is refused rather than warned about: a misspelled class
+ * would otherwise leave the operator's preference silently unused.
+ */
+const defaultModelsValidator: Validator = (value, path) => {
+  const object = requireObject(value, path);
+  const result: Record<string, readonly string[]> = {};
+
+  for (const [key, names] of Object.entries(object)) {
+    const keyPath = `${path}.${key}`;
+    if (!(DEVICE_CLASSES as readonly string[]).includes(key)) {
+      throw invalidValue(keyPath, `a device class (${DEVICE_CLASSES.join(", ")})`);
+    }
+    const list = typeof names === "string" ? [names] : names;
+    if (!Array.isArray(list) || list.length === 0 || !list.every(isNonEmptyString)) {
+      throw invalidValue(keyPath, "a model name or a non-empty list of model names");
+    }
+    result[key] = list;
+  }
+
+  return result;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /**

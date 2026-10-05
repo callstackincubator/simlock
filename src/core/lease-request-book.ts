@@ -15,7 +15,14 @@ export interface LeaseRequestLimits {
   readonly maxRecords: number;
 }
 
+/** The one place a lease request's id is minted. */
+export function newLeaseRequestId(idGenerator: IdGenerator): string {
+  return `req_${idGenerator.generate()}`;
+}
+
 export interface NewLeaseRequest {
+  /** The id the record is stored under, when the caller minted it before admission checks. */
+  readonly id?: string | undefined;
   readonly requesterId: string;
   readonly ownerId: string;
   readonly idempotencyKey?: string;
@@ -131,7 +138,7 @@ export class InMemoryLeaseRequestStore<Grant> implements LeaseRequestStore<Grant
   createLeaseRequest(input: NewLeaseRequest): Promise<LeaseRequestRecord<Grant>> {
     const now = this.options.clock.now();
     const record = newLeaseRequestRecord<Grant>(
-      `req_${this.options.idGenerator.generate()}`,
+      input.id ?? newLeaseRequestId(this.options.idGenerator),
       input,
       now,
     );
@@ -323,14 +330,17 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
    * report through, and writes the result once the wait `start` returns settles. Call it inside
    * the owner's serialized admission section, after the owner's own admission checks. A `start`
    * that throws settles the stored request as failed with that error and rethrows it, so no
-   * record is ever left open with nothing driving it.
+   * record is ever left open with nothing driving it. `id` is the one the owner minted before its
+   * admission checks (`newLeaseRequestId`); omitted, the store mints it.
    */
   async admit<Started extends { readonly promise: Promise<Grant> }>(
     request: DeviceRequest,
     options: LeaseRequestOptions,
     start: (id: string, onProgress: (progress: LeaseProgress) => void) => Started,
+    id?: string,
   ): Promise<{ readonly id: string; readonly started: Started }> {
     const record = await this.options.store.createLeaseRequest({
+      id,
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
       ownerId: options.ownerId,
       request,
@@ -484,13 +494,14 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
 
 /**
  * Whether two requests name the same device: what an idempotency key promises not to change. An
- * omitted `osVersion`, `mode` or `imageTag` compares equal to itself only: a request that named
+ * omitted `model`, `class`, `osVersion`, `mode` or `imageTag` compares equal to itself only: a request that named
  * no mode is not the same request as one that named the worker's default.
  */
 function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
   return (
     left.platform === right.platform &&
     left.model === right.model &&
+    left.class === right.class &&
     left.osVersion === right.osVersion &&
     left.mode === right.mode &&
     left.imageTag === right.imageTag

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { EventBus, EventHistory } from "../bus/index.js";
 import {
+  buildCapacityFigures,
   type CleanupReaper,
   ComponentInUseError,
   type ComponentInstaller,
@@ -331,29 +332,8 @@ export class Dispatcher {
 
   #statusGet: Handler<"status.get"> = () => {
     const snapshot = this.options.registry.snapshot;
-    const running = this.options.capacity.runningCapacity;
-    const warmDevices = snapshot.devices.filter((device) => device.state === "ready");
-    const capacity = Object.fromEntries(
-      (["ios", "android"] as const).map((platform) => [
-        platform,
-        {
-          limit: this.options.capacity.deviceLimit(platform),
-          ...running[platform],
-          atRamBudget: this.options.capacity.atRamBudget(platform),
-          warm: warmDevices.filter((device) => device.spec.platform === platform).length,
-          used: snapshot.devices.filter(
-            (device) => device.spec.platform === platform && device.state !== "deleted",
-          ).length,
-        },
-      ]),
-    );
-    const ramBudget = this.options.capacity.ramBudget;
     return {
-      capacity: {
-        ...capacity,
-        global: { ...running.global, warm: warmDevices.length },
-        ...(ramBudget === undefined ? {} : { ramBudget }),
-      },
+      capacity: buildCapacityFigures(snapshot.devices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
       // config rather than being assumed, because it is what tells a client whether the device

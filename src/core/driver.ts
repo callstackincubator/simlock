@@ -1,9 +1,19 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
-import type { DeviceMode, DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
+import type {
+  DeviceClass,
+  DeviceMode,
+  DeviceSpec,
+  DeviceTransitionUpdate,
+  Platform,
+} from "./domain.js";
 
-export interface DeviceRequest {
+/**
+ * What a driver resolves (ADR 0015 §5): a request with the exact model the core settled on. A
+ * driver never sees a class.
+ */
+export interface ExactDeviceRequest {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion?: string;
@@ -20,6 +30,16 @@ export interface DeviceRequest {
    * image of that tag, never to a download.
    */
   readonly imageTag?: string;
+}
+
+/**
+ * A lease request as it arrived (ADR 0015 §1): an exact model, a class, or neither, which means
+ * `phone`. Transports carry it unfilled; the acquisition coordinator resolves it into the exact
+ * request a driver takes.
+ */
+export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+  readonly model?: string;
+  readonly class?: DeviceClass;
 }
 
 export interface DriverDevice {
@@ -136,6 +156,10 @@ export type DriverEstimate =
  * the same matcher `resolveSpec` uses; a model with no other name has no entry. `images` is
  * present only for a driver whose runtimes come as installed images, one entry per image.
  *
+ * `modelClasses` maps a name in `models` to its class when the platform's tools report one; a
+ * model they say nothing usable about has no entry. The core carries it and reads nothing from
+ * it.
+ *
  * `customModels` names the values from `models` that exist because of something on this
  * machine, not because of the platform's tools. The core carries it and never reads it; a
  * driver with no such models omits the field.
@@ -146,6 +170,7 @@ export interface DriverCatalogEntry {
   readonly defaultRuntime: string | undefined;
   readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+  readonly modelClasses: Readonly<Record<string, DeviceClass>>;
   readonly images?: readonly DriverCatalogImage[];
   readonly customModels?: readonly string[];
 }
@@ -211,6 +236,12 @@ export interface DriverToolVersion {
 export interface Driver {
   readonly platform: Platform;
   /**
+   * ADR 0015 §4: the model names this driver's platform offers for each class, newest first.
+   * The core merges it behind the operator's own list and holds no model name itself; a class
+   * with no list has no entry.
+   */
+  readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
+  /**
    * Absolute path of the root this driver owns and scopes every platform command to.
    * Membership in it is what proves a device is Simlock's; the core carries the string
    * around without interpreting it, the same way it carries `address`.
@@ -240,7 +271,7 @@ export interface Driver {
    * `RuntimeMissingError` with `downloadable: true` and `component`, the string to hand to
    * `installComponent` -- the core never decides whether to download from inside a driver.
    */
-  resolveSpec(request: DeviceRequest): Promise<DeviceSpec>;
+  resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec>;
   /**
    * A read: the installed component that satisfies `component`, with its exact version and its
    * receipt, or `undefined`. Never downloads. A string that is not a version, such as the
@@ -728,12 +759,28 @@ export class UnsupportedRequestOptionError extends Error {
 }
 
 export class UnknownModelError extends Error {
+  /** The class a request named or meant when no model of it is listed on this host. */
+  readonly class: DeviceClass | undefined;
+  readonly model: string | undefined;
+
+  /**
+   * An exact model the host does not list, or, with `deviceClass` and no model, a class with no
+   * model on this host: the message then names the config key to set.
+   */
   constructor(
     readonly platform: Platform,
-    readonly model: string,
+    model: string | undefined,
+    deviceClass?: DeviceClass,
   ) {
-    super(`Unknown ${platform} model: ${model}`);
+    super(
+      deviceClass === undefined
+        ? `Unknown ${platform} model: ${String(model)}`
+        : `No ${platform} model of class ${deviceClass} is listed on this host; ` +
+            `name one in ${platform}.defaultModels.${deviceClass}`,
+    );
     this.name = "UnknownModelError";
+    this.model = model;
+    this.class = deviceClass;
   }
 }
 

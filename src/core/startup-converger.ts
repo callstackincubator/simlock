@@ -138,7 +138,12 @@ export class StartupConverger {
     for (const record of settled) {
       this.options.eventBus.emit(
         "lease.rejected",
-        { requestSpec: record.request, reason: "daemon-restarted" },
+        {
+          requestId: record.id,
+          requester: record.requesterId,
+          requestSpec: record.request,
+          reason: "daemon-restarted",
+        },
         "startup-converger",
       );
     }

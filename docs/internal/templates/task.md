@@ -31,7 +31,8 @@ after this PR merges that they could not after the previous one. -->
 
 ## Done when
 
-<!-- Observable checks a reviewer runs before merging. -->
+<!-- Observable checks a reviewer runs before merging. A line that needs a
+real simulator or emulator says so and names the slow-lane test that proves it. -->
 
 - ...
 

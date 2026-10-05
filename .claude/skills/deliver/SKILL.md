@@ -1,6 +1,8 @@
 ---
 name: deliver
 description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:ready feature (spec its tasks, then walk them in dependency order, two at a time). Claims, delegates implement, review and hardware checks to their forked skills, reasons only over their report blocks, and merges each PR through the gate. Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
+model: opus
+effort: medium
 ---
 
 # Deliver
@@ -11,7 +13,7 @@ skill for it, and reason over the report block it hands back. That keeps
 your context about the issues, not about file contents, so one run can
 carry a whole feature.
 
-Rules 1, 2, 9, 14, 15 and 16 in `docs/internal/agent-rules/delivery.md`
+Rules 1, 2, 3, 9, 14, 15 and 16 in `docs/internal/agent-rules/delivery.md`
 govern this skill.
 
 **Delegating.** Invoke a stage with the Skill tool and pass everything it
@@ -29,6 +31,14 @@ ended without its report block; report on the work already done".
 **A person present or not.** If a person is in this session, show any text
 you are about to post and ask before the slow lane runs. Unattended, post
 directly and run the slow lane when the lock is free (rule 16).
+
+**Park only for a person's decision.** A small gap in the spec is not a
+reason to stop: implement closes it the conservative way and lists it as
+an `Assumption:` line in the PR body, and the spec review checks it (rule
+3). Park only for a contradiction with the body, a rule or an accepted ADR;
+for behaviour a user would see that nobody decided; for a real-device check
+that cannot run; for a blocking finding still confirmed after round 2; or
+for what the gate refuses (step 3).
 
 ## 1. Take stock
 
@@ -48,10 +58,12 @@ gh issue view <N> --json number,title,labels,assignees,body
 `feature:ready` means the maintainer accepted the business sections and
 every ADR the feature links. Everything after that is yours (rule 1). Run
 the `spec-session` skill on it in `split` mode, unattended. It writes each
-task's technical spec, checks it for contradictions, links overlapping
-tasks under Depends on, and ticks each approval box. If it reports that a
-new decision needs an ADR, stop: that is the maintainer's to accept. Park
-the feature (step 6) with the decision under Blocked on.
+task's technical spec, links overlapping tasks under Depends on, has the
+`check-spec` skill read the tasks as posted, fixes in the task bodies
+whatever the accepted business sections settle, and only then ticks each
+approval box. If it reports that a finding or a decision needs a new ADR or
+a choice only the maintainer can make, stop: that is the maintainer's to
+accept. Park the feature (step 6) with it under Blocked on.
 
 ## 3. Deliver one issue
 
@@ -60,23 +72,32 @@ Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 
 1. **Implement.** `implement` with `issue #N, branch <kind>/<N>, mode
 build`. A report with `spec needs` under Open: park (step 6).
-2. **Review.** `review` with the PR number. Fix lines: `implement` with
-   mode `fix` and the Fix lines pasted, then `review` again with `round 2`
-   and the report's Rerun value. Spec needs, or a confirmed blocking
-   finding after round 2: park. Keep every Rejected line.
-3. **Hardware.** If implement reported Hardware lines, `verify-hardware`
-   with the PR, the branch and those lines. `fail`: `implement` in fix mode
-   with the Evidence lines, then `review` round 2 on the code review, then
-   `verify-hardware` once more. `busy` or `unavailable`: add the
-   `needs-hardware` label to the PR and park; the gate will not merge it.
+2. **Review and hardware, in parallel.** `review` with the PR number. If
+   implement reported Hardware lines, invoke `verify-hardware` in the
+   **same message**, with the PR, the branch and those lines, so both
+   check the commit implement pushed. With a person present, ask before
+   that message, since it starts the slow lane.
+3. **Decide**, once both reports are in.
+   - Fix lines, or Hardware `fail`: one `implement` run in mode `fix` with
+     the Fix lines and the hardware Evidence lines pasted together. Then
+     round 2: `review` with `round 2` and the report's Rerun value (`code`
+     at least when only the hardware failed), and in the same message
+     `verify-hardware` again when the fix changed anything but docs.
+   - Spec needs, or a confirmed blocking finding after round 2: park.
+   - Hardware `busy` or `unavailable`: finish the review rounds without it,
+     do steps 4 and 5, run `gh pr ready <M>`, add the `needs-hardware`
+     label to the PR, and park instead of running the gate. The gate would
+     not merge it.
+   - Notes never start a round. Keep every Notes and Rejected line.
 4. **Finish the PR body.** Walk every Done when line and say how each was
    checked; for the last open sub-issue of a feature, walk the parent's
-   Completion conditions too (rule 9). Add the `## Review` section:
+   Completion conditions too (rule 9). Keep implement's `## Assumptions`
+   section as it is. Add the `## Review` section:
 
    ```markdown
    ## Review
 
-   Spec review: <n> findings, <m> fixed. Code review: <n> findings, <m> fixed.
+   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes.
    Mutate: <n> mutants, <a> alive.
 
    Rejected:
@@ -84,13 +105,34 @@ build`. A report with `spec needs` under Open: park (step 6).
    - spec|code: <claim> — <reason>
    ```
 
-   Omit "Rejected:" when nothing was. Keep the counts line in exactly this
-   shape (`Code review: skipped.` for an ADR-only diff) and paste the
-   Rejected lines with their tags: `.agents/scripts/delivery-stats.mjs`
-   reads both. Rule 12: 200 words plus the checklist
-   and the Review section, ending with `*Written by an agent.*`.
+   `<b>` counts the blocking findings that review raised over all rounds,
+   `<m>` those confirmed and fixed, `<k>` its notes. Every blocking finding
+   not fixed is a Rejected line. Omit "Rejected:" when nothing was. Keep
+   the counts line in exactly this shape (`Code review: skipped.` for an
+   ADR-only diff) and paste the Rejected lines with their tags:
+   `.agents/scripts/delivery-stats.mjs` reads both. Rule 12: 200 words
+   plus the checklist, the Assumptions and the Review section, ending with
+   `*Written by an agent.*`.
 
-5. **Ready and merge.** `gh pr ready <M>`, then run the gate in the
+5. **Notes: one comment.** If the reports carried Notes lines, post them
+   once, after the last round, as one PR comment:
+
+   ```markdown
+   ## Review notes
+
+   Not blocking, not verified. Each is one reviewer's claim.
+
+   - spec|code: <path:line what could be better>
+
+   _Written by an agent._
+   ```
+
+   A note that is a separate piece of work (a defect outside this diff, a
+   refactor across modules) becomes one `bug:new` issue instead, linked
+   from that comment. Notes never block the merge and never start a fix
+   run.
+
+6. **Ready and merge.** `gh pr ready <M>`, then run the gate in the
    background and wait for its notification:
 
    ```bash
@@ -125,6 +167,8 @@ only makes a task ready once everything under its Depends on is closed, so
 readiness already encodes the order. Deliver up to two runnable tasks at
 once: invoke each stage for both in the same message, and keep the two
 pipelines apart. Each task has its own worktree, so they never share files.
+If both reach the hardware check at once, the second `verify-hardware`
+waits for the slow lane's lock (rule 16).
 After each merge, list again: merging closes the task, and the tasks that
 waited on it turn ready on their own.
 

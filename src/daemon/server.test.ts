@@ -2146,7 +2146,7 @@ describe("DaemonServer download policy", () => {
     const client = await createClient(harness.socketPath);
     await hello(client);
     // The fake names the requested version as the component: 65 characters, one past the bound.
-    const osVersion = "x".repeat(65);
+    const osVersion = "9".repeat(65);
 
     const grant = await client.request("lease.request", {
       allowDownload: true,
@@ -3252,8 +3252,11 @@ function testConfig(
       ...downloadsOverrides,
     },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       defaultTtlMs: 60_000,
@@ -3275,7 +3278,11 @@ function testConfig(
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,

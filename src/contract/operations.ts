@@ -10,12 +10,15 @@
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import { parseOsConstraint } from "./os-range.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   cleanupRuleSummarySchema,
   configSchema,
   daemonHealthSchema,
   daemonModeSchema,
+  type DeviceClass,
+  deviceClassSchema,
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
@@ -154,10 +157,20 @@ export const statusGet = defineOperation({
  * `imageTag` names the type of installed image the device is created from, as the catalog lists
  * it; a request that names one never downloads, and a platform without image types refuses it.
  */
-const leaseRequestInputSchema = z
+const leaseRequestBaseSchema = z
   .object({
-    model: z.string().min(1),
+    /**
+     * ADR 0015 §1: a request names an exact model, a device class, or neither, which means
+     * `phone`. Naming both is refused by the refinement below, so every transport answers alike.
+     */
+    model: z.string().min(1).optional(),
+    class: deviceClassSchema.optional(),
     platform: platformSchema,
+    /**
+     * ADR 0015 §2: an exact version or a range. A plain string here, checked by
+     * `refuseBadOsVersion` beside it: a refined field would be checked by the MCP SDK before the
+     * handler, and its own error would stand in for `BAD_REQUEST`.
+     */
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
@@ -197,6 +210,53 @@ const leaseRequestInputSchema = z
   })
   .strict();
 
+/**
+ * Refuses a request that names both a model and a class (ADR 0015 §1); one place, one check.
+ * `modelField` is what the caller's transport calls the model (HTTP's body says `device`), so
+ * the message names the fields that caller can actually send.
+ */
+export function refuseModelWithClass(
+  modelField = "model",
+): <T extends { readonly model?: unknown; readonly class?: unknown }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.model !== undefined && input.class !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `a request names a model or a class, not both: send only one of \`${modelField}\` and \`class\``,
+        path: ["class"],
+      });
+    }
+  };
+}
+
+/** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
+export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.osVersion === undefined) return;
+    const parsed = parseOsConstraint(input.osVersion);
+    if (!parsed.ok) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: parsed.message,
+        path: ["osVersion"],
+      });
+    }
+  };
+}
+
+/** The fields of `lease.request` without the model-or-class refinement, for schemas derived from it. */
+export const leaseRequestFields = leaseRequestBaseSchema;
+
+const leaseRequestInputSchema = leaseRequestBaseSchema
+  .superRefine(refuseModelWithClass())
+  .superRefine(refuseBadOsVersion());
+
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({
   name: "lease.request",
@@ -231,12 +291,34 @@ export const leaseRequest = defineOperation({
  */
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
   return {
-    model: input.model,
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.class === undefined ? {} : { class: input.class }),
     platform: input.platform,
     ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
     ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
   };
+}
+
+/**
+ * The class a request means (ADR 0015 §1): the one it names, `phone` when it names neither a
+ * model nor a class, and none for an exact model. A constant of the contract, not a worker
+ * setting; the worker's coordinator and the gateway both read it here.
+ */
+export function requestedClass(request: {
+  readonly model?: undefined;
+  readonly class?: DeviceClass | undefined;
+}): DeviceClass;
+export function requestedClass(request: {
+  readonly model?: string | undefined;
+  readonly class?: DeviceClass | undefined;
+}): DeviceClass | undefined;
+export function requestedClass(request: {
+  readonly model?: string | undefined;
+  readonly class?: DeviceClass | undefined;
+}): DeviceClass | undefined {
+  if (request.class !== undefined) return request.class;
+  return request.model === undefined ? "phone" : undefined;
 }
 
 // ---- lease.cancel (new, ADR §9) --------------------------------------------------------------

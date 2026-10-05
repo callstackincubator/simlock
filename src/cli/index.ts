@@ -40,7 +40,13 @@ import {
   type StatusGetOutput,
   type WorkerView,
 } from "../admin/index.js";
-import { type Role, waitingRequestSchema } from "../contract/index.js";
+import {
+  type DeviceClass,
+  deviceClassSchema,
+  requestedClass,
+  type Role,
+  waitingRequestSchema,
+} from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import {
   awaitWithin,
@@ -51,6 +57,7 @@ import {
 import { followLog, type Signals } from "./follow-log.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
+import { parseDurationMs } from "../contract/duration.js";
 
 type WaitingRequestEntry = z.infer<typeof waitingRequestSchema>;
 
@@ -905,13 +912,8 @@ async function runMcp(argv: readonly string[], environment: CliEnvironment): Pro
 
 /** Parses user-facing durations only at the CLI boundary. */
 export function parseDuration(value: string): number {
-  const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
-  if (match === null) throw new UsageError(`Invalid duration: ${value}`);
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "ms";
-  const multiplier = unit === "h" ? 3_600_000 : unit === "m" ? 60_000 : unit === "s" ? 1_000 : 1;
-  const milliseconds = amount * multiplier;
-  if (!Number.isSafeInteger(milliseconds)) throw new UsageError(`Invalid duration: ${value}`);
+  const milliseconds = parseDurationMs(value);
+  if (milliseconds === undefined) throw new UsageError(`Invalid duration: ${value}`);
   return milliseconds;
 }
 
@@ -935,6 +937,7 @@ async function runLease(
     "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
     "bind-pid": { type: "string" },
+    class: { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
     "export-env": { type: "boolean" },
@@ -949,8 +952,8 @@ async function runLease(
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
-        "                     [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+      "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -960,8 +963,8 @@ async function runLease(
   if (values.platform !== "ios" && values.platform !== "android")
     throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
-  if (typeof values.device !== "string" || values.device === "")
-    throw new UsageError(withHelpHint("lease requires --device <model>"));
+  if (values.device === "") throw new UsageError("lease --device must not be empty");
+  if (values.class === "") throw new UsageError("lease --class must not be empty");
   if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
   const requesterId = (values["agent-id"] as string | undefined) ?? environment.requesterId;
   const detached = values.detach ?? false;
@@ -1098,7 +1101,10 @@ async function runLease(
         allowDownload: values["allow-download"] === true,
         noWait: values["no-wait"] === true,
         requesterId,
-        model: values.device,
+        // Sent as typed, both of them: the contract refuses a request naming a model and a
+        // class, and a request naming neither means `phone` (ADR 0015 §1).
+        ...(typeof values.device === "string" ? { model: values.device } : {}),
+        ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
         platform,
         // Sent as typed: the contract, not the CLI, decides which modes exist, and answers
@@ -1330,7 +1336,7 @@ function formatWaitingRequests(requests: readonly WaitingRequestEntry[], now: nu
       const { spec } = request;
       const device = [
         spec.platform,
-        spec.model,
+        spec.model ?? `class ${String(requestedClass(spec))}`,
         spec.osVersion,
         spec.mode === undefined ? undefined : `mode ${spec.mode}`,
         spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
@@ -2362,6 +2368,8 @@ function quarantineMarker(device: StatusGetOutput["devices"][number]): string {
   return `purge retry ${attempts}${nextRetryAt}`;
 }
 
+const DEVICE_CLASS_ORDER: readonly string[] = deviceClassSchema.options;
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -2372,16 +2380,31 @@ function formatCatalog(response: CatalogGetOutput): string {
       // A model's other names follow it on a line of their own.
       // A model that exists only because of something on that machine is marked `(custom)`.
       const custom = new Set(entry.customModels ?? []);
-      const models = entry.models.flatMap((model) => {
+      const modelLine = (model: string): string[] => {
         const paired =
           (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
           [];
         const aliases =
           (Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined) ?? [];
         return [
-          `    ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
-          ...(aliases.length > 0 ? [`      Other names: ${aliases.join(", ")}`] : []),
+          `      ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
+          ...(aliases.length > 0 ? [`        Other names: ${aliases.join(", ")}`] : []),
         ];
+      };
+      // Models sit under a line for their class, in the order of the enum, then `(no class)`.
+      const classOf = (model: string): string | undefined =>
+        Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+      // A class line says which model Simlock would create for it on this host, or `none`.
+      const classLine = (deviceClass: string | undefined): string => {
+        if (deviceClass === undefined) return "    (no class):";
+        const model = Object.hasOwn(entry.classDefaults, deviceClass)
+          ? entry.classDefaults[deviceClass as keyof typeof entry.classDefaults]
+          : undefined;
+        return `    ${deviceClass} (default: ${model ?? "none"}):`;
+      };
+      const models = [...DEVICE_CLASS_ORDER, undefined].flatMap((deviceClass) => {
+        const members = entry.models.filter((model) => classOf(model) === deviceClass);
+        return members.length === 0 ? [] : [classLine(deviceClass), ...members.flatMap(modelLine)];
       });
       const images = (entry.images ?? []).map(
         (image) => `    ${image.runtime} ${image.tag} ${image.abi}`,

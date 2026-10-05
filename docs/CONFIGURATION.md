@@ -49,7 +49,9 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `downloads.timeoutMs`             | How long one request for a missing runtime / system image may take, counted from the moment it arrives. Waiting behind another download on the same platform counts too, and the clock never restarts; a request that runs out fails with `DOWNLOAD_TIMEOUT`. A running download is stopped when the oldest request sharing it runs out, and every request sharing it fails then. On a busy machine, raise it. | `20 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
-| `eventLog.rotateBytes`            | Size of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. One rotated generation, `events.jsonl.1`, is kept, so the history on disk stays within about twice this size and the oldest events are dropped first. | `5 MiB`                                                          |
+| `eventLog.rotateBytes` | Size of one generation of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. A rotation renames the file to `events.jsonl.1` and shifts older generations up by one (`.2`, `.3`, …). | `5 MiB` |
+| `eventLog.retention` | How long the event history is kept, in milliseconds. Retention is judged per generation by its newest line: a generation is deleted once its newest line is older than this, so a generation that mixes old and new lines stays until its newest line ages out. The sweep runs after every rotation and once when the daemon starts. The current file is never deleted. | `604800000` (7 days) |
+| `eventLog.maxBytes` | Total size of the event file and all its generations, the backstop for when events arrive faster than `eventLog.retention` ages them out. When the generations exceed it, the oldest are deleted first, whatever their age. Must be at least twice `eventLog.rotateBytes`; a smaller value is refused when the config loads. | `256 MiB` |
 | `log.level`                       | Lowest level written to `daemon.log`: `debug`, `info`, `warn`, or `error`. `debug` adds a line for every request that only reads (such as `simlock status`) and for every device command Simlock runs (`simctl`, `adb`, …) with its arguments and exit code. | `info`                                                           |
 | `log.rotateBytes`                 | Size at which `daemon.log` is rotated to `daemon.log.1`. One rotated file is kept.                                                                                                                                          | `5 MiB`                                                          |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
@@ -66,6 +68,8 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `ios.defaultMode`                 | The device mode an iOS lease request gets when it names none: `slim` or `full`. Every worker makes both kinds whatever this says. See [Device mode: slim and full](#device-mode-slim-and-full).                             | `full`                                                           |
 | `ios.slim.categories`             | Which daemon categories a slim iOS device has disabled. Omitted means every category the driver knows.                                                                                                                       | every known category                                             |
 | `ios.slim.bootTimeoutMs`          | Boot deadline for a slim iOS device, in place of the normal boot timeout.                                                                                                                                                    | `10 minutes`                                                     |
+| `ios.defaultModels.<class>`       | The iOS models to prefer for a device class (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`): one model name or a list of them, most preferred first. Tried before Simlock's own list. See [Default models per class](#default-models-per-class). | unset (Simlock's own list only)                                  |
+| `android.defaultModels.<class>`   | The same for Android models. | unset (Simlock's own list only)                                  |
 | `android.emulator.headless`       | Launch emulators without a window (`-no-window`). Needed on a host with no display, such as a Linux CI runner. See [Android emulator launch options](#android-emulator-launch-options). | `false`                                                          |
 | `android.emulator.gpu`            | The emulator's GPU mode, passed as `-gpu <mode>` (for example `host`, `swiftshader_indirect`, `guest`). `auto` passes nothing and leaves the emulator's own choice.                                                        | `auto`                                                           |
 | `android.emulator.audio`          | `false` launches emulators without audio (`-no-audio`).                                                                                                                                                                      | `true`                                                           |
@@ -456,6 +460,64 @@ request. Empty it before upgrading:
 ```bash
 simlock nuke --delete-devices
 ```
+
+## Default models per class
+
+For each device class (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto`,
+`desktop`) Simlock keeps a preference list of model names, and the default
+model for the class on this machine is the first name on it that qualifies.
+`simlock catalog` shows the result beside each class, as `classDefaults` in
+its JSON. A name qualifies when this machine's catalog lists it (by its name
+or another name it answers to, in any letter case), when the catalog says it
+is a model of that class, and when it pairs with at least one installed
+runtime. When no listed name of the class pairs with a runtime, the first
+listed one is shown anyway. A class in which no name qualifies has no default,
+and the catalog shows `none`.
+
+The list is the names you set, then Simlock's own list for the platform:
+
+| Class     | iOS, newest first                                                                                                 | Android, newest first                                     |
+| --------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `phone`   | iPhone 17, iPhone 16, iPhone 15, iPhone 14, iPhone 13                                                              | Pixel 9, Pixel 8, Pixel 7, Pixel 6, Medium Phone          |
+| `tablet`  | iPad Pro 11-inch (M5), iPad Pro 11-inch (M4), iPad Air 11-inch (M3), iPad (A16), iPad (10th generation)            | none                                                      |
+| `watch`   | Apple Watch Series 11 (46mm), Apple Watch Series 10 (46mm), Apple Watch Series 9 (45mm)                            | Wear OS Large Round, Wear OS Small Round                  |
+| `tv`      | Apple TV 4K (3rd generation), Apple TV                                                                             | Television (1080p), Television (4K)                       |
+| `vision`  | Apple Vision Pro                                                                                                   | none                                                      |
+| `auto`    | none                                                                                                               | Automotive (1080p landscape), Automotive (1024p landscape) |
+| `desktop` | none                                                                                                               | Medium Desktop, Large Desktop                             |
+
+Set `ios.defaultModels.<class>` or `android.defaultModels.<class>` to one
+model name, or to a non-empty list of them:
+
+```json
+{
+  "ios": { "defaultModels": { "phone": "iPhone 15", "tablet": ["iPad (A16)", "iPad (10th generation)"] } },
+  "android": { "defaultModels": { "phone": "Pixel 7" } }
+}
+```
+
+An empty string, an empty list, a list with an empty string, and a key that is
+not a class are refused when the config loads. A name that is not a model of
+that class on this machine is skipped, not an error: with `ios.defaultModels.phone`
+set to an iPad, the `phone` default is the first of Simlock's own names that
+qualifies. Which class a model belongs to is what the platform's tools report;
+see `modelClasses` in [`simlock catalog`](CLI.md#simlock-catalog---platform-iosandroid---json).
+
+### How a lease for a class picks a model
+
+A lease that names a class, or no model at all (which means `phone`), is
+granted an idle device of the class that fits before a new one is created. Only
+when nothing idle fits does the list above decide: Simlock creates the first
+name on it that this machine's catalog lists, that is a model of the class, and
+that pairs with an installed runtime. With `--image-tag`, only runtimes that
+have an installed image of that tag count as pairings. Unlike the default shown
+by `simlock catalog`, the pick can land further down the list than the catalog
+shows when the tag or the OS rules out the first names. It never downloads.
+A class with no listed name fails the lease at once with `UNKNOWN_MODEL`,
+naming `ios.defaultModels.<class>` or `android.defaultModels.<class>`, and a
+class whose listed names pair with no installed runtime fails with
+`RUNTIME_MISSING`. Android has no `tablet` model, and setting
+`android.defaultModels.tablet` does not add one.
 
 ## Android emulator launch options
 

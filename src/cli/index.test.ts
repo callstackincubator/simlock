@@ -1659,6 +1659,25 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(wrote).toBe(false);
   });
 
+  it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
+    for (const value of ["0", "1.5"]) {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let wrote = false;
+      const exitCode = await runCli(
+        ["config", "set", "eventLog.retention", value],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {
+            wrote = true;
+          },
+        }),
+      );
+      expect(exitCode).toBe(2);
+      expect(wrote).toBe(false);
+      expect(output.stderr).toContain("eventLog.retention");
+    }
+  });
+
   it("still writes a genuinely valid key", async () => {
     const output = outputCapture(realCliEnvironmentPorts());
     let written: Record<string, unknown> | undefined;
@@ -1889,6 +1908,8 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  classDefaults: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: ["constructor"],
                   platform: "ios",
@@ -1901,7 +1922,7 @@ describe("CLI: catalog", () => {
 
     await expect(runCli(["catalog"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("    constructor: (no paired runtime)\n");
+    expect(output.stdout).toContain("    (no class):\n      constructor: (no paired runtime)\n");
   });
 
   it("prints (none) for a platform with no models", async () => {
@@ -1914,6 +1935,8 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  classDefaults: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: [],
                   platform: "android",
@@ -1942,6 +1965,8 @@ describe("CLI: catalog", () => {
                 {
                   defaultRuntime: "26.0",
                   modelAliases: {},
+                  classDefaults: {},
+                  modelClasses: {},
                   modelRuntimes: {
                     "iPhone 16": ["18.4", "26.0"],
                     "iPhone 8": [],
@@ -1963,12 +1988,117 @@ describe("CLI: catalog", () => {
         "Platform: ios",
         "  Runtimes: 18.4, 26.0 (default: 26.0)",
         "  Models:",
-        "    iPhone 16: 18.4, 26.0",
-        "    iPhone XS: 18.4",
-        "    iPhone 8: (no paired runtime)",
+        "    (no class):",
+        "      iPhone 16: 18.4, 26.0",
+        "      iPhone XS: 18.4",
+        "      iPhone 8: (no paired runtime)",
         "",
       ].join("\n"),
     );
+  });
+
+  it("prints each model under its class in the order of the enum, and an unclassed model under (no class)", async () => {
+    const catalog = {
+      defaultRuntime: "26.0",
+      classDefaults: { phone: "iPhone 17", tablet: "iPad Pro" },
+      modelAliases: { "iPhone 17": ["iphone-17", "i17"] },
+      modelClasses: {
+        "Apple TV 4K": "tv" as const,
+        "Apple Watch Series 11 (46mm)": "watch" as const,
+        "iPad Pro": "tablet" as const,
+        "iPhone 17": "phone" as const,
+        "iPhone 16": "phone" as const,
+      },
+      modelRuntimes: {
+        "Apple TV 4K": ["26.0"],
+        "Apple Watch Series 11 (46mm)": ["26.0"],
+        "iPad Pro": ["26.0"],
+        "iPhone 16": ["26.0"],
+        "iPhone 17": ["26.0"],
+        Mystery: [],
+      },
+      models: [
+        "Mystery",
+        "Apple Watch Series 11 (46mm)",
+        "iPhone 17",
+        "Apple TV 4K",
+        "iPad Pro",
+        "iPhone 16",
+      ],
+      platform: "ios" as const,
+      runtimes: ["26.0"],
+      customModels: ["iPhone 16"],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: ios",
+        "  Runtimes: 26.0 (default: 26.0)",
+        "  Models:",
+        "    phone (default: iPhone 17):",
+        "      iPhone 17: 26.0",
+        "        Other names: iphone-17, i17",
+        "      iPhone 16 (custom): 26.0",
+        "    tablet (default: iPad Pro):",
+        "      iPad Pro: 26.0",
+        "    watch (default: none):",
+        "      Apple Watch Series 11 (46mm): 26.0",
+        "    tv (default: none):",
+        "      Apple TV 4K: 26.0",
+        "    (no class):",
+        "      Mystery: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("carries classDefaults in --json as received", async () => {
+    const catalog = {
+      classDefaults: { phone: "Pixel 9", tv: "Not Even Listed" },
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: {},
+      models: [],
+      platform: "android" as const,
+      runtimes: [],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
+  });
+
+  it("carries modelClasses in --json as received", async () => {
+    const catalog = {
+      modelAliases: {},
+      classDefaults: {},
+      modelClasses: { "Pixel 8": "phone" as const, "Odd One": "tv" as const },
+      modelRuntimes: {},
+      models: ["Pixel 8"],
+      platform: "android" as const,
+      runtimes: [],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
   });
 
   it("prints (none) for a platform that has images but none installed", async () => {
@@ -1982,6 +2112,8 @@ describe("CLI: catalog", () => {
                 {
                   images: [],
                   modelAliases: {},
+                  classDefaults: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: [],
                   platform: "android",
@@ -2020,6 +2152,8 @@ describe("CLI: catalog", () => {
                     { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
                   ],
                   modelAliases: { "Pixel 8": ["pixel_8"] },
+                  classDefaults: {},
+                  modelClasses: { "Pixel 8": "phone" },
                   modelRuntimes: { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
                   models: ["My Tablet", "Pixel 8"],
                   platform: "android",
@@ -2037,9 +2171,11 @@ describe("CLI: catalog", () => {
         "Platform: android",
         "  Runtimes: 34, 35 (default: 35)",
         "  Models:",
-        "    My Tablet: 34, 35",
-        "    Pixel 8: 34, 35",
-        "      Other names: pixel_8",
+        "    phone (default: none):",
+        "      Pixel 8: 34, 35",
+        "        Other names: pixel_8",
+        "    (no class):",
+        "      My Tablet: 34, 35",
         "  Images (runtime, tag, ABI):",
         "    34 default x86_64",
         "    35 google_apis arm64-v8a",
@@ -2060,6 +2196,8 @@ describe("CLI: catalog", () => {
                   customModels: ["My Tablet"],
                   defaultRuntime: "35",
                   modelAliases: {},
+                  classDefaults: {},
+                  modelClasses: {},
                   modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
                   models: ["My Tablet", "Pixel 8"],
                   platform: "android",
@@ -2077,8 +2215,9 @@ describe("CLI: catalog", () => {
         "Platform: android",
         "  Runtimes: 35 (default: 35)",
         "  Models:",
-        "    My Tablet (custom): 35",
-        "    Pixel 8: 35",
+        "    (no class):",
+        "      My Tablet (custom): 35",
+        "      Pixel 8: 35",
         "",
       ].join("\n"),
     );
@@ -4444,6 +4583,11 @@ describe("CLI: pure helpers", () => {
     expect(parseDuration("1h")).toBe(3_600_000);
     expect(() => parseDuration("banana")).toThrow();
   });
+
+  it("parseDuration accepts the d unit and rejects an unknown one", () => {
+    expect(parseDuration("2d")).toBe(2 * 24 * 60 * 60 * 1000);
+    expect(() => parseDuration("2w")).toThrow("Invalid duration");
+  });
 });
 
 // Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
@@ -4949,8 +5093,11 @@ function testConfig(): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       defaultTtlMs: 60_000,
@@ -4971,7 +5118,11 @@ function testConfig(): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,
@@ -5057,4 +5208,164 @@ describe("simlock list --requests", () => {
       });
     },
   );
+});
+
+describe("simlock lease: a request names a model, a class, or nothing", () => {
+  const grant = {
+    device: {
+      driverDeviceId: "dev_1",
+      id: "dev_1",
+      mode: "full" as const,
+      spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" as const },
+    },
+    environment: {},
+    lease: {
+      deviceId: "dev_1",
+      grantedAt: 0,
+      id: "lse_1",
+      lastRenewedAt: 0,
+      ownerId: "test-requester",
+      requesterId: "test-requester",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    },
+    timing: {
+      estimatedBootMs: 0,
+      estimatedProvisionMs: 0,
+      estimatedReadyMs: 0,
+      estimatedReclaimMs: 0,
+    },
+  };
+
+  async function sentFor(args: readonly string[]): Promise<Record<string, unknown> | undefined> {
+    let sent: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        sent = input as unknown as Record<string, unknown>;
+        return Promise.resolve(grant);
+      },
+    });
+    const output = outputCapture();
+    await runCli(
+      ["lease", ...args, "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    return sent;
+  }
+
+  it("sends neither model nor class for a lease with only a platform", async () => {
+    const sent = await sentFor(["--platform", "ios"]);
+
+    expect(sent).toMatchObject({ platform: "ios" });
+    expect(sent).not.toHaveProperty("model");
+    expect(sent).not.toHaveProperty("class");
+  });
+
+  it("sends the class for --class, and no model", async () => {
+    const sent = await sentFor(["--platform", "ios", "--class", "phone"]);
+
+    expect(sent).toMatchObject({ class: "phone", platform: "ios" });
+    expect(sent).not.toHaveProperty("model");
+  });
+
+  it("sends both fields for --class beside --device, leaving the refusal to the daemon", async () => {
+    const sent = await sentFor(["--platform", "ios", "--class", "phone", "--device", "iPhone 16"]);
+
+    expect(sent).toMatchObject({ class: "phone", model: "iPhone 16", platform: "ios" });
+  });
+
+  it("names --class in the lease usage text, with --device optional", async () => {
+    const output = outputCapture();
+
+    await runCli(["lease", "--help"], output.environmentWith({}));
+
+    expect(output.stdout).toBe(
+      "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--timeout <duration>]\n" +
+        "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
+        "                     [--export-env] [--bind-pid <pid>]\n",
+    );
+  });
+
+  it.each([
+    ["--device", "lease --device must not be empty"],
+    ["--class", "lease --class must not be empty"],
+  ])("exits 2 with USAGE for an empty %s, before connecting", async (flag, message) => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", flag, ""],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({});
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(2);
+    expect(connected).toBe(false);
+    expect(output.stderr).toContain(message);
+  });
+
+  it("prints the class of a waiting request that names no model, phone when it names none", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { class: "watch", platform: "ios" },
+          stage: "queued",
+        },
+        {
+          createdAt: 0,
+          id: "req_2",
+          queuePosition: 2,
+          requesterId: "b",
+          spec: { platform: "android" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios class watch, queued at 1, waiting 0s\n" +
+        "Request req_2: b, android class phone, queued at 2, waiting 0s\n",
+    );
+  });
+
+  it("prints a waiting request's OS range as typed", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { osVersion: ">=18 <26", platform: "ios" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios class phone >=18 <26, queued at 1, waiting 0s\n",
+    );
+  });
 });

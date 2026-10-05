@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
@@ -12,7 +13,7 @@ import {
   type InstalledComponent,
   RuntimeMissingError,
   UnknownModelError,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
   type DriverComponent,
@@ -27,7 +28,7 @@ import {
   PassthroughRefusedError,
   removeListedComponent,
 } from "../../dist/core/driver.js";
-import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
+import type { DeviceClass, DeviceSpec, Platform } from "../../dist/core/domain.js";
 import type {
   FakeDriverErrorSpec,
   FakeDriverOperation,
@@ -218,6 +219,21 @@ export class OutOfProcessFakeDriver implements Driver {
   }
 
   /**
+   * The script's `defaultModels`, `{}` when unset. Read from the file on each access, as every
+   * operation re-reads it, but synchronously: the port reads this as a property, once at start.
+   */
+  get defaultModels(): Readonly<Partial<Record<DeviceClass, readonly string[]>>> {
+    if (this.#scriptPath === undefined) return {};
+    try {
+      const parsed = JSON.parse(readFileSync(this.#scriptPath, "utf8")) as FakeDriverScript;
+      return parsed[this.platform]?.defaultModels ?? {};
+    } catch {
+      // The same fallback as `readPlatformScript`: a missing or half-written file reads as unset.
+      return {};
+    }
+  }
+
+  /**
    * Logged like every other call, so a flow can assert the purge re-proved the root before
    * it destroyed anything -- and refusable through `failures.revalidateRoot`, which is how
    * a flow stages the root going bad under a running daemon.
@@ -226,7 +242,7 @@ export class OutOfProcessFakeDriver implements Driver {
     await this.#beforeCall("revalidateRoot", []);
   }
 
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     const script = await this.#beforeCall("resolveSpec", [request]);
     this.#assertKnownModel(request.model, script);
     const osVersion =
@@ -471,6 +487,7 @@ export class OutOfProcessFakeDriver implements Driver {
       ...(script.images === undefined ? {} : { images: [...script.images] }),
       ...(script.customModels === undefined ? {} : { customModels: [...script.customModels] }),
       modelAliases: { ...script.modelAliases },
+      modelClasses: { ...script.modelClasses },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(script.modelRuntimes?.[model] ?? runtimes)]]),
       ),

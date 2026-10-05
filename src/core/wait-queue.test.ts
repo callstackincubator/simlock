@@ -326,3 +326,48 @@ describe("WaitQueue", () => {
     await expect(processing.promise).rejects.toThrow(`cancelled ${processing.id}`);
   });
 });
+
+describe("WaitQueue depth changes", () => {
+  function depthQueue() {
+    const clock = new FakeClock(1_000);
+    const depths: number[] = [];
+    let nextId = 1;
+    const queue = new WaitQueue({
+      clock,
+      idGenerator: { generate: () => `${nextId++}` },
+      onDepthChange: (depth) => depths.push(depth),
+    });
+    return { clock, depths, queue };
+  }
+
+  it("reports the new depth when a waiter joins the queue and when it leaves by grant, rejection or timeout", () => {
+    const { clock, depths, queue } = depthQueue();
+    const granted = queue.create(request, { ownerId: "a", requesterId: "a" });
+    const rejected = queue.create(request, { ownerId: "b", requesterId: "b" });
+    const timedOut = queue.create(request, { ownerId: "c", requesterId: "c", timeoutMs: 5 });
+    void rejected.promise.catch(() => undefined);
+    void timedOut.promise.catch(() => undefined);
+
+    queue.enqueue(granted);
+    queue.enqueue(rejected);
+    queue.enqueue(timedOut);
+    queue.resolve(granted, grant());
+    queue.reject(rejected, new RequestCancelledError(rejected.id));
+    clock.advance(5);
+
+    expect(depths).toEqual([1, 2, 3, 2, 1, 0]);
+  });
+
+  it("reports nothing for a waiter that never held a place, or for a repeated enqueue", () => {
+    const { depths, queue } = depthQueue();
+    const direct = queue.create(request, { ownerId: "a", requesterId: "a" });
+    const queued = queue.create(request, { ownerId: "b", requesterId: "b" });
+    void direct.promise.catch(() => undefined);
+
+    queue.reject(direct, new RequestCancelledError(direct.id));
+    queue.enqueue(queued);
+    queue.enqueue(queued);
+
+    expect(depths).toEqual([1]);
+  });
+});

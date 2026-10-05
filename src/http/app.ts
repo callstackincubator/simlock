@@ -3,7 +3,14 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
-import { type ComponentProgress, describeSchemaIssues, imageTagSchema } from "../contract/index.js";
+import {
+  type ComponentProgress,
+  describeSchemaIssues,
+  refuseModelWithClass,
+  deviceClassSchema,
+  imageTagSchema,
+} from "../contract/index.js";
+import { parseDurationMs } from "../contract/duration.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -86,7 +93,8 @@ const MAX_LONG_POLL_SECONDS = 60;
 const leaseRequestBodySchema = z
   .object({
     allowDownload: z.boolean().optional(),
-    device: z.string().min(1),
+    class: deviceClassSchema.optional(),
+    device: z.string().min(1).optional(),
     imageTag: imageTagSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
     noWait: z.boolean().optional(),
@@ -99,7 +107,11 @@ const leaseRequestBodySchema = z
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  // The contract's own check, told this body's name for the model so the 400 names `device`.
+  .superRefine((body, context) =>
+    refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
+  );
 
 /**
  * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path
@@ -152,8 +164,15 @@ function nullToUndefined<Value>(value: Value | null | undefined): Value | undefi
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
-    device: body.device,
+    ...(body.device === undefined ? {} : { device: body.device }),
+    ...(body.class === undefined ? {} : { class: body.class }),
     platform: body.platform,
+    ...leaseRequestOptionFields(body),
+  };
+}
+
+function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) {
+  return {
     ...(body.os === undefined ? {} : { os: body.os }),
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
     ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
@@ -814,13 +833,8 @@ async function parseRenewBody(c: {
  * not a duplicate of any daemon-side logic (the operation itself takes an absolute timestamp),
  * so it is not one of the re-implementations ADR §2 says fall away with the dispatcher move. */
 function parseDuration(value: string): number {
-  const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
-  if (match === null) throw badRequest(`Invalid duration: ${value}`);
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "ms";
-  const multiplier = unit === "h" ? 3_600_000 : unit === "m" ? 60_000 : unit === "s" ? 1_000 : 1;
-  const milliseconds = amount * multiplier;
-  if (!Number.isSafeInteger(milliseconds)) throw badRequest(`Invalid duration: ${value}`);
+  const milliseconds = parseDurationMs(value);
+  if (milliseconds === undefined) throw badRequest(`Invalid duration: ${value}`);
   return milliseconds;
 }
 

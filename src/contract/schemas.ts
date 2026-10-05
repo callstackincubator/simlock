@@ -22,6 +22,21 @@ import { z } from "zod";
 export const platformSchema = z.enum(["ios", "android"]);
 export type Platform = z.infer<typeof platformSchema>;
 
+/**
+ * ADR 0015 §3: the kind of device a model is. The contract and the core name the classes; which
+ * product family or tag of a platform's tools is which class lives in that platform's driver.
+ */
+export const deviceClassSchema = z.enum([
+  "phone",
+  "tablet",
+  "watch",
+  "tv",
+  "vision",
+  "auto",
+  "desktop",
+]);
+export type DeviceClass = z.infer<typeof deviceClassSchema>;
+
 const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
@@ -261,7 +276,9 @@ export const leaseGrantSchema = z.object({
 /** The device a lease request named, with every field it left out left out. */
 const requestedDeviceSchema = z.object({
   platform: platformSchema,
-  model: z.string(),
+  /** Present only when the request named a model; one that named a class or nothing has none. */
+  model: z.string().optional(),
+  class: deviceClassSchema.optional(),
   osVersion: z.string().optional(),
   mode: deviceModeSchema.optional(),
   imageTag: imageTagSchema.optional(),
@@ -478,6 +495,23 @@ export const platformCatalogSchema = z.object({
       message: `modelAliases lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
     }),
   /**
+   * ADR 0015 §3: for a name in `models`, its class, when the platform's tools report one. A model
+   * the tools say nothing usable about has no entry. On a gateway it is the union over the
+   * connected workers; when two workers class a model differently, the first worker in id order
+   * wins.
+   */
+  modelClasses: z
+    .record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema)
+    .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX),
+  /**
+   * ADR 0015 §4: for a class, the model Simlock would create for it on this host -- of the
+   * names on the class's preference list that `models` lists and that are of the class, the
+   * first that pairs with an installed runtime, else the first of them. A class in which no
+   * listed model counts has no entry. On a gateway a class's entry is kept only when every
+   * connected worker reports the same model for it, and that worker lists it itself.
+   */
+  classDefaults: z.record(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
+  /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
    * natively is listed too. On a gateway it is the union by runtime, tag, and ABI.
@@ -508,15 +542,35 @@ export const platformCatalogSchema = z.object({
  * answer. A name that does not fit loses its mark and stays in `models`; the list stops at its
  * maximum, and an empty list is left out. Lives beside the schema so the bounds are written once.
  */
-export function fitPlatformCatalog<Entry extends { readonly customModels?: readonly string[] }>(
-  entry: Entry,
-): Entry {
-  if (entry.customModels === undefined) return entry;
-  const { customModels, ...rest } = entry;
-  const fitting = customModels
+export function fitPlatformCatalog<
+  Entry extends {
+    readonly customModels?: readonly string[];
+    readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
+    readonly classDefaults?: Readonly<Partial<Record<DeviceClass, string>>>;
+  },
+>(entry: Entry): Entry {
+  const { classDefaults, customModels, modelClasses, ...rest } = entry;
+  const fitting = (customModels ?? [])
     .filter((model) => model.length <= CATALOG_NAME_MAX)
     .slice(0, CATALOG_CUSTOM_MODELS_MAX);
-  return (fitting.length === 0 ? rest : { ...rest, customModels: fitting }) as Entry;
+  return {
+    ...rest,
+    ...(modelClasses === undefined
+      ? {}
+      : {
+          modelClasses: Object.fromEntries(
+            Object.entries(modelClasses).filter(([model]) => model.length <= CATALOG_NAME_MAX),
+          ),
+        }),
+    ...(classDefaults === undefined
+      ? {}
+      : {
+          classDefaults: Object.fromEntries(
+            Object.entries(classDefaults).filter(([, model]) => model.length <= CATALOG_NAME_MAX),
+          ),
+        }),
+    ...(fitting.length === 0 ? {} : { customModels: fitting }),
+  } as unknown as Entry;
 }
 
 export const proposalSchema = z.object({
@@ -671,6 +725,9 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 ]);
 
 /** Mirrors `Config` (src/core/config.ts) field for field. */
+/** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
+const defaultModelsSchema = z.record(deviceClassSchema, z.array(z.string().min(1)).min(1));
+
 export const configSchema = z.object({
   /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
    * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
@@ -712,7 +769,13 @@ export const configSchema = z.object({
     rotateBytes: z.number(),
   }),
   // Optional: a newer gateway parses this from an older worker's `config.get`.
-  eventLog: z.object({ rotateBytes: z.number() }).optional(),
+  eventLog: z
+    .object({
+      rotateBytes: z.number(),
+      retention: z.number().optional(),
+      maxBytes: z.number().optional(),
+    })
+    .optional(),
   http: z.object({
     enabled: z.boolean(),
     host: z.string(),
@@ -728,12 +791,14 @@ export const configSchema = z.object({
   }),
   ios: z.object({
     defaultMode: deviceModeSchema,
+    defaultModels: defaultModelsSchema,
     slim: z.object({
       categories: z.array(z.string()).optional(),
       bootTimeoutMs: z.number(),
     }),
   }),
   android: z.object({
+    defaultModels: defaultModelsSchema,
     emulator: z.object({
       headless: z.boolean(),
       gpu: z.string().min(1),

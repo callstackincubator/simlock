@@ -7,12 +7,16 @@ import {
 } from "./capacity/index.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import {
+  type DeviceClass,
   type DeviceRecord,
+  type DeviceRequirement,
   type DeviceSpec,
+  exactRequirement,
+  fits,
   type LeaseRecord,
   mayBeGranted,
   type Platform,
-  sameSpec,
+  specMode,
 } from "./domain.js";
 import { selectManagedVictim, selectWarmVictim, type WarmVictimScope } from "./warm-pool.js";
 
@@ -25,7 +29,15 @@ export interface AcquisitionPlannerInput {
   readonly failures: number;
   readonly noWait: boolean;
   readonly snapshot: AcquisitionPlannerSnapshot;
+  /** The spec a new device would have, and so the pool mode an idle device must be in. */
   readonly spec: DeviceSpec;
+  /**
+   * What an idle device must satisfy besides its pool mode (ADR 0015 §5). Absent, the request is
+   * exact and the requirement is `spec`'s own model, OS and image tag.
+   */
+  readonly requirement?: DeviceRequirement | undefined;
+  /** The class the catalog gives a model, for a requirement that names a class. */
+  readonly classOf?: ((model: string) => DeviceClass | undefined) | undefined;
 }
 
 export type AcquisitionPlan =
@@ -62,23 +74,24 @@ export class AcquisitionPlanner {
 
   plan(input: AcquisitionPlannerInput): AcquisitionPlan {
     const { snapshot, spec } = input;
+    const requirement = input.requirement ?? exactRequirement(spec);
+    const classOf = input.classOf ?? (() => undefined);
+    // ADR 0015 §6: an idle device serves the request when it fits and is in the pool mode the
+    // new device would have. Among several that do, the first in snapshot order is taken.
+    const servesRequest = (device: DeviceRecord): boolean =>
+      mayBeGranted(device) &&
+      !this.claims.isClaimed(device.id) &&
+      specMode(device.spec) === specMode(spec) &&
+      fits(requirement, device.spec, classOf);
     const ready = snapshot.devices.find(
-      (device) =>
-        device.state === "ready" &&
-        mayBeGranted(device) &&
-        !this.claims.isClaimed(device.id) &&
-        sameSpec(device.spec, spec),
+      (device) => device.state === "ready" && servesRequest(device),
     );
     if (ready !== undefined) return { device: ready, kind: "grant-ready" };
 
     // A spent fresh device sits `shutdown` between its lease-end shutdown commit and its
     // delete; `mayBeGranted` is what keeps it from being booted for a new lease in that window.
     const shutdown = snapshot.devices.find(
-      (device) =>
-        device.state === "shutdown" &&
-        mayBeGranted(device) &&
-        !this.claims.isClaimed(device.id) &&
-        sameSpec(device.spec, spec),
+      (device) => device.state === "shutdown" && servesRequest(device),
     );
     if (shutdown !== undefined) return this.#planShutdownBoot(input, shutdown);
 

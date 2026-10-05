@@ -72,12 +72,18 @@ const modelRuntimesFixture = JSON.stringify({
   ],
 });
 
-function deviceType(id: string, name: string, maxRuntimeVersion = 0xffffff) {
+function deviceType(
+  id: string,
+  name: string,
+  maxRuntimeVersion = 0xffffff,
+  productFamily?: string,
+) {
   return {
     identifier: `com.apple.CoreSimulator.SimDeviceType.${id}`,
     maxRuntimeVersion,
     minRuntimeVersion: 0,
     name,
+    ...(productFamily === undefined ? {} : { productFamily }),
   };
 }
 
@@ -426,6 +432,7 @@ describe("IosSimctlDriver", () => {
       await expect(driver.listCatalog()).resolves.toEqual({
         defaultRuntime: undefined,
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: { "iPhone 16": [] },
         models: ["iPhone 16"],
         runtimes: [],
@@ -1031,6 +1038,7 @@ describe("IosSimctlDriver", () => {
     await expect(driver.listCatalog()).resolves.toStrictEqual({
       defaultRuntime: "26.5",
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: {
         "iPhone 15 Pro": ["18.4", "26.5"],
         "iPhone 16": ["18.4", "26.5"],
@@ -1038,6 +1046,59 @@ describe("IosSimctlDriver", () => {
       },
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
+    });
+  });
+
+  describe("model classes", () => {
+    function classesRunner(deviceTypes: unknown[]): ScriptedProcessRunner {
+      return new ScriptedProcessRunner([
+        {
+          match: listInvocation,
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              devicetypes: deviceTypes,
+              runtimes: [runtime("26.0", "23A339", true, [])],
+            }),
+          },
+        },
+      ]);
+    }
+
+    it("classes a device type by its product family: iPhone is phone, iPad is tablet, Apple Watch is watch, Apple TV is tv, Apple Vision is vision", async () => {
+      const driver = await createDriver(
+        classesRunner([
+          deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
+          deviceType("iPad-Pro", "iPad Pro", 0xffffff, "iPad"),
+          deviceType("Watch-11", "Apple Watch Series 11 (46mm)", 0xffffff, "Apple Watch"),
+          deviceType("TV-4K", "Apple TV 4K", 0xffffff, "Apple TV"),
+          deviceType("Vision-Pro", "Apple Vision Pro", 0xffffff, "Apple Vision"),
+        ]),
+      );
+
+      expect((await driver.listCatalog()).modelClasses).toEqual({
+        "Apple TV 4K": "tv",
+        "Apple Vision Pro": "vision",
+        "Apple Watch Series 11 (46mm)": "watch",
+        "iPad Pro": "tablet",
+        "iPhone 17": "phone",
+      });
+    });
+
+    it("keeps a device type with no product family, or one outside those five, in models with no modelClasses entry", async () => {
+      const driver = await createDriver(
+        classesRunner([
+          deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
+          deviceType("Mystery", "Mystery Device"),
+          deviceType("HomePod", "HomePod", 0xffffff, "HomePod"),
+        ]),
+      );
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.models).toEqual(["iPhone 17", "Mystery Device", "HomePod"]);
+      expect(catalog.modelClasses).toEqual({ "iPhone 17": "phone" });
     });
   });
 
@@ -4234,6 +4295,42 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
   await vi.waitFor(() => expect(state.done).toBe(true));
   return state.value;
 }
+
+describe("IosSimctlDriver defaultModels", () => {
+  it("lists the built-in iOS preference list per class, newest first, with phone starting at iPhone 17", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.defaultModels).toEqual({
+      phone: ["iPhone 17", "iPhone 16", "iPhone 15", "iPhone 14", "iPhone 13"],
+      tablet: [
+        "iPad Pro 11-inch (M5)",
+        "iPad Pro 11-inch (M4)",
+        "iPad Air 11-inch (M3)",
+        "iPad (A16)",
+        "iPad (10th generation)",
+      ],
+      tv: ["Apple TV 4K (3rd generation)", "Apple TV"],
+      vision: ["Apple Vision Pro"],
+      watch: [
+        "Apple Watch Series 11 (46mm)",
+        "Apple Watch Series 10 (46mm)",
+        "Apple Watch Series 9 (45mm)",
+      ],
+    });
+  });
+
+  it("has no iOS list for auto or desktop", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(Object.keys(driver.defaultModels).sort()).toEqual([
+      "phone",
+      "tablet",
+      "tv",
+      "vision",
+      "watch",
+    ]);
+  });
+});
 
 describe("IosSimctlDriver toolVersions()", () => {
   it("reports the Xcode version and build that xcodebuild -version prints", async () => {

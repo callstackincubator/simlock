@@ -284,6 +284,23 @@ for that platform has an `images` field. A gateway accepts any name a worker
 lists for a model, in any letter case, and sends that worker its own name for
 it.
 
+Each entry also carries `modelClasses`: for a name in `models` whose tooling
+reports one, its class, one of `phone`, `tablet`, `watch`, `tv`, `vision`,
+`auto` or `desktop`. A model the tooling says nothing usable about has no
+entry, and is still listed and leasable by name. On a gateway it is the union
+over the connected workers; when two workers class a model differently, the
+worker with the smallest id wins.
+
+Each entry also carries `classDefaults`: for a class, the model Simlock would
+create for it on that machine. It is the first name on the class's preference
+list (the names in `ios.defaultModels.<class>` or `android.defaultModels.<class>`,
+then Simlock's own list for the platform) that `models` lists, that is a model
+of the class, and that pairs with an installed runtime; when none pairs, the
+first of those that are listed and of the class. A class in which no listed
+name counts has no entry. On a gateway a class's entry is kept only when every
+connected worker reports the same model for it, and a worker with none for that
+class counts as disagreeing.
+
 An entry may also carry `customModels`: the names from `models` that exist
 because of something on that machine rather than the platform's tools. On
 Android that is a profile made with Android Studio's device manager, read
@@ -300,7 +317,9 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "runtimes": ["18.4", "26.0"],
     "defaultRuntime": "26.0",
     "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
-    "modelAliases": {}
+    "modelAliases": {},
+    "modelClasses": { "iPhone 16": "phone", "iPhone XS": "phone" },
+    "classDefaults": { "phone": "iPhone 16" }
   }, {
     "platform": "android",
     "models": ["My Tablet", "Pixel 8"],
@@ -308,6 +327,8 @@ that lists it marks it custom; each worker's own list is in its catalog in
     "defaultRuntime": "35",
     "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
     "modelAliases": { "Pixel 8": ["pixel_8"] },
+    "modelClasses": { "My Tablet": "phone", "Pixel 8": "phone" },
+    "classDefaults": { "phone": "Pixel 8" },
     "customModels": ["My Tablet"],
     "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
                 { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]
@@ -331,8 +352,27 @@ Role: `agent`. Enqueues a device request.
 }
 ```
 
-`platform` and `device` are required; `os` defaults to the newest installed
-runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
+`platform` is required. A request names its device in one of three ways:
+`device`, an exact model; `class`, a kind of device (`phone`, `tablet`, `watch`,
+`tv`, `vision`, `auto` or `desktop`) in place of a model; or neither, which asks
+for a `phone`. Sending both `device` and `class` is `400 BAD_REQUEST`. A request
+with a `class`, or with neither, is granted an idle device that fits before any
+device is created; when nothing idle fits it creates the first model on the
+class's preference list that the machine lists (see
+[Default models per class](CONFIGURATION.md#default-models-per-class)). A class
+with no listed model fails with `422 UNKNOWN_MODEL`, naming the config key, and
+one whose listed models pair with no installed runtime fails with `RUNTIME_MISSING`.
+The granted lease's `device`, `os`, `mode` and `imageTag` always name the device
+you got. Through a gateway a request that names no `device`, or whose `os` is a
+range, is `400 BAD_REQUEST` for now. `os` is an exact version (`"18.4"`) or a
+range: one or more of `>=`, `>`, `<=`, `<` followed by a version, joined by single
+spaces (`">=18 <26"`), or a hyphen range (`"18 - 26"`); a short version covers
+everything under it, so `">=18"` is 18.0 and newer and `"<=26"` includes every
+26.x. Anything written like a range but outside those forms (`^18`, `~18`, `18.x`, `*`, `||`) is `400 BAD_REQUEST`, and the message names these forms; any other string, such as `Baklava` or `34-ext12`, is an exact version. A
+range is granted an idle device whose OS satisfies it, or else a new device on the
+newest installed runtime in it; one no installed runtime satisfies fails at once
+with `422 RUNTIME_MISSING`, `downloadable: false` and the range as `osVersion`,
+whatever `allowDownload` says. `os` defaults to the newest installed runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
 above `lease.maxTtlMs`; `timeoutMs` (optional) is enforced daemon-side so a
 vanished client can't hold a queue slot forever. `mode` (optional, `"slim"`
 or `"full"`) is the device mode the request asks for; without it the request
@@ -1059,7 +1099,9 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "runtimes": ["18.4", "26.0"],
           "defaultRuntime": "26.0",
           "modelRuntimes": {"iPhone 16": ["18.4"]},
-          "modelAliases": {}
+          "modelAliases": {},
+          "modelClasses": {"iPhone 16": "phone"},
+          "classDefaults": {"phone": "iPhone 16"}
         },
         {
           "platform": "android",
@@ -1068,6 +1110,8 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "defaultRuntime": "18.0",
           "modelRuntimes": {},
           "modelAliases": {},
+          "modelClasses": {},
+          "classDefaults": {},
           "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],
@@ -1195,7 +1239,8 @@ an all-or-nothing that leaves the operator guessing.
   `since` (`simlock events --since`). They come from the daemon's event file,
   so they include events from before a daemon restart and beyond the 1000
   held in memory, back to the oldest event the file still holds
-  (`eventLog.rotateBytes`). Without `since`, the recent events held in
+  (`eventLog.retention` and `eventLog.maxBytes`). `since` takes `ms`, `s`,
+  `m`, `h` and `d` units (`?since=2d`). Without `since`, the recent events held in
   memory. Every event carries an `id`, the same one after a daemon restart;
   events written before the upgrade that added it are not returned. Events
   come back by `timestamp`, then in the order the daemon recorded them within

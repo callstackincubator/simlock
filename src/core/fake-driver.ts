@@ -1,11 +1,11 @@
 import type { Clock } from "../ports/index.js";
-import type { DeviceMode, DeviceSpec, Platform } from "./domain.js";
+import type { DeviceClass, DeviceMode, DeviceSpec, Platform } from "./domain.js";
 import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
   type ComponentRemoval,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
@@ -91,6 +91,10 @@ export interface FakeDriverOptions {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** The built-in preference lists the driver carries, per class; none unless a test says otherwise. */
+  readonly defaultModels?: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
+  /** What `listCatalog` reports as each model's class; empty unless a test says otherwise. */
+  readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
   /**
    * What `listCatalog` reports as installed images; the field is absent unless set. A request
    * naming an image tag resolves only to a runtime listed here with that tag.
@@ -135,6 +139,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 
 export class FakeDriver implements Driver {
   readonly platform: Platform;
+  readonly #defaultModels: FakeDriverOptions["defaultModels"];
   readonly deviceRoot: string;
   readonly #availableOsVersions: Set<string>;
   /** One receipt per installed version; an install replaces it with a new one. */
@@ -164,6 +169,7 @@ export class FakeDriver implements Driver {
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
+  readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
@@ -193,6 +199,8 @@ export class FakeDriver implements Driver {
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#modelRuntimes = options.modelRuntimes;
     this.#modelAliases = options.modelAliases;
+    this.#modelClasses = options.modelClasses;
+    this.#defaultModels = options.defaultModels;
     this.#images = options.images;
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
@@ -216,6 +224,10 @@ export class FakeDriver implements Driver {
     return this.#calls.map((call) => ({ ...call, arguments: [...call.arguments] }));
   }
 
+  get defaultModels(): Readonly<Partial<Record<DeviceClass, readonly string[]>>> {
+    return this.#defaultModels ?? {};
+  }
+
   /**
    * Succeeds unless a test fails it through `failOn`. A real driver re-runs the filesystem
    * checks here; the fake only has to be refusable, since what `Doctor` does with a refusal
@@ -236,7 +248,7 @@ export class FakeDriver implements Driver {
   }
 
   /** Never installs: a version that is not available throws, naming it as the component. */
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     await this.#beforeCall("resolveSpec", request);
     this.#assertMatchingPlatform(request.platform);
 
@@ -514,6 +526,7 @@ export class FakeDriver implements Driver {
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
       ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
       modelAliases: { ...this.#modelAliases },
+      modelClasses: { ...this.#modelClasses },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(this.#modelRuntimes?.[model] ?? runtimes)]]),
       ),

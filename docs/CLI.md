@@ -174,8 +174,8 @@ and booting, then — unless `--detach` — keeps running, renewing the lease on
 a timer and releasing it when it exits.
 
 ```
-simlock lease --platform <ios|android> --device <model> [--os <version>]
-              [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+simlock lease --platform <ios|android> [--device <model> | --class <class>]
+              [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
               [--timeout <duration>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -186,8 +186,25 @@ TTL and lives until it expires, is renewed, or is released. `--detach`
 changes what *this process* does after the grant, not what the daemon
 granted.
 
-- `--platform`, `--device` — required. `--os` defaults to the newest runtime
-  already installed for that platform.
+- `--platform` — required. `--device` names an exact model; `--class` names
+  a kind of device instead (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto`
+  or `desktop`); with neither, the lease asks for a `phone`. Naming both is a
+  `BAD_REQUEST` (exit 2). `--os` defaults to the newest runtime already
+  installed for that platform. See [What a lease asks for](#what-a-lease-asks-for).
+- `--os <version|range>` — an exact version (`18.4`), or a range: one or more
+  of `>=`, `>`, `<=`, `<` followed by a version, joined by single spaces
+  (`>=18 <26`), or a hyphen range (`18 - 26`). A short version covers
+  everything under it: `>=18` is 18.0 and newer, `<=26` includes every 26.x,
+  `>26` excludes them, `18 - 26` is `>=18 <=26`. Anything written like
+  a range but outside these forms (`^18`, `~18`, `18.x`, `*`, `||`) is
+  `BAD_REQUEST` (exit 2) and the message names these forms; any other string,
+  such as the Android runtimes `Baklava` or `34-ext12`, is an exact version.
+  A range is served by a fitting idle device first, or else by a new device
+  on the newest installed runtime in the range; when no installed runtime is
+  in the range the lease fails at once with `RUNTIME_MISSING` (exit 12), with
+  or without `--allow-download`, because a range never downloads.
+- `--class <class>` — the kind of device to lease, in place of a model. See
+  [What a lease asks for](#what-a-lease-asks-for).
 - `--agent-id` — this invocation's requester identity; see
   [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
   agent tool's session id, then a pid-derived value.
@@ -426,6 +443,43 @@ here, but equally `expired` or `killed`. A reboot cannot bring back
 anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
+
+### What a lease asks for
+
+A lease names its device in one of three ways:
+
+- `--device <model>` asks for exactly that model. It is granted an idle device
+  of that model, OS, mode and image tag, as always.
+- `--class <class>` asks for any model of that class.
+- With neither, the lease asks for a `phone`.
+
+A class lease is served by the first of these that applies: an idle device
+that is already running and fits, then an idle device that is shut down and
+fits (it is booted), then a new device. A device fits when its platform,
+class, OS, mode and image tag all satisfy the request: with no `--os` a class
+lease fits a device on any installed runtime, with `--os` a device whose OS
+satisfies it, `--mode full` and `--image-tag`
+are never relaxed, and a lease that names no mode fits only the worker's
+default mode. When several devices fit, which one is granted is not promised.
+
+When nothing idle fits, Simlock creates a device of the class on the newest
+installed runtime that the model pairs with. The model is the first on the
+class's preference list that this machine's catalog lists and that pairs with
+an installed runtime (of the requested image tag, when `--image-tag` is
+given); see [Default models per class](CONFIGURATION.md#default-models-per-class).
+It never downloads to do so. A class with no listed model fails the lease at
+once with `UNKNOWN_MODEL` (exit 12), naming the config key, such as
+`android.defaultModels.tablet`, whatever is idle; a class whose listed models
+pair with no installed runtime fails with `RUNTIME_MISSING` (exit 12), with or
+without `--allow-download`.
+
+The grant always names the model, OS, mode and image tag of the device you
+got. A class is a claim about the device type the platform's tools report:
+on iOS the product family, on Android the profile's tag, and every untagged
+Android profile is a `phone`, so `tablet` holds no Android model.
+
+Through a gateway, a lease that names no model is refused with `BAD_REQUEST`
+for now.
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
@@ -921,7 +975,9 @@ why its Android catalog looks thin, trimmed to one worker:
           "runtimes": ["18.4", "26.0"],
           "defaultRuntime": "26.0",
           "modelRuntimes": {"iPhone 16": ["18.4"]},
-          "modelAliases": {}
+          "modelAliases": {},
+          "modelClasses": {"iPhone 16": "phone"},
+          "classDefaults": {"phone": "iPhone 16"}
         },
         {
           "platform": "android",
@@ -930,6 +986,8 @@ why its Android catalog looks thin, trimmed to one worker:
           "defaultRuntime": "18.0",
           "modelRuntimes": {},
           "modelAliases": {},
+          "modelClasses": {},
+          "classDefaults": {},
           "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],
@@ -1035,6 +1093,8 @@ exposes the focused `list_devices`, `lease_simulator`, `release_simulator`, and
 `lease_status` tool surface for one agent session. The server auto-starts the
 daemon when needed, on a tool call; its renew timer reconnects only to a
 daemon that is already listening, and never launches one. `lease_simulator`
+names its device as `simlock lease` does: `model`, `class`, or neither for a
+phone (see [What a lease asks for](#what-a-lease-asks-for)); it also
 accepts the contract's optional `ttlMs` — defaulting to `lease.defaultTtlMs`
 and `BAD_REQUEST` above `lease.maxTtlMs`, the same rule every other frontend
 gets — and the session renews that lease on a timer and releases it when the
@@ -1222,7 +1282,8 @@ Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 1
 ```
 
 Each line names the request, the agent that sent it, the device it asked for
-(only the fields it named), where it stands, and how long it has waited.
+(only the fields it named; a request that named no model shows its class,
+`phone` when it named none), where it stands, and how long it has waited.
 `queued at 2` is its place in the queue, counting from 1, the requests ahead
 of it that are already starting included. `starting` means the daemon is working
 on it: placing it as it arrives, or finding, creating, booting or downloading
@@ -1259,6 +1320,26 @@ level (`runtime`), tag, and ABI. An image whose ABI the host cannot run
 natively is listed too, with its ABI. A tag listed here is what `simlock
 lease --image-tag` accepts.
 
+`modelClasses` says, for a model whose tooling reports one, which kind of
+device it is: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or
+`desktop`. On iOS the class comes from the device type's product family
+(iPhone, iPad, Apple Watch, Apple TV, Apple Vision). On Android it comes
+from the device profile's tag: `android-tv` is `tv`, `android-wear` is
+`watch`, `android-automotive` and its variants are `auto`, `android-desktop`
+is `desktop`, and a profile with no tag, or a custom profile from
+`devices.xml`, is `phone`. A model whose tooling reports nothing usable has
+no entry, and is still listed and leasable by name.
+
+`classDefaults` says, for a class, which model Simlock would create for it on
+this machine: the first name on the class's preference list that the catalog
+lists, that is a model of the class, and that pairs with an installed runtime
+(or the first of those that are listed and of the class, when none pairs).
+The list is the names in `ios.defaultModels.<class>` or
+`android.defaultModels.<class>`, then Simlock's own list for the platform;
+see [`docs/CONFIGURATION.md`](CONFIGURATION.md#default-models-per-class). A class
+in which no listed name counts has no entry. The human-oriented output shows
+it beside the class, as `none` when there is none.
+
 `customModels` lists the models that exist because of something on that
 machine rather than the platform's tools. The field is absent when there are
 none, and iOS never has it. See [Where Android models come
@@ -1273,16 +1354,18 @@ same way, unless `--platform` names it: then the command fails with that error.
 downloads a runtime or system image, and lists only what is installed,
 whatever `downloads.policy` says.
 
-Human-oriented by default, one line per model with the runtimes it pairs
-with, its other names on the line below it, and then each image:
+Human-oriented by default, models grouped under a line for their class (in
+the order above, then `(no class)`) that shows the class's default model, one line per model with the runtimes it
+pairs with, its other names on the line below it, and then each image:
 
 ```text
 Platform: android
   Runtimes: 34, 35 (default: 35)
   Models:
-    My Tablet (custom): 34, 35
-    Pixel 8: 34, 35
-      Other names: pixel_8
+    phone (default: Pixel 8):
+      My Tablet (custom): 34, 35
+      Pixel 8: 34, 35
+        Other names: pixel_8
   Images (runtime, tag, ABI):
     34 default x86_64
     35 google_apis arm64-v8a
@@ -1294,12 +1377,18 @@ Platform: android
 {"platforms":[{"platform":"android","models":["My Tablet","Pixel 8"],"runtimes":["34","35"],"defaultRuntime":"35",
   "modelRuntimes":{"My Tablet":["34","35"],"Pixel 8":["34","35"]},
   "modelAliases":{"Pixel 8":["pixel_8"]},
+  "modelClasses":{"My Tablet":"phone","Pixel 8":"phone"},
+  "classDefaults":{"phone":"Pixel 8"},
   "customModels":["My Tablet"],
   "images":[{"runtime":"34","tag":"default","abi":"x86_64"},{"runtime":"35","tag":"google_apis","abi":"arm64-v8a"}]}]}
 ```
 
 Against a gateway, `modelAliases` is the union of each worker's other names
-for a model, and `images` the union of their images. A model is in
+for a model, `modelClasses` the union of their classes (when two workers
+class a model differently, the worker with the smallest id wins), and `images`
+the union of their images. A class's entry in `classDefaults` is kept only
+when every connected worker reports the same model for it; a worker with none
+for that class counts as disagreeing. A model is in
 `customModels` when any worker that lists it marks it custom;
 `simlock worker list --json` shows which worker that is. A gateway accepts any
 name a worker lists for a model, in any letter case, and sends that worker its
@@ -1710,9 +1799,12 @@ history from before the upgrade that added it is not shown.
 - `--since 1h` reaches further back. Every event is also written to
   `~/.simlock/events.jsonl`, which survives restarts and crashes, so
   `--since` returns events from before the last restart and beyond the
-  in-memory limit, back to the oldest event the file still holds. The file
-  is capped by `eventLog.rotateBytes` (see
-  [CONFIGURATION.md](CONFIGURATION.md)); the oldest events go first.
+  in-memory limit, across every generation of the file, back to the oldest
+  event it still holds. Durations take `ms`, `s`, `m`, `h` and `d` units
+  (`--since 2d`); a bare number is milliseconds. The history is kept for
+  `eventLog.retention` (seven days by default), with `eventLog.maxBytes` as
+  a size backstop (see [CONFIGURATION.md](CONFIGURATION.md)); the oldest
+  events go first.
 - `--since` without `--follow`, with no daemon running, reads the file
   directly and does not start a daemon. `--follow` starts one as usual.
 - `--follow` keeps streaming live events. With `--since`, it prints that

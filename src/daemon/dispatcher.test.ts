@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { NoCapacityError } from "../core/lease-acquisition-coordinator.js";
+import { capacityChangedPayload } from "../core/capacity/observer.js";
 import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
@@ -336,9 +337,25 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
 describe("Dispatcher: parsing", () => {
   it("rejects a malformed input with BAD_REQUEST before the handler runs", async () => {
     const { dispatcher } = await buildDispatcher();
-    const rejection = dispatcher.dispatch("lease.request", { platform: "ios" }, session());
+    const rejection = dispatcher.dispatch("lease.request", { model: "iPhone 17" }, session());
     await expect(rejection).rejects.toBeInstanceOf(DispatchError);
     await expect(rejection).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("rejects a lease.request naming both a class and a model with BAD_REQUEST, the message naming both fields", async () => {
+    const { dispatcher, registry } = await buildDispatcher();
+
+    const rejection = dispatcher.dispatch(
+      "lease.request",
+      { class: "phone", model: "iPhone 17 Pro", platform: "ios" },
+      session(),
+    );
+
+    await expect(rejection).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/class.*model|model.*class/s),
+    });
+    expect(registry.snapshot.leases).toEqual([]);
   });
 
   it.each([
@@ -555,6 +572,8 @@ describe("Dispatcher: the fleet operations on a worker", () => {
             {
               defaultRuntime: "26.5",
               modelAliases: {},
+              classDefaults: {},
+              modelClasses: {},
               models: [],
               modelRuntimes: {},
               platform: "ios",
@@ -1149,6 +1168,21 @@ describe("Dispatcher: device mode on every surface", () => {
       expect(grant.device.mode).toBe(expected);
     },
   );
+
+  it("status.get reports the capacity figures the last capacity.changed carries", async () => {
+    const { dispatcher, engine, eventBus } = await buildDispatcher();
+    await engine.convergeRunningCapacity();
+    await dispatcher.dispatch("lease.request", request, session());
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    const last = eventBus
+      .replay()
+      .filter((event) => event.event === "capacity.changed")
+      .at(-1);
+    expect(last?.payload).toEqual(capacityChangedPayload(status.capacity));
+    expect(status.capacity.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+  });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
@@ -2963,8 +2997,11 @@ function testConfig(
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: downloadsPolicy, acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
-    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
+    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    android: {
+      defaultModels: {},
+      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       defaultTtlMs: 60_000,
@@ -2976,7 +3013,11 @@ function testConfig(
     },
     capacity,
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,

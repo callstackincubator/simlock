@@ -110,6 +110,21 @@ describe("Registry lease requests", () => {
     expect(await storedRequestIds(filesystem)).toEqual([created.id]);
   });
 
+  it("loads a stored class request after a reload, with its class and no model", async () => {
+    const { clock, filesystem, registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest({
+      ownerId: "agent",
+      request: { class: "phone", platform: "ios" },
+      requesterId: "agent",
+    });
+
+    const { registry: reloaded } = await loadRegistry({ clock, filesystem });
+
+    expect(reloaded.leaseRequests().map((record) => [record.id, record.request])).toEqual([
+      [created.id, { class: "phone", platform: "ios" }],
+    ]);
+  });
+
   it("reads a stored request back after a reload, result included", async () => {
     const { clock, filesystem, registry } = await loadRegistry();
     const created = await registry.createLeaseRequest({
@@ -156,6 +171,33 @@ describe("Registry lease requests", () => {
     const { registry } = await loadRegistry({ filesystem });
 
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
+  });
+
+  it("loads a stored request's class, and drops a record whose class is not one of the seven", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const record = (id: string, deviceClass: unknown) => ({
+      createdAt: 1_000,
+      id,
+      ownerId: "agent",
+      request: { class: deviceClass, platform: "ios" },
+      requesterId: "agent",
+      state: "open",
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [record("req_watch", "watch"), record("req_broken", "phablet")],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+
+    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
+      ["req_watch", { class: "watch", platform: "ios" }],
+    ]);
   });
 
   it("loads a stored request's image tag, and drops a record whose image tag is not a string", async () => {
@@ -392,6 +434,16 @@ describe("LeaseRequestBook", () => {
     await settled();
 
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
+  });
+
+  it("stores a request under the id its owner minted before admission, and mints no other", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+
+    const admitted = await book.admit(request, keyed, () => granted("lse_1"), "req_minted");
+
+    expect(admitted.id).toBe("req_minted");
+    expect(store.leaseRequests().map((record) => record.id)).toEqual(["req_minted"]);
   });
 
   it("lists an open request only while a wait drives it, never one left open with nothing behind it", async () => {

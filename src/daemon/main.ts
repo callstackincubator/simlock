@@ -7,12 +7,15 @@ import { fitHostFacts } from "../contract/index.js";
 import {
   type Config,
   type ConfigOverrides,
+  type DeviceClass,
   type DeviceMode,
   type Driver,
   type DriverRejection,
+  type ModelPreferences,
   type PrerequisiteCheck,
   CleanupReaper,
   ComponentInstaller,
+  DEVICE_CLASSES,
   DiskSpaceGuard,
   DriverCatalog,
   Doctor,
@@ -157,7 +160,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBusLogger(logger),
     idGenerator,
   );
-  const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
+  const eventHistory = openEventHistory({
+    clock,
+    config,
+    dataDirectory,
+    eventBus,
+    filesystem,
+    logger,
+  });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
@@ -257,6 +267,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     decisions,
     defaultModes: deviceModeWiring(config).defaultModes,
+    modelPreferences: modelPreferenceWiring(config, drivers),
     describeFailure: describeLeaseRequestFailure,
     drivers,
     eventBus,
@@ -729,6 +740,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // resolves is refused and redials on its own backoff.
     converge: async () => {
       await gatewayService.start();
+      fleetCoordinator.start();
     },
     dispose: async () => {
       fleetCoordinator.dispose();
@@ -1119,6 +1131,32 @@ export function deviceModeWiring(config: Pick<Config, "ios">): {
 }
 
 /**
+ * The one place a class's preference list is merged (ADR 0015 §4): the operator's names from
+ * `ios.defaultModels` or `android.defaultModels` first, then the driver's built-in ones, per
+ * platform that has a driver. The catalog reads the result; nothing else builds the list.
+ */
+export function modelPreferenceWiring(
+  config: Pick<Config, "android" | "ios">,
+  drivers: readonly Pick<Driver, "defaultModels" | "platform">[],
+): ModelPreferences {
+  return Object.fromEntries(
+    drivers.map((driver) => {
+      const configured =
+        driver.platform === "ios" ? config.ios.defaultModels : config.android.defaultModels;
+      const merged: Partial<Record<DeviceClass, readonly string[]>> = {};
+      for (const deviceClass of DEVICE_CLASSES) {
+        const names = [
+          ...(configured[deviceClass] ?? []),
+          ...(driver.defaultModels[deviceClass] ?? []),
+        ];
+        if (names.length > 0) merged[deviceClass] = names;
+      }
+      return [driver.platform, merged];
+    }),
+  );
+}
+
+/**
  * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. The driver
  * never depends on the event bus directly (architecture rule 5) -- this is the one place, at driver construction, that bridges the
  * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
@@ -1149,6 +1187,7 @@ export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: Sli
  * opened costs the history, never the daemon: one error line, and replay answers from the ring.
  */
 function openEventHistory(options: {
+  readonly clock: Clock;
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
@@ -1159,7 +1198,14 @@ function openEventHistory(options: {
   const logger = options.logger.child("events");
   let sink: NodeFileLogSink | undefined;
   try {
-    sink = new NodeFileLogSink({ maxBytes: options.config.eventLog.rotateBytes, path });
+    const { maxBytes, retention, rotateBytes } = options.config.eventLog;
+    sink = new NodeFileLogSink({
+      clock: options.clock,
+      maxBytes: rotateBytes,
+      path,
+      retentionMs: retention,
+      totalMaxBytes: maxBytes,
+    });
   } catch (error: unknown) {
     logger.error("Event file could not be opened; events are kept in memory only", {
       error: error instanceof Error ? error.message : String(error),

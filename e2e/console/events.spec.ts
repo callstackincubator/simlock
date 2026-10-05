@@ -112,6 +112,17 @@ function asShown(event: Envelope): string {
   ].join(" ");
 }
 
+/**
+ * Scrolls the feed's box to its last row, the oldest event. The feed draws only the rows in its
+ * box, so the first events of a run (`daemon.started`) are drawn only there once newer events,
+ * such as `capacity.changed`, sit above them.
+ */
+async function scrollFeedToOldest(page: Page): Promise<void> {
+  await page
+    .getByRole("region", { name: "Event feed" })
+    .evaluate((box) => box.scrollTo({ top: box.scrollHeight }));
+}
+
 /** Whether the page itself scrolls sideways. */
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -217,11 +228,13 @@ test.describe("the events view", () => {
       await lease(host, "console-e2e-narrow");
       await page.setViewportSize({ height: 740, width: 360 });
       await openEvents(page, host);
-      // `daemon.started` carries the whole config: the longest payload there is.
+      // `daemon.started` carries the whole config: the longest payload there is. It is the
+      // oldest event, so the feed is scrolled to it to be drawn.
+      await expect(rows(page).filter({ hasText: "lease.granted" })).not.toHaveCount(0);
+      await scrollFeedToOldest(page);
       await expect(
         rows(page).filter({ has: page.locator(".event-name", { hasText: "daemon.started" }) }),
       ).not.toHaveCount(0);
-      await expect(rows(page).filter({ hasText: "lease.granted" })).not.toHaveCount(0);
 
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
@@ -257,7 +270,7 @@ async function keyboardOnly(page: Page, host: RunningDaemon, tab: string): Promi
   await expect(nav).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
-  await expect(rows(page).filter({ hasText: "daemon.started" })).not.toHaveCount(0);
+  await expect(rows(page).filter({ hasText: "lease.granted" })).not.toHaveCount(0);
 
   // Into the filter: Tab reaches the checked choice, and the arrow keys move along them.
   const all = page.getByRole("radio", { name: "All" });

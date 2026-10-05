@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS, type Effect, type OperationName } from "./operations.js";
+import {
+  OPERATIONS,
+  type Effect,
+  type OperationName,
+  requestedClass,
+  requestedDevice,
+} from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
 import type { Role } from "./roles.js";
+import { platformCatalogSchema } from "./schemas.js";
 
 /**
  * The ADR §3 operation matrix, name -> role. A table-driven test against this makes
@@ -202,6 +209,30 @@ describe("component.install input", () => {
   });
 });
 
+describe("lease.request osVersion", () => {
+  const parse = (osVersion: string) =>
+    OPERATIONS["lease.request"].input.safeParse({ model: "iPhone 17", osVersion, platform: "ios" });
+
+  it.each([["18.4"], ["Baklava"], ["34-ext12"], [">=18"], [">=18 <26"], ["18 - 26"]])(
+    "accepts %s",
+    (osVersion) => {
+      expect(parse(osVersion).success).toBe(true);
+    },
+  );
+
+  it.each([["^18"], ["~18"], ["18.x"], ["18.X"], ["*"], [">=18 || <17"], [""]])(
+    "refuses %j with a message naming the accepted forms",
+    (osVersion) => {
+      const result = parse(osVersion);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toContain("18 - 26");
+        expect(result.error.issues[0]?.path).toEqual(["osVersion"]);
+      }
+    },
+  );
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
@@ -296,8 +327,8 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["lease.request"].output.parse(grant)).toBeDefined();
   });
 
-  it("lease.request: rejects a malformed input (missing model)", () => {
-    expect(() => OPERATIONS["lease.request"].input.parse({ platform: "ios" })).toThrow();
+  it("lease.request: rejects a malformed input (missing platform)", () => {
+    expect(() => OPERATIONS["lease.request"].input.parse({ model: "iPhone 17" })).toThrow();
   });
 
   it("doctor.run: round-trips a driver-advisory finding", () => {
@@ -481,6 +512,8 @@ describe("operation input/output round trips", () => {
               models: ["iPhone 17"],
               runtimes: ["26.0"],
               modelAliases: {},
+              classDefaults: {},
+              modelClasses: {},
               modelRuntimes: { "iPhone 17": ["26.0"] },
             },
           ],
@@ -511,6 +544,8 @@ describe("operation input/output round trips", () => {
           models: ["iPhone 17"],
           runtimes: ["26.0"],
           modelAliases: {},
+          classDefaults: {},
+          modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
           runtimeWorkers: { "26.0": ["wrk_1"] },
@@ -521,7 +556,14 @@ describe("operation input/output round trips", () => {
   });
 
   it("catalog.get rejects a platform entry without modelRuntimes", () => {
-    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"], modelAliases: {} };
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
+    };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
       /modelRuntimes/,
     );
@@ -532,11 +574,35 @@ describe("operation input/output round trips", () => {
     ).not.toThrow();
   });
 
+  it("catalog.get rejects an entry without modelClasses and one whose class is not one of the seven", () => {
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      classDefaults: {},
+      modelAliases: {},
+      modelRuntimes: { "iPhone 17": ["26.0"] },
+    };
+    const parse = (modelClasses?: unknown) =>
+      platformCatalogSchema.parse(modelClasses === undefined ? entry : { ...entry, modelClasses });
+
+    expect(() => parse()).toThrow(/modelClasses/);
+    expect(() => parse({ "iPhone 17": "phablet" })).toThrow(/modelClasses/);
+    expect(() => parse({ ["x".repeat(257)]: "phone" })).toThrow(/modelClasses/);
+    for (const deviceClass of ["phone", "tablet", "watch", "tv", "vision", "auto", "desktop"]) {
+      expect(parse({ "iPhone 17": deviceClass }).modelClasses).toEqual({
+        "iPhone 17": deviceClass,
+      });
+    }
+  });
+
   it("catalog.get rejects a platform entry without modelAliases, and takes images as optional", () => {
     const entry = {
       platform: "android",
       models: ["Pixel 8"],
       runtimes: ["35"],
+      classDefaults: {},
+      modelClasses: {},
       modelRuntimes: { "Pixel 8": ["35"] },
     };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
@@ -563,11 +629,15 @@ describe("operation input/output round trips", () => {
       runtimes: ["35"],
       modelRuntimes: { "Pixel 8": ["35"] },
       modelAliases: {},
+      classDefaults: {},
+      modelClasses: {},
     };
     const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
     const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);
     const aliasedModels = (count: number) =>
       Object.fromEntries(names(count).map((name) => [name, ["a"]]));
+    const classedModels = (count: number) =>
+      Object.fromEntries(names(count).map((name) => [name, "phone"]));
     // Each pair is the largest value accepted and the smallest one refused.
     const bounds = [
       [
@@ -580,6 +650,11 @@ describe("operation input/output round trips", () => {
       ],
       [{ modelAliases: { "Pixel 8": names(32) } }, { modelAliases: { "Pixel 8": names(33) } }],
       [{ modelAliases: aliasedModels(4096) }, { modelAliases: aliasedModels(4097) }],
+      [
+        { modelClasses: { ["x".repeat(256)]: "phone" } },
+        { modelClasses: { ["x".repeat(257)]: "phone" } },
+      ],
+      [{ modelClasses: classedModels(4096) }, { modelClasses: classedModels(4097) }],
       [{ customModels: ["x".repeat(256)] }, { customModels: ["x".repeat(257)] }],
       [{ customModels: names(4096) }, { customModels: names(4097) }],
       [
@@ -757,8 +832,11 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", slim: { bootTimeoutMs: 1 } },
-      android: { emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false } },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      android: {
+        defaultModels: {},
+        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
+      },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
@@ -773,6 +851,23 @@ describe("operation input/output round trips", () => {
       expect(() => shape.parse({ ...budget, usedBytes })).toThrow();
     }
     expect(() => shape.parse({ ...budget, limitBytes: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
+  it("config.get: carries each platform's defaultModels as lists of names per class, and refuses anything else", () => {
+    const shape = OPERATIONS["config.get"].output.shape;
+    const parse = (defaultModels: unknown) => ({
+      ios: shape.ios.shape.defaultModels.safeParse(defaultModels),
+      android: shape.android.shape.defaultModels.safeParse(defaultModels),
+    });
+
+    for (const parsed of Object.values(parse({ phone: ["iPhone 15", "iPhone 14"], tv: ["x"] }))) {
+      expect(parsed.success).toBe(true);
+      expect(parsed.data).toEqual({ phone: ["iPhone 15", "iPhone 14"], tv: ["x"] });
+    }
+    for (const refused of [{ phone: [] }, { phone: [""] }, { fridge: ["x"] }, { phone: "x" }]) {
+      expect(parse(refused).ios.success).toBe(false);
+      expect(parse(refused).android.success).toBe(false);
+    }
   });
 
   it("config.get: keeps both slim RAM sizes of the resource strategy when they are set", () => {
@@ -796,5 +891,48 @@ describe("operation input/output round trips", () => {
     const shape = OPERATIONS["config.get"].output.shape.capacity;
 
     expect(shape.parse(capacity)).toEqual(capacity);
+  });
+});
+
+describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () => {
+  const input = OPERATIONS["lease.request"].input;
+
+  it("refuses a request with both a class and a model, with a message naming the two fields", () => {
+    const result = input.safeParse({ class: "phone", model: "iPhone 16", platform: "ios" });
+
+    expect(result.success).toBe(false);
+    const message = result.success ? "" : result.error.issues.map((issue) => issue.message).join();
+    expect(message).toContain("`model`");
+    expect(message).toContain("`class`");
+  });
+
+  it("accepts a request with a class only, a model only, or neither", () => {
+    expect(input.safeParse({ class: "tablet", platform: "ios" }).success).toBe(true);
+    expect(input.safeParse({ model: "iPhone 16", platform: "ios" }).success).toBe(true);
+    expect(input.safeParse({ platform: "ios" }).success).toBe(true);
+  });
+
+  it("refuses a class that is not one of the seven", () => {
+    expect(input.safeParse({ class: "phablet", platform: "ios" }).success).toBe(false);
+  });
+
+  it("requestedDevice copies the class and leaves out the model a request did not name", () => {
+    expect(requestedDevice(input.parse({ class: "watch", platform: "ios" }))).toStrictEqual({
+      class: "watch",
+      platform: "ios",
+    });
+    expect(requestedDevice(input.parse({ platform: "android" }))).toStrictEqual({
+      platform: "android",
+    });
+    expect(requestedDevice(input.parse({ model: "Pixel 8", platform: "android" }))).toStrictEqual({
+      model: "Pixel 8",
+      platform: "android",
+    });
+  });
+
+  it("requestedClass answers the class named, phone for neither field, and none for an exact model", () => {
+    expect(requestedClass({ class: "tv" })).toBe("tv");
+    expect(requestedClass({})).toBe("phone");
+    expect(requestedClass({ model: "iPhone 16" })).toBeUndefined();
   });
 });

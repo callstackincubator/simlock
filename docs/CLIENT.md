@@ -38,6 +38,20 @@ await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();
 ```
 
+`requestLease` names its device in one of three ways: `model`, an exact model;
+`class`, one of `"phone"`, `"tablet"`, `"watch"`, `"tv"`, `"vision"`, `"auto"` or
+`"desktop"`, in place of a model; or neither, which asks for a `"phone"`. Naming both is a
+`BAD_REQUEST`. A request that names a class or nothing is granted an idle device
+that fits before any device is created, and `grant.device.spec` names the model
+you got:
+
+```ts
+await client.requestLease({ platform: "ios", class: "tablet" });
+await client.requestLease({ platform: "android" }); // a phone
+```
+
+Through a gateway, a request that names no `model` is a `BAD_REQUEST` for now.
+
 `requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
 mode the lease asks for. Without it the lease gets the default mode of the
 worker that serves it (`ios.defaultMode`, `full` unless configured). Any
@@ -60,7 +74,16 @@ type to create the device from, such as `"google_apis_playstore"`, as
 `getCatalog()` lists it under each image's `tag`. Without it Simlock picks the
 image itself (`google_apis` for the host's ABI when installed). With it the
 device comes from an installed image of that tag, and without `osVersion` from
-the newest API level that has one. A request with `imageTag` never downloads:
+the newest API level that has one.
+
+`osVersion` is an exact version (`"18.4"`) or a range: one or more of `>=`,
+`>`, `<=`, `<` followed by a version, joined by single spaces (`">=18 <26"`),
+or a hyphen range (`"18 - 26"`). A short version covers everything under it, so
+`">=18"` is 18.0 and newer. Anything written like a range but outside those forms (`^18`, `~18`, `18.x`, `*`, `||`) is `BAD_REQUEST`; any other string, such as `Baklava` or `34-ext12`, is an exact version. A range is served
+by an idle device whose OS satisfies it or by a new device on the newest
+installed runtime in it, and when none is installed it fails at once with
+`RUNTIME_MISSING`, whatever `allowDownload` says. Through a gateway a range is
+`BAD_REQUEST` for now. A request with `imageTag` never downloads:
 when no image of that tag is installed for the API level it fails with
 `RUNTIME_MISSING`, whatever `allowDownload` says. On iOS it is a
 `BAD_REQUEST`, and so is a tag that is not 1 to 64 letters, digits, `_`, `.`
@@ -244,7 +267,9 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 //    runtimes: ["18.4", "26.0"],
 //    defaultRuntime: "26.0",
 //    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
-//    modelAliases: {} }]
+//    modelAliases: {},
+//    modelClasses: { "iPhone 16": "phone", "iPhone XS": "phone" },
+//    classDefaults: { phone: "iPhone 16" } }]
 ```
 
 - `models` and `runtimes` are what is installed. A model and a runtime that
@@ -257,6 +282,14 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
   it, in any letter case. Only models with another name appear. On Android
   a built-in profile's AVD id is one (`{ "Pixel 8": ["pixel_8"] }`); iOS
   has none.
+- `modelClasses` maps a model to its class, one of `"phone"`, `"tablet"`,
+  `"watch"`, `"tv"`, `"vision"`, `"auto"` or `"desktop"`, when its tooling
+  reports one. A model with no entry is still listed and leasable by name.
+- `classDefaults` maps a class to the model Simlock would create for it on
+  this machine: the first name on the class's preference list that is listed,
+  is of the class and pairs with an installed runtime. The list is the names
+  in `ios.defaultModels.<class>` or `android.defaultModels.<class>`, then
+  Simlock's own. A class in which no listed name counts has no entry.
 - `images` is on Android entries only: every installed system image as
   `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
   image whose ABI the host cannot run natively is listed too.
@@ -277,7 +310,9 @@ model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
 runtime. The gateway sends a request only to a worker that pairs the model
 with the runtime. `modelAliases` and `images` are the unions of each
-worker's own. A model is in `customModels` when any worker that lists it
+worker's own, and so is `modelClasses`: when two workers class a model
+differently, the worker with the smallest id wins. A class has a `classDefaults`
+entry only when every connected worker reports the same model for it. A model is in `customModels` when any worker that lists it
 marks it custom; each worker's own list is in its catalog on
 `listWorkers()` from the admin client. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.
