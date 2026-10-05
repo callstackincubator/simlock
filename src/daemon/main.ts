@@ -160,7 +160,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBusLogger(logger),
     idGenerator,
   );
-  const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
+  const eventHistory = openEventHistory({
+    clock,
+    config,
+    dataDirectory,
+    eventBus,
+    filesystem,
+    logger,
+  });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
@@ -1180,6 +1187,7 @@ export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: Sli
  * opened costs the history, never the daemon: one error line, and replay answers from the ring.
  */
 function openEventHistory(options: {
+  readonly clock: Clock;
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
@@ -1190,7 +1198,14 @@ function openEventHistory(options: {
   const logger = options.logger.child("events");
   let sink: NodeFileLogSink | undefined;
   try {
-    sink = new NodeFileLogSink({ maxBytes: options.config.eventLog.rotateBytes, path });
+    const { maxBytes, retention, rotateBytes } = options.config.eventLog;
+    sink = new NodeFileLogSink({
+      clock: options.clock,
+      maxBytes: rotateBytes,
+      path,
+      retentionMs: retention,
+      totalMaxBytes: maxBytes,
+    });
   } catch (error: unknown) {
     logger.error("Event file could not be opened; events are kept in memory only", {
       error: error instanceof Error ? error.message : String(error),

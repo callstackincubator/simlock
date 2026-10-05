@@ -250,5 +250,6 @@ verbatim off the wire.
   without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
   one JSON line per event with the same fields. The file survives daemon
   restarts and crashes, is what `simlock events --since` reads, and is the
-  durable record: no event is copied into `daemon.log`. It is capped by
-  `eventLog.rotateBytes`, keeping one rotated generation. See ADR 0006.
+  durable record: no event is copied into `daemon.log`. It is kept for
+  `eventLog.retention` (seven days), bounded by `eventLog.maxBytes`, in numbered
+  generations of `eventLog.rotateBytes` each. See ADR 0006 and ADR 0016.

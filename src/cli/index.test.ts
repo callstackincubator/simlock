@@ -1659,6 +1659,25 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(wrote).toBe(false);
   });
 
+  it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
+    for (const value of ["0", "1.5"]) {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let wrote = false;
+      const exitCode = await runCli(
+        ["config", "set", "eventLog.retention", value],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {
+            wrote = true;
+          },
+        }),
+      );
+      expect(exitCode).toBe(2);
+      expect(wrote).toBe(false);
+      expect(output.stderr).toContain("eventLog.retention");
+    }
+  });
+
   it("still writes a genuinely valid key", async () => {
     const output = outputCapture(realCliEnvironmentPorts());
     let written: Record<string, unknown> | undefined;
@@ -4558,6 +4577,11 @@ describe("CLI: pure helpers", () => {
     expect(parseDuration("1h")).toBe(3_600_000);
     expect(() => parseDuration("banana")).toThrow();
   });
+
+  it("parseDuration accepts the d unit and rejects an unknown one", () => {
+    expect(parseDuration("2d")).toBe(2 * 24 * 60 * 60 * 1000);
+    expect(() => parseDuration("2w")).toThrow("Invalid duration");
+  });
 });
 
 // Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
@@ -5088,7 +5112,11 @@ function testConfig(): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,

@@ -1225,7 +1225,8 @@ an all-or-nothing that leaves the operator guessing.
   `since` (`simlock events --since`). They come from the daemon's event file,
   so they include events from before a daemon restart and beyond the 1000
   held in memory, back to the oldest event the file still holds
-  (`eventLog.rotateBytes`). Without `since`, the recent events held in
+  (`eventLog.retention` and `eventLog.maxBytes`). `since` takes `ms`, `s`,
+  `m`, `h` and `d` units (`?since=2d`). Without `since`, the recent events held in
   memory. Every event carries an `id`, the same one after a daemon restart;
   events written before the upgrade that added it are not returned. Events
   come back by `timestamp`, then in the order the daemon recorded them within
