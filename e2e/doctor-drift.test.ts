@@ -180,18 +180,37 @@ describe("doctor and drift", () => {
 
     // Registry-only destruction (safety.md #1/#3): --fix must never call a destructive
     // or state-changing driver verb. Every correction above is pure registry bookkeeping.
+    // The one call that is not --fix's is the warm pool booting back the device --fix just
+    // marked shut down, which was released a moment ago and has room: a `makeReady`, and only
+    // for that device.
     const calls = await env.driverLog.calls();
-    const destructiveOps = new Set(["destroy", "shutdown", "reclaim", "makeReady", "provision"]);
+    const destructiveOps = new Set(["destroy", "shutdown", "reclaim", "provision"]);
     expect(
       calls.filter((call) => destructiveOps.has(call.operation)),
       `--fix must be registry-only; saw: ${JSON.stringify(calls.map((call) => call.operation))}`,
     ).toEqual([]);
+    for (const call of calls.filter((entry) => entry.operation === "makeReady")) {
+      expect(
+        JSON.stringify(call.arguments),
+        "only the corrected device may be booted by the warm pool",
+      ).toContain(deviceA.device.driverDeviceId);
+    }
 
     const rowsAfterFix = await deviceRows(env);
     const rowA = rowsAfterFix.find((row) => row.id === registryIdOf(deviceA.device.driverDeviceId));
-    expect(rowA?.state, "deviceA's foreign-state-change should have been corrected").toBe(
-      "shutdown",
+    // `shutdown` is what --fix commits; the warm pool may already have booted the device back.
+    expect(["shutdown", "ready"], "deviceA must not be left in any other state").toContain(
+      rowA?.state,
     );
+    const shutdownEvents = (await env.events()).filter(
+      (entry) =>
+        entry.event === "device.shutdown" &&
+        JSON.stringify(entry.payload).includes(registryIdOf(deviceA.device.driverDeviceId)),
+    );
+    expect(
+      shutdownEvents.map((entry) => entry.payload),
+      "deviceA's foreign-state-change should have been corrected by doctor",
+    ).toEqual([{ deviceId: registryIdOf(deviceA.device.driverDeviceId), initiator: "doctor" }]);
     const rowB = rowsAfterFix.find((row) => row.id === registryIdOf(deviceB.device.driverDeviceId));
     expect(rowB?.state, "leased deviceB must be left alone by --fix").toBe("leased");
     const rowC = rowsAfterFix.find((row) => row.id === registryIdOf(deviceC.device.driverDeviceId));

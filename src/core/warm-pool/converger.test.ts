@@ -54,6 +54,7 @@ function harness(
     shutdown?: (target: DeviceRecord) => Promise<DeviceRecord | undefined>;
     boot?: (target: DeviceRecord) => Promise<DeviceRecord | undefined>;
     waiting?: () => readonly WaitingDemand[];
+    maintenance?: () => boolean;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -79,7 +80,13 @@ function harness(
   const shutdownArgs: unknown[][] = [];
   const bootCalls: string[] = [];
   const poolOptions: WarmPoolOptions = {
-    acquisition: { kick, waitingDemand },
+    acquisition: {
+      kick,
+      get maintenanceActive() {
+        return options.maintenance?.() ?? false;
+      },
+      waitingDemand,
+    },
     capacity: {
       runningCapacity: (devices): RunningCapacity => {
         const running = devices.filter((item) =>
@@ -401,6 +408,46 @@ describe("warm pool converger", () => {
 
     handoff?.release();
     await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("does nothing while an operator reset holds acquisition closed, and acts again once it is open", async () => {
+    let closed = true;
+    const rig = harness(
+      [device("a", "ready", 5_000), device("b", "ready", 1_000), device("s", "shutdown", 1_000)],
+      { limit: 1, maintenance: () => closed },
+    );
+
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.waitingDemand).not.toHaveBeenCalled();
+
+    closed = false;
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("stops acting on the rest of a pass when an operator reset begins during it", async () => {
+    let closed = false;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        maintenance: () => closed,
+        shutdown: async (target) => {
+          closed = true;
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+
+    await rig.pool.pass();
+
     expect(rig.shutdownCalls).toEqual(["a"]);
   });
 

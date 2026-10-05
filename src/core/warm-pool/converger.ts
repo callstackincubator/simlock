@@ -17,6 +17,8 @@ import { evaluate, type WarmProposal } from "./policy.js";
 export interface WarmPoolOptions {
   readonly acquisition: {
     kick(): void;
+    /** An operator reset (`nuke`) holds acquisition closed: the pool leaves every device alone. */
+    readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
   };
   readonly capacity: Pick<CapacityCoordinator, "runningCapacity" | "tryReserveBoot">;
@@ -113,6 +115,7 @@ export class WarmPool {
   }
 
   async #once(): Promise<void> {
+    if (this.options.acquisition.maintenanceActive) return;
     try {
       const proposals = await this.options.decisions.run(() => evaluate(this.#view()));
       for (const proposal of proposals) await this.#act(proposal);
@@ -146,6 +149,7 @@ export class WarmPool {
     // A failed step releases its reservation and so triggers the next pass at once; without a
     // pause that would retry a broken boot in a loop.
     if ((this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()) return;
+    if (this.options.acquisition.maintenanceActive) return;
     if (proposal.action === "shutdown") await this.#shutdown(proposal);
     else await this.#boot(proposal);
   }

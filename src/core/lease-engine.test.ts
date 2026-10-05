@@ -2645,6 +2645,23 @@ describe("LeaseEngine warm pool", () => {
     expect(harness.registry.snapshot.devices.map((item) => item.state)).toEqual(["ready", "ready"]);
   });
 
+  it("a nuke that deletes devices is not undone by the warm pool booting a released device back", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    await harness.engine.request(request, { ownerId: "held", requesterId: "held" });
+
+    await harness.engine.nuke(true);
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+  });
+
   it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({

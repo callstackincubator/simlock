@@ -2710,4 +2710,15 @@ describe("LeaseAcquisitionCoordinator waiting demand", () => {
     await pending;
     expect(harness.coordinator.waitingDemand()).toEqual([]);
   });
+
+  it("reports maintenance active between beginMaintenance and endMaintenance", async () => {
+    const harness = await createHarness();
+    expect(harness.coordinator.maintenanceActive).toBe(false);
+
+    await harness.coordinator.beginMaintenance();
+    expect(harness.coordinator.maintenanceActive).toBe(true);
+
+    await harness.coordinator.endMaintenance();
+    expect(harness.coordinator.maintenanceActive).toBe(false);
+  });
 });

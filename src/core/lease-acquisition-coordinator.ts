@@ -571,6 +571,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     );
   }
 
+  /** Whether an administrative reset holds acquisition closed; the warm pool does nothing meanwhile. */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
+  get maintenanceActive(): boolean {
+    return this.#admissionClosed;
+  }
+
   /** Direct availability notification for release, cleanup, and queue-timeout callers. */
   kick(): void {
     this.#wakeQueue();
