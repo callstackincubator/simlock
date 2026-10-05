@@ -547,8 +547,10 @@ const usage = await admin.usage({ from: Date.now() - 6 * 3_600_000, to: Date.now
 
 usage.totals.requests;       // lease requests made in the window
 usage.totals.wait.p95;       // milliseconds, or null when nothing waited
+usage.totals.failures.byEvent; // a count per failure event, e.g. "device.purge-failed"
 usage.workers[0]?.label;     // one entry for each worker; a worker lists itself
-usage.series;                // one point per bucket, for a chart
+usage.series;                // one point per bucket, for a chart; `waiting` counts every
+                             // request open at the bucket's end
 ```
 
 The daemon computes the figures from its event history, so they cover only what

@@ -9,7 +9,7 @@ function figuresFixture(overrides: Partial<UsageFigures> = {}): UsageFigures {
   return {
     boot: NONE,
     bySource: { booted: 0, provisioned: 0, warm: 0 },
-    errors: { byCode: {} },
+    failures: { byEvent: {} },
     granted: 0,
     held: NONE,
     incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
@@ -45,7 +45,7 @@ function usageFixture(overrides: Partial<UsageOutput> = {}): UsageOutput {
 const BUSY = figuresFixture({
   boot: { count: 2, max: 40_000, p50: 20_000, p95: 40_000 },
   bySource: { booted: 3, provisioned: 1, warm: 6 },
-  errors: { byCode: { "device.purge-failed": 2 } },
+  failures: { byEvent: { "device.purge-failed": 2 } },
   granted: 10,
   held: { count: 9, max: 3_725_000, p50: 300_000, p95: 1_800_000 },
   incidents: { crashRecovered: 1, lost: 4, quarantineRecovered: 3, quarantined: 2 },
@@ -93,7 +93,7 @@ describe("formatUsage", () => {
     expect(lines).toContain(
       "  Incidents:    2 quarantined, 1 recovered after a crash, 3 recovered from quarantine, 4 lost",
     );
-    expect(lines).toContain("  Errors:       device.purge-failed 2");
+    expect(lines).toContain("  Failures:     device.purge-failed 2");
   });
 
   it("says plainly what it has no figure for, and leaves out rows it has nothing to say in", () => {
@@ -104,7 +104,7 @@ describe("formatUsage", () => {
     expect(text).toContain("  Slots:        not known");
     expect(text).toContain("  Queue:        not known");
     expect(text).not.toContain("RAM:");
-    expect(text).not.toContain("Errors:");
+    expect(text).not.toContain("Failures:");
     expect(text).not.toContain("Rejected:");
     expect(text).not.toContain("Granted:");
     expect(text).not.toContain("Workers");
@@ -219,24 +219,24 @@ describe("formatUsage rows that depend on the figures", () => {
     const lines = formatUsage(
       usageFixture({
         totals: figuresFixture({
-          errors: { byCode: { "c.zed": 1, "a.alpha": 2, "b.mid": 3 } },
+          failures: { byEvent: { "c.zed": 1, "a.alpha": 2, "b.mid": 3 } },
           rejected: { byReason: { timeout: 1, "no-wait": 2, capacity: 3 }, total: 6 },
         }),
       }),
     ).split("\n");
 
-    expect(lines).toContain("  Errors:       a.alpha 2, b.mid 3, c.zed 1");
+    expect(lines).toContain("  Failures:     a.alpha 2, b.mid 3, c.zed 1");
     expect(lines).toContain("  Rejected:     capacity 3, no-wait 2, timeout 1");
   });
 
-  it("prints the Errors row only when there are error codes", () => {
+  it("prints the Failures row only when there are failure events", () => {
     const without = formatUsage(usageFixture());
     const withOne = formatUsage(
-      usageFixture({ totals: figuresFixture({ errors: { byCode: { "x.y": 1 } } }) }),
+      usageFixture({ totals: figuresFixture({ failures: { byEvent: { "x.y": 1 } } }) }),
     );
 
-    expect(without.split("\n").some((line) => line.startsWith("  Errors:"))).toBe(false);
-    expect(withOne.split("\n")).toContain("  Errors:       x.y 1");
+    expect(without.split("\n").some((line) => line.startsWith("  Failures:"))).toBe(false);
+    expect(withOne.split("\n")).toContain("  Failures:     x.y 1");
   });
 
   it("prints the Granted row only when something was granted", () => {

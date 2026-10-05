@@ -175,6 +175,31 @@ describe("simlock stats", () => {
     expect(table.stdout).toContain("Requests:");
   });
 
+  it("after a --no-wait refusal, requests and rejected.byReason.no-wait each rise by one and granted is unchanged", async () => {
+    const env = await withDaemon({
+      configOverrides: { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    expect((await env.cli([...LEASE_ARGS, "--agent-id", "agent-a", "--detach"])).code).toBe(0);
+    const before = await settledStats(env);
+
+    expect(
+      (await env.cli([...LEASE_ARGS, "--agent-id", "agent-b", "--no-wait", "--detach"])).code,
+    ).toBe(11);
+    const after = await settledStats(
+      env,
+      (usage) => usage.totals.requests > before.totals.requests,
+    );
+
+    expect(after.totals.requests).toBe(before.totals.requests + 1);
+    expect(after.totals.rejected.byReason["no-wait"]).toBe(
+      (before.totals.rejected.byReason["no-wait"] ?? 0) + 1,
+    );
+    expect(after.totals.granted).toBe(before.totals.granted);
+  });
+
   it("simlock stats --since 1h returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
     const env = await withDaemon();
     await env.driverScript.set({

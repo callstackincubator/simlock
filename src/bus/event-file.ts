@@ -9,7 +9,7 @@ export const EVENT_FILE_NAME = "events.jsonl";
 /**
  * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5).
  * With `carry`, also the latest envelope of each named event at or before `sinceTs` -- one per
- * `workerId` where the payload names one -- so a reader of a step function (ADR 0016 §3) is told
+ * `workerId` and one per `requester` where the payload names one -- so a reader of a step function (ADR 0016 §3) is told
  * the step in force when its window opens.
  * The current file is read first, then its generations `<path>.1`, `<path>.2` and so on until
  * one is missing (ADR 0016 §4). Newest first means a rotation landing mid-read can only make a
@@ -81,8 +81,9 @@ function noteRequest(requestedBefore: Set<string>, envelope: EventEnvelope): voi
 }
 
 /**
- * Keeps `envelope` as the step in force for its event and worker when it is a named event and no
- * later one is kept already. Ties on time and seq go to the one met last, the one written last.
+ * Keeps `envelope` as the step in force for its event, worker and requester when it is a named
+ * event and no later one is kept already. Ties on time and seq go to the one met last, the one
+ * written last.
  */
 function keepIfCarried(
   carried: Map<string, EventEnvelope>,
@@ -90,8 +91,13 @@ function keepIfCarried(
   carry: readonly EventName[],
 ): void {
   if (!carry.includes(envelope.event)) return;
-  const workerId = (envelope.payload as { readonly workerId?: unknown }).workerId;
-  const key = `${envelope.event}\u0000${typeof workerId === "string" ? workerId : ""}`;
+  const { workerId, requester } = envelope.payload as {
+    readonly workerId?: unknown;
+    readonly requester?: unknown;
+  };
+  const key = [envelope.event, workerId, requester]
+    .map((part) => (typeof part === "string" ? part : ""))
+    .join("\u0000");
   const kept = carried.get(key);
   if (kept === undefined || byTimeThenSeq(kept, envelope) <= 0) carried.set(key, envelope);
 }

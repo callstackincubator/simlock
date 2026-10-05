@@ -508,7 +508,7 @@ describe("device facts", () => {
     });
   });
 
-  it("counts each incident event under the name the figure uses, and each error under its event name", () => {
+  it("counts each incident event under the name the figure uses, and each `*-failed` event under its event name, a recovery failure under both", () => {
     const names: Record<string, string> = {
       "device.quarantine-abandoned": "lost",
       "device.quarantine-recovered": "quarantineRecovered",
@@ -518,17 +518,23 @@ describe("device facts", () => {
       "device.recovery-failed": "lost",
     };
     const incidents = Object.keys(names).map((name, i) => at(110 + i, name, {}));
-    const errors = [at(130, "device.purge-failed", {}), at(131, "component.install-failed", {})];
+    const failures = [
+      at(130, "device.purge-failed", {}),
+      at(131, "component.install-failed", {}),
+      at(132, "device.some-new-failed", {}),
+    ];
     const result = read([
       ...incidents,
-      ...errors,
-      at(132, "device.created", {}),
-      at(133, "lease.other", {}),
+      ...failures,
+      at(133, "device.created", {}),
+      at(134, "lease.other", {}),
     ]);
     expect(result.devices.map((d) => [d.kind, d.value])).toEqual([
       ...Object.values(names).map((v) => ["incident", v]),
-      ["error", "device.purge-failed"],
-      ["error", "component.install-failed"],
+      ["failure", "device.recovery-failed"],
+      ["failure", "device.purge-failed"],
+      ["failure", "component.install-failed"],
+      ["failure", "device.some-new-failed"],
     ]);
   });
 
@@ -550,6 +556,51 @@ describe("device facts", () => {
 
   it("adds the worker to the workers set from a device fact", () => {
     expect([...read([at(110, "device.quarantined", {})]).workers]).toEqual(["self"]);
+  });
+});
+
+describe("requests carried into the window", () => {
+  const grant = (ts: number, requestId: string, requester = "a") =>
+    at(ts, "lease.granted", { leaseId: `L${requestId}`, requestId, requester, source: "warm" });
+
+  it("carries a request made before the window that nothing had answered, with its outcome inside it", () => {
+    const result = read([request(90, "old"), grant(150, "old")]);
+    expect(result.requests).toEqual([]);
+    expect(result.carried).toHaveLength(1);
+    expect(result.carried[0]).toMatchObject({
+      outcome: { at: 150, kind: "granted", source: "warm" },
+      requestedAt: 90,
+      requester: "a",
+      worker: "self",
+    });
+  });
+
+  it("does not carry a request answered before the window, or one made inside it", () => {
+    const result = read([
+      request(80, "done", "b"),
+      grant(90, "done", "b"),
+      request(85, "refused", "c"),
+      at(95, "lease.rejected", { reason: "timeout", requestId: "refused", requester: "c" }),
+      request(110, "inside"),
+    ]);
+    expect(result.carried).toEqual([]);
+    expect(result.requests).toHaveLength(1);
+  });
+
+  it("carries only a requester's latest request made before the window", () => {
+    const result = read([request(80, "first"), grant(85, "first"), request(90, "second")]);
+    expect(result.carried.map((fact) => fact.requestedAt)).toEqual([90]);
+  });
+
+  it("carries a gateway request answered only by a relayed answer inside the window, matched by the namespaced requester", () => {
+    const answered = read([request(90, "old"), relayedGrant(150)], FLEET);
+    expect(answered.carried).toEqual([
+      expect.objectContaining({ outcome: expect.objectContaining({ at: 150 }), worker: "w1" }),
+    ]);
+    const before = read([request(80, "old"), relayedGrant(90), request(95, "later")], FLEET);
+    expect(before.carried.map((fact) => fact.requestedAt)).toEqual([95]);
+    const first = read([request(80, "old"), relayedGrant(90)], FLEET);
+    expect(first.carried).toEqual([]);
   });
 });
 
@@ -613,12 +664,32 @@ describe("a gateway", () => {
     expect(read(events("w1", "M"), FLEET).requests[0]).not.toHaveProperty("endedAt");
   });
 
-  it("gives a request with no dispatch no worker and no outcome, and does not count its grant", () => {
-    const result = read([request(110, "r"), relayedGrant(112)], FLEET);
+  it("gives a request with no dispatch and no relayed answer no worker and no outcome", () => {
+    const result = read([request(110, "r")], FLEET);
     expect(result.requests).toEqual([
       { platform: "ios", requestedAt: 110, requester: "a", worker: undefined },
     ]);
     expect([...result.workers]).toEqual([]);
+  });
+
+  it("takes the worker of the relayed answer for a request with no dispatch", () => {
+    const grant = read([request(110, "r"), relayedGrant(112, { workerId: "w5" })], FLEET);
+    expect(grant.requests[0]).toMatchObject({
+      outcome: { kind: "granted" },
+      requestedAt: 110,
+      worker: "w5",
+    });
+    const rejection = read([request(110, "r"), relayedReject(112, { workerId: "w6" })], FLEET);
+    expect(rejection.requests[0]).toMatchObject({ outcome: { kind: "rejected" }, worker: "w6" });
+    expect([...grant.workers]).toEqual(["w5"]);
+  });
+
+  it("names the worker the request was dispatched to, not the one that relayed the answer", () => {
+    const result = read(
+      [request(110, "r"), dispatch(111, "r", "a", "w1"), relayedGrant(112, { workerId: "w2" })],
+      FLEET,
+    );
+    expect(result.requests[0]?.worker).toBe("w1");
   });
 
   it("serves a request through its dispatch, and records the worker it was dispatched to", () => {
@@ -707,12 +778,11 @@ describe("a gateway", () => {
     expect(result.requests[0]).not.toHaveProperty("outcome");
   });
 
-  it("ignores a relayed grant of another worker or another requester", () => {
+  it("ignores a relayed grant of another requester, or of one without the gateway's prefix", () => {
     const result = read(
       [
         request(110, "r"),
         dispatch(111, "r"),
-        relayedGrant(112, { workerId: "w2" }),
         relayedGrant(113, { requester: "gw:b" }),
         relayedGrant(114, { requester: "a" }),
       ],
@@ -734,11 +804,12 @@ describe("a gateway", () => {
     expect(result.requests[0]?.outcome).toMatchObject({ source: "first" });
   });
 
-  it("lets a grant that came before the dispatch count, but not a rejection", () => {
+  it("counts a grant or a rejection that came before the dispatch", () => {
     const grant = read([request(110, "r"), relayedGrant(111), dispatch(112, "r")], FLEET);
     expect(grant.requests[0]?.outcome).toMatchObject({ kind: "granted" });
+    expect(grant.requests[0]?.worker).toBe("w1");
     const rejection = read([request(110, "r"), relayedReject(111), dispatch(112, "r")], FLEET);
-    expect(rejection.requests[0]).not.toHaveProperty("outcome");
+    expect(rejection.requests[0]?.outcome).toMatchObject({ kind: "rejected" });
   });
 
   it("does not let a grant from before the request count", () => {
@@ -767,12 +838,12 @@ describe("a gateway", () => {
     expect(second?.outcome).toMatchObject({ source: "late" });
   });
 
-  it("cuts off at a next dispatch of the requester even when its request was not seen", () => {
+  it("does not cut off at a next dispatch of the requester, only at its next request", () => {
     const result = read(
       [request(110, "r1"), dispatch(111, "r1"), dispatch(112, "r2"), relayedGrant(113)],
       FLEET,
     );
-    expect(result.requests[0]).not.toHaveProperty("outcome");
+    expect(result.requests[0]?.outcome).toMatchObject({ kind: "granted" });
   });
 
   it("does not cut off at another requester's request", () => {

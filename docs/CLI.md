@@ -1925,9 +1925,10 @@ What the figures count:
   time is left out of the figures rather than counted as zero.
 - **Incidents** count devices quarantined, devices recovered after a crash,
   devices recovered from quarantine, and devices lost (a recovery that failed, or
-  a quarantined device given up on). **Errors** counts failures that carry no
-  reason of their own among the rejections: purges that failed and component
-  installs that failed.
+  a quarantined device given up on). **Failures** counts the failure events in
+  the window by name: `device.purge-failed`, `device.recovery-failed`,
+  `component.install-failed`, and any other event whose name ends in
+  `-failed`. The row is left out when there were none.
 - A requester that is a token shows the token's label beside its id.
 
 The window is rounded down to whole steps of the time series `--json` carries,

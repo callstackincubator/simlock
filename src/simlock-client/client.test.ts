@@ -231,7 +231,7 @@ describe("connectSimlock: handshake", () => {
     const figures = {
       boot: none,
       bySource: { booted: 0, provisioned: 0, warm: 0 },
-      errors: { byCode: {} },
+      failures: { byEvent: {} },
       granted: 0,
       held: none,
       incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },

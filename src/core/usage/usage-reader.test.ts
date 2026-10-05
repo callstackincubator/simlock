@@ -63,7 +63,7 @@ const answer = (result: Awaited<ReturnType<UsageReader["get"]>>) => {
 };
 
 describe("UsageReader", () => {
-  it("rounds the window down to the bucket on both sides, so it never ends in the future, and reads the history from its start, with the two step events carried", async () => {
+  it("rounds the window down to the bucket on both sides, so it never ends in the future, and reads the history from its start, with the step and the request events carried", async () => {
     const { source, state } = history();
     const { usage } = reader(source);
 
@@ -71,7 +71,18 @@ describe("UsageReader", () => {
 
     expect(result.window).toEqual({ from: T0, to: T0 + HOUR });
     expect(result.bucketMs).toBe(MINUTE);
-    expect(state.asked).toEqual([{ carry: ["capacity.changed", "queue.changed"], sinceTs: T0 }]);
+    expect(state.asked).toEqual([
+      {
+        carry: [
+          "capacity.changed",
+          "lease.granted",
+          "lease.rejected",
+          "lease.requested",
+          "queue.changed",
+        ],
+        sinceTs: T0,
+      },
+    ]);
   });
 
   it("leaves a window that is already on bucket edges as it is", async () => {

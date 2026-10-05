@@ -154,7 +154,7 @@ function sourcesOf(grantedSources: readonly string[]): UsageFigures["bySource"] 
 /** The figures a device event brings: durations, incidents, and failures by name. */
 function deviceFigures(
   devices: readonly DeviceFact[],
-): Pick<UsageFigures, "boot" | "errors" | "incidents" | "provisioning"> {
+): Pick<UsageFigures, "boot" | "failures" | "incidents" | "provisioning"> {
   const durations = (kind: DeviceFact["kind"]) =>
     summarise(devices.filter((fact) => fact.kind === kind).map((fact) => fact.value as number));
   const named = (kind: DeviceFact["kind"]) =>
@@ -162,7 +162,7 @@ function deviceFigures(
   const incidents = named("incident");
   return {
     boot: durations("boot"),
-    errors: { byCode: named("error") },
+    failures: { byEvent: named("failure") },
     incidents: {
       crashRecovered: incidents.crashRecovered ?? 0,
       lost: incidents.lost ?? 0,
@@ -283,7 +283,7 @@ function seriesOf(read: ReadEvents, window: UsageWindow, bucketMs: number): Usag
   );
   const capacity = valuesAt(scopedSteps(read.capacity, {}), ends);
   const depths = valuesAt(read.queue, ends);
-  const waiting = waitingAt(read.requests, ends);
+  const waiting = waitingAt([...read.requests, ...read.carried], ends);
   return ends.map((at, index) => {
     const values = capacity[index] as readonly CapacityValue[];
     const ram = ramOf(values, "used");
@@ -298,7 +298,10 @@ function seriesOf(read: ReadEvents, window: UsageWindow, bucketMs: number): Usag
   });
 }
 
-/** How many requests have been made and not yet settled at each of `times`, which ascend. */
+/**
+ * How many requests have been made and not yet settled at each of `times`, which ascend: every
+ * request open at that time, those made before the window and still open when it began included.
+ */
 function waitingAt(requests: readonly RequestFact[], times: readonly number[]): number[] {
   const ascending = (values: number[]) => values.sort((left, right) => left - right);
   const made = ascending(requests.flatMap((fact) => fact.requestedAt ?? []));

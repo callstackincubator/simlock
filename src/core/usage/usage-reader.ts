@@ -3,7 +3,15 @@ import type { UsageOutput } from "../../contract/index.js";
 import { computeUsage, seriesBucketMs, type UsageWindow } from "./compute-usage.js";
 
 /** The two timelines whose step in force at a window's start is read with it (ADR 0016 §3). */
-const STEP_EVENTS: readonly EventName[] = ["capacity.changed", "queue.changed"];
+/** The events whose latest envelope before the window the figures need: the two steps, and the
+ * latest request and answer of each requester, which tell what was still waiting at its start. */
+const STEP_EVENTS: readonly EventName[] = [
+  "capacity.changed",
+  "lease.granted",
+  "lease.rejected",
+  "lease.requested",
+  "queue.changed",
+];
 
 /** The part of the event history `usage.get` reads (`EventHistory` satisfies it). */
 export interface UsageHistory {

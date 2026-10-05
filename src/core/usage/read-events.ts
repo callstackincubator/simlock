@@ -37,10 +37,10 @@ interface Rejected {
 }
 
 export interface DeviceFact {
-  readonly kind: "provisioning" | "boot" | "incident" | "error";
+  readonly kind: "provisioning" | "boot" | "incident" | "failure";
   readonly worker: string | undefined;
   readonly platform: Platform | undefined;
-  /** The duration for the first two, the incident or error name for the others. */
+  /** The duration for the first two, the incident name or the failure event name for the others. */
   readonly value: number | string;
 }
 
@@ -56,6 +56,8 @@ export type CapacityStep = Step<
 
 export interface ReadEvents {
   readonly requests: readonly RequestFact[];
+  /** Requests made before the window and still open when it began; only the series counts them. */
+  readonly carried: readonly RequestFact[];
   readonly devices: readonly DeviceFact[];
   readonly capacity: readonly CapacityStep[];
   readonly queue: readonly Step<number>[];
@@ -94,8 +96,8 @@ const INCIDENT_OF: Readonly<Record<string, Incident>> = {
   "device.recovered": "crashRecovered",
   "device.recovery-failed": "lost",
 };
-/** Failures that carry no reason of their own among the rejections, counted by their event name. */
-const ERROR_EVENTS = new Set(["device.purge-failed", "component.install-failed"]);
+/** A failure is any event named `*-failed`, counted by its name. */
+const isFailure = (event: string): boolean => event.endsWith("-failed");
 
 const text = (payload: Payload, key: string): string | undefined => {
   const value = payload[key];
@@ -117,7 +119,11 @@ const objectOf = (value: unknown): Payload | undefined =>
 type RelayedAnswer =
   | { readonly kind: "granted"; readonly source: string; readonly leaseId: string }
   | { readonly kind: "rejected"; readonly reason: string };
-type Relayed = { readonly index: number; readonly at: number } & RelayedAnswer;
+type Relayed = {
+  readonly index: number;
+  readonly at: number;
+  readonly worker: string;
+} & RelayedAnswer;
 
 interface Dispatch {
   readonly index: number;
@@ -162,6 +168,9 @@ class Reader {
   readonly #workers = new Set<string>();
   readonly #devicePlatform = new Map<string, Platform>();
   readonly #requested = new Map<string, Request>();
+  /** The latest request of each requester made before the window, and where each was answered. */
+  readonly #carriedRequests = new Map<string, Request & { readonly requestId: string }>();
+  readonly #answeredBefore = new Map<string, number>();
   readonly #ownRejections = new Map<
     string,
     Omit<Rejected, "kind"> & {
@@ -173,6 +182,7 @@ class Reader {
   readonly #ends = new Map<string, number>();
   readonly #dispatches = new Map<string, Dispatch>();
   readonly #boundaries = new Map<string, number[]>();
+  /** Relayed grants and rejections by the namespaced requester they are for. */
   readonly #relayed = new Map<string, Relayed[]>();
   readonly #handlers: Record<string, (seen: Seen) => void> = {
     "capacity.changed": (seen) => this.#capacityChanged(seen),
@@ -211,6 +221,7 @@ class Reader {
       capacity: this.#capacity,
       devices: this.#devices,
       queue: this.#queue,
+      carried: this.#carriedOpen(),
       requests: [...this.#requests(), ...this.#refusedAtAdmission()],
       workers: this.#workers,
     };
@@ -253,7 +264,17 @@ class Reader {
     const requestId = text(seen.payload, "requestId");
     const requester = text(seen.payload, "requester");
     this.#boundary(requester, seen.index);
-    if (!seen.within || requestId === undefined || requester === undefined) return;
+    if (requestId === undefined || requester === undefined) return;
+    if (seen.event.timestamp <= this.window.from) {
+      this.#carriedRequests.set(requester, {
+        at: seen.event.timestamp,
+        index: seen.index,
+        platform: requestPlatform(seen.payload),
+        requestId,
+        requester,
+      });
+    }
+    if (!seen.within) return;
     this.#requested.set(requestId, {
       at: seen.event.timestamp,
       index: seen.index,
@@ -266,7 +287,6 @@ class Reader {
     const requestId = text(seen.payload, "requestId");
     const requester = text(seen.payload, "requesterId");
     const worker = text(seen.payload, "workerId");
-    this.#boundary(requester, seen.index);
     if (!this.options.fleet || !seen.within) return;
     if (requestId === undefined || requester === undefined || worker === undefined) return;
     this.#dispatches.set(requestId, { index: seen.index, requestId, requester, worker });
@@ -275,14 +295,19 @@ class Reader {
   #relay(seen: Seen, relayed: RelayedAnswer): void {
     const requester = text(seen.payload, "requester");
     if (requester === undefined || seen.worker === undefined) return;
-    const key = this.#key(seen.worker, requester);
-    const entry = { ...relayed, at: seen.event.timestamp, index: seen.index } as Relayed;
-    this.#relayed.set(key, [...(this.#relayed.get(key) ?? []), entry]);
+    const entry = {
+      ...relayed,
+      at: seen.event.timestamp,
+      index: seen.index,
+      worker: seen.worker,
+    } as Relayed;
+    this.#relayed.set(requester, [...(this.#relayed.get(requester) ?? []), entry]);
   }
 
   #rejected(seen: Seen): void {
     const requestId = text(seen.payload, "requestId");
     const reason = text(seen.payload, "reason");
+    if (this.#answeredEarlier(seen)) return;
     if (!seen.within || requestId === undefined || reason === undefined) return;
     const requester = text(seen.payload, "requester");
     if (seen.own) {
@@ -298,8 +323,16 @@ class Reader {
     }
   }
 
+  /** Notes where a requester was last answered before the window; true for such an answer. */
+  #answeredEarlier(seen: Seen): boolean {
+    if (seen.event.timestamp > this.window.from) return false;
+    const requester = text(seen.payload, "requester");
+    if (requester !== undefined) this.#answeredBefore.set(requester, seen.index);
+    return true;
+  }
+
   #granted(seen: Seen): void {
-    if (!seen.within) return;
+    if (this.#answeredEarlier(seen) || !seen.within) return;
     if (this.options.fleet) {
       this.#relay(seen, {
         kind: "granted",
@@ -350,16 +383,14 @@ class Reader {
 
   #deviceEvent(seen: Seen): void {
     const incident = INCIDENT_OF[seen.event.event];
-    if (!this.#counts(seen) || (incident === undefined && !ERROR_EVENTS.has(seen.event.event)))
-      return;
+    const failure = isFailure(seen.event.event);
+    if (!this.#counts(seen) || (incident === undefined && !failure)) return;
     const platform =
       platformOf(seen.payload.platform) ??
       this.#platformOfDevice(seen.worker, text(seen.payload, "deviceId"));
-    this.#addDevice(seen, {
-      kind: incident === undefined ? "error" : "incident",
-      platform,
-      value: incident ?? seen.event.event,
-    });
+    if (incident !== undefined)
+      this.#addDevice(seen, { kind: "incident", platform, value: incident });
+    if (failure) this.#addDevice(seen, { kind: "failure", platform, value: seen.event.event });
   }
 
   #platformOfDevice(worker: string, deviceId: string | undefined): Platform | undefined {
@@ -380,6 +411,18 @@ class Reader {
     const facts: RequestFact[] = [];
     for (const [requestId, request] of this.#requested) {
       facts.push(this.#factFor(requestId, request));
+    }
+    return facts;
+  }
+
+  /** The requests made before the window that nothing had answered when it began. */
+  #carriedOpen(): RequestFact[] {
+    const facts: RequestFact[] = [];
+    for (const [requester, request] of this.#carriedRequests) {
+      const answered = [requester, `${this.options.requesterPrefix}${requester}`].some(
+        (key) => (this.#answeredBefore.get(key) ?? -1) > request.index,
+      );
+      if (!answered) facts.push(this.#factFor(request.requestId, request));
     }
     return facts;
   }
@@ -408,20 +451,19 @@ class Reader {
       : this.#withEnd({ ...base, outcome: grant, worker: own }, grant.leaseId, own);
   }
 
-  /** A fleet request's outcome is the worker's, found through its dispatch (ADR 0016 §6). */
+  /** A fleet request's outcome is the worker's relayed answer for its requester (ADR 0016 §6). */
   #fleetFact(base: RequestFactBase, requestId: string, request: Request): RequestFact {
-    const dispatch = this.#dispatches.get(requestId);
-    if (dispatch === undefined) return { ...base, worker: undefined };
-    this.#workers.add(dispatch.worker);
-    const worker = dispatch.worker;
-    const relayed = this.#fleetOutcome(dispatch, request.index);
+    const dispatched = this.#dispatches.get(requestId)?.worker;
+    const relayed = this.#fleetOutcome(request);
+    const worker = dispatched ?? relayed?.worker;
+    if (worker !== undefined) this.#workers.add(worker);
     if (relayed === undefined) return { ...base, worker };
     if (relayed.kind === "rejected") {
       const outcome: Rejected = { at: relayed.at, kind: "rejected", reason: relayed.reason };
       return { ...base, outcome, worker };
     }
     const outcome: Granted = { at: relayed.at, kind: "granted", source: relayed.source };
-    return this.#withEnd({ ...base, outcome, worker }, relayed.leaseId, worker);
+    return this.#withEnd({ ...base, outcome, worker }, relayed.leaseId, relayed.worker);
   }
 
   #withEnd(fact: RequestFact, leaseId: string, worker: string): RequestFact {
@@ -430,19 +472,16 @@ class Reader {
   }
 
   /**
-   * The first relayed grant or rejection from the worker a request was dispatched to, for its
-   * namespaced requester, that falls before the requester's next request (ADR 0016 §6). A rejection
-   * must come at or after the dispatch. A grant may come before it: a warm device is granted
-   * before the answer that announces the dispatch reaches the gateway, so a grant counts from the
-   * request.
+   * The first relayed grant or rejection for the request's namespaced requester at or after the
+   * gateway's own `lease.requested` for it and before that requester's next one (ADR 0016 §6). A
+   * grant may come before `request.dispatched`: a warm device is granted before the dispatch
+   * answer reaches the gateway.
    */
-  #fleetOutcome(dispatch: Dispatch, requestIndex: number): Relayed | undefined {
-    const next = this.#boundariesOf(dispatch.requester).find((index) => index > dispatch.index);
-    const key = this.#key(dispatch.worker, `${this.options.requesterPrefix}${dispatch.requester}`);
-    return (this.#relayed.get(key) ?? []).find(
+  #fleetOutcome(request: Request): Relayed | undefined {
+    const next = this.#boundariesOf(request.requester).find((index) => index > request.index);
+    return (this.#relayed.get(`${this.options.requesterPrefix}${request.requester}`) ?? []).find(
       (candidate) =>
-        candidate.index >= (candidate.kind === "granted" ? requestIndex : dispatch.index) &&
-        (next === undefined || candidate.index < next),
+        candidate.index >= request.index && (next === undefined || candidate.index < next),
     );
   }
 

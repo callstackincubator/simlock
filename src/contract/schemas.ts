@@ -1064,7 +1064,7 @@ const usageFiguresSchema = z.object({
     warm: z.number().int().nonnegative(),
   }),
   boot: usageSamplesSchema,
-  errors: z.object({ byCode: usageCountsSchema }),
+  failures: z.object({ byEvent: usageCountsSchema }),
   granted: z.number().int().nonnegative(),
   held: usageSamplesSchema,
   incidents: z.object({

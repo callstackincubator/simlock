@@ -91,9 +91,9 @@ function totalRows(totals: UsageFigures): string[] {
       `${totals.incidents.quarantined} quarantined, ${totals.incidents.crashRecovered} recovered after a crash, ` +
         `${totals.incidents.quarantineRecovered} recovered from quarantine, ${totals.incidents.lost} lost`,
     ),
-    ...(Object.keys(totals.errors.byCode).length === 0
+    ...(Object.keys(totals.failures.byEvent).length === 0
       ? []
-      : [row("Errors:", list(totals.errors.byCode))]),
+      : [row("Failures:", list(totals.failures.byEvent))]),
   ];
 }
 

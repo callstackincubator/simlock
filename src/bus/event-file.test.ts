@@ -565,6 +565,39 @@ describe("readEventFile", () => {
     expect(await read(step("evt_5", 5, 200), step("evt_6", 5, 200))).toEqual(["evt_6"]);
   });
 
+  it("readEventFile with carry keeps the latest of a named event for each requester, so a request still open when the window opens is carried", async () => {
+    const forRequester = (
+      seq: number,
+      timestamp: number,
+      event: "lease.requested" | "lease.granted",
+      requester: string,
+    ): EventEnvelope =>
+      ({
+        event,
+        id: `evt_${seq}`,
+        module: "test",
+        payload: { requester },
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        forRequester(1, 100, "lease.requested", "a"),
+        forRequester(2, 110, "lease.requested", "b"),
+        forRequester(3, 120, "lease.granted", "a"),
+        forRequester(4, 130, "lease.requested", "a"),
+        forRequester(5, 400, "lease.requested", "c"),
+      ),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["lease.requested", "lease.granted"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.seq)).toEqual([2, 3, 4, 5]);
+  });
+
   it("readEventFile with carry returns the latest capacity.changed and queue.changed at or before sinceTs, one per worker id, and none when there is none", async () => {
     const step = (
       seq: number,

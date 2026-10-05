@@ -562,25 +562,21 @@ describe("computeUsage", () => {
   });
 
   it("with fleet: true settles a dispatched request as rejected, with the worker's reason, from the relayed lease.rejected of the worker it was dispatched to", () => {
-    const dispatched = (workerId: string) =>
-      at(T0 + 2_000, "request.dispatched", {
-        model: "m",
-        platform: "ios",
-        queuedMs: 0,
-        reason: "free-capacity",
-        requestId: "gw-r1",
-        requesterId: "agent-a",
-        stage: "s",
-        workerId,
-      });
-    const base = [requested(T0 + 1_000, "gw-r1")];
-
     const usage = computeUsage(
       [
-        ...base,
-        dispatched("w1"),
-        // Another worker's rejection for the same requester is not this request's outcome.
-        rejected(T0 + 2_500, "w2-r", "no-wait", "gw:g1:agent-a", { workerId: "w2" }),
+        requested(T0 + 1_000, "gw-r1"),
+        at(T0 + 2_000, "request.dispatched", {
+          model: "m",
+          platform: "ios",
+          queuedMs: 0,
+          reason: "free-capacity",
+          requestId: "gw-r1",
+          requesterId: "agent-a",
+          stage: "s",
+          workerId: "w1",
+        }),
+        // Another requester's rejection is not this request's outcome.
+        rejected(T0 + 2_500, "w1-x", "no-wait", "gw:g1:agent-b", { workerId: "w1" }),
         rejected(T0 + 3_000, "w1-r", "boot-timeout", "gw:g1:agent-a", { workerId: "w1" }),
       ],
       WINDOW,
@@ -647,6 +643,39 @@ describe("computeUsage", () => {
 
     expect(usage.totals.granted).toBe(1);
     expect(usage.totals.wait.p50).toBe(400);
+  });
+
+  it("with fleet: true does not credit a requester's next request with a grant that came before it", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        // The grant for the first request reaches the gateway ahead of its dispatch, and the
+        // requester then asks again and nothing answers the second request.
+        granted(T0 + 1_400, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+        requested(T0 + 10_000, "gw-r2"),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.requests).toBe(2);
+    expect(usage.totals.granted).toBe(1);
+    expect(usage.totals.wait).toEqual({ count: 1, max: 400, p50: 400, p95: 400 });
+  });
+
+  it("with fleet: true names the worker of the relayed grant when the request has no request.dispatched", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        granted(T0 + 1_400, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w7" }),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.granted).toBe(1);
+    expect(usage.workers).toHaveLength(1);
+    expect(usage.workers[0]).toMatchObject({ granted: 1, id: "w7", requests: 1 });
   });
 
   it("sets partial and coversFrom when the oldest event is inside the window", () => {
@@ -730,7 +759,7 @@ describe("computeUsage", () => {
     });
   });
 
-  it("counts failures that carry no reason of their own by event name under errors.byCode", () => {
+  it("counts every `*-failed` event in the window by its event name under failures.byEvent, by the event's timestamp", () => {
     const usage = computeUsage(
       [
         at(T0 + 1_000, "device.purge-failed", {
@@ -753,15 +782,22 @@ describe("computeUsage", () => {
           error: "x",
           platform: "ios",
         }),
+        at(T0 + 4_000, "device.recovery-failed", { deviceId: "d3", leaseId: "l" }),
+        at(T0 + 5_000, "device.some-new-failed" as EventName, { deviceId: "d3" }),
+        at(WINDOW.from - 1, "device.purge-failed", { deviceId: "d9" }),
+        at(WINDOW.to + 1, "device.purge-failed", { deviceId: "d9" }),
       ],
       WINDOW,
       WORKER,
     );
 
-    expect(usage.totals.errors.byCode).toEqual({
+    expect(usage.totals.failures.byEvent).toEqual({
       "component.install-failed": 1,
       "device.purge-failed": 2,
+      "device.recovery-failed": 1,
+      "device.some-new-failed": 1,
     });
+    expect(usage.totals.incidents.lost).toBe(1);
   });
 
   it("sorts events supplied out of order and leaves the caller's array exactly as it was", () => {
@@ -829,7 +865,7 @@ describe("computeUsage", () => {
     expect(usage.totals.bySource).toEqual({ booted: 0, provisioned: 0, warm: 1 });
   });
 
-  it("keeps durations and incidents out of errors.byCode when device events of every kind are present", () => {
+  it("keeps durations and incidents out of failures.byEvent when device events of every kind are present", () => {
     const usage = computeUsage(
       [
         at(T0 + 1_000, "device.provisioned", {
@@ -852,7 +888,7 @@ describe("computeUsage", () => {
       WORKER,
     );
 
-    expect(usage.totals.errors.byCode).toEqual({ "device.purge-failed": 1 });
+    expect(usage.totals.failures.byEvent).toEqual({ "device.purge-failed": 1 });
     expect(usage.totals.incidents.quarantined).toBe(1);
     expect(usage.totals.boot.count).toBe(1);
     expect(usage.totals.provisioning.count).toBe(1);
@@ -969,6 +1005,40 @@ describe("computeUsage", () => {
 
     expect(worker.workers[0]?.queue).toEqual({ meanDepth: 2, peakDepth: 2 });
     expect(fleet.workers[0]?.queue).toEqual({ meanDepth: null, peakDepth: null });
+  });
+
+  it("counts a request made before the window and still waiting at its start in the series' waiting, though in no total", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 - 30_000, "old", "agent-a"),
+        // Answered before the window opened: not waiting at its start.
+        requested(T0 - 40_000, "done", "agent-b"),
+        granted(T0 - 35_000, "done", "l0", "warm", "agent-b"),
+        queueChanged(T0 - 30_000, 1),
+        granted(T0 + 90_000, "old", "l1"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 0, 0]);
+    expect(usage.series[0]?.queueDepth).toBe(1);
+    expect(usage.totals.requests).toBe(0);
+    expect(usage.totals.granted).toBe(0);
+  });
+
+  it("with fleet: true counts a request made before the window until a worker's relayed answer for its requester", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 - 30_000, "gw-old", "agent-a"),
+        granted(T0 + 90_000, "w-1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 0, 0]);
+    expect(usage.totals.granted).toBe(0);
   });
 
   it("counts a request as waiting from the instant it is made until the instant it settles, per series point", () => {
