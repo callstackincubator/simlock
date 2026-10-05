@@ -1151,8 +1151,9 @@ under. Leased devices are never touched by any of this.
 A completed reclaim (`ReclaimCoordinator#reclaim`) commits exactly the state
 the driver's reclaim returned: `shutdown` on iOS, `ready` on Android. It makes
 no keep-or-shutdown decision and boots nothing, so an Android device released
-over the running limit stays `ready` until the warm pool module (ADR 0017)
-lands.
+over the running limit stays `ready`: nothing brings the pool back under the
+limit at release time until the warm pool module (ADR 0017) lands, and only
+idle shutdown or a later demand eviction shuts it down meanwhile.
 
 ## Device state machine
 
@@ -1330,10 +1331,12 @@ still counts as running capacity and is invisible to every grant path
 `reclaim` operation claim for its whole duration — which is how
 `StartupConverger#recoverInterruptedReclaims` and `simlock doctor`'s
 stalled-transition finding both tell a live purge from an abandoned one. A
-waiter queued for exactly that device is granted the moment the purge settles:
-the coordinator re-notifies acquisition *after* releasing the claim, because
-the reclaim coordinator's own notification fires while the device is still claimed and
-therefore still unselectable.
+waiter queued for exactly that device is planned again the moment the purge
+settles: the coordinator re-notifies acquisition *after* releasing the claim,
+because the reclaim coordinator's own notification fires while the device is
+still claimed and therefore still unselectable. On Android the reclaim commits
+`ready`, so that waiter is granted at once; on iOS it commits `shutdown`, so
+the waiter gets a `boot-shutdown` plan and waits a full boot after the erase.
 
 Three things still wait for the purge, deliberately:
 

@@ -673,9 +673,11 @@ device it has already given up.
 
 What that means for the next command: the device is `reclaiming` for a moment
 after `release` returns, so it still counts as running capacity and is not
-grantable yet. A `lease` request that wants it simply queues and is granted the
-instant the purge finishes; nothing is lost, but `status` right after a release
-will show `reclaiming` rather than `ready`. `simlock daemon stop` waits for
+grantable yet. A `lease` request that wants it simply queues; nothing is lost,
+but `status` right after a release will show `reclaiming` rather than `ready`.
+An Android emulator comes back `ready`, so the waiting request is granted the
+instant the purge finishes. An iOS simulator comes back `shutdown` after its
+erase, so the waiting request then waits for a full boot as well. `simlock daemon stop` waits for
 in-flight purges before exiting, so a graceful shutdown still leaves the pool
 settled; a daemon killed mid-purge leaves its devices `reclaiming` for the next
 startup to recover.

@@ -849,8 +849,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * A queued waiter whose spec matches a device already being reclaimed is waiting on that
    * reclaim, not on nothing in particular: an iOS erase holds the only matching device for
    * tens of seconds, and reporting only `queued` leaves the requester with a position and no
-   * sense of how long. Purely informational -- the plan is untouched, and the device is
-   * granted through the normal `ready` path when its reclaim commits. Nothing is reported
+   * sense of how long. Purely informational -- the plan is untouched. When the reclaim
+   * commits, the waiter is planned again like any other: an Android device comes back
+   * `ready` and is granted at once, an iOS one comes back `shutdown` and is granted
+   * through a `boot-shutdown` plan, a full boot after the erase. Nothing is reported
    * when no matching device is reclaiming, so this never invents a stage out of an idle wait.
    */
   #notifyReclaimWait(waiter: AcquisitionWaiter): void {

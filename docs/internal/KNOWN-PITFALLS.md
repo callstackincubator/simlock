@@ -856,8 +856,9 @@ even though the daemon completes it. Simlock relays boot progress as MCP
 progress notifications precisely so clients can pass
 `resetTimeoutOnProgress: true` (or a longer timeout) on `lease_simulator`,
 as in `client.callTool(request, undefined, { resetTimeoutOnProgress: true,
-timeout: 600_000 })`. The warm pool hides this for every lease after the
-first.
+timeout: 600_000 })`. Nothing hides this: a released iOS simulator is shut
+down after its erase rather than kept warm, so every slim lease pays the cold
+boot, not only the first.
 
 **`launchctl disable` accepts labels that do not exist.** Verified on iOS
 26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
