@@ -552,6 +552,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
             {
               defaultRuntime: "26.5",
               modelAliases: {},
+              modelClasses: {},
               models: [],
               modelRuntimes: {},
               platform: "ios",

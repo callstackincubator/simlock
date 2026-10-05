@@ -51,6 +51,7 @@ describe("DriverCatalog", () => {
       {
         defaultRuntime: "26.5",
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: { "iPhone 16": ["18.4", "26.5"] },
         models: ["iPhone 16"],
         platform: "ios",
@@ -59,6 +60,7 @@ describe("DriverCatalog", () => {
       {
         defaultRuntime: "34",
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: { "Pixel 8": ["34"] },
         models: ["Pixel 8"],
         platform: "android",
@@ -77,6 +79,7 @@ describe("DriverCatalog", () => {
       {
         defaultRuntime: "26.5",
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: {},
         models: [],
         platform: "ios",
@@ -97,6 +100,7 @@ describe("DriverCatalog", () => {
       {
         defaultRuntime: "26.5",
         modelAliases: {},
+        modelClasses: {},
         modelRuntimes: {},
         models: [],
         platform: "ios",

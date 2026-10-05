@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONS, type Effect, type OperationName } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
 import type { Role } from "./roles.js";
+import { platformCatalogSchema } from "./schemas.js";
 
 /**
  * The ADR §3 operation matrix, name -> role. A table-driven test against this makes
@@ -480,6 +481,7 @@ describe("operation input/output round trips", () => {
               models: ["iPhone 17"],
               runtimes: ["26.0"],
               modelAliases: {},
+              modelClasses: {},
               modelRuntimes: { "iPhone 17": ["26.0"] },
             },
           ],
@@ -510,6 +512,7 @@ describe("operation input/output round trips", () => {
           models: ["iPhone 17"],
           runtimes: ["26.0"],
           modelAliases: {},
+          modelClasses: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
           runtimeWorkers: { "26.0": ["wrk_1"] },
@@ -529,6 +532,28 @@ describe("operation input/output round trips", () => {
         platforms: [{ ...entry, modelRuntimes: { "iPhone 17": ["26.0"] } }],
       }),
     ).not.toThrow();
+  });
+
+  it("catalog.get rejects an entry without modelClasses and one whose class is not one of the seven", () => {
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: { "iPhone 17": ["26.0"] },
+    };
+    const parse = (modelClasses?: unknown) =>
+      platformCatalogSchema.parse(modelClasses === undefined ? entry : { ...entry, modelClasses });
+
+    expect(() => parse()).toThrow(/modelClasses/);
+    expect(() => parse({ "iPhone 17": "phablet" })).toThrow(/modelClasses/);
+    expect(() => parse({ ["x".repeat(257)]: "phone" })).toThrow(/modelClasses/);
+    for (const deviceClass of ["phone", "tablet", "watch", "tv", "vision", "auto", "desktop"]) {
+      expect(parse({ "iPhone 17": deviceClass }).modelClasses).toEqual({
+        "iPhone 17": deviceClass,
+      });
+    }
   });
 
   it("catalog.get rejects a platform entry without modelAliases, and takes images as optional", () => {
@@ -562,6 +587,7 @@ describe("operation input/output round trips", () => {
       runtimes: ["35"],
       modelRuntimes: { "Pixel 8": ["35"] },
       modelAliases: {},
+      modelClasses: {},
     };
     const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
     const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);

@@ -1889,6 +1889,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: ["constructor"],
                   platform: "ios",
@@ -1901,7 +1902,7 @@ describe("CLI: catalog", () => {
 
     await expect(runCli(["catalog"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("    constructor: (no paired runtime)\n");
+    expect(output.stdout).toContain("    (no class):\n      constructor: (no paired runtime)\n");
   });
 
   it("prints (none) for a platform with no models", async () => {
@@ -1914,6 +1915,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   modelAliases: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: [],
                   platform: "android",
@@ -1942,6 +1944,7 @@ describe("CLI: catalog", () => {
                 {
                   defaultRuntime: "26.0",
                   modelAliases: {},
+                  modelClasses: {},
                   modelRuntimes: {
                     "iPhone 16": ["18.4", "26.0"],
                     "iPhone 8": [],
@@ -1963,12 +1966,94 @@ describe("CLI: catalog", () => {
         "Platform: ios",
         "  Runtimes: 18.4, 26.0 (default: 26.0)",
         "  Models:",
-        "    iPhone 16: 18.4, 26.0",
-        "    iPhone XS: 18.4",
-        "    iPhone 8: (no paired runtime)",
+        "    (no class):",
+        "      iPhone 16: 18.4, 26.0",
+        "      iPhone XS: 18.4",
+        "      iPhone 8: (no paired runtime)",
         "",
       ].join("\n"),
     );
+  });
+
+  it("prints each model under its class in the order of the enum, and an unclassed model under (no class)", async () => {
+    const catalog = {
+      defaultRuntime: "26.0",
+      modelAliases: { "iPhone 17": ["iphone-17"] },
+      modelClasses: {
+        "Apple TV 4K": "tv",
+        "Apple Watch Series 11 (46mm)": "watch",
+        "iPad Pro": "tablet",
+        "iPhone 17": "phone",
+        "iPhone 16": "phone",
+      },
+      modelRuntimes: {
+        "Apple TV 4K": ["26.0"],
+        "Apple Watch Series 11 (46mm)": ["26.0"],
+        "iPad Pro": ["26.0"],
+        "iPhone 16": ["26.0"],
+        "iPhone 17": ["26.0"],
+        Mystery: [],
+      },
+      models: [
+        "Mystery",
+        "Apple Watch Series 11 (46mm)",
+        "iPhone 17",
+        "Apple TV 4K",
+        "iPad Pro",
+        "iPhone 16",
+      ],
+      platform: "ios" as const,
+      runtimes: ["26.0"],
+      customModels: ["iPhone 16"],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: ios",
+        "  Runtimes: 26.0 (default: 26.0)",
+        "  Models:",
+        "    phone:",
+        "      iPhone 17: 26.0",
+        "        Other names: iphone-17",
+        "      iPhone 16 (custom): 26.0",
+        "    tablet:",
+        "      iPad Pro: 26.0",
+        "    watch:",
+        "      Apple Watch Series 11 (46mm): 26.0",
+        "    tv:",
+        "      Apple TV 4K: 26.0",
+        "    (no class):",
+        "      Mystery: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("carries modelClasses in --json as received", async () => {
+    const catalog = {
+      modelAliases: {},
+      modelClasses: { "Pixel 8": "phone", "Odd One": "tv" },
+      modelRuntimes: {},
+      models: ["Pixel 8"],
+      platform: "android" as const,
+      runtimes: [],
+    };
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ getCatalog: () => Promise.resolve({ platforms: [catalog] }) }),
+    });
+
+    await expect(runCli(["catalog", "--json"], environment)).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual({ platforms: [catalog] });
   });
 
   it("prints (none) for a platform that has images but none installed", async () => {
@@ -1982,6 +2067,7 @@ describe("CLI: catalog", () => {
                 {
                   images: [],
                   modelAliases: {},
+                  modelClasses: {},
                   modelRuntimes: {},
                   models: [],
                   platform: "android",
@@ -2060,6 +2146,7 @@ describe("CLI: catalog", () => {
                   customModels: ["My Tablet"],
                   defaultRuntime: "35",
                   modelAliases: {},
+                  modelClasses: {},
                   modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
                   models: ["My Tablet", "Pixel 8"],
                   platform: "android",

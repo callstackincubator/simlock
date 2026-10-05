@@ -91,6 +91,8 @@ export interface FakeDriverOptions {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as each model's class; empty unless a test says otherwise. */
+  readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
   /**
    * What `listCatalog` reports as installed images; the field is absent unless set. A request
    * naming an image tag resolves only to a runtime listed here with that tag.

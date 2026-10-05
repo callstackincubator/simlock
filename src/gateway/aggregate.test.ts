@@ -332,6 +332,7 @@ describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    modelClasses: {},
     modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
     platform: "ios" as const,
@@ -341,6 +342,7 @@ describe("aggregateCatalog", () => {
   const iosOnB = {
     defaultRuntime: "26.0",
     modelAliases: {},
+    modelClasses: {},
     modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
     platform: "ios" as const,
@@ -362,6 +364,30 @@ describe("aggregateCatalog", () => {
       runtimes: ["25.4", "26.0"],
       runtimeWorkers: { "25.4": ["wrk_b"], "26.0": ["wrk_a", "wrk_b"] },
     });
+  });
+
+  it("carries the union of the connected workers' model classes, and keeps the class of the first worker in id order when two disagree", () => {
+    const classed = (modelClasses: Record<string, "phone" | "tablet" | "tv">) => ({
+      ...iosOnB,
+      modelClasses,
+    });
+
+    // Listed with the later id first, so the answer cannot come from input order.
+    const catalog = aggregateCatalog([
+      view({ catalog: [classed({ "iPad Pro": "phone", "iPhone 17": "tv" })], id: "wrk_b" }),
+      view({ catalog: [classed({ "iPhone 17": "phone" })], id: "wrk_a" }),
+      view({
+        catalog: [classed({ "iPad Pro": "tablet" })],
+        connection: "disconnected",
+        id: "wrk_0",
+      }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelClasses).toEqual({
+      "iPad Pro": "phone",
+      "iPhone 17": "phone",
+    });
+    expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
   });
 
   it("keeps a default runtime only when every worker agrees on it", () => {
@@ -397,6 +423,7 @@ describe("aggregateCatalog", () => {
   it("pairs a model with a runtime when at least one connected worker pairs them", () => {
     const iosOnC = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -427,6 +454,7 @@ describe("aggregateCatalog", () => {
   it("ignores the pairings of disconnected and incompatible workers", () => {
     const pairsOld = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -444,6 +472,7 @@ describe("aggregateCatalog", () => {
   it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
     const unpaired = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone XS": [] },
       models: ["iPhone XS"],
       platform: "ios" as const,
@@ -468,6 +497,7 @@ describe("aggregateCatalog", () => {
       platforms: [
         {
           modelAliases: {},
+          modelClasses: {},
           modelRuntimes: {},
           models: ["constructor"],
           platform: "ios",
@@ -484,6 +514,7 @@ describe("aggregateCatalog", () => {
   it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
     const claimsMore = {
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -506,6 +537,7 @@ describe("aggregateCatalog", () => {
             iosOnA,
             {
               modelAliases: {},
+              modelClasses: {},
               modelRuntimes: { "Pixel 9": ["35"] },
               models: ["Pixel 9"],
               platform: "android",
