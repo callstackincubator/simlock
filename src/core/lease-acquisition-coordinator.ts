@@ -1,4 +1,4 @@
-import type { EventBus } from "../bus/index.js";
+import type { EventBus, EventMap } from "../bus/index.js";
 import { requestedClass } from "../contract/index.js";
 import {
   compareVersions,
@@ -6,7 +6,7 @@ import {
   parseOsConstraint,
   satisfies,
 } from "../contract/os-range.js";
-import { type Logger, NoopLogger } from "../ports/index.js";
+import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
@@ -14,7 +14,7 @@ import {
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
-import { type LeaseRequestBook } from "./lease-request-book.js";
+import { type LeaseRequestBook, newLeaseRequestId } from "./lease-request-book.js";
 import { classCandidates, findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 import {
   type DeviceClass,
@@ -129,6 +129,8 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
+  /** Mints a request's id before admission checks, so a request refused there still has one. */
+  readonly idGenerator: IdGenerator;
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
@@ -156,6 +158,16 @@ interface AcquisitionWaiter extends Waiter {
   spec?: DeviceSpec;
   timing: LeaseTiming;
 }
+
+/** The kinds of plan that end in a grant. An eviction never does: the plan made after it does. */
+type GrantingPlanKind = "grant-ready" | "boot-shutdown" | "provision";
+
+/** The one place a plan's kind becomes the `source` a `lease.granted` reports. */
+const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
+  "boot-shutdown": "booted",
+  "grant-ready": "warm",
+  provision: "provisioned",
+};
 
 type OperationPlan = Exclude<
   AcquisitionPlan,
@@ -216,10 +228,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       admitted = await this.options.decisions.run(async () => {
         const replay = this.options.requests.replay(request, options);
         if (replay !== undefined) return { replay };
+        const requestId = newLeaseRequestId(this.options.idGenerator);
         if (this.#admissionClosed) {
           this.options.eventBus.emit(
             "lease.rejected",
-            { requestSpec: request, reason: "killed" },
+            {
+              requestId,
+              requester: options.requesterId,
+              requestSpec: request,
+              reason: "killed",
+            },
             "lease-acquisition-coordinator",
           );
           throw new NukeCancelledError();
@@ -233,7 +251,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         ) {
           this.options.eventBus.emit(
             "lease.rejected",
-            { requestSpec: request, reason: "already-leased" },
+            {
+              requestId,
+              requester: options.requesterId,
+              requestSpec: request,
+              reason: "already-leased",
+            },
             "lease-acquisition-coordinator",
           );
           throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
@@ -242,6 +265,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           request,
           options,
           (id, onProgress) => this.#newWaiter(request, { ...options, onProgress }, id),
+          requestId,
         );
         this.options.eventBus.emit(
           "lease.requested",
@@ -273,7 +297,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       for (const waiter of this.options.queue.cancelAll(() => new NukeCancelledError())) {
         this.options.eventBus.emit(
           "lease.rejected",
-          { requestSpec: waiter.request, reason: "killed" },
+          {
+            requestId: waiter.id,
+            requester: waiter.options.requesterId,
+            requestSpec: waiter.request,
+            reason: "killed",
+          },
           "lease-acquisition-coordinator",
         );
       }
@@ -595,7 +624,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       }
       return;
     }
-    await this.#grantHandoff(waiter, handoff);
+    await this.#grantHandoff(waiter, handoff, "provision");
   }
 
   async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
@@ -610,7 +639,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.options.drivers.get(plan.device.spec.platform),
         plan.device.spec,
       );
-      await this.#grant(waiter, plan.device.id);
+      await this.#grant(waiter, plan.device.id, plan.kind);
       return undefined;
     }
     const operation = operationPlan(plan);
@@ -644,11 +673,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
    * through it, so there is no second construction site to keep in step.
    */
-  async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
+  async #grant(waiter: AcquisitionWaiter, deviceId: string, kind: GrantingPlanKind): Promise<void> {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
       ownerId: waiter.options.ownerId,
+      requestId: waiter.id,
       requesterId: waiter.options.requesterId,
+      source: GRANT_SOURCE[kind],
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
     this.options.queue.resolve(waiter, {
@@ -792,7 +823,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       if (destroyed) this.#wakeQueue();
       return;
     }
-    await this.#grantHandoff(waiter, handoff, capacityReservation);
+    await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
   }
 
   #defer(waiter: AcquisitionWaiter): void {
@@ -834,12 +865,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #grantHandoff(
     waiter: AcquisitionWaiter,
     handoff: ReadyDeviceHandoff,
+    kind: GrantingPlanKind,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
-        await this.#grant(waiter, handoff.device.id);
+        await this.#grant(waiter, handoff.device.id, kind);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
@@ -874,7 +906,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (this.options.queue.reject(waiter, error)) {
       this.options.eventBus.emit(
         "lease.rejected",
-        { requestSpec: waiter.request, reason },
+        {
+          requestId: waiter.id,
+          requester: waiter.options.requesterId,
+          requestSpec: waiter.request,
+          reason,
+        },
         "lease-acquisition-coordinator",
       );
     }

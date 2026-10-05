@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -44,7 +44,10 @@ function parseLines(contents: string): Envelope[] {
 
 async function eventFile(env: TestEnv): Promise<Envelope[]> {
   const path = join(env.home, "events.jsonl");
-  const rotated = existsSync(`${path}.1`) ? await readFile(`${path}.1`, "utf8") : "";
+  let rotated = "";
+  for (let generation = 1; existsSync(`${path}.${generation}`); generation++) {
+    rotated = (await readFile(`${path}.${generation}`, "utf8")) + rotated;
+  }
   return parseLines(rotated + (await readFile(path, "utf8")));
 }
 
@@ -87,6 +90,51 @@ describe("event history", () => {
     expect(new Set(afterRestart.map((entry) => entry.id)).size).toBe(afterRestart.length);
   });
 
+  it("shows lease.granted with the requestId of the preceding lease.requested, provisioned for a first lease and warm for the next on the same device", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const firstId = await leaseDevice(env);
+    expect((await env.cli(["release", firstId])).code).toBe(0);
+    const secondId = await leaseDevice(env);
+
+    const history = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+
+    const granted = [firstId, secondId].map((leaseId) => grantOf(history, leaseId));
+    const requested = history.filter((entry) => entry.event === "lease.requested");
+    expect(requested).toHaveLength(2);
+    for (const [index, grant] of granted.entries()) {
+      const request = requested[index];
+      expect(request?.payload.requestId).toMatch(/^req_/);
+      expect(grant?.payload.requestId).toBe(request?.payload.requestId);
+      expect(history.indexOf(request as Envelope)).toBeLessThan(history.indexOf(grant as Envelope));
+    }
+    expect(granted.map((grant) => grant?.payload.source)).toEqual(["provisioned", "warm"]);
+    expect(granted[0]?.payload.deviceId).toEqual(expect.any(String));
+    expect(granted[1]?.payload.deviceId).toBe(granted[0]?.payload.deviceId);
+  });
+
+  it("shows capacity.changed and queue.changed from daemon start, never two in a row with equal payloads", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const leaseId = await leaseDevice(env);
+    expect((await env.cli(["release", leaseId])).code).toBe(0);
+
+    const history = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+
+    for (const name of ["capacity.changed", "queue.changed"]) {
+      const payloads = history
+        .filter((entry) => entry.event === name)
+        .map((entry) => entry.payload);
+      expect(payloads.length).toBeGreaterThan(0);
+      payloads.slice(1).forEach((payload, index) => expect(payload).not.toEqual(payloads[index]));
+    }
+    const firstCapacity = history.findIndex((entry) => entry.event === "capacity.changed");
+    expect(firstCapacity).toBeLessThan(
+      history.findIndex((entry) => entry.event === "lease.requested"),
+    );
+    expect(history.find((entry) => entry.event === "queue.changed")?.payload).toEqual({ depth: 0 });
+  });
+
   it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {
     const env = await withDaemon();
     await prepare(env);
@@ -103,12 +151,14 @@ describe("event history", () => {
     expect(status.json).toEqual({ status: "stopped" });
   });
 
-  it("keeps events.jsonl plus events.jsonl.1 under twice eventLog.rotateBytes, holding the newest event", async () => {
-    const rotateBytes = 8 * 1024;
-    const env = await withDaemon({ configOverrides: { eventLog: { rotateBytes } } });
+  it("keeps no more than two generations beside events.jsonl when eventLog.maxBytes is twice eventLog.rotateBytes, holding the newest event", async () => {
+    const rotateBytes = 2 * 1024;
+    const env = await withDaemon({
+      configOverrides: { eventLog: { maxBytes: 2 * rotateBytes, rotateBytes } },
+    });
     await prepare(env);
     let lastLeaseId = "";
-    for (let round = 0; round < 8; round++) {
+    for (let round = 0; round < 12; round++) {
       lastLeaseId = await leaseDevice(env);
       expect((await env.cli(["release", lastLeaseId])).code).toBe(0);
     }
@@ -122,8 +172,55 @@ describe("event history", () => {
       { label: "the last release in the event file" },
     );
     expect(existsSync(`${path}.1`)).toBe(true);
-    const total = (await stat(path)).size + (await stat(`${path}.1`)).size;
-    expect(total).toBeLessThanOrEqual(2 * rotateBytes);
+    const beside = (await readdir(env.home)).filter((name) => /^events\.jsonl\.\d+$/.test(name));
+    expect(beside.length).toBeLessThanOrEqual(2);
+    let total = (await stat(path)).size;
+    for (const name of beside) total += (await stat(join(env.home, name))).size;
+    expect(total).toBeLessThanOrEqual(3 * rotateBytes);
+  });
+
+  it("simlock events --since 7d with the daemon stopped reads events from a generation older than .1", async () => {
+    const env = await withDaemon({ configOverrides: { eventLog: { rotateBytes: 2 * 1024 } } });
+    await prepare(env);
+    const firstLeaseId = await leaseDevice(env);
+    expect((await env.cli(["release", firstLeaseId])).code).toBe(0);
+    for (let round = 0; round < 6; round++) {
+      expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
+    }
+    const path = join(env.home, "events.jsonl");
+    expect(existsSync(`${path}.3`)).toBe(true);
+    await env.cli(["daemon", "stop"]);
+    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+
+    const history = await env.cli(["events", "--since", "7d"]);
+
+    expect(history.code).toBe(0);
+    expect(grantOf(parseLines(history.stdout), firstLeaseId)).toBeDefined();
+    const ids = parseLines(history.stdout).map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("deletes every generation holding only first-run events once eventLog.retention has passed and the file rotates again", async () => {
+    const env = await withDaemon({
+      configOverrides: { eventLog: { retention: 5_000, rotateBytes: 2 * 1024 } },
+    });
+    await prepare(env);
+    const path = join(env.home, "events.jsonl");
+    const firstLeaseId = await leaseDevice(env);
+    expect((await env.cli(["release", firstLeaseId])).code).toBe(0);
+    for (let round = 0; round < 6; round++) {
+      expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
+    }
+    expect(existsSync(`${path}.2`)).toBe(true);
+    expect(grantOf(await eventFile(env), firstLeaseId)).toBeDefined();
+
+    await waitFor(
+      async () => {
+        expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
+        return grantOf(await eventFile(env), firstLeaseId) === undefined;
+      },
+      { label: "the first run's events deleted after retention", timeout: 60_000 },
+    );
   });
 
   it("keeps every emitted event in the event file after daemon.log rotates", async () => {

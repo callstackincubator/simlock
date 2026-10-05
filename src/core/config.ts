@@ -183,8 +183,17 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
-  /** The event file (`events.jsonl`): its size before it rotates, one generation kept. */
-  readonly eventLog: { readonly rotateBytes: number };
+  /**
+   * The event file (`events.jsonl`): `rotateBytes` is one generation's size before it rotates,
+   * `retention` how long (milliseconds) a generation is kept after its newest line, and
+   * `maxBytes` the total size of every generation, the backstop when events arrive faster than
+   * `retention` ages them out.
+   */
+  readonly eventLog: {
+    readonly rotateBytes: number;
+    readonly retention: number;
+    readonly maxBytes: number;
+  };
   readonly http: {
     readonly enabled: boolean;
     readonly host: string;
@@ -384,6 +393,7 @@ export async function loadConfig({
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
+  validateEventLogBounds(merged);
   if (mode === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
     requireGatewayHttp(merged);
@@ -420,6 +430,16 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 function validateLeaseTtls(config: Config): void {
   if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
     throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
+  }
+}
+
+/**
+ * Cross-field check: the size cap has to hold the current file and at least one full rotated
+ * generation, or the sweep would delete the history the moment it rotates.
+ */
+function validateEventLogBounds(config: Config): void {
+  if (config.eventLog.maxBytes < 2 * config.eventLog.rotateBytes) {
+    throw invalidValue("eventLog.maxBytes", "at least twice eventLog.rotateBytes");
   }
 }
 
@@ -653,7 +673,11 @@ function defaultConfig(
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
@@ -796,7 +820,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
-    eventLog: objectValidator({ rotateBytes: positiveInteger }),
+    eventLog: objectValidator({
+      rotateBytes: positiveInteger,
+      retention: positiveInteger,
+      maxBytes: positiveInteger,
+    }),
     http: objectValidator({
       enabled: booleanValue,
       host: stringValue,

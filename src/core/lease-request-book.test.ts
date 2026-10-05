@@ -436,6 +436,16 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
+  it("stores a request under the id its owner minted before admission, and mints no other", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+
+    const admitted = await book.admit(request, keyed, () => granted("lse_1"), "req_minted");
+
+    expect(admitted.id).toBe("req_minted");
+    expect(store.leaseRequests().map((record) => record.id)).toEqual(["req_minted"]);
+  });
+
   it("lists an open request only while a wait drives it, never one left open with nothing behind it", async () => {
     const store = memoryStore();
     const book = bookOver(store);

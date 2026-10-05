@@ -759,7 +759,13 @@ export const configSchema = z.object({
     rotateBytes: z.number(),
   }),
   // Optional: a newer gateway parses this from an older worker's `config.get`.
-  eventLog: z.object({ rotateBytes: z.number() }).optional(),
+  eventLog: z
+    .object({
+      rotateBytes: z.number(),
+      retention: z.number().optional(),
+      maxBytes: z.number().optional(),
+    })
+    .optional(),
   http: z.object({
     enabled: z.boolean(),
     host: z.string(),

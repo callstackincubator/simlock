@@ -448,6 +448,29 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("republishes a worker's queue.changed with its workerId and emits no queue.changed of its own", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "queue.changed",
+      id: "evt_worker-queue",
+      module: "wait-queue",
+      payload: { depth: 3 },
+      seq: 5,
+      timestamp: 900,
+    });
+
+    expect(harness.events.filter((event) => event.event === "queue.changed")).toMatchObject([
+      { module: "wait-queue", payload: { depth: 3, workerId: "wrk_1" } },
+    ]);
+
+    await harness.service.stop();
+  });
+
   // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
   // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
   // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking

@@ -1,6 +1,13 @@
 import { type Clock, CryptoIdGenerator, type IdGenerator } from "../ports/index.js";
 import { byTimeThenSeq } from "./order.js";
 
+export interface CapacityFiguresPayload {
+  readonly running: number;
+  readonly maxRunning: number;
+  readonly reserved: number;
+  readonly warm: number;
+}
+
 export interface EventMap {
   "lease.requested": {
     /** The stored request's id, so an observer can correlate this event with its record. */
@@ -19,6 +26,11 @@ export interface EventMap {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly requester: string;
+    /** The stored request this lease served: the id its `lease.requested` carried. */
+    readonly requestId: string;
+    /** How the device came to be ready: handed over `warm`, `booted` from shut down, or
+     * `provisioned` for this request. */
+    readonly source: "warm" | "booted" | "provisioned";
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
@@ -47,6 +59,11 @@ export interface EventMap {
     readonly ownerId: string;
   };
   "lease.rejected": {
+    /** The request's id. A request refused at admission (`killed`, `already-leased`) was never
+     * stored and has no `lease.requested`, but it carries the id it would have been stored
+     * under. */
+    readonly requestId: string;
+    readonly requester: string;
     /** The request as it arrived, as on `lease.requested`: `class` when it named one, `model`
      * only when it did (ADR 0015 §9). */
     readonly requestSpec: unknown;
@@ -63,6 +80,20 @@ export interface EventMap {
       /** A request still open when the daemon stopped, settled as failed at the next start. */
       | "daemon-restarted";
   };
+  /**
+   * A worker's capacity figures changed. Emitted after every registry commit and every
+   * reservation taken or released that changes them, and once at startup; never twice in a
+   * row with equal figures. `ramBudget` is there only under a strategy that keeps one.
+   */
+  "capacity.changed": {
+    readonly ios: CapacityFiguresPayload;
+    readonly android: CapacityFiguresPayload;
+    readonly global: CapacityFiguresPayload;
+    readonly ramBudget?: { readonly usedBytes: number; readonly limitBytes: number };
+  };
+  /** The depth of a wait queue changed (a worker's, or a gateway's fleet queue), and once at
+   * startup. */
+  "queue.changed": { readonly depth: number };
   "device.provisioned": {
     readonly deviceId: string;
     readonly spec: unknown;
@@ -465,4 +496,10 @@ export class EventBus {
   }
 }
 
-export { EVENT_FILE_NAME, EventHistory, eventKey, readEventFile } from "./event-file.js";
+export {
+  EVENT_FILE_NAME,
+  EventHistory,
+  eventKey,
+  readEventFile,
+  readEventHistory,
+} from "./event-file.js";

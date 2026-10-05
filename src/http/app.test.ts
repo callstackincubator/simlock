@@ -1756,6 +1756,20 @@ describe("operator-only listing routes", () => {
     expect(recentBody.events).toEqual([{ event: "daemon.stopping" }]);
   });
 
+  it("GET /v1/events accepts the d unit in ?since", async () => {
+    const { app, clock, dispatcher } = buildHarness();
+    let seen: number | undefined;
+    dispatcher.handlers["events.replay"] = (input) => {
+      seen = (input as { sinceTs?: number }).sinceTs;
+      return [];
+    };
+
+    const response = await app.request("/v1/events?since=2d", { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    expect(seen).toBe(clock.now() - 2 * 24 * 60 * 60 * 1000);
+  });
+
   it("400s an invalid ?since duration, before dispatching", async () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["events.replay"] = () => {
@@ -1763,6 +1777,7 @@ describe("operator-only listing routes", () => {
     };
     const response = await app.request("/v1/events?since=nonsense", { headers: operatorAuth });
     expect(response.status).toBe(400);
+    expect(JSON.stringify(await response.json())).toContain("Invalid duration: nonsense");
   });
 
   it("GET /v1/events/stream dispatches events.subscribe then follows the raw event bus live", async () => {

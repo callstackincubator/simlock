@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { NoCapacityError } from "../core/lease-acquisition-coordinator.js";
+import { capacityChangedPayload } from "../core/capacity/observer.js";
 import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
@@ -1164,6 +1165,21 @@ describe("Dispatcher: device mode on every surface", () => {
       expect(grant.device.mode).toBe(expected);
     },
   );
+
+  it("status.get reports the capacity figures the last capacity.changed carries", async () => {
+    const { dispatcher, engine, eventBus } = await buildDispatcher();
+    await engine.convergeRunningCapacity();
+    await dispatcher.dispatch("lease.request", request, session());
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    const last = eventBus
+      .replay()
+      .filter((event) => event.event === "capacity.changed")
+      .at(-1);
+    expect(last?.payload).toEqual(capacityChangedPayload(status.capacity));
+    expect(status.capacity.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+  });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
@@ -2952,7 +2968,11 @@ function testConfig(
     },
     capacity,
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,

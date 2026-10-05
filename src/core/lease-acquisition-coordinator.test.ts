@@ -94,7 +94,11 @@ function config(maxDevices = 1, maxRunning = 1): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: { rotateBytes: 5 * 1024 * 1024 },
+    eventLog: {
+      rotateBytes: 5 * 1024 * 1024,
+      retention: 7 * 24 * 60 * 60 * 1000,
+      maxBytes: 256 * 1024 * 1024,
+    },
     warmPool: {
       quarantine: {
         maxRetries: 3,
@@ -170,11 +174,29 @@ async function createHarness(
     ttl: { defaultMs: 100 },
   });
   let coordinator: LeaseAcquisitionCoordinator | undefined;
+  /** Every id minted for a request, in order. */
+  const requestIds: string[] = [];
+  const idGenerator = {
+    generate: () => {
+      const id = `request-${nextId++}`;
+      requestIds.push(id);
+      return id;
+    },
+  };
   const queue = new WaitQueue({
     clock,
-    idGenerator: { generate: () => `request-${nextId++}` },
+    idGenerator,
     onTimeout: (waiter) => {
-      bus.emit("lease.rejected", { requestSpec: waiter.request, reason: "timeout" }, "wait-queue");
+      bus.emit(
+        "lease.rejected",
+        {
+          requestId: waiter.id,
+          requester: waiter.options.requesterId,
+          requestSpec: waiter.request,
+          reason: "timeout",
+        },
+        "wait-queue",
+      );
       coordinator?.kick();
     },
   });
@@ -198,6 +220,7 @@ async function createHarness(
     defaultModes: options.defaultModes ?? {},
     drivers: catalog,
     eventBus: bus,
+    idGenerator,
     leases,
     lifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -216,7 +239,7 @@ async function createHarness(
       store: registry,
     }),
   });
-  return { bus, clock, components, coordinator, driver, filesystem, queue, registry };
+  return { bus, clock, components, coordinator, driver, filesystem, queue, registry, requestIds };
 }
 
 async function seedReady(
@@ -729,7 +752,14 @@ describe("LeaseAcquisitionCoordinator", () => {
       name: "RequesterAlreadyLeasedError",
       requesterId: "agent",
     });
-    expect(rejections).toEqual([{ reason: "already-leased", requestSpec: request }]);
+    expect(rejections).toEqual([
+      {
+        reason: "already-leased",
+        requestId: expect.stringMatching(/^req_/),
+        requester: "agent",
+        requestSpec: request,
+      },
+    ]);
     expect(harness.queue.depth).toBe(1);
   });
 
@@ -1042,7 +1072,12 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(harness.coordinator.cancelPending("queued")).resolves.toBe("cancelled");
     await expect(queued).rejects.toMatchObject({ name: "RequestCancelledError" });
     expect(harness.coordinator.queueDepth).toBe(0);
-    expect(rejections).toContainEqual({ requestSpec: request, reason: "cancelled" });
+    expect(rejections).toContainEqual({
+      reason: "cancelled",
+      requestId: expect.stringMatching(/^req_/),
+      requester: "queued",
+      requestSpec: request,
+    });
 
     // No capacity remains (still held by "first"), but crucially this is NoCapacityError,
     // not RequesterAlreadyLeasedError -- the cancelled requester is no longer pending.
@@ -1677,7 +1712,12 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
         .filter((event) => event.event === "lease.rejected")
         .map((event) => event.payload),
     ).toEqual([
-      { reason: "unresolvable-spec", requestSpec: { ...request, imageTag: "google_apis" } },
+      {
+        reason: "unresolvable-spec",
+        requestId: expect.stringMatching(/^req_/),
+        requester: "agent",
+        requestSpec: { ...request, imageTag: "google_apis" },
+      },
     ]);
     expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
   });
@@ -2415,5 +2455,133 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
         IdempotencyConflictError,
       );
     });
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
+  const owner = (id: string) => ({ ownerId: id, requesterId: id });
+
+  function granted(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const events: Array<{ requestId: string; source: string; leaseId: string }> = [];
+    harness.bus.subscribe("lease.granted", (envelope) => events.push(envelope.payload));
+    const requested: string[] = [];
+    harness.bus.subscribe("lease.requested", (envelope) =>
+      requested.push(envelope.payload.requestId),
+    );
+    return { events, requested };
+  }
+
+  it("emits lease.granted with source warm and the request's id for a lease granted from a ready device", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    const { events, requested } = granted(harness);
+
+    const grant = await harness.coordinator.request(request, owner("agent"));
+
+    expect(events).toEqual([
+      expect.objectContaining({ leaseId: grant.lease.id, requestId: requested[0], source: "warm" }),
+    ]);
+    expect(requested[0]).toMatch(/^req_/);
+  });
+
+  it("emits lease.granted with source booted for a lease granted after booting a shut-down device", async () => {
+    const harness = await createHarness();
+    await seedShutdown(harness);
+    const { events, requested } = granted(harness);
+
+    await harness.coordinator.request(request, owner("agent"));
+
+    expect(events).toEqual([
+      expect.objectContaining({ requestId: requested[0], source: "booted" }),
+    ]);
+  });
+
+  it("emits lease.granted with source provisioned for a lease granted on a device provisioned for it", async () => {
+    const harness = await createHarness();
+    const { events, requested } = granted(harness);
+
+    await harness.coordinator.request(request, owner("agent"));
+
+    expect(events).toEqual([
+      expect.objectContaining({ requestId: requested[0], source: "provisioned" }),
+    ]);
+  });
+
+  it("emits lease.granted with source provisioned when an eviction deleted a device and a new one was created", async () => {
+    const harness = await createHarness();
+    await seedReady(harness, { ...request, model: "iPhone SE" });
+    const { events } = granted(harness);
+
+    await harness.coordinator.request(request, owner("agent"));
+
+    expect(events).toEqual([expect.objectContaining({ source: "provisioned" })]);
+  });
+
+  it("emits lease.granted with source booted when an eviction shut a device down and a shut-down device was then booted", async () => {
+    // One running slot, two devices allowed: a ready device of another model holds the slot, a
+    // shut-down device of the requested model waits. Booting the second needs the slot back.
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 1 });
+    await seedShutdown(harness);
+    const evicted = await seedReady(harness, { ...request, model: "iPhone SE" });
+    const { events } = granted(harness);
+
+    await harness.coordinator.request(request, owner("agent"));
+
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === evicted.id)?.state,
+    ).not.toBe("ready");
+    expect(events).toEqual([expect.objectContaining({ source: "booted" })]);
+  });
+
+  it("gives a request refused as already-leased the id its admission would have minted, and emits no lease.requested for it", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const first = await harness.coordinator.request(request, owner("agent"));
+    const requested: string[] = [];
+    harness.bus.subscribe("lease.requested", (envelope) =>
+      requested.push(envelope.payload.requestId),
+    );
+    const rejected: Array<{ requestId: string; requester: string; reason: string }> = [];
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+    const mintedBefore = harness.requestIds.length;
+
+    await expect(harness.coordinator.request(request, owner("agent"))).rejects.toMatchObject({
+      existingLeaseId: first.lease.id,
+    });
+
+    expect(requested).toEqual([]);
+    expect(harness.requestIds).toHaveLength(mintedBefore + 1);
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "already-leased",
+        requestId: `req_${harness.requestIds[mintedBefore]}`,
+        requester: "agent",
+      }),
+    ]);
+
+    // The same position in the sequence, on a request that passes admission: that id is the one
+    // the stored request gets, and nothing mints a second.
+    const mintedBeforeAdmitted = harness.requestIds.length;
+    await harness.coordinator.request(request, owner("other"));
+    expect(harness.requestIds).toHaveLength(mintedBeforeAdmitted + 1);
+    expect(requested).toEqual([`req_${harness.requestIds[mintedBeforeAdmitted]}`]);
+  });
+
+  it("gives a request refused as killed the id it would have been stored under", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.beginMaintenance();
+    const rejected: Array<{ requestId: string; requester: string; reason: string }> = [];
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    await expect(harness.coordinator.request(request, owner("agent"))).rejects.toMatchObject({
+      name: "NukeCancelledError",
+    });
+
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "killed",
+        requestId: `req_${harness.requestIds[0]}`,
+        requester: "agent",
+      }),
+    ]);
   });
 });

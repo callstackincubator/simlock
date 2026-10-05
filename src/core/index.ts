@@ -22,6 +22,7 @@ export {
   transition,
   transitionEnteredAt,
 } from "./domain.js";
+export { buildCapacityFigures } from "./capacity/index.js";
 export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
