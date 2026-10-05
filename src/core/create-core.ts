@@ -10,11 +10,17 @@ import {
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
-import type { CapacityReader, CatalogReader, PassthroughResolver } from "./core-ports.js";
+import type {
+  CapacityReader,
+  CatalogReader,
+  LeaseExpirer,
+  PassthroughResolver,
+} from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type { DeviceSpec } from "./domain.js";
-import type { Driver } from "./driver.js";
+import { Doctor } from "./doctor.js";
+import type { Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
@@ -40,6 +46,8 @@ interface CoreOptions {
    */
   readonly decisions: SerializedDecision;
   readonly drivers: readonly Driver[];
+  /** Drivers that refused to start, reported by `doctor` on every run. */
+  readonly driverRejections?: readonly DriverRejection[] | undefined;
   readonly eventBus: EventBus;
   /**
    * Where work core finishes off its callers' paths reports its failures. A backgrounded
@@ -49,6 +57,8 @@ interface CoreOptions {
   readonly logger?: Logger | undefined;
   /** ADR 0015 §4: the model names to try for each class, per platform, operator's list first. */
   readonly modelPreferences?: ModelPreferences | undefined;
+  /** The checks `doctor` runs per platform this host could run. None if omitted. */
+  readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
 }
@@ -57,7 +67,7 @@ interface CoreOptions {
  * What core needs from leasing and cannot import (ADR 0018 §2). Leasing implements each one and
  * the composition root hands them over through `Core#connect`.
  */
-interface CorePorts {
+export interface CorePorts {
   /**
    * The fences an operator reset puts around acquisition and around release, and the release of
    * every lease it runs between them (`NukeService`).
@@ -66,6 +76,8 @@ interface CorePorts {
     readonly acquisition: AcquisitionMaintenance;
     readonly leases: LeaseMaintenance;
   };
+  /** Administrative lease expiry, which doctor reconciliation uses on a lease that lapsed. */
+  readonly leaseExpirer: LeaseExpirer;
   /** Tells acquisition a device came back, so a waiting request is tried again. */
   readonly notifyAvailability: () => void;
   /** The spec the queue's head waits for, when one waits; the warm pool keeps a device for it. */
@@ -97,6 +109,7 @@ export interface Core {
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
   readonly deviceLifecycle: ManagedDeviceLifecycle;
+  readonly doctor: Doctor;
   readonly drivers: DriverCatalog;
   readonly nuke: NukeService;
   readonly provisioner: DeviceProvisioner;
@@ -208,6 +221,22 @@ export function createCore(options: CoreOptions): Core {
     leases: leaseMaintenance.leases,
     registry,
   });
+  const doctor = new Doctor({
+    // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
+    // erase, and is now how every release purges -- reads as a stalled transition.
+    claims,
+    clock: options.clock,
+    config: options.config,
+    drivers: options.drivers,
+    driverRejections: options.driverRejections ?? [],
+    eventBus: options.eventBus,
+    leaseExpirer: { expire: async (leaseId) => port("leaseExpirer").expire(leaseId) },
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    prerequisiteChecks: options.prerequisiteChecks ?? [],
+    quarantine,
+    registry,
+    runningPlatforms: () => options.drivers.map((driver) => driver.platform),
+  });
   const startup = new StartupConverger({
     capacity: capacityReader,
     claims,
@@ -246,6 +275,7 @@ export function createCore(options: CoreOptions): Core {
     cleanup,
     decisions,
     deviceLifecycle,
+    doctor,
     drivers,
     nuke,
     provisioner,

@@ -115,7 +115,7 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
-export { type Core, createCore } from "./create-core.js";
+export { type Core, type CorePorts, createCore } from "./create-core.js";
 export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {

@@ -11,6 +11,7 @@ import {
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
   REDACTED_VALUE,
+  Registry,
 } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
@@ -562,6 +563,45 @@ describe("startDaemon wires core and leasing together", () => {
     expect(events.find((event) => event.event === "queue.changed")?.module).toBe("wait-queue");
   });
 
+  it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    // The previous process's registry: one request still open when it stopped.
+    const previous = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "1" },
+      statePath,
+    });
+    await previous.createLeaseRequest({
+      ownerId: "agent-1",
+      request: ios,
+      requesterId: "agent-1",
+    });
+
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      filesystem,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath,
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+
+    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    expect(names.indexOf("lease.rejected")).toBeGreaterThan(-1);
+    expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
+  });
+
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
     const clock = new FakeClock(1_000);
     const { daemon, driver, grant } = await leasedIos({
@@ -634,7 +674,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
   });
 
-  it("starts the leased-device health monitor once startup is done", async () => {
+  it("probes a leased device again as time passes once startup is done", async () => {
     const clock = new FakeClock(1_000);
     const { driver } = await leasedIos({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const probesBefore = driver.calls.filter((call) => call.operation === "listManaged").length;

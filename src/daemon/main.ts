@@ -18,7 +18,6 @@ import {
   DEVICE_CLASSES,
   DiskSpaceGuard,
   DriverCatalog,
-  Doctor,
   HostFactsReader,
   createCore,
   loadConfig,
@@ -273,13 +272,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     decisions,
     drivers,
+    driverRejections: rejections,
     eventBus,
     logger,
     modelPreferences,
+    prerequisiteChecks,
     registry,
     systemStats,
   });
-  // Builds leasing on top of core, then hands core the ports leasing implements (ADR 0018 §2).
+  // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
     clock,
     components,
@@ -292,6 +293,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger,
     modelPreferences,
   });
+  // Core declared ports only leasing can implement; this is the one place they are handed over,
+  // before any request is admitted (ADR 0018 §2).
+  core.connect(leasing.corePorts);
   const reaper = new CleanupReaper({
     clock,
     config,
@@ -301,23 +305,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger,
     registry,
     diskPath: dataDirectory,
-  });
-  const doctor = new Doctor({
-    // Without this, a backgrounded reclaim -- which holds its device in `reclaiming`
-    // for a full erase, and is now how every release purges -- reads as a stalled
-    // transition.
-    claims: core.claimReader,
-    clock,
-    config,
-    drivers,
-    driverRejections: rejections,
-    eventBus,
-    leaseExpirer: leasing,
-    logger,
-    prerequisiteChecks,
-    quarantine: core.quarantine,
-    registry,
-    runningPlatforms: () => drivers.map((driver) => driver.platform),
   });
   const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
@@ -400,7 +387,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     components,
     config,
-    doctor,
+    doctor: core.doctor,
     driverRejections: rejections,
     defaultRequesterId:
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
@@ -452,7 +439,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
     // left in flight is finished off in the background, off this critical path (#43).
     converge: async () => {
-      await Promise.all([doctor.reconcile(), convergeStartup()]);
+      await Promise.all([core.doctor.reconcile(), convergeStartup()]);
     },
     settle: async () => leasing.settle(),
     // Drivers are disposed after the lease subsystem, and every one of them is tried even

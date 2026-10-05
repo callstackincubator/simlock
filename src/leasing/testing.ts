@@ -97,6 +97,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     logger: options.logger,
     modelPreferences: options.modelPreferences,
   });
+  core.connect(leasing.corePorts);
   return {
     core,
     leasing,

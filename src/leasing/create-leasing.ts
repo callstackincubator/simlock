@@ -4,6 +4,7 @@ import {
   type ComponentInstaller,
   type Config,
   type Core,
+  type CorePorts,
   type DeviceMode,
   type DeviceRequest,
   type DeviceSpec,
@@ -37,7 +38,7 @@ export interface LeasingOptions {
    */
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
   readonly config: Config;
-  /** Device management, built first; `createLeasing` fills its ports through `core.connect`. */
+  /** Device management, built first. */
   readonly core: Core;
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
@@ -73,6 +74,12 @@ export interface LeasingOptions {
 
 /** What the daemon's request handlers and status reporting use leasing through. */
 export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
+  /**
+   * The ports core declared, implemented by leasing. The composition root hands them to
+   * `core.connect` once, before any request is admitted (ADR 0018 §2); building leasing does not
+   * connect, so building one over a core never re-points that core's ports.
+   */
+  readonly corePorts: CorePorts;
   /** Every lease request, stored in the registry; read by the HTTP request resource too. */
   readonly requests: LeaseRequestBook<LeaseGrant>;
   /**
@@ -114,7 +121,7 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
 
 /**
  * Composition root for the lease subsystem, built on top of `core` (ADR 0018 §2). Wires leasing's
- * parts together, then hands core the ports it declared through `core.connect`.
+ * parts together and returns the ports core declared as `corePorts`; the daemon connects them.
  */
 export function createLeasing(options: LeasingOptions): Leasing {
   const { core } = options;
@@ -208,16 +215,20 @@ export function createLeasing(options: LeasingOptions): Leasing {
           },
         });
 
-  core.connect({
-    leaseMaintenance: { acquisition, leases: releaseCoordinator },
-    notifyAvailability: () => acquisition.kick(),
-    queueHeadDemand: () => {
-      const spec = acquisition.queueHeadSpec;
-      return spec === undefined ? undefined : { spec };
-    },
-  });
-
   return {
+    corePorts: {
+      leaseExpirer: {
+        expire: async (leaseId) => {
+          await releaseCoordinator.expire(leaseId);
+        },
+      },
+      leaseMaintenance: { acquisition, leases: releaseCoordinator },
+      notifyAvailability: () => acquisition.kick(),
+      queueHeadDemand: () => {
+        const spec = acquisition.queueHeadSpec;
+        return spec === undefined ? undefined : { spec };
+      },
+    },
     requests,
     healthMonitor,
     request: async (

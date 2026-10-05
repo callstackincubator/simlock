@@ -179,7 +179,6 @@
                   "LeaseRequestBook",
                   "LeaseRequestForbiddenError",
                   "LeaseRequestOptions",
-                  "NoCapacityError",
                   "QueuePlace",
                   "QueueTimeoutError",
                   "ReplayedLeaseRequestError",

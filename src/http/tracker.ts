@@ -373,7 +373,7 @@ interface DownloadingProgress {
   readonly percent?: number | undefined;
 }
 
-/** Structural subset of `LeaseProgress` (`src/core/wait-queue.ts`) -- this module only ever
+/** Structural subset of `LeaseProgress` (`src/core/domain.ts`) -- this module only ever
  * receives it through a dispatched `lease.request`'s session `onProgress` override, never
  * imports the core type directly. */
 type HttpLeaseProgress =

@@ -68,6 +68,9 @@ async function releasedLease({ driver, registry }: Awaited<ReturnType<typeof bui
 
 function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
   return {
+    leaseExpirer: {
+      expire: async (leaseId) => void order.push(`leaseExpirer.expire:${leaseId}`),
+    },
     leaseMaintenance: {
       acquisition: {
         beginMaintenance: async () => void order.push("acquisition.begin"),
@@ -137,6 +140,35 @@ describe("createCore", () => {
 
     expect(order).toEqual(["queueHeadDemand", "notifyAvailability"]);
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "ready" }]);
+  });
+
+  it("doctor expires a lease past its deadline through the connected leaseExpirer port", async () => {
+    const { core, driver, registry } = await build();
+    const spec = { model: "Phone", osVersion: "1", platform: "ios" } as const;
+    const provisioned = await driver.provision(spec);
+    const device = await registry.registerDevice({
+      driverData: provisioned.driverData,
+      driverDeviceId: provisioned.deviceId,
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: 500,
+      ttlMs: 60_000,
+    });
+    const order: string[] = [];
+    core.connect(ports(order));
+
+    await core.doctor.reconcile({ fix: true });
+
+    expect(order).toEqual([`leaseExpirer.expire:${lease.id}`]);
   });
 
   it("converge re-arms the quarantine retry timers, and dispose cancels the ones armed", async () => {

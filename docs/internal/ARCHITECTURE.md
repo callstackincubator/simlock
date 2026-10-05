@@ -1840,8 +1840,8 @@ policies replaceable without introducing an ambient dependency container.
 Reachability does not depend on startup recovery work. `DaemonServer#start`
 claims the socket (`DaemonEndpointHost#start`) before running `startDaemon`'s
 `converge` callback, which runs `doctor.reconcile()` and
-`leaseEngine.convergeRunningCapacity()` concurrently rather than one after the
-other: `doctor.reconcile()` is pure reconnaissance that already runs
+`convergeStartup()` (leasing's startup, then core's `converge()`) concurrently rather than one
+after the other: `doctor.reconcile()` is pure reconnaissance that already runs
 interleaved with live lease/reclaim activity whenever a client issues
 `doctor.run` mid-session (it shells out per driver/device, then at most flags
 drift for a later `--fix`), so overlapping it with startup's own registry
@@ -1871,7 +1871,7 @@ leaving it accepting connections it can never serve; parked requests reject
 with `DAEMON_STARTUP_FAILED` instead of hanging. Because the two converge
 calls run concurrently, one throwing does not cancel the other — `Promise.all`
 still attaches a handler to both, so neither can produce an unhandled
-rejection, but a straggling `convergeRunningCapacity()` step can keep running
+rejection, but a straggling `convergeStartup()` step can keep running
 briefly after `stop()` has begun. Nothing it can still do (registry-only
 destruction, never touching a leased device) is unsafe to have in flight
 during shutdown; it just means "stopped" is not instantaneous relative to the

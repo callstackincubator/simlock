@@ -1,11 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildCapacityFigures,
   type ModelPreferences,
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
-  type Core,
   DriverCrashError,
   type DeviceSpec,
   type LeaseProgress,
@@ -2802,31 +2801,33 @@ describe("createLeasing wiring", () => {
 
   it("hands core the spec the queue's head waits for, and nothing while no request waits", async () => {
     const harness = await createHarness();
-    let ports: Parameters<Core["connect"]>[0] | undefined;
-    const core: Core = {
-      ...harness.engine.core,
-      connect: (supplied) => {
-        ports = supplied;
-      },
-    };
-    const leasing = createLeasing({
-      clock: harness.clock,
-      components,
-      config: config(),
-      core,
-      eventBus: harness.bus,
-      idGenerator: { generate: () => "1" },
-    });
-    expect(ports?.queueHeadDemand()).toBeUndefined();
+    const { queueHeadDemand } = harness.engine.leasing.corePorts;
+    expect(queueHeadDemand()).toBeUndefined();
 
-    await leasing.request(request, { ownerId: "holder", requesterId: "holder" });
-    const waiting = leasing.request(request, { ownerId: "waiter", requesterId: "waiter" });
+    await harness.engine.request(request, { ownerId: "holder", requesterId: "holder" });
+    const waiting = harness.engine.request(request, { ownerId: "waiter", requesterId: "waiter" });
     waiting.catch(() => undefined);
     await flush();
 
-    expect(ports?.queueHeadDemand()).toEqual({
+    expect(queueHeadDemand()).toEqual({
       spec: expect.objectContaining({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
     });
-    await leasing.cancelPending("waiter");
+    await harness.engine.cancelPending("waiter");
+  });
+
+  it("does not connect core itself: building a second leasing leaves the first one's ports in place", async () => {
+    const harness = await createHarness();
+    const connect = vi.spyOn(harness.engine.core, "connect");
+
+    createLeasing({
+      clock: harness.clock,
+      components,
+      config: config(),
+      core: harness.engine.core,
+      eventBus: harness.bus,
+      idGenerator: { generate: () => "1" },
+    });
+
+    expect(connect).not.toHaveBeenCalled();
   });
 });
