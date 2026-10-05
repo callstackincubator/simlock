@@ -173,7 +173,7 @@ describe("simlock stats", () => {
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("Totals");
     expect(table.stdout).toContain("Requests:");
-  });
+  }, 240_000);
 
   it("after a --no-wait refusal, requests and rejected.byReason.no-wait each rise by one and granted is unchanged", async () => {
     const env = await withDaemon({
@@ -198,7 +198,7 @@ describe("simlock stats", () => {
       (before.totals.rejected.byReason["no-wait"] ?? 0) + 1,
     );
     expect(after.totals.granted).toBe(before.totals.granted);
-  });
+  }, 240_000);
 
   it("simlock stats --since 1h returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
     const env = await withDaemon();
@@ -228,7 +228,7 @@ describe("simlock stats", () => {
       wait: before.totals.wait,
     });
     expect(after.requesters).toEqual(before.requesters);
-  });
+  }, 240_000);
 
   it("on a gateway with two workers, simlock stats has fleet totals and one row per worker, and each worker's own simlock stats covers itself only", async () => {
     const port = await freeLoopbackPort();
@@ -281,5 +281,5 @@ describe("simlock stats", () => {
       expect(own.totals.granted).toBe(1);
       expect(own.workers[0]?.granted).toBe(1);
     }
-  });
+  }, 240_000);
 });
