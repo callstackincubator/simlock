@@ -169,9 +169,58 @@ describe("import rules enforced by pnpm lint", () => {
   it("fails a contract file importing anything outside the contract", () => {
     expectLintError("src/contract/x.ts", `import { x } from "../core/index.js";\n`);
     expectLintError("src/contract/x.ts", `import { x } from "../bus/index.js";\n`);
+    expectLintError("src/contract/x.ts", `import { x } from "./sub/../../core/index.js";\n`);
+    expectLintError("src/contract/sub/x.ts", `import { x } from "./../../bus/index.js";\n`);
+    expectLintError("src/contract/x.ts", `import { x } from "/abs/core/index.js";\n`);
   });
 
   it("passes a contract file importing a package and its own siblings", () => {
     expectLintPass("src/contract/x.ts", `import { z } from "zod";\nimport { y } from "./y.js";\n`);
+  });
+
+  it("fails a file inside drivers importing past the ios or android index from outside it, and passes the index", () => {
+    expectLintError(
+      "src/drivers/installer-process.ts",
+      `import { x } from "./ios/prerequisites.js";\n`,
+    );
+    expectLintError("src/drivers/android/x.ts", `import { x } from "../ios/simctl.js";\n`);
+    expectLintError("src/drivers/x.ts", `import { x } from "./android/prerequisites.js";\n`);
+    expectLintError("src/drivers/ios/x.ts", `import { x } from "../android/adb.js";\n`);
+    expectLintPass("src/drivers/x.ts", `import { x } from "./ios/index.js";\n`);
+    expectLintPass("src/drivers/android/x.ts", `import { x } from "../ios/index.js";\n`);
+  });
+
+  it("passes a file inside a driver importing its sibling", () => {
+    expectLintPass("src/drivers/ios/x.ts", `import { x } from "./simctl.js";\n`);
+    expectLintPass("src/drivers/android/sub/x.ts", `import { x } from "../adb.js";\n`);
+  });
+
+  it("fails a test file outside core importing capacity's testing file or index through core", () => {
+    expectLintError("src/http/x.test.ts", `import { x } from "../core/capacity/testing.js";\n`);
+    expectLintError("src/http/x.test.ts", `import { x } from "../core/capacity/index.js";\n`);
+    expectLintError("src/http/test-fakes.ts", `import { x } from "../core/capacity/testing.js";\n`);
+  });
+
+  it("fails a testing.ts file breaking its module's direction rule", () => {
+    expectLintError("src/core/testing.ts", `import { x } from "node:fs";\n`);
+    expectLintError("src/core/testing.ts", `import { x } from "../drivers/ios/index.js";\n`);
+    expectLintError("src/core/capacity/testing.ts", `import { x } from "node:fs";\n`);
+  });
+
+  it("fails a production file importing a testing.js or test-*.js file", () => {
+    expectLintError("src/core/x.ts", `import { x } from "./testing.js";\n`);
+    expectLintError("src/core/x.ts", `import { x } from "./test-wiring.js";\n`);
+    expectLintError("src/core/x.ts", `import { x } from "./capacity/testing.js";\n`);
+    expectLintError("src/core/capacity/x.ts", `import { x } from "./testing.js";\n`);
+    expectLintError("src/gateway/x.ts", `import { x } from "./testing.js";\n`);
+    expectLintError("src/daemon/x.ts", `import { x } from "./test-helpers.js";\n`);
+    expectLintError("src/daemon/main.ts", `import { x } from "./testing.js";\n`);
+    expectLintError("src/http/x.ts", `import { x } from "./test-fakes.js";\n`);
+    expectLintError("src/contract/x.ts", `import { x } from "./testing.js";\n`);
+  });
+
+  it("passes a test file importing its own module's testing.js or test-*.js file", () => {
+    expectLintPass("src/core/x.test.ts", `import { x } from "./testing.js";\n`);
+    expectLintPass("src/http/x.test.ts", `import { x } from "./test-fakes.js";\n`);
   });
 });
