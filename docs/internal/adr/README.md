@@ -55,6 +55,6 @@ the status is stale.
 | [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Accepted |
 | [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted — not yet implemented |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — not yet implemented |
-| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Proposed |
+| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — not yet implemented |
 | [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — not yet implemented |
 | [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted — not yet implemented |
