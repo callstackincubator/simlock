@@ -2146,7 +2146,7 @@ describe("DaemonServer download policy", () => {
     const client = await createClient(harness.socketPath);
     await hello(client);
     // The fake names the requested version as the component: 65 characters, one past the bound.
-    const osVersion = "x".repeat(65);
+    const osVersion = "9".repeat(65);
 
     const grant = await client.request("lease.request", {
       allowDownload: true,

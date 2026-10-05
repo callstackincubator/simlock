@@ -33,7 +33,8 @@ import {
  * `imageTag` is inherited too, bounded by the contract. `model` and `class` are both optional and
  * refused together (ADR 0015 §1) by the contract's own refinement when the request reaches
  * `lease.request`, not here: a refined schema has no `.shape`, so the SDK would list the tool with
- * no fields at all.
+ * no fields at all. A malformed `osVersion` is refused the same way, by the contract's own check
+ * when the request reaches `lease.request`: the MCP side adds no second check.
  */
 export const leaseSimulatorInputSchema = leaseRequestFields.omit({ requesterId: true });
 

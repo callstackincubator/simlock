@@ -1937,6 +1937,18 @@ still names pool identity for the warm pool, reclaim and the idempotency
 check. A class is read from the catalog entry (`modelClasses`) at the moment
 a fit is decided; a device record stores none.
 
+`osVersion` is an exact version or an OS range (ADR 0015 §2). The one grammar
+is `src/contract/os-range.ts`: the contract schema refines `osVersion`
+through its parser (a refinement over the request object, so the MCP SDK's own
+field validation never answers first), so a malformed range is `BAD_REQUEST` on
+every transport; a string that is not range-like is a bare version and stays
+exact, as `Baklava` or `34-ext12` on Android,
+and the core and the gateway import `satisfies` and `compareVersions` from it.
+For a range the coordinator picks the newest `modelRuntimes` entry in range
+(of the requested image tag) for the exact model, or for the first class
+candidate that has one, and hands the driver that exact version; none is
+`RUNTIME_MISSING` with `downloadable: false`, and a range never installs.
+
 For an exact model: **platform + device model + OS version**.
 OS defaults to the newest runtime already installed on the machine that can
 actually run the requested model — for iOS specifically, the newest

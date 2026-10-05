@@ -22,6 +22,7 @@ import {
   type Driver,
   DriverCrashError,
   readyTransitionUpdate,
+  RuntimeMissingError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
@@ -2007,6 +2008,262 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
 
       expect(granted.device.id).not.toBe(old.id);
       expect(granted.device.spec.osVersion).toBe("26.5");
+    });
+  });
+
+  describe("OS ranges", () => {
+    const rangeDriver = (options: Partial<ConstructorParameters<typeof FakeDriver>[0]> = {}) =>
+      iosDriver({
+        availableOsVersions: ["18.0", "18.4", "26.5"],
+        modelRuntimes: {
+          "iPhone 15": ["18.0", "18.4", "26.5"],
+          "iPhone 16": ["18.0", "18.4", "26.5"],
+          "iPhone 17": ["26.5"],
+        },
+        ...options,
+      });
+
+    it("sends a class request with no osVersion to the driver without pinning a runtime", async () => {
+      const driver = rangeDriver();
+      const harness = await classHarness(driver);
+
+      await harness.coordinator.request({ platform: "ios" }, owner("agent"));
+
+      const resolve = driver.calls.find((call) => call.operation === "resolveSpec");
+      expect(resolve?.arguments[0]).toEqual({ mode: "full", model: "iPhone 17", platform: "ios" });
+    });
+
+    it("grants a ready idle device whose OS satisfies the range, and not one outside it", async () => {
+      const inside = await classHarness(rangeDriver());
+      const warm = await seedReady(inside, { ...iphone15, osVersion: "18.0" });
+      const grantedInside = await inside.coordinator.request(
+        { ...phone, osVersion: ">=18 <26" },
+        owner("agent"),
+      );
+      expect(grantedInside.device.id).toBe(warm.id);
+
+      const outside = await classHarness(rangeDriver());
+      const stale = await seedReady(outside, { ...iphone15, osVersion: "26.5" });
+      const grantedOutside = await outside.coordinator.request(
+        { ...phone, osVersion: ">=18 <26" },
+        owner("agent"),
+      );
+      expect(grantedOutside.device.id).not.toBe(stale.id);
+      expect(grantedOutside.device.spec.osVersion).toBe("18.4");
+    });
+
+    it("fails an exact model the catalog does not list, sent with a range, at once with UnknownModelError", async () => {
+      const driver = rangeDriver();
+      const harness = await classHarness(driver);
+
+      await expect(
+        harness.coordinator.request(
+          { model: "iPhone 99", osVersion: ">=18", platform: "ios" },
+          owner("agent"),
+        ),
+      ).rejects.toMatchObject({ model: "iPhone 99", name: "UnknownModelError" });
+      expect(deviceWork(driver)).toBe(0);
+    });
+
+    it("grants an exact model with a range a ready idle device of that model in range, and not one of another model", async () => {
+      const harness = await classHarness(rangeDriver());
+      const other = await seedReady(harness, { ...iphone15, osVersion: "18.0" });
+      const same = await seedReady(harness, {
+        model: "iPhone 16",
+        osVersion: "18.0",
+        platform: "ios",
+      });
+      const before = deviceWork(harness.driver);
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 16", osVersion: ">=18 <26", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.id).toBe(same.id);
+      expect(granted.device.id).not.toBe(other.id);
+      expect(deviceWork(harness.driver)).toBe(before);
+    });
+
+    it("fails an exact model with a range at once with UnknownModelError when the platform lists no catalog", async () => {
+      const harness = await createHarness({
+        catalogReader: { listCatalog: async () => [] },
+        drivers: [rangeDriver()],
+      });
+
+      await expect(
+        harness.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          owner("agent"),
+        ),
+      ).rejects.toMatchObject({ model: "iPhone 16", name: "UnknownModelError" });
+    });
+
+    it("never installs for a range even when the driver then reports a downloadable runtime missing", async () => {
+      class Racing extends FakeDriver {
+        override async resolveSpec(): Promise<DeviceSpec> {
+          throw new RuntimeMissingError("ios", "18.4", { component: "18.4" });
+        }
+      }
+      const asked: unknown[] = [];
+      const harness = await createHarness({
+        components: {
+          install: async (call) => {
+            asked.push(call);
+            return { outcome: "installed", version: "18.4" };
+          },
+        },
+        drivers: [
+          new Racing({
+            availableOsVersions: ["18.4"],
+            clock: new FakeClock(1_000),
+            knownModels: ["iPhone 16"],
+            modelClasses: { "iPhone 16": "phone" },
+            platform: "ios",
+          }),
+        ],
+      });
+
+      await expect(
+        harness.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          { ...owner("agent"), allowDownload: true },
+        ),
+      ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+      expect(asked).toEqual([]);
+    });
+
+    it("creates an exact model with a range on the newest listed pairing in range", async () => {
+      const harness = await classHarness(rangeDriver());
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 16", osVersion: "<26", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.spec).toMatchObject({ model: "iPhone 16", osVersion: "18.4" });
+      expect(provisioned(harness).map((spec) => spec.osVersion)).toEqual(["18.4"]);
+    });
+
+    it.each([
+      ["without allowDownload", false],
+      ["with allowDownload", true],
+    ])(
+      "fails an exact model with a range nothing installed satisfies at once with RuntimeMissingError, not downloadable, naming the range, and never installs, %s",
+      async (_label, allowDownload) => {
+        const driver = rangeDriver();
+        const harness = await classHarness(driver);
+
+        await expect(
+          harness.coordinator.request(
+            { model: "iPhone 16", osVersion: "<=17", platform: "ios" },
+            { ...owner("agent"), allowDownload },
+          ),
+        ).rejects.toMatchObject({
+          downloadable: false,
+          name: "RuntimeMissingError",
+          osVersion: "<=17",
+        });
+        expect(installs(driver)).toEqual([]);
+        expect(deviceWork(driver)).toBe(0);
+      },
+    );
+
+    it.each([["Baklava"], ["34-ext12"]])(
+      "reaches resolveSpec with the bare version %s exact, as without ranges, and a range never picks it",
+      async (name) => {
+        const driver = rangeDriver({
+          availableOsVersions: ["18.4", name],
+          modelRuntimes: { "iPhone 16": ["18.4", name] },
+        });
+        const harness = await classHarness(driver);
+
+        await harness.coordinator.request(
+          { model: "iPhone 16", osVersion: name, platform: "ios" },
+          owner("agent"),
+        );
+        const resolved = driver.calls.find((call) => call.operation === "resolveSpec");
+        expect(resolved?.arguments[0]).toMatchObject({ osVersion: name });
+
+        const ranged = await classHarness(driver);
+        const granted = await ranged.coordinator.request(
+          { model: "iPhone 16", osVersion: ">=18", platform: "ios" },
+          owner("agent"),
+        );
+        expect(granted.device.spec.osVersion).toBe("18.4");
+      },
+    );
+
+    it("picks the newest in-range runtime whatever order the catalog lists them in", async () => {
+      const harness = await classHarness(
+        rangeDriver({
+          availableOsVersions: ["18.4", "26.5", "9.3", "18.0"],
+          modelRuntimes: { "iPhone 16": ["18.4", "26.5", "9.3", "18.0"] },
+        }),
+      );
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 16", osVersion: "<26", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.spec.osVersion).toBe("18.4");
+    });
+
+    it("takes the first class candidate that has an in-range pairing and its newest such runtime: <=18 creates an iPhone 16 on the newest 18.x", async () => {
+      const harness = await classHarness(rangeDriver());
+
+      const granted = await harness.coordinator.request(
+        { ...phone, osVersion: "<=18" },
+        owner("agent"),
+      );
+
+      expect(granted.device.spec).toMatchObject({ model: "iPhone 16", osVersion: "18.4" });
+    });
+
+    it.each([
+      ["without allowDownload", false],
+      ["with allowDownload", true],
+    ])(
+      "fails a class with a range no candidate pairs with at once with RuntimeMissingError and never installs, %s",
+      async (_label, allowDownload) => {
+        const driver = rangeDriver();
+        const harness = await classHarness(driver);
+
+        await expect(
+          harness.coordinator.request(
+            { ...phone, osVersion: "<=17" },
+            { ...owner("agent"), allowDownload },
+          ),
+        ).rejects.toMatchObject({
+          downloadable: false,
+          name: "RuntimeMissingError",
+          osVersion: "<=17",
+        });
+        expect(installs(driver)).toEqual([]);
+      },
+    );
+
+    it("does not pick a runtime in range whose only images carry another tag: API 35 default only and API 34 google_apis, >=33 with tag google_apis creates on 34", async () => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["34", "35"],
+        clock: new FakeClock(1_000),
+        images: [
+          { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+          { abi: "arm64-v8a", runtime: "35", tag: "default" },
+        ],
+        knownModels: ["Pixel 8"],
+        modelClasses: { "Pixel 8": "phone" },
+        modelRuntimes: { "Pixel 8": ["34", "35"] },
+        platform: "android",
+      });
+      const harness = await classHarness(driver, { android: { phone: ["Pixel 8"] } });
+
+      const byModel = await harness.coordinator.request(
+        { imageTag: "google_apis", model: "Pixel 8", osVersion: ">=33", platform: "android" },
+        owner("agent"),
+      );
+      expect(byModel.device.spec).toMatchObject({ imageTag: "google_apis", osVersion: "34" });
     });
   });
 

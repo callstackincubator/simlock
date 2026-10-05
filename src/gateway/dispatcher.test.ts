@@ -857,6 +857,48 @@ describe("GatewayDispatcher", () => {
       },
     );
 
+    it("answers a lease.request whose osVersion is a range BAD_REQUEST, as a gateway does not route OS ranges yet", async () => {
+      const { directory, dispatcher } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", osVersion: ">=18", platform: "ios" },
+          session({ role: "agent" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("does not route OS ranges yet"),
+      });
+      expect(client.lastRequestLeaseInput).toBeUndefined();
+    });
+
+    it("forwards a lease.request's exact osVersion to the worker unchanged", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17", noWait: true, osVersion: "26.0", platform: "ios" },
+        session({ role: "agent" }),
+      );
+
+      expect(client.lastRequestLeaseInput).toMatchObject({ osVersion: "26.0" });
+    });
+
     it("forwards a lease.request's image tag to the worker unchanged", async () => {
       const { directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();

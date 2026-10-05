@@ -953,7 +953,7 @@ async function runLease(
   if (values.help) {
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
-        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",

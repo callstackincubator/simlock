@@ -5275,7 +5275,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
 
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
-        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -5335,6 +5335,31 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Request req_1: a, ios class watch, queued at 1, waiting 0s\n" +
         "Request req_2: b, android class phone, queued at 2, waiting 0s\n",
+    );
+  });
+
+  it("prints a waiting request's OS range as typed", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { osVersion: ">=18 <26", platform: "ios" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios class phone >=18 <26, queued at 1, waiting 0s\n",
     );
   });
 });

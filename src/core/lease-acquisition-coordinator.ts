@@ -1,5 +1,11 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import { requestedClass } from "../contract/index.js";
+import {
+  compareVersions,
+  type OsRange,
+  parseOsConstraint,
+  satisfies,
+} from "../contract/os-range.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
@@ -9,7 +15,7 @@ import {
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
 import { type LeaseRequestBook, newLeaseRequestId } from "./lease-request-book.js";
-import { classCandidates, modelClass, pairedRuntimes } from "./catalog-match.js";
+import { classCandidates, findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 import {
   type DeviceClass,
   type DeviceMode,
@@ -331,8 +337,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
       const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
-      const target = this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode));
-      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, options);
+      const range = requestedRange(request);
+      const target =
+        range === undefined
+          ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
+          : await this.#resolveRanged(request, mode, range);
+      // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
+      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, {
+        ...options,
+        allowDownload: options.allowDownload === true && range === undefined,
+      });
       waiter.spec = checkedSpec(resolved, request, mode);
       waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
       waiter.classOf = target.classOf;
@@ -356,14 +370,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Turns a request that names no model into the exact one a driver resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model on its preference
-   * list that this host's catalog lists, classes as that class, and pairs with an installed
-   * runtime (of the requested image tag, when it names one); the catalog is read, and nothing is
-   * downloaded. A class with no listed model fails as `UnknownModelError`, and one whose listed
-   * models pair with no runtime as a `RuntimeMissingError` no download can fix.
+   * Turns a request that names no model, or names an OS range, into the exact one a driver
+   * resolves (ADR 0015 §5). A class, named or meant by naming nothing, becomes the first model
+   * on its preference list that this host's catalog lists, classes as that class, and pairs with
+   * an installed runtime (of the requested image tag, and in the requested range, when it names
+   * them); an exact model with a range must be listed, or the request fails as
+   * `UnknownModelError`. With a range the runtime is the newest paired one in it, passed on as an
+   * exact version. The catalog is read, and nothing is downloaded. A class with no listed model
+   * fails as `UnknownModelError`, and a model or class with no pairing as a `RuntimeMissingError`
+   * no download can fix.
    */
-  async #resolveClass(request: DeviceRequest, mode: DeviceMode): Promise<ResolvedTarget> {
-    const { class: _class, model: _model, ...rest } = request;
+  async #resolveClass(
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range?: OsRange,
+  ): Promise<ResolvedTarget> {
     const deviceClass = requestedClass({ class: request.class });
     const entry = (await this.options.catalog.listCatalog(request.platform))[0];
     if (entry === undefined) throw new UnknownModelError(request.platform, undefined, deviceClass);
@@ -375,21 +396,68 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (candidates.length === 0) {
       throw new UnknownModelError(request.platform, undefined, deviceClass);
     }
-    const chosen = candidates.find((candidate) => pairs(entry, candidate, request));
+    const chosen = candidates.find(
+      (candidate) => matchingRuntimes(entry, candidate, request, range).length > 0,
+    );
     if (chosen === undefined) {
       throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
     }
     return {
+      ...this.#rangedTarget(
+        entry,
+        chosen,
+        { class: deviceClass, kind: "class" },
+        request,
+        mode,
+        range,
+      ),
       classOf: (candidate) => modelClass(entry, candidate),
-      exact: { ...rest, mode, model: chosen },
+    };
+  }
+
+  /** A request that names a model and an OS range: the model must be listed (ADR 0015 §5). */
+  async #resolveRanged(
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range: OsRange,
+  ): Promise<ResolvedTarget> {
+    if (request.model === undefined) return this.#resolveClass(request, mode, range);
+    const entry = (await this.options.catalog.listCatalog(request.platform))[0];
+    if (entry === undefined) throw new UnknownModelError(request.platform, request.model);
+    const listed = findCatalogModel(entry, request.model);
+    if (listed === undefined) throw new UnknownModelError(request.platform, request.model);
+    return this.#rangedTarget(
+      entry,
+      listed,
+      { kind: "model", model: listed },
+      request,
+      mode,
+      range,
+    );
+  }
+
+  /** The target for `model` once the request's runtime constraints are settled against `entry`. */
+  #rangedTarget(
+    entry: DriverCatalogEntry,
+    model: string,
+    target: DeviceRequirement["target"],
+    request: DeviceRequest,
+    mode: DeviceMode,
+    range: OsRange | undefined,
+  ): ResolvedTarget {
+    const { class: _class, model: _model, ...rest } = request;
+    return {
+      exact: {
+        ...rest,
+        mode,
+        model,
+        ...(range === undefined ? {} : { osVersion: newestRuntime(entry, model, request, range) }),
+      },
       requirement: {
         imageTag: request.imageTag,
-        osVersion:
-          request.osVersion === undefined
-            ? { kind: "installed", versions: entry.runtimes }
-            : { kind: "exact", version: request.osVersion },
+        osVersion: requiredOs(entry, request, range),
         platform: request.platform,
-        target: { class: deviceClass, kind: "class" },
+        target,
       },
     };
   }
@@ -978,18 +1046,53 @@ interface ResolvedTarget {
 }
 
 /**
- * Whether a model pairs with an installed runtime, counting only the requested OS version when the
- * request names one, and only runtimes that have an image of the requested tag when it names one (the rule the gateway's `matchRequest` applies).
+ * The installed runtimes a model pairs with that the request accepts: the one it names, or those
+ * in its range, or any when it names none; and only runtimes that have an image of the requested
+ * tag when it names one (the rule the gateway's `matchRequest` applies).
  */
-function pairs(
+function matchingRuntimes(
   entry: DriverCatalogEntry,
   model: string,
   { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
-): boolean {
-  return pairedRuntimes(entry, model).some(
+  range: OsRange | undefined,
+): string[] {
+  return pairedRuntimes(entry, model).filter(
     (runtime) =>
-      (osVersion === undefined || runtime === osVersion) &&
+      (range === undefined
+        ? osVersion === undefined || runtime === osVersion
+        : satisfies(runtime, range)) &&
       (imageTag === undefined ||
         (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
   );
+}
+
+/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
+function newestRuntime(
+  entry: DriverCatalogEntry,
+  model: string,
+  request: DeviceRequest,
+  range: OsRange,
+): string {
+  const newest = matchingRuntimes(entry, model, request, range).sort(compareVersions).at(-1);
+  if (newest === undefined) throw new RuntimeMissingError(request.platform, range.text);
+  return newest;
+}
+
+/** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
+function requiredOs(
+  entry: DriverCatalogEntry,
+  { osVersion }: DeviceRequest,
+  range: OsRange | undefined,
+): DeviceRequirement["osVersion"] {
+  if (range !== undefined) return range;
+  return osVersion === undefined
+    ? { kind: "installed", versions: entry.runtimes }
+    : { kind: "exact", version: osVersion };
+}
+
+/** The request's OS range, when its `osVersion` is one rather than an exact version. */
+function requestedRange(request: DeviceRequest): OsRange | undefined {
+  if (request.osVersion === undefined) return undefined;
+  const parsed = parseOsConstraint(request.osVersion);
+  return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
 }

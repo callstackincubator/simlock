@@ -41,6 +41,7 @@ import {
   type OperationName,
   type tokenRecordSchema,
 } from "../contract/index.js";
+import { parseOsConstraint } from "../contract/os-range.js";
 import {
   DispatchError,
   runDispatch,
@@ -437,6 +438,10 @@ export class GatewayDispatcher {
     if (input.model === undefined) {
       throw new DispatchError("BAD_REQUEST", "a gateway does not route class requests yet");
     }
+    // The same stub for an OS range: matching one against workers is the next task.
+    if (input.osVersion !== undefined && isRange(input.osVersion)) {
+      throw new DispatchError("BAD_REQUEST", "a gateway does not route OS ranges yet");
+    }
     const { model } = input;
     return this.options.coordinator.request(
       // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
@@ -531,4 +536,10 @@ function unsupportedByDesign(
   return () => {
     throw new DispatchError("UNSUPPORTED_IN_GATEWAY_MODE", message, { operation });
   };
+}
+
+/** Whether an `osVersion` is a range rather than an exact version. */
+function isRange(osVersion: string): boolean {
+  const parsed = parseOsConstraint(osVersion);
+  return parsed.ok && parsed.constraint.kind === "range";
 }

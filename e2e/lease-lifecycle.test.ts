@@ -286,6 +286,30 @@ describe("lease lifecycle across both frontends", () => {
       expect(result.stderr).toContain("BAD_REQUEST");
     });
 
+    it("grants --os '>=18' a device on 18.0 or newer, fails --os '<=17' at once with RUNTIME_MISSING with and without --allow-download, and refuses --os '^18' with BAD_REQUEST naming the accepted forms", async () => {
+      const env = await withDaemon({ driverScript: { ios: iosScript } });
+
+      const inRange = await lease(env, "in-range", ["--os", ">=18"]);
+      expect(inRange.code, inRange.stderr).toBe(0);
+      expect(Number.parseFloat(granted(inRange).device.spec.osVersion)).toBeGreaterThanOrEqual(18);
+      await env.cli(["release", granted(inRange).lease.id]);
+
+      await env.driverLog.clear();
+      for (const extra of [[], ["--allow-download"]]) {
+        const missing = await lease(env, "missing", ["--os", "<=17", ...extra]);
+        expect(missing.code).toBe(12);
+        expect(missing.stderr).toContain("RUNTIME_MISSING");
+      }
+      expect(
+        (await env.driverLog.calls()).filter((call) => call.operation === "installComponent"),
+      ).toEqual([]);
+
+      const malformed = await lease(env, "malformed", ["--os", "^18"]);
+      expect(malformed.code).not.toBe(0);
+      expect(malformed.stderr).toContain("BAD_REQUEST");
+      expect(malformed.stderr).toContain("18 - 26");
+    });
+
     it.each([
       [undefined, "iPhone 17"],
       ["iPhone 15", "iPhone 15"],
