@@ -103,17 +103,22 @@ describe("StartupConverger", () => {
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
   });
 
-  it("leaves ready devices over maxRunning running at startup", async () => {
+  it("leaves every ready device ready at startup", async () => {
     const older = device("older", "ios", "ready", 1);
     const newer = device("newer", "android", "ready", 2);
     const harness = createHarness([newer, older], []);
 
     await harness.converger.converge();
-    expect(older.state).toBe("ready");
-    expect(newer.state).toBe("ready");
+
+    expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "newer", state: "ready" },
+      { id: "older", state: "ready" },
+    ]);
+    expect(harness.recovery.recoverInterruptedReclaim).not.toHaveBeenCalled();
+    expect(harness.spentDeviceDeletion.deleteSpent).not.toHaveBeenCalled();
   });
 
-  it("leaves unavoidable leased overage untouched", async () => {
+  it("leaves every leased device leased at startup", async () => {
     const first = device("first", "ios", "leased", 1);
     const second = device("second", "ios", "leased", 2);
     const leases = [
@@ -141,8 +146,13 @@ describe("StartupConverger", () => {
     const harness = createHarness([first, second], leases);
 
     await harness.converger.converge();
-    expect(first.state).toBe("leased");
-    expect(second.state).toBe("leased");
+
+    expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "first", state: "leased" },
+      { id: "second", state: "leased" },
+    ]);
+    expect(harness.recovery.recoverInterruptedReclaim).not.toHaveBeenCalled();
+    expect(harness.spentDeviceDeletion.deleteSpent).not.toHaveBeenCalled();
   });
 
   it("leaves a platform without a driver untouched instead of failing convergence", async () => {
@@ -201,29 +211,6 @@ describe("StartupConverger", () => {
 
     expect(harness.leaseIdsAtTimerRestore).toEqual(["lease-1"]);
     expect(harness.leases).toHaveLength(1);
-    expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
-  });
-
-  it("leaves a leased device leased even when the running limit is now zero", async () => {
-    // The device the lease holds is over the (lowered) limit, and stays exactly where it is:
-    // there is no sweep left that could free it, and the capacity pass never touches a
-    // leased device. It goes back to the pool when the lease expires or is released.
-    const leasedDevice = device("leased-device", "ios", "leased", 1);
-    const leases = [
-      {
-        deviceId: leasedDevice.id,
-        grantedAt: 0,
-        id: "lease-1",
-        requesterId: "a",
-        ownerId: "a",
-        lastRenewedAt: 0,
-        ttlMs: 60_000,
-        ttlDeadline: 1000,
-      },
-    ];
-    const harness = createHarness([leasedDevice], leases);
-
-    await harness.converger.converge();
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
   });
 
