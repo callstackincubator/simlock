@@ -93,12 +93,23 @@ pnpm test:e2e <e2e files>        # only the e2e files you added or edited
 ```
 
 Never run `pnpm check`, `pnpm test`, `pnpm typecheck`, `pnpm lint`,
-`pnpm format:check`, `pnpm mutate`, the whole e2e suite or the console lane.
+`pnpm format:check`, `pnpm fallow`, `pnpm mutate`, the whole e2e suite or
+the console lane, and never the tools behind them either (`tsc`, `oxlint`,
+`oxfmt`, `fallow`, `stryker`, from `node_modules/.bin` or anywhere else): a
+type or lint error shows up in the commit hook's output.
 Commit runs format, lint and typecheck. Push runs Fallow, the e2e typecheck
 and `pnpm mutate` on the lines this branch changed; it takes minutes, so run
 `git push` in the background and read its output when it ends. CI runs the
-full suite on every push. Never pass `--no-verify`. Push once per step, not
-after every commit.
+full suite on every push. Never pass `--no-verify` or `-n`. Push once per
+step, not after every commit, and never in the foreground.
+
+Never wait on CI: do not poll `gh pr checks`, `gh run watch` or loop with
+`sleep`. Read `gh pr checks <M>` at most once, before the report, and only to
+report what it already says.
+
+Never use `git stash`: every worktree shares one stash list, so a `pop` can
+apply another branch's work. Commit instead. Temporary files go in your
+scratchpad, not `/tmp`.
 
 Build what `always-in-scope.md` lists as you go: both `EVENTS.md` files for
 a new or changed event; a search of `README.md`, `docs/` and every
@@ -153,8 +164,8 @@ bodies, CLI help) — a refinement can empty a published schema while every
 unit test stays green.
 
 Then `pnpm test:changed` and the e2e files you touched must pass, and you
-push. A failing test you did not touch, locally or in CI
-(`gh pr checks <M>`, then `gh run view <id> --log-failed`):
+push. A failing test you did not touch, locally or in a CI run that has
+already failed (`gh run view <id> --log-failed`):
 if an open `flaky-test` issue names it (`gh issue list --label flaky-test
 --search "<title>"`), list it under Flaky and move on. Otherwise apply
 testing rule 5 to that one file: run `pnpm vitest run <file>` in a worktree
@@ -193,7 +204,7 @@ End with exactly this block, nothing after it:
 Issue: #N  Branch: <kind>/<N>  PR: #M (draft)
 Tests: k of n spec tests green (red commit <short sha>)
 Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
-Run: test:changed pass | fail (<what failed>); CI <pass | fail | running>
+Run: test:changed pass | fail (<what failed>); CI <pass | fail | running | not checked>
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
 Hardware: <Done when lines that need real devices, or "none">
 Flaky: <test title — #issue per line, or "none">
