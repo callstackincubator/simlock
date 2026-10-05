@@ -149,7 +149,7 @@ Prove a claim with the affected test file only:
 `pnpm run build && pnpm run build:e2e && pnpm exec vitest run --project e2e <file>`
 for a fast e2e test. Do not run `pnpm check`, `pnpm test`, `pnpm mutate`,
 the whole e2e suite, the console lane (`pnpm test:console`) or the slow
-lane: CI and the implementer already ran them on this commit.
+lane: the git hooks and CI already ran them on this commit.
 
 You may break code to see what a test catches, at most three times in this
 review, on your riskiest claims: a changed error path, a bound, a parser,

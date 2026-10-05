@@ -145,9 +145,12 @@ the session that invoked them; their frontmatter pins Opus only until the
 next message, so an unattended run keeps it and an attended one returns to
 the session's model after the first reply. `implement` commits the spec's
 tests red first and opens a draft PR, so CI runs from the first push; it
-then turns them green in commits that each lower the failing count, and
-runs `pnpm mutate` so every changed line is shown to matter before anyone
-reviews it.
+then turns them green in commits that each lower the failing count. It
+runs only the tests its change can reach — `pnpm test:changed` and the e2e
+files it touched. Every other check runs on its own: format, lint and
+typecheck on commit; Fallow, the e2e typecheck and `pnpm mutate` (mutants
+on the changed lines only, so every changed line is shown to matter before
+anyone reviews it) on push; the full suite in CI.
 
 A spec never answers every question. What any change includes without
 asking — docs it makes false, both `EVENTS.md` files, a test for every new
@@ -177,7 +180,7 @@ or interleaving makes each changed function wrong and whether a rule is
 broken. It works in its own worktree and proves claims with the affected
 test file only, breaking code at most three times on its riskiest claims;
 `pnpm check`, `pnpm mutate` and the browser and slow lanes are left to the
-implementer and CI. The two are blind to each other on purpose: a reviewer
+git hooks and CI. The two are blind to each other on purpose: a reviewer
 holding both the spec and the rules resolves a conflict between them
 silently, and the maintainer wants to see that conflict, because it usually
 means the spec is missing a line.

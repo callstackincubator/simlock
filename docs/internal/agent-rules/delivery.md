@@ -237,7 +237,7 @@ is open, done means closed as completed.
     break code to see what stays green (testing rules 2 and 3) at most three
     times, on its riskiest claims, and restores the tree afterwards. It does
     not run `pnpm check`, `pnpm mutate`, the whole fast e2e suite, the
-    console lane or the slow lane: the implementer and CI run those.
+    console lane or the slow lane: the git hooks and CI run those.
     Each review returns findings, one per defect: a claim, the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
     finding is blocking when it breaks behaviour, leaves wrong state, or
