@@ -54,12 +54,19 @@ describe("parseOsConstraint", () => {
 });
 
 describe("a string that is not range-like", () => {
-  it.each([["Baklava"], ["34-ext12"], ["26.5-beta"], ["x18"], ["18x"], [" 18"], ["18 "]])(
-    "is a bare version and stays exact: %j",
-    (text) => {
-      expect(parsed(text)).toEqual({ kind: "exact", version: text });
-    },
-  );
+  it.each([
+    ["Baklava"],
+    ["34-ext12"],
+    ["26.5-beta"],
+    ["x18"],
+    ["18x"],
+    [" 18"],
+    ["18 "],
+    ["ext>1"],
+    ["a=b"],
+  ])("is a bare version and stays exact: %j", (text) => {
+    expect(parsed(text)).toEqual({ kind: "exact", version: text });
+  });
 
   it("satisfies no range when the version is not dotted integers", () => {
     expect(satisfies("Baklava", parsed(">=18"))).toBe(false);

@@ -107,12 +107,11 @@ function segments(version: string): readonly number[] {
 }
 
 /**
- * Whether a device OS satisfies a constraint; a bare version is string equality, and a version
- * that is not dotted integers (`Baklava`) satisfies no range.
+ * Whether a device OS satisfies a constraint; a bare version is string equality. A version that is
+ * not dotted integers (`Baklava`) reads as NaN, which every bound refuses, so it satisfies no range.
  */
 export function satisfies(version: string, constraint: OsConstraint): boolean {
   if (constraint.kind === "exact") return constraint.version === version;
-  if (!VERSION.test(version)) return false;
   const parts = segments(version);
   return constraint.bounds.every(
     (bound) =>
