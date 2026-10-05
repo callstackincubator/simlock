@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -289,6 +290,23 @@ describe("NodeFileLogSink", () => {
       expect(await generations(directory)).toContain("events.jsonl.1");
     });
 
+    it("deletes a generation by its last line's timestamp even when earlier lines are older still", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      await writeFile(`${path}.1`, `${stamped(1)}\n${stamped(2)}\n`);
+
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(10_000_000),
+        maxBytes: 10_000,
+        path,
+        retentionMs: 1_000,
+      });
+      sink.close();
+
+      // The file's own mtime is now; only the last line's timestamp (2) says it is expired.
+      expect(await generations(directory)).toEqual(["events.jsonl"]);
+    });
+
     it("when the generations exceed maxBytes the oldest are deleted until the total fits, and the current file is never deleted", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");
@@ -358,6 +376,30 @@ describe("NodeFileLogSink", () => {
       expect(await generations(directory)).toEqual(["events.jsonl"]);
     });
 
+    it("the sweep leaves no file descriptor open after it reads each generation's newest line", async () => {
+      const directory = await tempDir();
+      const path = join(directory, "events.jsonl");
+      for (const generation of [1, 2, 3, 4, 5]) {
+        await writeFile(`${path}.${generation}`, `${stamped(9_000_000)}\n`);
+      }
+      const openDescriptors = (): number => readdirSync("/dev/fd").length;
+      const before = openDescriptors();
+
+      const sink = new NodeFileLogSink({
+        clock: new FakeClock(10_000_000),
+        maxBytes: 10_000,
+        path,
+        retentionMs: DAY,
+        totalMaxBytes: 1_000_000,
+      });
+      const during = openDescriptors();
+      sink.close();
+
+      // Only the sink's own descriptor is held; the five generations were read and closed.
+      expect(during - before).toBe(1);
+      expect(await generations(directory)).toHaveLength(6);
+    });
+
     it("keeps numbered generations with only a retention", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");
@@ -382,15 +424,20 @@ describe("NodeFileLogSink", () => {
     it("keeps numbered generations with only a total size cap, and deletes the oldest to fit it", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");
-      const sink = new NodeFileLogSink({ maxBytes: 10, path, totalMaxBytes: 30 });
+      const sink = new NodeFileLogSink({ maxBytes: 10, path, totalMaxBytes: 35 });
 
-      for (const letter of ["a", "b", "c", "d"]) sink.write(letter.repeat(10));
+      for (const letter of ["a", "b", "c", "d", "e"]) sink.write(letter.repeat(10));
       sink.close();
 
-      // Each file is 11 bytes: the current file plus one generation fit 30, a second do not.
-      expect(await generations(directory)).toEqual(["events.jsonl", "events.jsonl.1"]);
-      expect(await readFile(`${path}.1`, "utf8")).toBe("cccccccccc\n");
-      expect(await readFile(path, "utf8")).toBe("dddddddddd\n");
+      // Each file is 11 bytes: the current file plus two generations fit 35, a third does not.
+      expect(await generations(directory)).toEqual([
+        "events.jsonl",
+        "events.jsonl.1",
+        "events.jsonl.2",
+      ]);
+      expect(await readFile(`${path}.2`, "utf8")).toBe("cccccccccc\n");
+      expect(await readFile(`${path}.1`, "utf8")).toBe("dddddddddd\n");
+      expect(await readFile(path, "utf8")).toBe("eeeeeeeeee\n");
     });
 
     it("keeps a generation whose newest line is exactly at the retention boundary", async () => {

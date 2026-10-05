@@ -262,10 +262,8 @@ export class NodeFileLogSink implements LogSink {
 
   /** How many of the `count` generations are not past `retentionMs`. */
   #withinRetention(count: number): number {
-    const cutoff =
-      this.#retentionMs === undefined
-        ? Number.NEGATIVE_INFINITY
-        : this.#clock.now() - this.#retentionMs;
+    // No retention: nothing is ever older than the cutoff.
+    const cutoff = this.#clock.now() - (this.#retentionMs ?? Number.POSITIVE_INFINITY);
     let keep = count;
     while (keep > 0 && this.#newestLine(`${this.#path}.${keep}`) < cutoff) keep -= 1;
     return keep;
@@ -273,13 +271,13 @@ export class NodeFileLogSink implements LogSink {
 
   /** How many of the first `keep` generations fit `totalMaxBytes` beside the current file. */
   #fitSize(sizes: readonly number[], keep: number): number {
-    if (this.#totalMaxBytes === undefined) return keep;
+    const cap = this.#totalMaxBytes ?? Number.POSITIVE_INFINITY;
     // The current file is counted at its full size, not what it holds now: it is about to
     // fill, and the cap is a promise about the total once it has.
     let total = sizes.slice(0, keep).reduce((sum, size) => sum + size, 0);
     total += Math.max(this.#bytesWritten, this.#maxBytes);
     let kept = keep;
-    while (kept > 0 && total > this.#totalMaxBytes) {
+    while (kept > 0 && total > cap) {
       kept -= 1;
       total -= sizes[kept] ?? 0;
     }
@@ -288,9 +286,9 @@ export class NodeFileLogSink implements LogSink {
 
   /** The time of a generation's newest line: its `timestamp` field, else the file's mtime. */
   #newestLine(file: string): number {
-    const lines = readTail(file).trimEnd().split("\n");
+    const tail = readTail(file).trimEnd();
     try {
-      const parsed: unknown = JSON.parse(lines[lines.length - 1] ?? "");
+      const parsed: unknown = JSON.parse(tail.slice(tail.lastIndexOf("\n") + 1));
       // A `null` line throws here and is caught, like any other line that is not an object.
       const timestamp = (parsed as { timestamp?: unknown }).timestamp;
       if (typeof timestamp === "number") return timestamp;

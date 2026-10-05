@@ -60,10 +60,7 @@ async function readGenerations(filesystem: Filesystem, path: string): Promise<st
     // The current file may be missing while generations exist (a rotation caught between its
     // rename and its re-open). A missing generation is one rotation step caught mid-shift when
     // the next number exists; only two in a row end the walk.
-    else if (
-      generation > 0 &&
-      (await readLines(filesystem, `${path}.${generation + 1}`)) === undefined
-    ) {
+    else if ((await readLines(filesystem, `${path}.${generation + 1}`)) === undefined) {
       return generations;
     }
   }
