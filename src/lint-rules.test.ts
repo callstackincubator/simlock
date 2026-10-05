@@ -223,4 +223,33 @@ describe("import rules enforced by pnpm lint", () => {
     expectLintPass("src/core/x.test.ts", `import { x } from "./testing.js";\n`);
     expectLintPass("src/http/x.test.ts", `import { x } from "./test-fakes.js";\n`);
   });
+  it("fails a core file importing leasing's index, and passes leasing's testing file in a core test", () => {
+    expectLintError("src/core/x.ts", `import { x } from "../leasing/index.js";\n`);
+    expectLintPass("src/core/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("fails a core test importing a private leasing file", () => {
+    expectLintError("src/core/x.test.ts", `import { x } from "../leasing/wait-queue.js";\n`);
+  });
+
+  it("fails a daemon file importing a private leasing file, and passes leasing's index", () => {
+    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/wait-queue.js";\n`);
+    expectLintPass("src/daemon/x.ts", `import { x } from "../leasing/index.js";\n`);
+  });
+
+  it("fails a leasing file importing node:fs, child_process or a driver", () => {
+    expectLintError("src/leasing/x.ts", `import { x } from "node:fs";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "child_process";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "../drivers/ios/index.js";\n`);
+  });
+
+  it("passes leasing's testing file in a daemon test file, and fails the same import in a daemon file", () => {
+    expectLintPass("src/daemon/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
+    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("fails a gateway file importing createLeasing from leasing's index, and passes LeaseRequestBook", () => {
+    expectLintError("src/gateway/x.ts", `import { createLeasing } from "../leasing/index.js";\n`);
+    expectLintPass("src/gateway/x.ts", `import { LeaseRequestBook } from "../leasing/index.js";\n`);
+  });
 });

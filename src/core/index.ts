@@ -136,3 +136,4 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
+export { createCore } from "./create-core.js";
