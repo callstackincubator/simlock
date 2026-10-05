@@ -44,9 +44,11 @@ monitor, and the startup reconciler of
 `src/core/` keeps device management: the registry and its persistence,
 capacity, the provisioner, the managed device lifecycle, the warm pool,
 cleanup and the reaper, quarantine, nuke, doctor, the driver interface and
-catalog, and the device half of startup convergence. Lease records stay in
-the registry, because a grant and the device's move to `leased` are one
-`state.json` write.
+catalog, and the device half of startup convergence. Lease records and lease request records stay in the registry, because a
+grant and the device's move to `leased` are one `state.json` write, and
+ADR 0019 §4 makes the request's result part of it. The record types and
+the store interface the registry implements (`LeaseRequestStore`) stay in
+core; leasing's request book is the only caller.
 
 ```mermaid
 flowchart LR
@@ -68,7 +70,11 @@ flowchart LR
 Where device management must act on a lease, core declares the interface
 it needs and leasing implements it. Nuke already works this way: it calls
 `releaseAllDuringMaintenance` through an interface declared in core. The
-daemon wires the two together.
+daemon wires the two together. Core is built first, so such an interface
+is filled in late: `createCore` returns the services and a `connect`
+step that takes leasing's implementations, and the daemon calls it after
+`createLeasing`, before it admits requests. A core service called before
+`connect` fails with an error naming the missing port.
 
 `LeaseEngine` goes away. `createCore(...)` builds core's services,
 including ADR 0017's warm-pool module, `createLeasing({ core, ... })`
@@ -122,8 +128,13 @@ tests may import its `testing.ts`, and `pnpm lint` enforces the rule.
   `child_process`, for the same reason. `src/daemon/**` other than
   `main.ts` may not import `gateway/`: the composition root is the only
   daemon file that knows a gateway exists. `src/gateway/**` may not import `drivers/`, `http/`,
-  `cli/` or `mcp/`, from `daemon/` only `dispatch.js`, and from core's index only the names its allow-list
-  gives (`allowImportNames`). `src/contract/**` imports nothing outside
+  `cli/` or `mcp/`, from `daemon/` only `dispatch.js`, and from core's
+  and leasing's indexes only the names its allow-lists give
+  (`allowImportNames`): from leasing, the request book, the in-memory
+  store, the wait queue, their errors and their types; never
+  `createLeasing`, the acquisition coordinator, the lifecycle or the
+  release coordinator. That keeps ADR 0005 §33's ban on the gateway
+  reaching the lifecycle enforced after the move. `src/contract/**` imports nothing outside
   itself.
 
 Lint checks one file's own imports. Two checks follow imports further and

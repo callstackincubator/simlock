@@ -9,7 +9,9 @@
   and the "nothing is swept" reading of it, now hold only for a lease
   whose device is running. Narrows [ADR
   0003](0003-one-typed-daemon-contract-behind-every-frontend.md)'s
-  `status.get`: four fields become optional.
+  `status.get`: four fields become optional. Narrows [ADR
+  0005](0005-gateway-and-worker-modes.md) §20's worker view: its device,
+  lease, capacity, queue and catalog fields become optional too.
 - **Depends on:** [ADR
   0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md)
   for the leasing module that owns the reconciler, and [ADR
@@ -59,7 +61,9 @@ Startup runs in this order, all while health is `starting`:
 4. Kept leases get their expiry timers back, from their persisted
    deadlines.
 5. Core's device convergence runs as ADR 0017 leaves it: quarantine
-   timers, interrupted reclaims, spent devices.
+   timers, interrupted reclaims, spent devices. It skips every device on
+   an unreadable platform, as it already skips a platform with no driver,
+   so a reclaim §2 leaves waiting is not started here either.
 6. Health becomes `running`; parked requests proceed and the health
    monitor starts.
 
@@ -178,8 +182,9 @@ as for any `device-lost`.
 - A driver failure at startup, or a listing slower than 60 seconds, ends
   every lease on that platform. Before this ADR a failure failed startup
   instead, and a hung `adb devices` kept the daemon starting forever.
-- Startup is slower by one listing per platform before convergence, and by
-  running doctor and device convergence one after the other.
+- Startup is slower by the slowest platform listing before convergence,
+  up to the 60-second limit, and by running doctor and device convergence
+  one after the other.
 - The health monitor's runtime behaviour is unchanged: a device that stops
   after startup is still rebooted, and a missing one is still debounced.
 - Startup waits up to 60 seconds per platform for its read, read side by
