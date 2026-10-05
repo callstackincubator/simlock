@@ -2,18 +2,14 @@ import type { EventBus } from "../bus/index.js";
 import { requestedClass } from "../contract/index.js";
 import { type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
-import {
-  type AcquisitionPlan,
-  type AcquisitionPlanner,
-  type AcquisitionPlannerInput,
-} from "./acquisition-planner.js";
+import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
   type DeviceOperationClaim,
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
-import { findCatalogModel } from "./catalog-match.js";
+import { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 import {
   type DeviceClass,
   type DeviceMode,
@@ -149,8 +145,8 @@ export interface LeaseAcquisitionCoordinatorOptions {
 interface AcquisitionWaiter extends Waiter {
   failures: number;
   /** What an idle device must satisfy besides its pool mode, kept beside `spec` (ADR 0015 §5). */
-  classOf?: (model: string) => DeviceClass | undefined;
-  requirement?: DeviceRequirement;
+  classOf?: ((model: string) => DeviceClass | undefined) | undefined;
+  requirement?: DeviceRequirement | undefined;
   spec?: DeviceSpec;
   timing: LeaseTiming;
 }
@@ -310,7 +306,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, options);
       waiter.spec = checkedSpec(resolved, request, mode);
       waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
-      if (target.classOf !== undefined) waiter.classOf = target.classOf;
+      waiter.classOf = target.classOf;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -346,7 +342,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.options.modelPreferences[request.platform]?.[deviceClass] ?? []
     ).flatMap((name) => {
       const listed = findCatalogModel(entry, name);
-      return listed !== undefined && classOfModel(entry, listed) === deviceClass ? [listed] : [];
+      return listed !== undefined && modelClass(entry, listed) === deviceClass ? [listed] : [];
     });
     if (candidates.length === 0) {
       throw new UnknownModelError(request.platform, undefined, deviceClass);
@@ -356,7 +352,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
     }
     return {
-      classOf: (candidate) => classOfModel(entry, candidate),
+      classOf: (candidate) => modelClass(entry, candidate),
       exact: { ...rest, mode, model: chosen },
       requirement: {
         imageTag: request.imageTag,
@@ -571,7 +567,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       noWait: waiter.options.noWait ?? false,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
-      ...fitInput(waiter),
+      requirement: waiter.requirement,
+      classOf: waiter.classOf,
     });
   }
 
@@ -937,16 +934,6 @@ function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceM
   return mode === "slim" ? resolved : fullSpec(resolved);
 }
 
-/** What the planner needs, beside the spec, to find an idle device that fits the request. */
-function fitInput(
-  waiter: AcquisitionWaiter,
-): Pick<AcquisitionPlannerInput, "classOf" | "requirement"> {
-  return {
-    ...(waiter.requirement === undefined ? {} : { requirement: waiter.requirement }),
-    ...(waiter.classOf === undefined ? {} : { classOf: waiter.classOf }),
-  };
-}
-
 /** What `#resolveClass` settles on; an exact request has only `exact`. */
 interface ResolvedTarget {
   readonly exact: ExactDeviceRequest;
@@ -954,18 +941,12 @@ interface ResolvedTarget {
   readonly classOf?: (model: string) => DeviceClass | undefined;
 }
 
-/** A model's class in a catalog entry; an inherited key like `constructor` is no class. */
-function classOfModel(entry: DriverCatalogEntry, model: string): DeviceClass | undefined {
-  return Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
-}
-
 /**
  * Whether a model pairs with an installed runtime, counting only runtimes that have an image of
  * the requested tag when the request names one (the rule the gateway's `matchRequest` applies).
  */
 function pairs(entry: DriverCatalogEntry, model: string, imageTag: string | undefined): boolean {
-  const runtimes = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : [];
-  return (runtimes ?? []).some(
+  return pairedRuntimes(entry, model).some(
     (runtime) =>
       imageTag === undefined ||
       (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag),

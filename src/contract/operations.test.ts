@@ -892,12 +892,14 @@ describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () =
   });
 
   it("requestedDevice copies the class and leaves out the model a request did not name", () => {
-    expect(requestedDevice(input.parse({ class: "watch", platform: "ios" }))).toEqual({
+    expect(requestedDevice(input.parse({ class: "watch", platform: "ios" }))).toStrictEqual({
       class: "watch",
       platform: "ios",
     });
-    expect(requestedDevice(input.parse({ platform: "android" }))).toEqual({ platform: "android" });
-    expect(requestedDevice(input.parse({ model: "Pixel 8", platform: "android" }))).toEqual({
+    expect(requestedDevice(input.parse({ platform: "android" }))).toStrictEqual({
+      platform: "android",
+    });
+    expect(requestedDevice(input.parse({ model: "Pixel 8", platform: "android" }))).toStrictEqual({
       model: "Pixel 8",
       platform: "android",
     });

@@ -35,9 +35,9 @@ export interface AcquisitionPlannerInput {
    * What an idle device must satisfy besides its pool mode (ADR 0015 §5). Absent, the request is
    * exact and the requirement is `spec`'s own model, OS and image tag.
    */
-  readonly requirement?: DeviceRequirement;
+  readonly requirement?: DeviceRequirement | undefined;
   /** The class the catalog gives a model, for a requirement that names a class. */
-  readonly classOf?: (model: string) => DeviceClass | undefined;
+  readonly classOf?: ((model: string) => DeviceClass | undefined) | undefined;
 }
 
 export type AcquisitionPlan =

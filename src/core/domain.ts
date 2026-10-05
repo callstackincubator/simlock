@@ -107,13 +107,32 @@ export function fits(
   if (requirement.platform !== spec.platform || requirement.imageTag !== spec.imageTag) {
     return false;
   }
-  const { target, osVersion } = requirement;
-  const targetFits =
-    target.kind === "model" ? target.model === spec.model : classOf(spec.model) === target.class;
-  if (!targetFits) return false;
-  return osVersion.kind === "exact"
-    ? osVersion.version === spec.osVersion
-    : osVersion.versions.includes(spec.osVersion);
+  return (
+    fitsTarget(requirement.target, spec.model, classOf) &&
+    satisfiesOs(requirement.osVersion, spec.osVersion)
+  );
+}
+
+function fitsTarget(
+  target: DeviceRequirement["target"],
+  model: string,
+  classOf: (model: string) => DeviceClass | undefined,
+): boolean {
+  switch (target.kind) {
+    case "model":
+      return target.model === model;
+    case "class":
+      return classOf(model) === target.class;
+  }
+}
+
+function satisfiesOs(constraint: OsConstraint, osVersion: string): boolean {
+  switch (constraint.kind) {
+    case "exact":
+      return constraint.version === osVersion;
+    case "installed":
+      return constraint.versions.includes(osVersion);
+  }
 }
 
 /**

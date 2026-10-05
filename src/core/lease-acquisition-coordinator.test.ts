@@ -27,6 +27,7 @@ import {
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
+import type { CatalogReader } from "./lease-ports.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import {
   IdempotencyConflictError,
@@ -104,6 +105,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
   };
 }
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
@@ -117,6 +119,8 @@ async function createHarness(
     readonly maxRunning?: number;
     /** The class preference lists the daemon would build from config and the drivers. */
     readonly preferences?: ModelPreferences;
+    /** Stands in for the catalog reader a class request reads, when a test scripts it. */
+    readonly catalogReader?: Pick<CatalogReader, "listCatalog">;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -186,7 +190,7 @@ async function createHarness(
       timeoutMs: 1_200_000,
     });
   coordinator = new LeaseAcquisitionCoordinator({
-    catalog,
+    catalog: options.catalogReader ?? catalog,
     claims,
     components,
     decisions,
@@ -1699,7 +1703,7 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
       const harness = await createHarness({ drivers: [driver] });
 
       await expect(harness.coordinator.request(asked, owner("agent"))).rejects.toThrow(
-        /resolved image tag/,
+        /driver resolved image tag .* for a request naming/,
       );
       expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
     },
@@ -2048,6 +2052,75 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
         });
       },
     );
+
+    it("fails a class request at once with UnknownModelError when the platform has no preference list at all", async () => {
+      const harness = await classHarness(iosDriver(), {});
+
+      await expect(harness.coordinator.request(phone, owner("agent"))).rejects.toMatchObject({
+        class: "phone",
+        name: "UnknownModelError",
+        message: expect.stringContaining("ios.defaultModels.phone"),
+      });
+    });
+
+    it("fails a class request with UnknownModelError when the catalog reader answers no entry for the platform", async () => {
+      const harness = await createHarness({
+        catalogReader: { listCatalog: async () => [] },
+        drivers: [iosDriver()],
+        preferences: iosPreferences,
+      });
+
+      await expect(harness.coordinator.request(phone, owner("agent"))).rejects.toMatchObject({
+        name: "UnknownModelError",
+      });
+    });
+
+    it.each([
+      ["names none", undefined, "default"],
+      ["names a version", "18.4", "18.4"],
+    ])(
+      "names the OS in the RuntimeMissingError of a class whose models pair with no runtime when the request %s",
+      async (_label, osVersion, named) => {
+        const driver = iosDriver({ modelRuntimes: { "iPhone 16": [] } });
+        const harness = await classHarness(driver, { ios: { phone: ["iPhone 16"] } });
+
+        await expect(
+          harness.coordinator.request(
+            { ...phone, ...(osVersion === undefined ? {} : { osVersion }) },
+            owner("agent"),
+          ),
+        ).rejects.toMatchObject({ name: "RuntimeMissingError", osVersion: named });
+      },
+    );
+
+    it("fits a class request naming an OS only a device on that OS, and creates a device on it otherwise", async () => {
+      const harness = await classHarness();
+      const newest = await seedReady(harness, { ...iphone15, osVersion: "26.5" });
+
+      const older = await harness.coordinator.request(
+        { ...phone, osVersion: "18.4" },
+        owner("agent"),
+      );
+
+      expect(older.device.id).not.toBe(newest.id);
+      expect(older.device.spec.osVersion).toBe("18.4");
+
+      const sameOs = await classHarness();
+      const warm = await seedReady(sameOs, iphone15);
+      const granted = await sameOs.coordinator.request(
+        { ...phone, osVersion: "18.4" },
+        owner("agent"),
+      );
+      expect(granted.device.id).toBe(warm.id);
+    });
+
+    it("fails a class request naming an image tag on a driver with no images with RuntimeMissingError, not downloadable", async () => {
+      const harness = await classHarness();
+
+      await expect(
+        harness.coordinator.request({ ...phone, imageTag: "google_apis" }, owner("agent")),
+      ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+    });
 
     it("passes the driver an exact model, never a class", async () => {
       const driver = iosDriver();

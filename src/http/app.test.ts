@@ -434,9 +434,21 @@ describe("POST /v1/lease-requests", () => {
     expect(response.status).toBe(400);
     const { error } = (await response.json()) as { error: { code: string; message: string } };
     expect(error.code).toBe("BAD_REQUEST");
-    expect(error.message).toContain("device");
-    expect(error.message).toContain("class");
+    expect(error.message).toBe(
+      "class: a request names a device or a class, not both: send only one of `device` and `class`",
+    );
     expect(dispatcher.calls).toHaveLength(0);
+  });
+
+  it("dispatches a body naming a device as the model, with no class", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, defaultBody);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
+    await responsePromise;
+
+    expect(call.input).toMatchObject({ model: "iPhone 17 Pro", platform: "ios" });
+    expect(call.input).not.toHaveProperty("class");
   });
 
   it.each([

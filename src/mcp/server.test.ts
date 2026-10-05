@@ -230,6 +230,20 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("describes the three ways lease_simulator names a device", async () => {
+    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
+    try {
+      const { tools } = await mcpClient.listTools();
+
+      const description = tools.find((tool) => tool.name === "lease_simulator")?.description;
+      expect(description).toContain("`model`");
+      expect(description).toContain("`class`");
+      expect(description).toContain("neither");
+    } finally {
+      await close();
+    }
+  });
+
   it("refuses a lease_simulator call naming both a class and a model, the message naming both fields, before asking", async () => {
     const client = new FakeSimlockClient();
     const { mcpClient, close } = await connectedServer(client);

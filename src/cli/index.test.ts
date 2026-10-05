@@ -5245,8 +5245,35 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
 
     await runCli(["lease", "--help"], output.environmentWith({}));
 
-    expect(output.stdout).toContain("--class");
-    expect(output.stdout).not.toMatch(/--platform <ios\|android> --device <model>/);
+    expect(output.stdout).toBe(
+      "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
+        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--timeout <duration>]\n" +
+        "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
+        "                     [--export-env] [--bind-pid <pid>]\n",
+    );
+  });
+
+  it.each([
+    ["--device", "lease --device must not be empty"],
+    ["--class", "lease --class must not be empty"],
+  ])("exits 2 with USAGE for an empty %s, before connecting", async (flag, message) => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", flag, ""],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({});
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(2);
+    expect(connected).toBe(false);
+    expect(output.stderr).toContain(message);
   });
 
   it("prints the class of a waiting request that names no model, phone when it names none", async () => {

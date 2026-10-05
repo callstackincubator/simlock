@@ -173,6 +173,33 @@ describe("Registry lease requests", () => {
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
   });
 
+  it("loads a stored request's class, and drops a record whose class is not one of the seven", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const record = (id: string, deviceClass: unknown) => ({
+      createdAt: 1_000,
+      id,
+      ownerId: "agent",
+      request: { class: deviceClass, platform: "ios" },
+      requesterId: "agent",
+      state: "open",
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [record("req_watch", "watch"), record("req_broken", "phablet")],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+
+    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
+      ["req_watch", { class: "watch", platform: "ios" }],
+    ]);
+  });
+
   it("loads a stored request's image tag, and drops a record whose image tag is not a string", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
