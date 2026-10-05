@@ -137,7 +137,7 @@ rather than assume continuity.
 
 ## Warm-pool purge failures (resolved: quarantine, #21)
 
-Before a released device enters the warm pool, Simlock attempts to purge the
+Before a released device is grantable again, Simlock attempts to purge the
 previous lease's state. A successful purge produces a clean, ready device.
 
 **The original pitfall:** the first warm-pool version emitted
@@ -150,7 +150,7 @@ misbehaving.
 of readiness-checking it back into circulation. `quarantined` is a shared
 "present in the registry, counts against running capacity, not grantable"
 disposition (see `docs/internal/ARCHITECTURE.md`, "Quarantine: present but not
-grantable") — `AcquisitionPlanner` and the warm-pool eviction helpers select
+grantable") — `AcquisitionPlanner` and the idle-order eviction helpers select
 targets by exact state, so a quarantined device is simply invisible to every
 grant path with no special-casing required. `QuarantineCoordinator` retries
 the purge on a `Clock`-driven backoff (`warmPool.quarantine.{maxRetries,

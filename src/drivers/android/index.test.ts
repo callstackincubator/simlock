@@ -1171,8 +1171,8 @@ describe("AndroidDriver", () => {
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
     // Both measured on an M3 Pro / Pixel 8 / API 35. The gap is real: a `wipe` reclaim defers
-    // the wipe to the next `makeReady`, but the warm-pool disposition runs that boot before the
-    // device leaves `reclaiming`, so the window is a cold wipe boot rather than a shutdown.
+    // the wipe to the next `makeReady`; a reclaim that also boots the device back to warm
+    // spends a cold wipe boot in `reclaiming` rather than a shutdown.
     expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(6_000);
     expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(32_000);
   });

@@ -87,7 +87,7 @@ export interface StartupConvergerOptions {
  * until its driver returns -- worse than untouched, better than a phantom lease pinning a
  * device nobody holds. And a dark platform's devices still count toward capacity (see
  * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
- * over budget; excess selection below excludes them from the candidates, not from the count.
+ * over budget.
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}

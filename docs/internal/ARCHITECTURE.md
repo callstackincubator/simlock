@@ -983,7 +983,7 @@ managed-device registry, capacity accounting behind a pluggable strategy
 (the default derives limits from the machine and treats RAM as the binding
 constraint for Android emulators), the device state machine, the
 cleanup reaper, the leased-device health monitor, the event bus, and
-warm-pool *policy*.
+idle-device ordering.
 
 Platform mechanisms live behind a narrow driver interface:
 
@@ -1117,9 +1117,8 @@ mode (a slim size left unset falls back to the full one) and uses one sum
 and one limit for `canProvision`, `canBoot` and `status.get`'s
 `capacity.ramBudget`. `canBoot` refuses with `ram-budget` when the boot's
 extra size (full minus the device's own size) does not fit. The
-coordinator's boot reservation, taken by the planner for a shut-down device
-and by the warm pool for a reclaimed device it boots back to warm, counts
-that device as `full` in every decision until released; status leaves every
+coordinator's boot reservation, taken by the planner for a shut-down device,
+counts that device as `full` in every decision until released; status leaves every
 reservation out. A boot refused for RAM evicts nothing and waits. Running
 slots ignore mode. A recovery reboot is not checked and boots full while the
 record keeps its mode (KNOWN-PITFALLS). A restart with larger sizes can
@@ -1140,24 +1139,20 @@ startup — nothing about a restart proves a holder is dead, so nothing is
 released on the strength of it. A lease whose deadline already passed while no
 daemon was running expires as soon as one is, through the ordinary expiry path.
 `StartupConverger` then recovers unleased interrupted reclaims through the
-warm-pool recovery port — a backgrounded reclaim marks its device with a
+reclaim coordinator's recovery port — a backgrounded reclaim marks its device with a
 `reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
-never survive a restart) rather than cutting it short — and finally
-deterministically shuts down excess unleased, unclaimed `ready` registry
-devices through `CleanupActionExecutor`. Leased devices are never touched by
-any of this, so a lowered limit may remain visibly over-limit until leases
-expire or are released.
+never survive a restart) rather than cutting it short — and
+deletes spent `fresh` devices. It shuts nothing down for being over a running
+limit, so a lowered limit may leave `ready` devices running (and the pool
+visibly over-limit) until a lease or the warm pool's own rules bring it back
+under. Leased devices are never touched by any of this.
 
-The capacity sweep's view of what's `ready` is only ever a snapshot, and a
-background reclaim in flight makes it more so: `reclaiming` already counts
-toward the running total (see above), but a device mid-reclaim cannot be a
-shutdown *candidate* until it settles. The sweep does not wait for that or
-re-run afterward — it tolerates the transient view, because a completed
-reclaim (`WarmPoolCoordinator#reclaim`) makes its own capacity-aware
-keep-or-shutdown decision when it settles, serialized against everything
-else touching the registry, so the pool can never end up over limit even
-though the sweep that ran at startup couldn't see the reclaim coming.
+A completed reclaim (`ReclaimCoordinator#reclaim`) commits exactly the state
+the driver's reclaim returned: `shutdown` on iOS, `ready` on Android. It makes
+no keep-or-shutdown decision and boots nothing, so an Android device released
+over the running limit stays `ready` until the warm pool module (ADR 0017)
+lands.
 
 ## Device state machine
 
@@ -1324,7 +1319,7 @@ commit inside the serialized decision section: the lease record is gone,
 driver-side purge — an iOS `simctl erase` runs tens of seconds, an Android
 snapshot restore comparably — and it carries no information the releasing
 caller can act on. So `LeaseReleaseCoordinator` commits the first half, hands
-the second to `WarmPoolCoordinator` without awaiting it, and returns. An agent
+the second to `ReclaimCoordinator` without awaiting it, and returns. An agent
 releasing over MCP or the CLI gets its turn back immediately instead of
 blocking on a device it has already given up, and an expiry frees its device
 the same way.
@@ -1337,7 +1332,7 @@ still counts as running capacity and is invisible to every grant path
 stalled-transition finding both tell a live purge from an abandoned one. A
 waiter queued for exactly that device is granted the moment the purge settles:
 the coordinator re-notifies acquisition *after* releasing the claim, because
-the warm pool's own notification fires while the device is still claimed and
+the reclaim coordinator's own notification fires while the device is still claimed and
 therefore still unselectable.
 
 Three things still wait for the purge, deliberately:
@@ -1377,8 +1372,8 @@ capacity coordinator into these direct transactional call chains:
   `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver
   work and registry transitions.
 - `LeaseLifecycle` owns grant, renewal, release commits, and expiry scheduling.
-  A release passes its committed result directly to `WarmPoolCoordinator`,
-  which performs reclaim and warm-pool disposition — without the releasing
+  A release passes its committed result directly to `ReclaimCoordinator`,
+  which performs the reclaim and commits what the driver returns — without the releasing
   caller waiting on it (see "Release hands the purge off").
 - `CapacityCoordinator` owns provisioning and running reservations while the
   configured `CapacityStrategy` decides the limits. `DeviceOperationClaims` excludes
@@ -1890,7 +1885,7 @@ do and what went wrong. The log records:
   record; `daemon.stop` and `hello` are answered by the socket server and keep
   their own lines.
 - **One line per handled background failure** — a boot, an eviction, a
-  quarantine retry, a warm-pool disposition, a scheduled cleanup run, a lease
+  quarantine retry, a scheduled cleanup run, a lease
   expiry — from the core module that caught it (`logger.child("<module>")`,
   `NoopLogger` by default), with `deviceId`, `step`, `error`, and the lease or
   requester where the site knows one. A failure whose error already travels on
