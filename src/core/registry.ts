@@ -303,7 +303,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * release-time purge failure, or a fresh device's failed lease-end shutdown, leaves
    * `reclaiming`; a fresh device's failed delete leaves `shutdown`; and a
    * stalled-transition timeout leaves `provisioning`. The caller -- QuarantineCoordinator,
-   * reached from WarmPoolCoordinator for the lease-end paths -- emits `device.quarantined`
+   * reached from ReclaimCoordinator for the lease-end paths -- emits `device.quarantined`
    * (and, for a lease-end failure, `device.purge-failed`) after this commits.
    */
   async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {

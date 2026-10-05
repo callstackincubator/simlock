@@ -226,10 +226,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
   }
 
-  get queueHeadSpec(): DeviceSpec | undefined {
-    return (this.options.queue.head as AcquisitionWaiter | undefined)?.spec;
-  }
-
   /**
    * Admits a request, or answers a repeat of one. A repeat under a stored key is answered before
    * any other check -- its result never depends on what changed on the host since. A new
@@ -853,8 +849,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * A queued waiter whose spec matches a device already being reclaimed is waiting on that
    * reclaim, not on nothing in particular: an iOS erase holds the only matching device for
    * tens of seconds, and reporting only `queued` leaves the requester with a position and no
-   * sense of how long. Purely informational -- the plan is untouched, and the device is
-   * granted through the normal `ready` path when its reclaim commits. Nothing is reported
+   * sense of how long. Purely informational -- the plan is untouched. When the reclaim
+   * commits, the waiter is planned again like any other: an Android device comes back
+   * `ready` and is granted at once, an iOS one comes back `shutdown` and is granted
+   * through a `boot-shutdown` plan, a full boot after the erase. Nothing is reported
    * when no matching device is reclaiming, so this never invents a stage out of an idle wait.
    */
   #notifyReclaimWait(waiter: AcquisitionWaiter): void {
@@ -992,7 +990,7 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
 /**
  * What this device's reclaim will cost once the lease is released -- the one part of a
  * grant's timing that describes work still ahead of the holder rather than work already
- * done. `standard` because that is what every release path asks for (`WarmPoolCoordinator
+ * done. `standard` because that is what every release path asks for (`ReclaimCoordinator
  * #reclaim`, `QuarantineCoordinator`); a holder cannot request a different clean level.
  */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {

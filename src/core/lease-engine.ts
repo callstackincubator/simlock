@@ -41,7 +41,7 @@ import { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WaitQueue } from "./wait-queue.js";
-import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
 
@@ -131,7 +131,7 @@ export class LeaseEngine {
   readonly requests: LeaseRequestBook<StoredLeaseGrant>;
   readonly #decisions: SerializedDecision;
   readonly #startup: StartupConverger;
-  readonly #warmPool: WarmPoolCoordinator;
+  readonly #reclaim: ReclaimCoordinator;
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#decisions = options.decisions;
@@ -233,19 +233,13 @@ export class LeaseEngine {
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
-    this.#warmPool = new WarmPoolCoordinator({
-      capacity: this.#capacity,
+    this.#reclaim = new ReclaimCoordinator({
       clock: options.clock,
       decisions: this.#decisions,
       drivers: this.#drivers,
       eventBus: options.eventBus,
       notifyAvailability: () => this.#acquisition.kick(),
       quarantine: this.#quarantine,
-      queueHeadDemand: () => {
-        const spec = this.#acquisition.queueHeadSpec;
-        return spec === undefined ? undefined : { spec };
-      },
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
     this.#releaseCoordinator = new LeaseReleaseCoordinator({
@@ -255,7 +249,7 @@ export class LeaseEngine {
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       notifyAvailability: () => this.#acquisition.kick(),
       registry: options.registry,
-      warmPool: this.#warmPool,
+      reclaim: this.#reclaim,
     });
     this.cleanup = new CleanupExecutor({
       eventBus: options.eventBus,
@@ -270,15 +264,13 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#startup = new StartupConverger({
-      capacity: this,
       claims: this.#claims,
-      cleanup: this.cleanup,
       decisions: this.#decisions,
       drivers: this.#drivers,
       eventBus: options.eventBus,
       interruptedReclaimRecovery: {
         recoverInterruptedReclaim: async (device) => {
-          await this.#warmPool.recoverInterrupted(device.id);
+          await this.#reclaim.recoverInterrupted(device.id);
         },
       },
       quarantineRestore: { restore: () => this.#quarantine.restore() },
@@ -288,7 +280,7 @@ export class LeaseEngine {
         // and ungrantable, and the next start (or the idle delete rule) tries again.
         deleteSpent: async (device) => {
           try {
-            await this.#warmPool.deleteSpent(device.id);
+            await this.#reclaim.deleteSpent(device.id);
           } catch (error: unknown) {
             options.logger?.error("startup delete of a spent device failed", {
               deviceId: device.id,
@@ -415,7 +407,7 @@ export class LeaseEngine {
     return this.#capacity.ramBudget(this.#capacityDevices());
   }
 
-  /** Safely converges unleased running devices after startup reconciliation. */
+  /** Runs the startup sequence after reconciliation, then starts the capacity observer. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
     // Every run begins with a step in both: what the figures and the queue depth are now.

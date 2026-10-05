@@ -429,8 +429,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // startup's own registry work is nothing this codebase doesn't already do.
     // convergeRunningCapacity() releases no leases at all any more (ADR 0004 removed the
     // orphan sweep), so the only device work left on this path is interrupted-reclaim
-    // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
-    // left in flight is finished off in the background, off this critical path (#43).
+    // recovery -- and a reclaim a previous daemon left in flight is finished off in the
+    // background, off this critical path (#43).
     converge: async () => {
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },

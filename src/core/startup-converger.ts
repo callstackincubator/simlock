@@ -1,5 +1,4 @@
 import type { EventBus } from "../bus/index.js";
-import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import {
   type DeviceRecord,
   type LeaseRecord,
@@ -8,9 +7,7 @@ import {
   mayBeGranted,
   type Platform,
 } from "./domain.js";
-import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
-import { compareLeastRecentlyUsed } from "./warm-pool.js";
 
 export interface StartupRegistry {
   readonly snapshot: {
@@ -61,9 +58,7 @@ export interface StartupDriverAvailability {
 }
 
 export interface StartupConvergerOptions {
-  readonly capacity: CapacityReader;
   readonly claims: DeviceClaimReader;
-  readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
   readonly drivers: StartupDriverAvailability;
   readonly eventBus: Pick<EventBus, "emit">;
@@ -92,7 +87,7 @@ export interface StartupConvergerOptions {
  * until its driver returns -- worse than untouched, better than a phantom lease pinning a
  * device nobody holds. And a dark platform's devices still count toward capacity (see
  * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
- * over budget; excess selection below excludes them from the candidates, not from the count.
+ * over budget.
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
@@ -115,20 +110,6 @@ export class StartupConverger {
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.
     await this.#deleteSpentDevices();
-
-    const refused = new Set<string>();
-    for (;;) {
-      const candidate = await this.options.decisions.run(() => this.#nextExcessCandidate(refused));
-      if (candidate === undefined) return;
-
-      const executed = await this.options.cleanup.execute({
-        action: "shutdown",
-        reason: "running capacity exceeds configured maxRunning",
-        rule: "startup-max-running",
-        target: candidate.id,
-      });
-      if (!executed) refused.add(candidate.id);
-    }
   }
 
   async #settleOpenLeaseRequests(): Promise<void> {
@@ -165,24 +146,6 @@ export class StartupConverger {
     for (const device of spent) {
       await this.options.spentDeviceDeletion.deleteSpent(device);
     }
-  }
-
-  #nextExcessCandidate(refused: ReadonlySet<string>): DeviceRecord | undefined {
-    const capacity = this.options.capacity.runningCapacity;
-    const overPlatforms = (["ios", "android"] as const).filter(
-      (platform) => capacity[platform].running > capacity[platform].maxRunning,
-    );
-    if (capacity.global.running <= capacity.global.maxRunning && overPlatforms.length === 0) {
-      return undefined;
-    }
-
-    return this.#actionableDevices("ready")
-      .filter(
-        (device) =>
-          !refused.has(device.id) &&
-          (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
-      )
-      .sort(compareLeastRecentlyUsed)[0];
   }
 
   /**

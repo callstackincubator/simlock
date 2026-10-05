@@ -302,7 +302,7 @@ export function isSettled(record: Pick<LeaseRequestRecord<unknown>, "state">): b
  * capacity, but not grantable" disposition: a device the core cannot vouch for
  * right now, sitting outside the `ready`/`shutdown` states every grant and
  * eviction path already selects on. `reclaiming -> quarantined` is its release-time
- * purge-failure entry (see WarmPoolCoordinator); `provisioning -> quarantined` is its
+ * purge-failure entry (see ReclaimCoordinator); `provisioning -> quarantined` is its
  * stalled-transition entry (Doctor, for a `provisioning` that never finished);
  * `shutdown -> quarantined` is a spent fresh device whose delete failed after its
  * lease-end shutdown committed -- each its own entry into the same state rather than a
