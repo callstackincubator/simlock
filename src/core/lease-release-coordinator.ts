@@ -102,7 +102,7 @@ export class LeaseReleaseCoordinator
    * Gives up a lease whose device could not be brought back. Internally
    * originated only -- no client can ask for it -- but it is an ordinary
    * release otherwise, so it takes the same maintenance admission and the same
-   * warm-pool reclaim as every other one.
+   * reclaim as every other one.
    */
   async releaseDeviceLost(leaseId: string): Promise<void> {
     await this.#runNormal(() => this.#release(leaseId, "device-lost", { reclaim: "background" }));

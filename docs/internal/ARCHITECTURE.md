@@ -22,8 +22,8 @@ remote agent ──token auth──> HTTP frontend ─same role interfaces──
                                                                      │ state machine ·│
                                                                      │ reaper · health│
                                                                      │ monitor · event│
-                                                                     │ bus · warm-pool│
-                                                                     │ policy         │
+                                                                     │ bus · reclaim  │
+                                                                     │ coordinator    │
                                                                      └─┬─────────┬────┘
                                                                        │ driver  │ driver
                                                                        ▼ interface ▼ interface
@@ -1145,15 +1145,16 @@ apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and
 deletes spent `fresh` devices. It shuts nothing down for being over a running
 limit, so a lowered limit may leave `ready` devices running (and the pool
-visibly over-limit) until a lease or the warm pool's own rules bring it back
-under. Leased devices are never touched by any of this.
+visibly over-limit) until a lease's demand eviction or idle shutdown brings it
+back under. Leased devices are never touched by any of this.
 
 A completed reclaim (`ReclaimCoordinator#reclaim`) commits exactly the state
-the driver's reclaim returned: `shutdown` on iOS, `ready` on Android. It makes
+the driver's reclaim returned: `shutdown` on iOS; on Android `ready` after a
+snapshot restore, or `shutdown` when the driver falls back to a wipe. It makes
 no keep-or-shutdown decision and boots nothing, so an Android device released
-over the running limit stays `ready`: nothing brings the pool back under the
-limit at release time until the warm pool module (ADR 0017) lands, and only
-idle shutdown or a later demand eviction shuts it down meanwhile.
+over the running limit stays `ready` after a snapshot restore: nothing brings
+the pool back under the limit at release time, and only idle shutdown or a
+later demand eviction shuts it down meanwhile.
 
 ## Device state machine
 
@@ -1186,10 +1187,10 @@ without bypassing the FIFO head.
 
 ### Quarantine: present but not grantable
 
-`quarantined` is the shared disposition for a device the core cannot vouch
+`quarantined` is the shared state for a device the core cannot vouch
 for right now: it stays in the registry and keeps counting against running
 capacity (so it is not silently over-provisioned away), but it is invisible
-to every grant path, because `AcquisitionPlanner` and the warm-pool eviction
+to every grant path, because `AcquisitionPlanner` and its eviction
 helpers select targets by exact state (`state === "ready"`), never by
 excluding known-bad states. Anything that needs "in the registry, counts
 against capacity, not grantable" is expressed by adding its own entry into
@@ -1528,8 +1529,8 @@ proposals.
 
 An in-process, typed event bus carries **past-tense business facts**
 (`device.reclaimed`, `lease.expired`). Observers — cleanup triggers,
-logging/metrics, `simlock events --follow` — subscribe to it. Warm-pool
-reclaim/disposition, cleanup execution, startup convergence, eviction, and
+logging/metrics, `simlock events --follow` — subscribe to it. Reclaim
+commit, cleanup execution, startup convergence, eviction, and
 nuke remain explicit direct component call chains.
 
 The bright line: **events for reactions, direct calls for transactions.** The
