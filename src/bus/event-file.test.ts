@@ -490,6 +490,32 @@ describe("readEventFile", () => {
     expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
   });
 
+  it("readEventFile with carry keeps the later step when a line written afterwards is older, and the line written last on a tie", async () => {
+    const step = (id: string, seq: number, timestamp: number): EventEnvelope =>
+      ({
+        event: "capacity.changed",
+        id,
+        module: "test",
+        payload: {},
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const read = async (...written: EventEnvelope[]) =>
+      (
+        await readEventFile(
+          await filesystemWith({ "/data/events.jsonl": lines(...written) }),
+          "/data/events.jsonl",
+          {
+            carry: ["capacity.changed"],
+            sinceTs: 300,
+          },
+        )
+      ).map((entry) => entry.id);
+
+    expect(await read(step("evt_2", 2, 200), step("evt_3", 3, 100))).toEqual(["evt_2"]);
+    expect(await read(step("evt_5", 5, 200), step("evt_6", 5, 200))).toEqual(["evt_6"]);
+  });
+
   it("readEventFile with carry returns the latest capacity.changed and queue.changed at or before sinceTs, one per worker id, and none when there is none", async () => {
     const step = (
       seq: number,

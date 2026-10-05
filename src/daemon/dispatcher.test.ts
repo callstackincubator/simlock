@@ -200,6 +200,8 @@ async function buildDispatcher(
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
     >;
+    /** Leaves the token store out, as a daemon started without one is. */
+    readonly withoutTokens?: boolean;
     /** `gateway.label` in this daemon's config; unset by default. */
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
@@ -306,7 +308,7 @@ async function buildDispatcher(
     reaper,
     registry,
     stalls: stallOptions(engine, driver, overrides),
-    tokens,
+    ...tokenOption(overrides.withoutTokens, tokens),
     version: "1.2.3",
   });
   return {
@@ -320,6 +322,11 @@ async function buildDispatcher(
     registry,
     tokens,
   };
+}
+
+/** The `tokens` option, left out for a daemon started without a store. */
+function tokenOption(without: boolean | undefined, tokens: TokenStore): { tokens?: TokenStore } {
+  return without === true ? {} : { tokens };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -1193,6 +1200,47 @@ describe("Dispatcher: usage.get", () => {
     ]);
     expect(usage.workers.map((worker) => worker.id)).toEqual(["instance-1"]);
     expect(usage.totals.requests).toBe(1);
+  });
+
+  it("the worker handler answers with no label for a requester when the daemon has no token store", async () => {
+    const { dispatcher, eventBus } = await buildDispatcher({ withoutTokens: true });
+    eventBus.emit(
+      "lease.requested",
+      {
+        requestId: "req_1",
+        requestSpec: { platform: "ios" },
+        requester: "tok_x",
+        waitPolicy: "wait",
+      },
+      "test",
+    );
+
+    const usage = await dispatcher.dispatch(
+      "usage.get",
+      { from: 0, to: 600_000 },
+      session({ role: "admin" }),
+    );
+
+    expect(usage.requesters).toEqual([
+      { granted: 0, heldTotalMs: 0, id: "tok_x", rejected: 0, requests: 1 },
+    ]);
+  });
+
+  it("the worker handler's HISTORY_NOT_KEPT message names when the history begins", async () => {
+    const oldestTs = Date.parse("2026-10-05T10:00:00.000Z");
+    const { history } = countingHistory(oldestTs);
+    const { dispatcher } = await buildDispatcher({ eventHistory: history });
+
+    await expect(
+      dispatcher.dispatch(
+        "usage.get",
+        { from: oldestTs - 2 * HOUR, to: oldestTs - HOUR },
+        session({ role: "admin" }),
+      ),
+    ).rejects.toMatchObject({
+      message:
+        "The event history does not reach back to the end of that window; its oldest event is from 2026-10-05T10:00:00.000Z.",
+    });
   });
 
   it("usage.get is an admin operation an agent token cannot call", async () => {

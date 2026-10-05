@@ -69,6 +69,9 @@ describe("connectSimlock: handshake", () => {
     await expect(client.runCleanup()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
     });
+    await expect(client.usage({ from: 0, to: 60_000 })).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
     expect(connection.sent).toHaveLength(before);
 
     const stopPromise = client.stopDaemon();

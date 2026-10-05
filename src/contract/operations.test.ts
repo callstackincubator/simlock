@@ -935,3 +935,71 @@ describe("usage.get input", () => {
     expect(parse({ from: 0 }).success).toBe(false);
   });
 });
+
+describe("usage.get contract details", () => {
+  const issues = (input: unknown) => {
+    const result = OPERATIONS["usage.get"].input.safeParse(input);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+
+  it("usage.get names the bound it refused: from before to, and no more than ninety days", () => {
+    expect(issues({ from: 6, to: 5 })).toEqual(["from must be before to"]);
+    expect(issues({ from: 0, to: 91 * 24 * 60 * 60 * 1000 })).toEqual([
+      "the window must not be longer than 90 days",
+    ]);
+  });
+
+  it("every operation carries the name it is registered under", () => {
+    for (const [key, operation] of Object.entries(OPERATIONS)) expect(operation.name).toBe(key);
+  });
+
+  it("usage.get output keeps the RAM figures of a scope and the RAM use of a series point", () => {
+    const samples = { count: 0, max: null, p50: null, p95: null };
+    const figures = {
+      boot: samples,
+      bySource: { booted: 0, provisioned: 0, warm: 0 },
+      errors: { byCode: {} },
+      granted: 0,
+      held: samples,
+      incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+      provisioning: samples,
+      queue: { meanDepth: null, peakDepth: null },
+      rejected: { byReason: {}, total: 0 },
+      requests: 0,
+      turnaround: samples,
+      utilisation: {
+        ram: { limitBytes: 100, meanBytes: 40, peakBytes: 60 },
+        slots: { max: 2, mean: 1, peak: 2 },
+      },
+      wait: samples,
+    };
+    const point = {
+      at: 60_000,
+      queueDepth: 0,
+      ramUsedBytes: 60,
+      slotsMax: 2,
+      slotsUsed: 1,
+      waiting: 0,
+    };
+    const output = {
+      bucketMs: 60_000,
+      coversFrom: 0,
+      partial: false,
+      platforms: { android: figures, ios: figures },
+      requesters: [],
+      series: [point],
+      totals: figures,
+      window: { from: 0, to: 60_000 },
+      workers: [],
+    };
+
+    const parsed = OPERATIONS["usage.get"].output.parse(output);
+
+    expect(parsed.totals.utilisation.ram).toEqual({
+      limitBytes: 100,
+      meanBytes: 40,
+      peakBytes: 60,
+    });
+    expect(parsed.series).toEqual([point]);
+  });
+});

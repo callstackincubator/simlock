@@ -47,7 +47,7 @@ export class UsageReader {
       from: Math.floor(asked.from / bucketMs) * bucketMs,
       to: Math.ceil(asked.to / bucketMs) * bucketMs,
     };
-    const key = `${window.from}:${window.to}:${this.options.history.latestId() ?? ""}`;
+    const key = `${window.from}:${window.to}:${String(this.options.history.latestId())}`;
     if (this.#memo?.key === key) return { usage: this.#memo.usage };
 
     const { events, oldestTs } = await this.options.history.read({
@@ -68,13 +68,13 @@ export class UsageReader {
 
   /** The label of each requester the events name that the token store knows (ADR 0016 §7). */
   async #labelsFor(events: readonly EventEnvelope[]): Promise<Record<string, string>> {
-    const prefix = this.options.fleet?.requesterPrefix ?? "";
+    const prefix = this.options.fleet?.requesterPrefix;
     const requesters = requestersIn(events);
     if (requesters.size === 0) return {};
     const tokens = await this.options.tokenLabels();
     const labels: Record<string, string> = {};
     for (const requester of requesters) {
-      const own = prefix !== "" && requester.startsWith(prefix);
+      const own = prefix !== undefined && requester.startsWith(prefix);
       const label = tokens.get(own ? requester.slice(prefix.length) : requester);
       if (label !== undefined) labels[requester] = label;
     }

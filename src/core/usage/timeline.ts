@@ -32,7 +32,7 @@ export function segmentsOf<Value>(
   let start = from;
   for (; index < steps.length; index += 1) {
     const step = steps[index] as Step<Value>;
-    if (step.at > to) break;
+    if (step.at >= to) break;
     segments.push({ end: step.at, start, values: [...current.values()] });
     current.set(step.key, step.value);
     start = step.at;

@@ -131,6 +131,8 @@ function harness(
     readonly eventHistory?: Pick<EventHistory, "latestId" | "read" | "replay">;
     /** The tokens the gateway's store lists besides its worker token; none by default. */
     readonly tokenRecords?: readonly { id: string; label?: string }[];
+    /** Leaves the token store out, as a gateway started without one is. */
+    readonly withoutTokens?: boolean;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
   } = {},
@@ -194,7 +196,7 @@ function harness(
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
-    tokens,
+    ...(options.withoutTokens === true ? {} : { tokens }),
     workers,
   });
   return {
@@ -606,6 +608,25 @@ describe("GatewayDispatcher", () => {
       "gw:other-instance:tok_a": undefined,
       tok_a: "ci-bot",
     });
+  });
+
+  it("the gateway handler answers with no label for a requester when it has no token store", async () => {
+    const { dispatcher, eventBus } = harness({ withoutTokens: true });
+    eventBus.emit(
+      "lease.requested",
+      {
+        requestId: "req_1",
+        requestSpec: { platform: "ios" },
+        requester: "tok_x",
+        waitPolicy: "wait",
+      },
+      "gateway",
+    );
+
+    const usage = await dispatcher.dispatch("usage.get", { from: 0, to: 600_000 }, session());
+
+    expect(usage.requesters.map((requester) => requester.label)).toEqual([undefined]);
+    expect(usage.requesters).toHaveLength(1);
   });
 
   it("answers usage.get with fleet totals and one entry per worker, labelled from the registry", async () => {

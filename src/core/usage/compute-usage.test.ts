@@ -361,6 +361,25 @@ describe("computeUsage", () => {
     expect(usage.totals.wait.count).toBe(0);
   });
 
+  it("counts a killed rejection that names no request spec, with no preceding lease.requested, under rejected", () => {
+    const usage = computeUsage(
+      [
+        at(T0 + 1_000, "lease.rejected", {
+          reason: "killed",
+          requestId: "r-killed",
+          requester: "agent-a",
+        }),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.requests).toBe(0);
+    expect(usage.totals.rejected).toEqual({ byReason: { killed: 1 }, total: 1 });
+    expect(usage.platforms.ios.rejected.total).toBe(0);
+    expect(usage.platforms.android.rejected.total).toBe(0);
+  });
+
   it("counts a request from before from that is rejected inside the window under neither requests nor rejections", () => {
     const usage = computeUsage(
       [

@@ -5423,6 +5423,26 @@ describe("CLI: stats", () => {
     }
   });
 
+  it("simlock stats names the flag combination or the time it refused in the usage error", async () => {
+    for (const [argv, message] of [
+      [
+        ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+        "stats takes --since or --from, not both",
+      ],
+      [["--to", "2026-10-04T10:00:00Z"], "--to needs --from"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [["--from", "last tuesday"], "Invalid time: last tuesday"],
+    ] as const) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain(`"message":"${message}"`);
+    }
+  });
+
   it("simlock stats --json prints the operation's output unchanged", async () => {
     const answer = usageAnswer(
       { from: NOW - HOUR, to: NOW },

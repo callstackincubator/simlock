@@ -42,6 +42,14 @@ describe("segmentsOf", () => {
   });
 });
 
+describe("segmentsOf at the end of the window", () => {
+  it("cuts no segment for a step at the very end of the window, which has no time in the window", () => {
+    const segments = segmentsOf([step(5, "a", 1), step(50, "a", 9)], 10, 50);
+
+    expect(segments).toEqual([{ end: 50, start: 10, values: [1] }]);
+  });
+});
+
 describe("valuesAt", () => {
   it("answers the values in force at each time, counting a step at that time", () => {
     const steps = [step(5, "a", 1), step(20, "a", 3), step(20, "b", 7)];
