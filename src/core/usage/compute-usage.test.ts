@@ -9,7 +9,7 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const T0 = 1_000_000_000;
 const WINDOW = { from: T0, to: T0 + HOUR };
-const WORKER: UsageOptions = { fleet: false, workerId: "self" };
+const WORKER: UsageOptions = { fleet: false, workers: [{ id: "self" }] };
 const FLEET: UsageOptions = { fleet: true, requesterPrefix: "gw:g1:" };
 
 let sequence = 0;
@@ -376,6 +376,19 @@ describe("computeUsage", () => {
 
     expect(usage.totals.requests).toBe(1);
     expect(usage.totals.rejected).toEqual({ byReason: { cancelled: 1 }, total: 1 });
+
+    // The history a window is read from holds nothing from before it, so a rejection whose
+    // request is not there is told from one refused at admission by its reason.
+    const unseen = computeUsage(
+      [
+        rejected(T0 + 1_000, "r-old", "timeout"),
+        rejected(T0 + 2_000, "r-old-2", "boot-timeout"),
+        rejected(T0 + 3_000, "r-refused", "already-leased", "agent-b"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+    expect(unseen.totals.rejected).toEqual({ byReason: { "already-leased": 1 }, total: 1 });
   });
 
   it("reports null series points and excludes them from peak and mean before the first step when no step precedes the window", () => {
@@ -452,7 +465,7 @@ describe("computeUsage", () => {
         }),
       ],
       WINDOW,
-      { ...FLEET, workerLabels: { w1: "mac-1" } },
+      { ...FLEET, workers: [{ id: "w1", label: "mac-1" }] },
     );
 
     expect(usage.platforms.ios).toMatchObject({ granted: 1, requests: 1 });
@@ -482,7 +495,6 @@ describe("computeUsage", () => {
           workerId: "w1",
         }),
         // The worker's own copy of the same request.
-        requested(T0 + 1_200, "w-r1", "gw:g1:agent-a", "ios"),
         at(T0 + 1_300, "lease.requested", {
           requestId: "w-r1",
           requestSpec: { platform: "ios" },
@@ -687,7 +699,7 @@ describe("computeUsage", () => {
     const usage = computeUsage(
       [requested(T0 + 1_000, "r1"), granted(T0 + 2_000, "r1", "l1")],
       WINDOW,
-      { fleet: false, workerId: "wrk_me", workerLabels: { wrk_me: "my-mac" } },
+      { fleet: false, workers: [{ id: "wrk_me", label: "my-mac" }] },
     );
 
     expect(usage.workers).toHaveLength(1);
