@@ -204,23 +204,32 @@ const leaseRequestBaseSchema = z
   })
   .strict();
 
-/** Refuses a request that names both a model and a class (ADR 0015 §1); one place, one message. */
-export function refuseModelWithClass<
-  T extends { readonly model?: unknown; readonly class?: unknown },
->(input: T, context: z.RefinementCtx): void {
-  if (input.model !== undefined && input.class !== undefined) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "a request names a model or a class, not both: send only one of `model` and `class`",
-      path: ["class"],
-    });
-  }
+/**
+ * Refuses a request that names both a model and a class (ADR 0015 §1); one place, one check.
+ * `modelField` is what the caller's transport calls the model (HTTP's body says `device`), so
+ * the message names the fields that caller can actually send.
+ */
+export function refuseModelWithClass(
+  modelField = "model",
+): <T extends { readonly model?: unknown; readonly class?: unknown }>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.model !== undefined && input.class !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `a request names a model or a class, not both: send only one of \`${modelField}\` and \`class\``,
+        path: ["class"],
+      });
+    }
+  };
 }
 
 /** The fields of `lease.request` without the model-or-class refinement, for schemas derived from it. */
 export const leaseRequestFields = leaseRequestBaseSchema;
 
-const leaseRequestInputSchema = leaseRequestBaseSchema.superRefine(refuseModelWithClass);
+const leaseRequestInputSchema = leaseRequestBaseSchema.superRefine(refuseModelWithClass());
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({

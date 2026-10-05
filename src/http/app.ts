@@ -6,6 +6,7 @@ import type { EventBus } from "../bus/index.js";
 import {
   type ComponentProgress,
   describeSchemaIssues,
+  refuseModelWithClass,
   deviceClassSchema,
   imageTagSchema,
 } from "../contract/index.js";
@@ -105,7 +106,11 @@ const leaseRequestBodySchema = z
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  // The contract's own check, told this body's name for the model so the 400 names `device`.
+  .superRefine((body, context) =>
+    refuseModelWithClass("device")({ model: body.device, class: body.class }, context),
+  );
 
 /**
  * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path

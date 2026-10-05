@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
+import { SimlockError } from "../client/index.js";
+import { describeSchemaIssues } from "../contract/index.js";
 import {
+  leaseSimulatorCheckedInputSchema,
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
   leaseStatusInputSchema,
@@ -131,7 +134,16 @@ export function createMcpServer(session: McpSession): McpServer {
           progressToken === undefined
             ? undefined
             : createLeaseProgressReporter(progressToken, extra.sendNotification);
-        const output = await session.lease(input, extra.signal, onProgress);
+        const checked = leaseSimulatorCheckedInputSchema.safeParse(input);
+        if (!checked.success) {
+          throw new SimlockError(
+            "BAD_REQUEST",
+            "protocol",
+            describeSchemaIssues(checked.error.issues),
+            {},
+          );
+        }
+        const output = await session.lease(checked.data, extra.signal, onProgress);
         return success(output);
       } catch (error: unknown) {
         return failure(error);

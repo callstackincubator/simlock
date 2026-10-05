@@ -54,7 +54,7 @@ describe("MCP contracts", () => {
   });
 
   it("is the same schema the contract validates lease.request input against, minus requesterId", () => {
-    expect(Object.keys(leaseSimulatorInputSchema.innerType().shape).sort()).toEqual(
+    expect(Object.keys(leaseSimulatorInputSchema.shape).sort()).toEqual(
       Object.keys(leaseRequestFields.shape)
         .filter((key) => key !== "requesterId")
         .sort(),

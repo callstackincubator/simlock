@@ -12,6 +12,7 @@ import { SimlockError } from "../client/index.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession } from "./session.js";
+import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
 
 describe("MCP server (smoke)", () => {
@@ -67,6 +68,13 @@ describe("MCP server (smoke)", () => {
       ]);
       expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
         "modelClasses",
+      );
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {}).sort()).toEqual(
+        Object.keys(leaseSimulatorInputSchema.shape).sort(),
+      );
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toEqual(
+        expect.arrayContaining(["platform", "model", "class"]),
       );
       for (const tool of tools.tools) {
         expect(tool.inputSchema).toEqual(expect.any(Object));
