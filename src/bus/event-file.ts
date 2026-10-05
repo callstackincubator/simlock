@@ -51,7 +51,7 @@ export async function readEventHistory(
   return { events: events.sort(byTimeThenSeq), oldestTs };
 }
 
-/** The lines of the current file, then of each generation, newest first, until one is missing. */
+/** The lines of the current file, then of each generation, newest first, until two in a row are missing. */
 async function readGenerations(filesystem: Filesystem, path: string): Promise<string[][]> {
   const generations: string[][] = [];
   for (let generation = 0; ; generation += 1) {

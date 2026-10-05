@@ -1914,7 +1914,7 @@ that cannot be opened, or a write that fails, costs the history and never the
 daemon or the emitter: one error line, writing stops, and replay falls back
 to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
 `sinceTs` it answers from the ring, with `sinceTs` from the file (current
-file, then `.1`, `.2` and so on until one is missing, deduplicated by `id`).
+file, then `.1`, `.2` and so on until two in a row are missing, deduplicated by `id`).
 The CLI reads the file itself only for `simlock events --since` when no
 daemon answers; `--follow` subscribes first, replays, and drops replayed
 pushes, so the join neither loses nor repeats an event.

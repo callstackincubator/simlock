@@ -155,6 +155,29 @@ describe("event history", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("deletes every generation holding only first-run events once eventLog.retention has passed and the file rotates again", async () => {
+    const env = await withDaemon({
+      configOverrides: { eventLog: { retention: 5_000, rotateBytes: 2 * 1024 } },
+    });
+    await prepare(env);
+    const path = join(env.home, "events.jsonl");
+    const firstLeaseId = await leaseDevice(env);
+    expect((await env.cli(["release", firstLeaseId])).code).toBe(0);
+    for (let round = 0; round < 6; round++) {
+      expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
+    }
+    expect(existsSync(`${path}.2`)).toBe(true);
+    expect(grantOf(await eventFile(env), firstLeaseId)).toBeDefined();
+
+    await waitFor(
+      async () => {
+        expect((await env.cli(["release", await leaseDevice(env)])).code).toBe(0);
+        return grantOf(await eventFile(env), firstLeaseId) === undefined;
+      },
+      { label: "the first run's events deleted after retention", timeout: 60_000 },
+    );
+  });
+
   it("keeps every emitted event in the event file after daemon.log rotates", async () => {
     const env = await withDaemon({ configOverrides: { log: { rotateBytes: 1024 } } });
     await prepare(env);

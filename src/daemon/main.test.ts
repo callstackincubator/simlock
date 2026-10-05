@@ -76,6 +76,28 @@ async function start(
   return { daemon, directory, sink };
 }
 
+describe("the event file sink", () => {
+  it("judges retention by the injected clock, so a generation younger than the retention on that clock survives the start-up sweep", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    // The fake clock reads 1_000; a real clock would put the 7-day cutoff far past 500.
+    await writeFile(join(directory, "events.jsonl.1"), `{"timestamp":500}\n`);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+
+    expect(await readFile(join(directory, "events.jsonl.1"), "utf8")).toBe(`{"timestamp":500}\n`);
+  });
+});
+
 /** A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
  * fails fast, and the fake clock never fires its retry. */
 async function unreachableGatewayUrl(): Promise<string> {

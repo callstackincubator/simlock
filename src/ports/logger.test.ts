@@ -492,8 +492,8 @@ describe("NodeFileLogSink", () => {
     it("does not count a generation already deleted for age against the size cap", async () => {
       const directory = await tempDir();
       const path = join(directory, "events.jsonl");
-      // Each line is 16 bytes with its newline. The current file counts as one full 16-byte
-      // generation, so .1 and .2 fit a 48-byte cap exactly -- but not with .3 counted too.
+      // Each line is 19 bytes with its newline (lineBytes below). The current file counts as one
+      // full generation, so .1 and .2 fit a 3 * lineBytes cap exactly -- but not with .3 too.
       await writeFile(`${path}.1`, `{"timestamp":9500}\n`);
       await writeFile(`${path}.2`, `{"timestamp":9400}\n`);
       await writeFile(`${path}.3`, `{"timestamp":5}\n`);
