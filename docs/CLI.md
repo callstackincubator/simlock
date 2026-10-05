@@ -1071,6 +1071,8 @@ exposes the focused `list_devices`, `lease_simulator`, `release_simulator`, and
 `lease_status` tool surface for one agent session. The server auto-starts the
 daemon when needed, on a tool call; its renew timer reconnects only to a
 daemon that is already listening, and never launches one. `lease_simulator`
+names its device as `simlock lease` does: `model`, `class`, or neither for a
+phone (see [What a lease asks for](#what-a-lease-asks-for)); it also
 accepts the contract's optional `ttlMs` — defaulting to `lease.defaultTtlMs`
 and `BAD_REQUEST` above `lease.maxTtlMs`, the same rule every other frontend
 gets — and the session renews that lease on a timer and releases it when the
