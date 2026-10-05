@@ -1598,7 +1598,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       latencyMs: { reclaim: 34_000 },
       platform: "ios",
       // The reclaim itself leaves the device booted off; whether it comes back
-      // `ready` is entirely up to WarmPoolCoordinator#mayRemainWarm's capacity
+      // `ready` is entirely up to ReclaimCoordinator#mayRemainWarm's capacity
       // check at settle time -- which is exactly what this test is about.
       reclaimResult: "shutdown",
     });

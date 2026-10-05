@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { selectWarmVictim } from "./warm-pool.js";
+import { selectIdleRunningVictim } from "./idle-order.js";
 
 const device = (
   id: string,
@@ -28,8 +28,10 @@ describe("warm-pool policy", () => {
       device("ios-reclaiming", "ios", "reclaiming", 0),
     ];
 
-    expect(selectWarmVictim(devices, { kind: "platform", platform: "ios" })?.id).toBe("ios-a");
-    expect(selectWarmVictim(devices, { kind: "global" })?.id).toBe("android-old");
+    expect(selectIdleRunningVictim(devices, { kind: "platform", platform: "ios" })?.id).toBe(
+      "ios-a",
+    );
+    expect(selectIdleRunningVictim(devices, { kind: "global" })?.id).toBe("android-old");
   });
 
   it("does not treat shutdown, leased, or reclaiming devices as warm", () => {
@@ -39,6 +41,6 @@ describe("warm-pool policy", () => {
       device("reclaiming", "ios", "reclaiming", 0),
     ];
 
-    expect(selectWarmVictim(devices, { kind: "global" })).toBeUndefined();
+    expect(selectIdleRunningVictim(devices, { kind: "global" })).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import type { DeviceRecord, Platform } from "./domain.js";
 
-export type WarmVictimScope =
+export type IdleVictimScope =
   | { readonly kind: "global" }
   | { readonly kind: "platform"; readonly platform: Platform };
 
@@ -8,9 +8,9 @@ function isWarmDevice(device: DeviceRecord): boolean {
   return device.state === "ready";
 }
 
-export function selectWarmVictim(
+export function selectIdleRunningVictim(
   devices: readonly DeviceRecord[],
-  scope: WarmVictimScope,
+  scope: IdleVictimScope,
 ): DeviceRecord | undefined {
   return devices
     .filter(

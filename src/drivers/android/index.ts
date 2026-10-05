@@ -112,7 +112,7 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
 // 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
 // only shut the emulator down and defer the wipe to the next `makeReady`; what it does not do
-// is end the device's time in `reclaiming`. `WarmPoolCoordinator#disposition` re-readies a
+// is end the device's time in `reclaiming`. `ReclaimCoordinator#disposition` re-readies a
 // device the pool wants to keep warm before committing the transition, so the wipe boot and the
 // baseline re-capture land inside the same window -- and that window, not the driver call, is
 // what both consumers of this number measure: a waiting requester's ETA, and the state age

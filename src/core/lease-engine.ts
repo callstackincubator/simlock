@@ -41,7 +41,7 @@ import { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WaitQueue } from "./wait-queue.js";
-import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
 
@@ -131,7 +131,7 @@ export class LeaseEngine {
   readonly requests: LeaseRequestBook<StoredLeaseGrant>;
   readonly #decisions: SerializedDecision;
   readonly #startup: StartupConverger;
-  readonly #warmPool: WarmPoolCoordinator;
+  readonly #warmPool: ReclaimCoordinator;
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#decisions = options.decisions;
@@ -233,7 +233,7 @@ export class LeaseEngine {
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
-    this.#warmPool = new WarmPoolCoordinator({
+    this.#warmPool = new ReclaimCoordinator({
       capacity: this.#capacity,
       clock: options.clock,
       decisions: this.#decisions,

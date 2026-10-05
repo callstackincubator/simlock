@@ -66,7 +66,7 @@ export interface DriverDevice {
  * Builds a `DeviceTransitionUpdate` from a driver's freshly re-read device. It always writes
  * `mode`, defaulting a driver's `undefined` to `"full"` here and nowhere else, so a stale
  * `"slim"` can never outlive a re-boot that did not slim. Shared by every readiness path that
- * commits a driver's post-`makeReady` result (`ManagedDeviceLifecycle`, `WarmPoolCoordinator`)
+ * commits a driver's post-`makeReady` result (`ManagedDeviceLifecycle`, `ReclaimCoordinator`)
  * so they can't drift on this.
  */
 export function readyTransitionUpdate(readyDevice: DriverDevice): DeviceTransitionUpdate {

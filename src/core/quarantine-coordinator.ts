@@ -85,7 +85,7 @@ export class QuarantineCoordinator {
    * count as running -- so no queued waiter can be satisfied by this alone
    * and `notifyAvailability` is not called.
    */
-  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's quarantine port.
+  // fallow-ignore-next-line unused-class-member -- called through ReclaimCoordinator's quarantine port.
   async enter(failure: QuarantinePurgeFailure): Promise<void> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     await this.options.decisions.run(async () => {

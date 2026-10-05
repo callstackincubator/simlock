@@ -3,7 +3,7 @@ import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { LeaseRecord } from "./domain.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
-import type { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+import type { ReclaimCoordinator } from "./reclaim-coordinator.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
@@ -45,7 +45,7 @@ export interface LeaseReleaseCoordinatorOptions {
    */
   readonly notifyAvailability: () => void;
   readonly registry: LeaseReleaseRegistry;
-  readonly warmPool: Pick<WarmPoolCoordinator, "reclaim">;
+  readonly warmPool: Pick<ReclaimCoordinator, "reclaim">;
 }
 
 /**
@@ -223,7 +223,7 @@ export class LeaseReleaseCoordinator
    * The claim is released, and the failure logged rather than thrown, once the
    * reclaim settles -- no caller is awaiting this promise, so a rejection here would
    * otherwise be unhandled. A purge that fails at the driver is not that case: it is
-   * handled inside `WarmPoolCoordinator#reclaim`, which quarantines the device
+   * handled inside `ReclaimCoordinator#reclaim`, which quarantines the device
    * instead of rejecting, and stays visible in `simlock status` and
    * `device.purge-failed`.
    */
@@ -240,7 +240,7 @@ export class LeaseReleaseCoordinator
       })
       .finally(() => {
         claim?.release();
-        // `WarmPoolCoordinator#reclaim` fires its own availability notification while
+        // `ReclaimCoordinator#reclaim` fires its own availability notification while
         // this claim is still held, and a claimed device is invisible to
         // `AcquisitionPlanner` -- so a waiter queued for exactly this device would
         // sleep through it and sit there until some unrelated event kicked the queue.

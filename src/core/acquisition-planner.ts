@@ -18,7 +18,11 @@ import {
   type Platform,
   specMode,
 } from "./domain.js";
-import { selectManagedVictim, selectWarmVictim, type WarmVictimScope } from "./warm-pool.js";
+import {
+  selectManagedVictim,
+  selectIdleRunningVictim,
+  type IdleVictimScope,
+} from "./idle-order.js";
 
 export interface AcquisitionPlannerSnapshot {
   readonly devices: readonly DeviceRecord[];
@@ -161,10 +165,10 @@ export class AcquisitionPlanner {
     const capacity = this.capacity.runningCapacity(capacityDevices(snapshot.devices));
     const platformBlocked =
       capacity[platform].running + capacity[platform].reserved >= capacity[platform].maxRunning;
-    const scope: WarmVictimScope = platformBlocked
+    const scope: IdleVictimScope = platformBlocked
       ? { kind: "platform", platform }
       : { kind: "global" };
-    return selectWarmVictim(this.#eligibleEvictionDevices(snapshot), scope);
+    return selectIdleRunningVictim(this.#eligibleEvictionDevices(snapshot), scope);
   }
 
   #eligibleEvictionDevices(snapshot: AcquisitionPlannerSnapshot): readonly DeviceRecord[] {

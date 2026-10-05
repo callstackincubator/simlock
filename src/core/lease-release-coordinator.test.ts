@@ -390,7 +390,7 @@ describe("LeaseReleaseCoordinator", () => {
       await harness.coordinator.release(granted.lease.id, "explicit");
       await harness.coordinator.settleBackgroundReclaims();
 
-      // WarmPoolCoordinator fires its own availability kick while this claim is still
+      // ReclaimCoordinator fires its own availability kick while this claim is still
       // held, and AcquisitionPlanner skips claimed devices -- so without a notice on
       // this side of the claim release, a waiter queued for exactly this device sleeps
       // through the only signal it was going to get.

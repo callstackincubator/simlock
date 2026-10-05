@@ -992,7 +992,7 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
 /**
  * What this device's reclaim will cost once the lease is released -- the one part of a
  * grant's timing that describes work still ahead of the holder rather than work already
- * done. `standard` because that is what every release path asks for (`WarmPoolCoordinator
+ * done. `standard` because that is what every release path asks for (`ReclaimCoordinator
  * #reclaim`, `QuarantineCoordinator`); a holder cannot request a different clean level.
  */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {

@@ -10,7 +10,7 @@ import {
 } from "./domain.js";
 import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
-import { compareLeastRecentlyUsed } from "./warm-pool.js";
+import { compareLeastRecentlyUsed } from "./idle-order.js";
 
 export interface StartupRegistry {
   readonly snapshot: {

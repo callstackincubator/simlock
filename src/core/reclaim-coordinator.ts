@@ -26,11 +26,11 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 
-export interface WarmPoolDriverCatalog {
+export interface ReclaimDriverCatalog {
   get(platform: Platform): Driver;
 }
 
-export interface WarmPoolRegistry {
+export interface ReclaimRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
@@ -66,20 +66,20 @@ export interface WarmPoolCapacityReader {
 }
 
 /** Where a release-time purge failure is handed off once the reclaim attempt commits. */
-export interface WarmPoolQuarantine {
+export interface ReclaimQuarantine {
   enter(failure: QuarantinePurgeFailure): Promise<void>;
 }
 
-export interface WarmPoolCoordinatorOptions {
+export interface ReclaimCoordinatorOptions {
   readonly capacity: WarmPoolCapacityReader;
   readonly clock: Clock;
   readonly decisions: Pick<SerializedDecision, "run">;
-  readonly drivers: WarmPoolDriverCatalog;
+  readonly drivers: ReclaimDriverCatalog;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly notifyAvailability: () => void;
-  readonly quarantine: WarmPoolQuarantine;
+  readonly quarantine: ReclaimQuarantine;
   readonly queueHeadDemand: () => { readonly spec?: DeviceSpec } | undefined;
-  readonly registry: WarmPoolRegistry;
+  readonly registry: ReclaimRegistry;
   readonly logger?: Logger;
 }
 
@@ -87,10 +87,10 @@ export interface WarmPoolCoordinatorOptions {
  * Reclaims released devices and commits their warm-pool disposition. Driver
  * work remains outside the serialized registry decision sections.
  */
-export class WarmPoolCoordinator {
+export class ReclaimCoordinator {
   readonly #logger: Logger;
 
-  constructor(private readonly options: WarmPoolCoordinatorOptions) {
+  constructor(private readonly options: ReclaimCoordinatorOptions) {
     this.#logger = options.logger?.child("warm-pool-coordinator") ?? new NoopLogger();
   }
 

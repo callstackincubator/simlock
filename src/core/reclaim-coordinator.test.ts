@@ -18,10 +18,10 @@ import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import {
-  WarmPoolCoordinator,
-  type WarmPoolQuarantine,
-  type WarmPoolRegistry,
-} from "./warm-pool-coordinator.js";
+  ReclaimCoordinator,
+  type ReclaimQuarantine,
+  type ReclaimRegistry,
+} from "./reclaim-coordinator.js";
 
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
@@ -109,8 +109,8 @@ class TestRegistry {
 
   async transitionDevice(
     deviceId: string,
-    to: Parameters<WarmPoolRegistry["transitionDevice"]>[1],
-    event: Parameters<WarmPoolRegistry["transitionDevice"]>[2],
+    to: Parameters<ReclaimRegistry["transitionDevice"]>[1],
+    event: Parameters<ReclaimRegistry["transitionDevice"]>[2],
     update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -168,10 +168,10 @@ async function createHarness(
   const registry = new TestRegistry(options.devices ?? [reclaiming], options.leases, bus);
   const notifyAvailability = vi.fn();
   const quarantined: QuarantinePurgeFailure[] = [];
-  const quarantine: WarmPoolQuarantine = {
+  const quarantine: ReclaimQuarantine = {
     enter: vi.fn(async (failure) => void quarantined.push(failure)),
   };
-  const coordinator = new WarmPoolCoordinator({
+  const coordinator = new ReclaimCoordinator({
     capacity: options.capacity ?? capacity(),
     clock,
     decisions: new SerializedDecision(),
@@ -230,7 +230,7 @@ function released(device: DeviceRecord): ReleasedLease {
   };
 }
 
-describe("WarmPoolCoordinator", () => {
+describe("ReclaimCoordinator", () => {
   it("retains a reclaimed ready device when capacity permits", async () => {
     const harness = await createHarness();
 
@@ -246,7 +246,7 @@ describe("WarmPoolCoordinator", () => {
     const harness = await createHarness();
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
     const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
-    const coordinator = new WarmPoolCoordinator({
+    const coordinator = new ReclaimCoordinator({
       capacity: capacity(),
       clock: harness.clock,
       decisions: new SerializedDecision(),
@@ -586,7 +586,7 @@ describe("WarmPoolCoordinator", () => {
       const harness = await freshHarness("shutdown");
       const reusable = device("reusable", "shutdown", "reusable-driver", spec);
       const registry = new TestRegistry([harness.target, reusable], [], harness.bus);
-      const coordinator = new WarmPoolCoordinator({
+      const coordinator = new ReclaimCoordinator({
         capacity: capacity(),
         clock: harness.clock,
         decisions: new SerializedDecision(),
