@@ -64,6 +64,8 @@ export interface ReadEvents {
 
 export interface ReadOptions {
   readonly fleet: boolean;
+  /** The `requestId` of every request made before the window. */
+  readonly requestedBefore: ReadonlySet<string>;
   /** The id a worker's own events are attributed to. */
   readonly self: string;
   /** What a gateway puts in front of a requester it forwards. */
@@ -78,8 +80,10 @@ export interface UsageWindow {
 type Payload = Readonly<Record<string, unknown>>;
 type Incident = keyof UsageFigures["incidents"];
 
-/** A rejection whose request the events do not show was refused before it was stored, or belongs
- * to a request from before the window; only these two reasons are ever given before admission. */
+/** A rejection with no `lease.requested` anywhere in the history read was refused before the
+ * request was stored; only these two reasons are ever given before admission. One whose request
+ * is in the history follows that request: counted with it, or in no count when it was made before
+ * the window. */
 const REFUSED_AT_ADMISSION = new Set(["already-leased", "killed"]);
 /** The device events that count as an incident, by what the figure calls them. */
 const INCIDENT_OF: Readonly<Record<string, Incident>> = {
@@ -447,7 +451,8 @@ class Reader {
   #refusedAtAdmission(): RequestFact[] {
     const facts: RequestFact[] = [];
     for (const [requestId, rejection] of this.#ownRejections) {
-      if (this.#requested.has(requestId) || !REFUSED_AT_ADMISSION.has(rejection.reason)) continue;
+      if (this.#requested.has(requestId) || this.options.requestedBefore.has(requestId)) continue;
+      if (!REFUSED_AT_ADMISSION.has(rejection.reason)) continue;
       facts.push({
         outcome: { at: rejection.at, kind: "rejected", reason: rejection.reason },
         platform: rejection.platform,

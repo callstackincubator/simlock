@@ -564,7 +564,7 @@ describe("GatewayDispatcher", () => {
     const { dispatcher } = harness({
       eventHistory: {
         latestId: () => undefined,
-        read: async () => ({ events: [], oldestTs: undefined }),
+        read: async () => ({ events: [], oldestTs: undefined, requestedBefore: new Set<string>() }),
         replay: async (input) => {
           asked.push(input);
           return fromHistory;
@@ -684,7 +684,7 @@ describe("GatewayDispatcher", () => {
         latestId: () => "evt_1",
         read: async () => {
           reads += 1;
-          return { events: [], oldestTs: 99 * 3_600_000 };
+          return { events: [], oldestTs: 99 * 3_600_000, requestedBefore: new Set<string>() };
         },
         replay: async () => [],
       },

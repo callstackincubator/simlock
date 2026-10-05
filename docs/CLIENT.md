@@ -554,7 +554,7 @@ usage.series;                // one point per bucket, for a chart
 The daemon computes the figures from its event history, so they cover only what
 the history holds: `partial` is `true` and `coversFrom` says where they start when
 it does not reach the start of the window. `window` in the answer is the window
-asked for, widened to a whole number of `bucketMs`, and the series never has more
+asked for, rounded down to a whole number of `bucketMs` at both ends, and the series never has more
 than 200 points. A window that ends before the oldest event the history holds
 rejects with `HISTORY_NOT_KEPT`; its `details.oldestTs` is the oldest time the
 history reaches. Against a gateway the totals are the fleet's and `workers` has

@@ -16,6 +16,10 @@ import { peakAndMean, segmentsOf, type Step, valuesAt } from "./timeline.js";
 export type { UsageWindow } from "./read-events.js";
 
 export interface UsageOptions {
+  /** The series bucket, picked once from the window asked for; the window's own span when absent. */
+  readonly bucketMs?: number;
+  /** The `requestId` of every request made before the window; a rejection of one is in no count. */
+  readonly requestedBefore?: ReadonlySet<string>;
   /** The gateway rule (ADR 0016 §6): request facts from the gateway's own events, device facts
    * from the events its workers relayed. */
   readonly fleet: boolean;
@@ -61,10 +65,11 @@ export function computeUsage(
   const workers = options.workers ?? [];
   const read = readEvents(sorted, window, {
     fleet: options.fleet,
+    requestedBefore: options.requestedBefore ?? new Set(),
     requesterPrefix: options.requesterPrefix ?? "",
     self: workers[0]?.id ?? "local",
   });
-  const bucketMs = seriesBucketMs(window.to - window.from);
+  const bucketMs = options.bucketMs ?? seriesBucketMs(window.to - window.from);
   const oldest = options.oldestTs ?? sorted[0]?.timestamp;
   const coversFrom = oldest === undefined ? window.from : Math.max(window.from, oldest);
   const figures = (scope: Scope) => figuresFor(read, window, scope);

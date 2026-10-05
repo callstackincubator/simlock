@@ -1121,7 +1121,7 @@ describe("Dispatcher: events.replay", () => {
 /** The parts of the history `usage.get` reads, for a test that is not about it. */
 const noUsageHistory = {
   latestId: () => undefined,
-  read: async () => ({ events: [], oldestTs: undefined }),
+  read: async () => ({ events: [], oldestTs: undefined, requestedBefore: new Set<string>() }),
 };
 
 describe("Dispatcher: usage.get", () => {
@@ -1135,7 +1135,7 @@ describe("Dispatcher: usage.get", () => {
       latestId: () => state.newest,
       read: async () => {
         state.reads += 1;
-        return { events: [], oldestTs };
+        return { events: [], oldestTs, requestedBefore: new Set<string>() };
       },
       replay: async () => [],
     };
@@ -1155,8 +1155,8 @@ describe("Dispatcher: usage.get", () => {
 
     expect(state.reads).toBe(1);
     expect(second).toEqual(first);
-    // The answer's window is the window asked for rounded out to the bucket, not the one asked for.
-    expect(second.window).toEqual({ from: WINDOW.from, to: WINDOW.to + minute });
+    // The answer's window is the window asked for rounded down to the bucket, never into the future.
+    expect(second.window).toEqual({ from: WINDOW.from, to: WINDOW.to });
 
     state.newest = "evt_2";
     await call(asked);
@@ -1175,6 +1175,20 @@ describe("Dispatcher: usage.get", () => {
     ).rejects.toMatchObject({
       code: "HISTORY_NOT_KEPT",
       details: { oldestTs: WINDOW.to + 5 * HOUR },
+    });
+  });
+
+  it("the worker handler names an oldest timestamp no date can hold as the number in HISTORY_NOT_KEPT's message", async () => {
+    const unreadable = 9e15;
+    const { history } = countingHistory(unreadable);
+    const { dispatcher } = await buildDispatcher({ eventHistory: history });
+
+    await expect(
+      dispatcher.dispatch("usage.get", WINDOW, session({ role: "admin" })),
+    ).rejects.toMatchObject({
+      code: "HISTORY_NOT_KEPT",
+      details: { oldestTs: unreadable },
+      message: expect.stringContaining("its oldest event is from 9000000000000000."),
     });
   });
 

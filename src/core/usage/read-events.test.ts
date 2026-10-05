@@ -4,8 +4,18 @@ import type { EventEnvelope } from "../../bus/index.js";
 import { readEvents, type ReadOptions } from "./read-events.js";
 
 const WINDOW = { from: 100, to: 200 };
-const WORKER: ReadOptions = { fleet: false, requesterPrefix: "", self: "self" };
-const FLEET: ReadOptions = { fleet: true, requesterPrefix: "gw:", self: "gateway" };
+const WORKER: ReadOptions = {
+  fleet: false,
+  requestedBefore: new Set(),
+  requesterPrefix: "",
+  self: "self",
+};
+const FLEET: ReadOptions = {
+  fleet: true,
+  requestedBefore: new Set(),
+  requesterPrefix: "gw:",
+  self: "gateway",
+};
 
 let sequence = 0;
 
@@ -426,6 +436,21 @@ describe("requests on a worker", () => {
       at(120, "lease.rejected", { reason: "killed", requestId: "r", requester: "a" }),
     ]);
     expect(result.requests).toHaveLength(1);
+  });
+
+  it("counts a killed rejection of a request made before the window in no count, and one made inside it with that request", () => {
+    const before = read(
+      [at(120, "lease.rejected", { reason: "killed", requestId: "old", requester: "a" })],
+      { ...WORKER, requestedBefore: new Set(["old"]) },
+    );
+    expect(before.requests).toEqual([]);
+
+    const inside = read([
+      request(110, "r"),
+      at(120, "lease.rejected", { reason: "killed", requestId: "r", requester: "a" }),
+    ]);
+    expect(inside.requests).toHaveLength(1);
+    expect(inside.requests[0]).toMatchObject({ requestedAt: 110 });
   });
 
   it("an empty payload is read as no facts instead of throwing", () => {

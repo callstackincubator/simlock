@@ -57,7 +57,7 @@ import {
   type ErasedHandler,
   usageAnswer,
 } from "./dispatch.js";
-import { tokenLabelMap, UsageReader } from "../core/usage/usage-reader.js";
+import { tokenLabelMap, UsageReader } from "../core/usage/index.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 

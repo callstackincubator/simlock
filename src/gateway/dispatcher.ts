@@ -50,7 +50,7 @@ import {
 } from "../daemon/dispatch.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { tokenLabelMap, UsageReader } from "../core/usage/usage-reader.js";
+import { tokenLabelMap, UsageReader } from "../core/usage/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";

@@ -37,11 +37,12 @@ export async function readEventHistory(
   filesystem: Filesystem,
   path: string,
   { sinceTs, carry = [] }: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
-): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+): Promise<EventHistoryRead> {
   const generations = await readGenerations(filesystem, path);
   const seen = new Set<string>();
   const events: EventEnvelope[] = [];
   const carried = new Map<string, EventEnvelope>();
+  const requestedBefore = new Set<string>();
   let oldestTs: number | undefined;
   // Oldest generation first, so events that tie on time and seq keep the order they were written.
   for (const line of generations.reverse().flat()) {
@@ -50,13 +51,33 @@ export async function readEventHistory(
     oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
     if (envelope.timestamp <= sinceTs) {
       keepIfCarried(carried, envelope, carry);
+      noteRequest(requestedBefore, envelope);
       continue;
     }
     if (seen.has(eventKey(envelope))) continue;
     seen.add(eventKey(envelope));
     events.push(envelope);
   }
-  return { events: [...carried.values(), ...events].sort(byTimeThenSeq), oldestTs };
+  return {
+    events: [...carried.values(), ...events].sort(byTimeThenSeq),
+    oldestTs,
+    requestedBefore,
+  };
+}
+
+/** What a history read answers: the events, how far back it reaches, and which requests were made
+ * before `sinceTs` (a rejection in the window follows its request, ADR 0016 §4). */
+export interface EventHistoryRead {
+  readonly events: EventEnvelope[];
+  readonly oldestTs: number | undefined;
+  /** The `requestId` of every `lease.requested` at or before `sinceTs`. */
+  readonly requestedBefore: ReadonlySet<string>;
+}
+
+function noteRequest(requestedBefore: Set<string>, envelope: EventEnvelope): void {
+  if (envelope.event !== "lease.requested") return;
+  const requestId = (envelope.payload as { readonly requestId?: unknown }).requestId;
+  if (typeof requestId === "string") requestedBefore.add(requestId);
 }
 
 /**
@@ -184,7 +205,7 @@ export class EventHistory {
   async read(input: {
     readonly sinceTs: number;
     readonly carry: readonly EventName[];
-  }): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+  }): Promise<EventHistoryRead> {
     const { filesystem, logger, path } = this.#options;
     if (!this.#writing) return this.#readRing(input);
     try {
@@ -209,15 +230,22 @@ export class EventHistory {
   }: {
     readonly sinceTs: number;
     readonly carry: readonly EventName[];
-  }): { readonly events: EventEnvelope[]; readonly oldestTs: number | undefined } {
+  }): EventHistoryRead {
     const ring = this.#options.bus.replay();
     const carried = new Map<string, EventEnvelope>();
+    const requestedBefore = new Set<string>();
     let oldestTs: number | undefined;
     for (const envelope of ring) {
       oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
-      if (envelope.timestamp <= sinceTs) keepIfCarried(carried, envelope, carry);
+      if (envelope.timestamp > sinceTs) continue;
+      keepIfCarried(carried, envelope, carry);
+      noteRequest(requestedBefore, envelope);
     }
     const newer = ring.filter((envelope) => envelope.timestamp > sinceTs);
-    return { events: [...carried.values(), ...newer].sort(byTimeThenSeq), oldestTs };
+    return {
+      events: [...carried.values(), ...newer].sort(byTimeThenSeq),
+      oldestTs,
+      requestedBefore,
+    };
   }
 }

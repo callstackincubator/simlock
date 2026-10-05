@@ -7,10 +7,12 @@ const STEP_EVENTS: readonly EventName[] = ["capacity.changed", "queue.changed"];
 
 /** The part of the event history `usage.get` reads (`EventHistory` satisfies it). */
 export interface UsageHistory {
-  read(input: {
-    readonly sinceTs: number;
-    readonly carry: readonly EventName[];
-  }): Promise<{ readonly events: readonly EventEnvelope[]; readonly oldestTs: number | undefined }>;
+  read(input: { readonly sinceTs: number; readonly carry: readonly EventName[] }): Promise<{
+    readonly events: readonly EventEnvelope[];
+    readonly oldestTs: number | undefined;
+    /** The `requestId` of every `lease.requested` at or before `sinceTs`. */
+    readonly requestedBefore: ReadonlySet<string>;
+  }>;
   /** The id of the event published last; the memo is good while it has not moved. */
   latestId(): string | undefined;
 }
@@ -31,8 +33,8 @@ export type UsageResult = { readonly usage: UsageOutput } | { readonly oldestTs:
 
 /**
  * Answers `usage.get` for a worker or a gateway from the same code (ADR 0016): reads the history
- * for the window, hands it to `computeUsage`, joins token labels. The window is rounded out to the
- * series bucket, and the last answer is kept by that window and the newest event, so a caller that
+ * for the window, hands it to `computeUsage`, joins token labels. The window is rounded down to the
+ * series bucket, both ends, so it never reaches a time that has not come, and the last answer is kept by that window and the newest event, so a caller that
  * asks again within the bucket while nothing happened reads nothing.
  */
 export class UsageReader {
@@ -42,23 +44,25 @@ export class UsageReader {
 
   async get(asked: UsageWindow): Promise<UsageResult> {
     const bucketMs = seriesBucketMs(asked.to - asked.from);
-    // Out to the bucket on both sides, so the window asked for is inside the one answered.
+    // Down to the bucket on both sides (ADR 0016): the answer never reaches a time not yet come.
     const window = {
       from: Math.floor(asked.from / bucketMs) * bucketMs,
-      to: Math.ceil(asked.to / bucketMs) * bucketMs,
+      to: Math.floor(asked.to / bucketMs) * bucketMs,
     };
     const key = `${window.from}:${window.to}:${String(this.options.history.latestId())}`;
     if (this.#memo?.key === key) return { usage: this.#memo.usage };
 
-    const { events, oldestTs } = await this.options.history.read({
+    const { events, oldestTs, requestedBefore } = await this.options.history.read({
       carry: STEP_EVENTS,
       sinceTs: window.from,
     });
     if (oldestTs !== undefined && oldestTs > asked.to) return { oldestTs };
     const usage = computeUsage(events, window, {
+      bucketMs,
       fleet: this.options.fleet !== undefined,
       labels: await this.#labelsFor(events),
       oldestTs,
+      requestedBefore,
       requesterPrefix: this.options.fleet?.requesterPrefix ?? "",
       workers: this.options.workers(),
     });

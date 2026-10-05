@@ -228,7 +228,7 @@ describe("EventHistory", () => {
 
     const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
 
-    expect(read).toEqual({ events: [early, late], oldestTs: 1_000 });
+    expect(read).toEqual({ events: [early, late], oldestTs: 1_000, requestedBefore: new Set() });
     expect(await events.replay({ carry: ["queue.changed"], sinceTs: 2_000 })).toEqual([
       early,
       late,
@@ -399,6 +399,40 @@ describe("readEventFile", () => {
     expect(held.oldestTs).toBe(100);
     expect(held.events.map((entry) => entry.seq)).toEqual([3]);
     expect(empty.oldestTs).toBeUndefined();
+  });
+
+  it("reports the requestId of each lease.requested at or before sinceTs, and none from after it or from other events", async () => {
+    const requested = (seq: number, timestamp: number, requestId: string): EventEnvelope =>
+      ({
+        ...envelope(seq, timestamp),
+        event: "lease.requested",
+        payload: { requestId },
+      }) as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        requested(1, 100, "old"),
+        envelope(2, 150),
+        requested(3, 200, "edge"),
+        requested(4, 300, "new"),
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.requestedBefore].sort()).toEqual(["edge", "old"]);
+  });
+
+  it("reports the requests made before sinceTs from the ring too", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("lease.requested", { requestId: "old", requester: "a" } as never, "lease");
+    clock.advance(2_000);
+    bus.emit("lease.requested", { requestId: "new", requester: "a" } as never, "lease");
+
+    const read = await events.read({ carry: [], sinceTs: 2_000 });
+
+    expect([...read.requestedBefore]).toEqual(["old"]);
   });
 
   it("returns the generations when the current file is missing", async () => {

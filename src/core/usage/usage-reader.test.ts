@@ -34,7 +34,7 @@ function history(events: readonly EventEnvelope[] = [], oldestTs: number | undef
     latestId: () => state.newest,
     read: async (input) => {
       state.asked.push(input);
-      return { events: state.events, oldestTs: state.oldestTs };
+      return { events: state.events, oldestTs: state.oldestTs, requestedBefore: new Set<string>() };
     },
   };
   return { source, state };
@@ -63,13 +63,13 @@ const answer = (result: Awaited<ReturnType<UsageReader["get"]>>) => {
 };
 
 describe("UsageReader", () => {
-  it("widens the window out to the bucket on both sides and reads the history from its start, with the two step events carried", async () => {
+  it("rounds the window down to the bucket on both sides, so it never ends in the future, and reads the history from its start, with the two step events carried", async () => {
     const { source, state } = history();
     const { usage } = reader(source);
 
     const result = answer(await usage.get({ from: T0 + 10_000, to: T0 + HOUR + 10_000 }));
 
-    expect(result.window).toEqual({ from: T0, to: T0 + HOUR + MINUTE });
+    expect(result.window).toEqual({ from: T0, to: T0 + HOUR });
     expect(result.bucketMs).toBe(MINUTE);
     expect(state.asked).toEqual([{ carry: ["capacity.changed", "queue.changed"], sinceTs: T0 }]);
   });

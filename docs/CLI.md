@@ -1930,9 +1930,10 @@ What the figures count:
   installs that failed.
 - A requester that is a token shows the token's label beside its id.
 
-The window is widened to whole steps of the time series `--json` carries, which
-is 1 minute for a window of a few hours and grows to 1 day for 90 days; the
-window in the answer is the widened one.
+The window is rounded down to whole steps of the time series `--json` carries,
+which is 1 minute for a window of a few hours and grows to 1 day for 90 days, so
+it never ends at a time that has not come yet; the window in the answer is the
+rounded one.
 
 Against a **gateway** the totals are the fleet's and there is a row for each
 worker, with the grants, hold times and device figures of that worker. Requests,

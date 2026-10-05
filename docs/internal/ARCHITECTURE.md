@@ -1947,14 +1947,15 @@ pushes, so the join neither loses nor repeats an event.
 turns it into numbers. `computeUsage` (`src/core/usage/`) is pure: it takes
 the envelopes of a window, with the latest `capacity.changed` and `queue.changed`
 at or before the window's start that `EventHistory.read`'s `carry` adds, and
-returns the figures. `readEvents` reads them into one fact per request, joined
+the ids of the requests made before it (`requestedBefore`, so a rejection of
+one is in no count), and returns the figures. `readEvents` reads them into one fact per request, joined
 by `requestId` and `leaseId`, and one per device event; `compute-usage.ts` adds
 them up by platform, by worker and by requester. On a gateway (`fleet`) request
 facts come from its own events and device facts from the events its workers
 relayed, and a request is joined to its worker's grant or rejection through
 `request.dispatched`; that rule is in `readEvents` and nowhere else. One
-`UsageReader` serves both dispatchers: it rounds the window out to the series
-bucket, keeps its last answer by that window and the newest event id, and joins
+`UsageReader` serves both dispatchers: it rounds the window down to the series
+bucket at both ends, keeps its last answer by that window and the newest event id, and joins
 token labels, so the daemon's two handlers differ only in `fleet`. `simlock stats`
 prints what the operation returns and computes nothing.
 
