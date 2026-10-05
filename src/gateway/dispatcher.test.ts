@@ -525,7 +525,11 @@ describe("GatewayDispatcher", () => {
 
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
     const { dispatcher, eventBus } = harness();
-    eventBus.emit("lease.granted", { deviceId: "dev_1", leaseId: "l1", requester: "a" }, "worker");
+    eventBus.emit(
+      "lease.granted",
+      { deviceId: "dev_1", leaseId: "l1", requester: "a", requestId: "req_1", source: "warm" },
+      "worker",
+    );
 
     await expect(dispatcher.dispatch("events.replay", {}, session())).resolves.toEqual([
       expect.objectContaining({ event: "lease.granted" }),

@@ -1,6 +1,6 @@
 # 0016. Usage figures are derived on read from the event history
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-05
 - **Issue:** [#329](https://github.com/callstackincubator/simlock/issues/329)
 - **Supersedes:** nothing. Extends [ADR

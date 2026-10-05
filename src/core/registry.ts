@@ -29,6 +29,7 @@ import {
   type LeaseRequestOutcome,
   type LeaseRequestStore,
   type NewLeaseRequest,
+  newLeaseRequestId,
   newLeaseRequestRecord,
   retainedLeaseRequests,
   withNewLeaseRequest,
@@ -147,6 +148,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   #leases: LeaseRecord[] = [];
   #leaseRequests: readonly LeaseRequestRecord[] = [];
   #components: readonly ComponentRecord[] = [];
+  readonly #commitListeners: (() => void)[] = [];
   #unknownState: Record<string, unknown> = {};
   readonly #unknownDeviceFields = new Map<string, Record<string, unknown>>();
   readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
@@ -607,7 +609,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   async createLeaseRequest(input: NewLeaseRequest): Promise<LeaseRequestRecord> {
     const now = this.options.clock.now();
     const record = newLeaseRequestRecord<LeaseGrant>(
-      `req_${this.options.idGenerator.generate()}`,
+      input.id ?? newLeaseRequestId(this.options.idGenerator),
       input,
       now,
     );
@@ -699,6 +701,13 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     this.#leases = leases;
     this.#leaseRequests = leaseRequests;
     this.#components = components;
+    this.#commitListeners.forEach((listener) => listener());
+  }
+
+  /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */
+  // fallow-ignore-next-line unused-class-member -- called by LeaseEngine, which holds the registry as a `Registry`; the audit does not follow it.
+  onCommit(listener: () => void): void {
+    this.#commitListeners.push(listener);
   }
 
   #restore(contents: string): void {

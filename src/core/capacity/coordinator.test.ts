@@ -9,7 +9,7 @@ import type { CapacityDevice, RegisteredCapacityDevice } from "./strategy.js";
 
 const gibibyte = 1024 ** 3;
 
-function coordinator(): CapacityCoordinator {
+function coordinator(onReservationsChanged?: () => void): CapacityCoordinator {
   return new CapacityCoordinator(
     resourceStrategy.create(
       {
@@ -25,6 +25,7 @@ function coordinator(): CapacityCoordinator {
         totalRamBytes: 32 * gibibyte,
       }),
     ),
+    onReservationsChanged,
   );
 }
 
@@ -305,5 +306,22 @@ describe("CapacityCoordinator", () => {
 
   it("delegates the device ceiling to the strategy it was given", () => {
     expect(coordinator().deviceLimit("android")).toBe(4);
+  });
+});
+
+describe("CapacityCoordinator reservation changes", () => {
+  it("reports a change when a provisioning reservation is taken and once when it is released, however often release is called", () => {
+    let changes = 0;
+    const subject = coordinator(() => {
+      changes += 1;
+    });
+
+    const attempt = subject.tryReserveProvisioning({ mode: "full", platform: "android" }, []);
+    if (!attempt.ok) throw new Error("expected a reservation");
+    expect(changes).toBe(1);
+
+    attempt.reservation.release();
+    attempt.reservation.release();
+    expect(changes).toBe(2);
   });
 });

@@ -86,6 +86,8 @@ async function grant(
     payload: { bootDuration: 0, deviceId: device.id },
   });
   const result = await harness.lifecycle.grant({
+    requestId: "req_1",
+    source: "warm",
     deviceId: device.id,
     requesterId: `agent_${device.id}`,
     ownerId: `agent_${device.id}`,
