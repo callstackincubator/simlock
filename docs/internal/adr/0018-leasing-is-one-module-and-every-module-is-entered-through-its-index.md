@@ -87,7 +87,11 @@ without touching another module.
 
 A module may also have a `testing.ts`: fakes and test wiring other modules'
 tests use, such as `FakeDriver` and today's `core/test-wiring.ts`. Only a
-`*.test.ts` file may import it. Production code that needs a fake is a bug.
+test file may import it: a `*.test.ts` file, or a test helper named
+`test-*.ts`, such as `src/http/test-fakes.ts`, that only tests import.
+Production code that needs a fake is a bug. Anything production code
+also uses, such as the in-memory lease request store the gateway runs
+on, belongs on the index, not in `testing.ts`.
 
 This amends architecture rule 14, which lets only a directory's own tests
 import a file inside it. Rule 14 gains two sentences: another component's
@@ -103,11 +107,15 @@ tests may import its `testing.ts`, and `pnpm lint` enforces the rule.
   for every component directory rule 14 covers that has an index:
   `core/capacity/`, `core/warm-pool/`, `drivers/ios/`, `drivers/android/`,
   and any directory leasing grows. A file inside the directory imports
-  its siblings freely. In a `*.test.ts` file, `testing.js` is allowed
+  its siblings freely. In a `*.test.ts` file or a `test-*.ts` helper, `testing.js` is allowed
   too. The two directories rule 14 names as predating it,
   `core/cleanup/` and `gateway/routing/`, get their pattern in the change
   that gives them an index.
-- **Direction:** a per-directory override says what each module may import.
+- **Direction:** a per-directory override says what each module's
+  production files may import. Test files are exempt from direction
+  rules, as today: a core test may read real files with `fs`, and may
+  build real leasing through `leasing/testing.js`. They still enter
+  every module through its index or `testing.js`.
   `src/core/**` may not import `leasing/`, a driver, `fs` or
   `child_process` (core reaches the filesystem and processes through
   injected ports). `src/leasing/**` may not import a driver, `fs` or
