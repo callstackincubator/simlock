@@ -3232,7 +3232,7 @@ describe("FleetLeaseCoordinator: queue.changed", () => {
 
 describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)", () => {
   const phones = {
-    modelClasses: { "iPhone 16": "phone", "iPhone 17": "phone" },
+    modelClasses: { "iPhone 16": "phone", "iPhone 17": "phone" } as const,
     models: ["iPhone 16", "iPhone 17"],
     platform: "ios" as const,
     runtimes: ["18.0", "26.0"],
@@ -3244,7 +3244,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
     entry: Parameters<typeof catalogFixture>[0][number],
     options: {
       readonly capacity?: ReturnType<typeof statusFixture>["capacity"];
-      readonly devices?: ReturnType<typeof deviceFixture>[];
+      readonly devices?: ReturnType<WorkerRegistry["views"]>[number]["devices"];
     } = {},
   ): void {
     workers.connected(workerId, undefined, "0.3.0");
@@ -3370,7 +3370,7 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
     directory.add("wrk_b", warm);
     warm.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const pixels = {
-      modelClasses: { "Pixel 8": "phone" },
+      modelClasses: { "Pixel 8": "phone" } as const,
       models: ["Pixel 8"],
       platform: "android" as const,
       runtimes: ["35"],

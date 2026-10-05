@@ -232,7 +232,7 @@ describe("warm-hit", () => {
   describe("a class or range request", () => {
     const catalog = {
       defaultRuntime: "26.0",
-      modelClasses: { "iPad Pro": "tablet", "iPhone 15": "phone", "iPhone 17": "phone" },
+      modelClasses: { "iPad Pro": "tablet", "iPhone 15": "phone", "iPhone 17": "phone" } as const,
       models: ["iPad Pro", "iPhone 15", "iPhone 17"],
       platform: "ios" as const,
       runtimes: ["18.0", "26.0"],

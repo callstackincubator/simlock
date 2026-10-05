@@ -478,8 +478,10 @@ got. A class is a claim about the device type the platform's tools report:
 on iOS the product family, on Android the profile's tag, and every untagged
 Android profile is a `phone`, so `tablet` holds no Android model.
 
-Through a gateway, a lease that names no model is refused with `BAD_REQUEST`
-for now.
+Through a gateway the same requests work: a class, no model at all, and an
+`--os` range are served by any worker that has something fitting, and the
+gateway passes them on to that worker as they arrived (see
+[Against a gateway](#against-a-gateway)).
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
@@ -731,6 +733,16 @@ is preferred over one at it, and the one with the most free capacity gets the
 request. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
 
+A request with `--class`, or with neither `--device` nor `--class` (which means
+`--class phone`), is served by a worker whose catalog lists a model of that
+class paired with an installed runtime that satisfies `--os` (any installed
+runtime when you give none). With `--os` as a range, a model matches when one of
+its paired runtimes is in the range. A warm device matches a class request when
+its model is of that class on that worker, its runtime is in the range (any
+installed runtime with no `--os`), and its mode and image tag fit as above. The
+gateway does not pick the model or the runtime: the worker does, by its own
+rules, so the grant names what you got.
+
 ### A request no worker can serve
 
 A lease through a gateway never waits for something that cannot arrive. A
@@ -745,8 +757,8 @@ catalog has not arrived, is neither.
 | --- | --- |
 | No worker takes requests | `NO_CAPACITY` (exit 11) at once |
 | At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
-| ... and no known worker lists the model | `UNKNOWN_MODEL` (exit 12) at once |
-| ... and no known worker has the runtime, or can pair it with the model | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is `default` when you named none |
+| ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
+| ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
 | A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
 | A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
 

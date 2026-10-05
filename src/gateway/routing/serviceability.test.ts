@@ -172,7 +172,7 @@ describe("assess", () => {
 
   describe("a class request", () => {
     const PHONE: CatalogEntry = {
-      modelClasses: { "iPhone 17": "phone" },
+      modelClasses: { "iPhone 17": "phone" } as const,
       models: ["iPhone 17"],
       platform: "ios",
       runtimes: ["26.0"],
@@ -191,7 +191,7 @@ describe("assess", () => {
 
     it("row 3: treats a request naming neither model nor class as phone", () => {
       const tablets: CatalogEntry = {
-        modelClasses: { "iPad Pro": "tablet" },
+        modelClasses: { "iPad Pro": "tablet" } as const,
         models: ["iPad Pro"],
         platform: "ios",
         runtimes: ["26.0"],

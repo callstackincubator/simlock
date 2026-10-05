@@ -85,7 +85,7 @@ describe("matchRequest", () => {
   it("reads no inherited key as a pairing or an alias", () => {
     const view = worker({
       modelAliases: {},
-      modelClasses: {},
+      modelClasses: {} as const,
       modelRuntimes: {},
       models: ["constructor"],
       platform: "ios",
@@ -98,7 +98,7 @@ describe("matchRequest", () => {
     // alias list for the model and moves on to the next one.
     const withNext = worker({
       modelAliases: {},
-      modelClasses: {},
+      modelClasses: {} as const,
       models: ["constructor", "iPhone 17"],
       platform: "ios",
       runtimes: ["26.0"],
@@ -152,7 +152,7 @@ describe("matchRequest", () => {
 
   describe("with a class", () => {
     const PHONES = {
-      modelClasses: { "iPad Pro": "tablet", "iPhone 16": "phone", "iPhone 17": "phone" },
+      modelClasses: { "iPad Pro": "tablet", "iPhone 16": "phone", "iPhone 17": "phone" } as const,
       modelRuntimes: { "iPad Pro": ["26.0"], "iPhone 16": ["18.0"], "iPhone 17": ["26.0"] },
       models: ["iPad Pro", "iPhone 16", "iPhone 17"],
       platform: "ios" as const,
@@ -184,7 +184,7 @@ describe("matchRequest", () => {
       expect(matchRequest(worker(PHONES), { platform: "ios" })).toBeDefined();
       const tablets = worker({
         ...PHONES,
-        modelClasses: { "iPad Pro": "tablet" },
+        modelClasses: { "iPad Pro": "tablet" } as const,
         models: ["iPad Pro"],
       });
       expect(matchRequest(tablets, { platform: "ios" })).toBeUndefined();
@@ -207,7 +207,7 @@ describe("matchRequest", () => {
     });
 
     it("reads no inherited key as a class", () => {
-      const view = worker({ ...PHONES, modelClasses: {}, models: ["constructor"] });
+      const view = worker({ ...PHONES, modelClasses: {} as const, models: ["constructor"] });
 
       expect(matchRequest(view, phone)).toBeUndefined();
     });

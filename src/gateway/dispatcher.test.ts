@@ -351,7 +351,7 @@ describe("GatewayDispatcher", () => {
         {
           modelAliases: {},
           classDefaults: {},
-          modelClasses: {},
+          modelClasses: {} as const,
           modelRuntimes: { "iPhone 17": ["26.0"] },
           models: ["iPhone 17"],
           platform: "ios",
@@ -855,7 +855,7 @@ describe("GatewayDispatcher", () => {
           queueDepth: 0,
           catalog: catalogFixture([
             {
-              modelClasses: { "iPhone 17": "phone" },
+              modelClasses: { "iPhone 17": "phone" } as const,
               models: ["iPhone 17"],
               platform: "ios",
               runtimes: ["26.0"],

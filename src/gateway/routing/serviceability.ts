@@ -4,9 +4,10 @@
  * it and acts on the answer, and the stages never see a request this table has rejected.
  */
 import type { Platform } from "../../contract/index.js";
+import type { DeviceClass } from "../../core/domain.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
-import { hasPlatform, listsModel, matchRequest } from "./request-match.js";
+import { hasPlatform, listsModel, matchRequest, wantedClass } from "./request-match.js";
 import { takesRequests } from "./stages/takes-requests.js";
 
 export type RejectionCode = "NO_CAPACITY" | "NO_DRIVER" | "UNKNOWN_MODEL" | "RUNTIME_MISSING";
@@ -20,6 +21,7 @@ export interface Rejection {
   readonly details?: {
     readonly platform: Platform;
     readonly model?: string;
+    readonly class?: DeviceClass;
     readonly osVersion?: string;
     readonly downloadable?: false;
   };
@@ -52,15 +54,7 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
       reason: "unresolvable-spec",
     };
   }
-  if (!known.some((worker) => listsModel(worker, request))) {
-    return {
-      code: "UNKNOWN_MODEL",
-      details: { model: request.model, platform },
-      kind: "reject",
-      message: `Unknown ${platform} model: ${request.model}`,
-      reason: "unresolvable-spec",
-    };
-  }
+  if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
     const osVersion = request.osVersion ?? "default";
     return {
@@ -79,6 +73,30 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
  * platform or model, so only `incompatible` needs ruling out here. */
 function isKnown(worker: WorkerView): boolean {
   return worker.connection !== "incompatible";
+}
+
+/** A model no worker lists, or, for a class request, a class none lists a model of. */
+function unknownModel(request: RoutableRequest): Rejection {
+  const { platform } = request;
+  if (request.model === undefined) {
+    const deviceClass = wantedClass(request);
+    return {
+      code: "UNKNOWN_MODEL",
+      details: { class: deviceClass, platform },
+      kind: "reject",
+      message:
+        `No ${platform} model of class ${deviceClass} is listed by any worker in the fleet; ` +
+        `name one in ${platform}.defaultModels.${deviceClass} on a worker`,
+      reason: "unresolvable-spec",
+    };
+  }
+  return {
+    code: "UNKNOWN_MODEL",
+    details: { model: request.model, platform },
+    kind: "reject",
+    message: `Unknown ${platform} model: ${request.model}`,
+    reason: "unresolvable-spec",
+  };
 }
 
 function noWorker(): Rejection {

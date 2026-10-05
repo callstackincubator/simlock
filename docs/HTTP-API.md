@@ -363,8 +363,7 @@ class's preference list that the machine lists (see
 with no listed model fails with `422 UNKNOWN_MODEL`, naming the config key, and
 one whose listed models pair with no installed runtime fails with `RUNTIME_MISSING`.
 The granted lease's `device`, `os`, `mode` and `imageTag` always name the device
-you got. Through a gateway a request that names no `device`, or whose `os` is a
-range, is `400 BAD_REQUEST` for now. `os` is an exact version (`"18.4"`) or a
+you got. `os` is an exact version (`"18.4"`) or a
 range: one or more of `>=`, `>`, `<=`, `<` followed by a version, joined by single
 spaces (`">=18 <26"`), or a hyphen range (`"18 - 26"`); a short version covers
 everything under it, so `">=18"` is 18.0 and newer and `"<=26"` includes every
@@ -432,6 +431,17 @@ that lists `device` as a model or another name for one, in any letter case,
 and pairs that model with `os` (or, without `os`, with at least one installed
 runtime). With `imageTag`, the worker's catalog must also list an image of that
 tag, for `os` when it is given. The worker is sent its own name for the model.
+
+A request with `class`, or with neither `device` nor `class` (which means
+`phone`), goes to a worker whose catalog lists a model of that class paired with
+an installed runtime that satisfies `os`, or, without `os`, with at least one
+installed runtime. An `os` range is forwarded as you wrote it, and so is the
+class: the worker picks the model and the runtime by its own rules. A worker
+holding a ready device of that class, in the range and in the mode the request
+needs, is preferred over one that would create a device. A class no worker
+lists a model of fails at once with `422 UNKNOWN_MODEL`, and a range none of
+their models of the class pair with an installed runtime in fails at once with
+`422 RUNTIME_MISSING` carrying the range as `osVersion`.
 
 A gateway fails a request no worker can serve at once, with or without
 `noWait` and `timeoutMs`, instead of queueing it. A worker *takes requests*
