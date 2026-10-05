@@ -235,6 +235,21 @@ describe("EventHistory", () => {
     ]);
   });
 
+  it("reads the ring with an event at exactly sinceTs as the step in force and not as a newer event", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    clock.advance(1_000);
+    const step = bus.emit("queue.changed", { depth: 4 }, "wait-queue");
+    bus.emit("daemon.stopping", { reason: "at the edge" }, "daemon");
+    clock.advance(1);
+    const after = bus.emit("daemon.stopping", { reason: "after" }, "daemon");
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
+
+    expect(read.events).toEqual([step, after]);
+  });
+
   it("names the newest event's id, and none before the first event", () => {
     const bus = new EventBus(new FakeClock(1_000));
     const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });

@@ -112,24 +112,22 @@ function figuresFor(read: ReadEvents, window: UsageWindow, scope: Scope): UsageF
   const requests = read.requests.filter((fact) => inScope(fact, scope));
   const devices = read.devices.filter((fact) => inScope(fact, scope));
   const asked = requests.filter((fact) => fact.requestedAt !== undefined);
-  const granted = requests.filter((fact) => fact.outcome?.kind === "granted");
+  const grants = requests.flatMap((fact) =>
+    fact.outcome?.kind === "granted" ? [{ ...fact, outcome: fact.outcome }] : [],
+  );
   const rejected = requests.flatMap((fact) =>
     fact.outcome?.kind === "rejected" ? [fact.outcome.reason] : [],
   );
   return {
     ...deviceFigures(devices),
-    bySource: sourcesOf(granted),
-    granted: granted.length,
-    held: summarise(granted.flatMap((fact) => spanOf(fact.outcome?.at, fact.endedAt))),
+    bySource: sourcesOf(grants.map((fact) => fact.outcome.source)),
+    granted: grants.length,
+    held: summarise(grants.flatMap((fact) => spanOf(fact.outcome.at, fact.endedAt))),
     queue:
       scope.queue === true ? queueOf(read.queue, window) : { meanDepth: null, peakDepth: null },
     rejected: { byReason: countBy(rejected), total: rejected.length },
     requests: asked.length,
-    turnaround: summarise(
-      asked.flatMap((fact) =>
-        fact.outcome?.kind === "granted" ? spanOf(fact.requestedAt, fact.endedAt) : [],
-      ),
-    ),
+    turnaround: summarise(grants.flatMap((fact) => spanOf(fact.requestedAt, fact.endedAt))),
     utilisation: utilisationOf(read.capacity, window, scope),
     wait: summarise(asked.flatMap((fact) => spanOf(fact.requestedAt, fact.outcome?.at))),
   };
@@ -140,10 +138,9 @@ function spanOf(start: number | undefined, end: number | undefined): number[] {
   return start === undefined || end === undefined ? [] : [end - start];
 }
 
-function sourcesOf(granted: readonly RequestFact[]): UsageFigures["bySource"] {
+function sourcesOf(grantedSources: readonly string[]): UsageFigures["bySource"] {
   const sources = { booted: 0, provisioned: 0, warm: 0 };
-  for (const fact of granted) {
-    const source = fact.outcome?.kind === "granted" ? fact.outcome.source : undefined;
+  for (const source of grantedSources) {
     if (source === "warm" || source === "booted" || source === "provisioned") sources[source] += 1;
   }
   return sources;

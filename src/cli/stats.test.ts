@@ -153,3 +153,187 @@ describe("formatUsage", () => {
     expect(lines).toContain("  tok_b           1 request, 0 granted, 0 rejected, held 0s");
   });
 });
+
+const PLATFORM_ROW = "0 requests, 0 granted, 0 rejected, wait p50 -, held p50 -, slots peak -";
+const TOTAL_ROWS = [
+  "Totals",
+  "  Requests:     0 (0 granted, 0 rejected)",
+  "  Wait:         no samples",
+  "  Held:         no samples",
+  "  Turnaround:   no samples",
+  "  Provisioning: no samples",
+  "  Boot:         no samples",
+  "  Slots:        not known",
+  "  Queue:        not known",
+  "  Incidents:    0 quarantined, 0 recovered after a crash, 0 recovered from quarantine, 0 lost",
+];
+
+describe("formatUsage layout", () => {
+  it("separates the sections with one blank line each, in the order of the header, totals, platforms, workers and requesters", () => {
+    const text = formatUsage(
+      usageFixture({
+        coversFrom: Date.parse("2026-10-05T09:59:00.000Z"),
+        partial: true,
+        requesters: [{ granted: 0, heldTotalMs: 0, id: "tok_b", rejected: 0, requests: 1 }],
+        workers: [{ ...figuresFixture(), id: "wrk_2" }],
+      }),
+    );
+
+    expect(text).toBe(
+      [
+        "Usage from 2026-10-04T10:00:00.000Z to 2026-10-05T10:00:00.000Z",
+        "Figures cover from 2026-10-05T09:59:00.000Z: the history does not reach back to the start of the window.",
+        "",
+        ...TOTAL_ROWS,
+        "",
+        "Platforms",
+        `  android  ${PLATFORM_ROW}`,
+        `  ios      ${PLATFORM_ROW}`,
+        "",
+        "Workers",
+        `  wrk_2  ${PLATFORM_ROW}`,
+        "",
+        "Requesters",
+        "  tok_b  1 request, 0 granted, 0 rejected, held 0s",
+      ].join("\n"),
+    );
+  });
+
+  it("prints a whole report without the optional sections when there are no workers or requesters", () => {
+    expect(formatUsage(usageFixture())).toBe(
+      [
+        "Usage from 2026-10-04T10:00:00.000Z to 2026-10-05T10:00:00.000Z",
+        "",
+        ...TOTAL_ROWS,
+        "",
+        "Platforms",
+        `  android  ${PLATFORM_ROW}`,
+        `  ios      ${PLATFORM_ROW}`,
+      ].join("\n"),
+    );
+  });
+});
+
+describe("formatUsage rows that depend on the figures", () => {
+  it("lists the error codes and the rejection reasons by name, whatever order they arrived in", () => {
+    const lines = formatUsage(
+      usageFixture({
+        totals: figuresFixture({
+          errors: { byCode: { "c.zed": 1, "a.alpha": 2, "b.mid": 3 } },
+          rejected: { byReason: { timeout: 1, "no-wait": 2, capacity: 3 }, total: 6 },
+        }),
+      }),
+    ).split("\n");
+
+    expect(lines).toContain("  Errors:       a.alpha 2, b.mid 3, c.zed 1");
+    expect(lines).toContain("  Rejected:     capacity 3, no-wait 2, timeout 1");
+  });
+
+  it("prints the Errors row only when there are error codes", () => {
+    const without = formatUsage(usageFixture());
+    const withOne = formatUsage(
+      usageFixture({ totals: figuresFixture({ errors: { byCode: { "x.y": 1 } } }) }),
+    );
+
+    expect(without.split("\n").some((line) => line.startsWith("  Errors:"))).toBe(false);
+    expect(withOne.split("\n")).toContain("  Errors:       x.y 1");
+  });
+
+  it("prints the Granted row only when something was granted", () => {
+    const withGrant = formatUsage(
+      usageFixture({
+        totals: figuresFixture({ bySource: { booted: 0, provisioned: 0, warm: 1 }, granted: 1 }),
+      }),
+    ).split("\n");
+    const without = formatUsage(usageFixture()).split("\n");
+
+    expect(withGrant).toContain("  Granted:      warm 1, booted 0, provisioned 0");
+    expect(without.some((line) => line.startsWith("  Granted:"))).toBe(false);
+  });
+
+  it("prints the Rejected row only when something was rejected", () => {
+    const withReject = formatUsage(
+      usageFixture({
+        totals: figuresFixture({ rejected: { byReason: { timeout: 1 }, total: 1 } }),
+      }),
+    ).split("\n");
+    const without = formatUsage(usageFixture()).split("\n");
+
+    expect(withReject).toContain("  Rejected:     timeout 1");
+    expect(without.some((line) => line.startsWith("  Rejected:"))).toBe(false);
+  });
+
+  it("prints the RAM row only when the figures carry RAM", () => {
+    const withRam = formatUsage(
+      usageFixture({
+        totals: figuresFixture({
+          utilisation: {
+            ram: { limitBytes: 8 * 1024 ** 3, meanBytes: 0, peakBytes: 1024 ** 3 },
+            slots: { max: null, mean: null, peak: null },
+          },
+        }),
+      }),
+    ).split("\n");
+    const without = formatUsage(usageFixture()).split("\n");
+
+    expect(withRam).toContain("  RAM:          peak 1.0 GiB of 8.0 GiB, mean 0.0 GiB");
+    expect(without.some((line) => line.startsWith("  RAM:"))).toBe(false);
+  });
+
+  it.each([
+    ["peak", { max: 4, mean: 1.5, peak: null }],
+    ["max", { max: null, mean: 1.5, peak: 3 }],
+    ["mean", { max: 4, mean: null, peak: 3 }],
+  ])("says slots are not known when only the slot %s is missing", (_name, slots) => {
+    const lines = formatUsage(
+      usageFixture({ totals: figuresFixture({ utilisation: { slots } }) }),
+    ).split("\n");
+
+    expect(lines).toContain("  Slots:        not known");
+  });
+
+  it.each([
+    ["peak depth", { meanDepth: 0.4, peakDepth: null }],
+    ["mean depth", { meanDepth: null, peakDepth: 2 }],
+  ])("says the queue is not known when only the queue %s is missing", (_name, queue) => {
+    const lines = formatUsage(usageFixture({ totals: figuresFixture({ queue }) })).split("\n");
+
+    expect(lines).toContain("  Queue:        not known");
+  });
+
+  it.each([
+    ["p50", { count: 1, max: 2, p50: null, p95: 1 }],
+    ["p95", { count: 1, max: 2, p50: 1, p95: null }],
+    ["max", { count: 1, max: null, p50: 1, p95: 2 }],
+  ])("says there are no samples when only the %s is missing", (_name, wait) => {
+    const lines = formatUsage(usageFixture({ totals: figuresFixture({ wait }) })).split("\n");
+
+    expect(lines).toContain("  Wait:         no samples");
+  });
+});
+
+describe("formatUsage durations", () => {
+  const waitP50 = (ms: number): string => {
+    const lines = formatUsage(
+      usageFixture({
+        totals: figuresFixture({ wait: { count: 1, max: ms, p50: ms, p95: ms } }),
+      }),
+    ).split("\n");
+    const line = lines.find((candidate) => candidate.startsWith("  Wait:"));
+    return (line ?? "").replace(/^ {2}Wait: +p50 /, "").replace(/,.*$/, "");
+  };
+
+  it.each([
+    [0, "0s"],
+    [250, "250ms"],
+    [999, "999ms"],
+    [1_000, "1s"],
+    [59_999, "60s"],
+    [60_000, "1m 0s"],
+    [3_599_999, "59m 59s"],
+    [3_600_000, "1h 0m"],
+    [7_380_000, "2h 3m"],
+  ])("prints %i ms as %s", (ms, expected) => {
+    expect(waitP50(ms)).toBe(expected);
+  });
+});

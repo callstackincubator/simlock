@@ -763,4 +763,239 @@ describe("computeUsage", () => {
       "device.purge-failed": 2,
     });
   });
+
+  it("sorts events supplied out of order and leaves the caller's array exactly as it was", () => {
+    const events = [
+      released(T0 + 13_000, "l1"),
+      granted(T0 + 3_000, "r1", "l1"),
+      requested(T0 + 1_000, "r1"),
+    ];
+    const before = events.map((event) => event.id);
+
+    const usage = computeUsage(events, WINDOW, WORKER);
+
+    expect(events.map((event) => event.id)).toEqual(before);
+    expect(usage.totals.wait).toEqual({ count: 1, max: 2_000, p50: 2_000, p95: 2_000 });
+    expect(usage.totals.held).toEqual({ count: 1, max: 10_000, p50: 10_000, p95: 10_000 });
+    // The oldest event is the earliest one by time, not the first one given.
+    expect(usage.coversFrom).toBe(T0 + 1_000);
+  });
+
+  it("names the one worker `local` when it is given no workers", () => {
+    const usage = computeUsage([capacity(T0 + MINUTE, figures(1, 0, 2))], WINDOW, {
+      fleet: false,
+    });
+
+    expect(usage.workers.map((worker) => worker.id)).toEqual(["local"]);
+  });
+
+  it("matches a fleet request to its worker's grant by the bare requester when no requesterPrefix is given", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        at(T0 + 1_100, "request.dispatched", {
+          model: "m",
+          platform: "ios",
+          queuedMs: 0,
+          reason: "warm-hit",
+          requestId: "gw-r1",
+          requesterId: "agent-a",
+          stage: "s",
+          workerId: "w1",
+        }),
+        granted(T0 + 4_000, "w-r1", "l1", "warm", "agent-a", { workerId: "w1" }),
+      ],
+      WINDOW,
+      { fleet: true },
+    );
+
+    expect(usage.totals.granted).toBe(1);
+    expect(usage.totals.wait).toEqual({ count: 1, max: 3_000, p50: 3_000, p95: 3_000 });
+  });
+
+  it("counts a grant whose source is none of warm, booted and provisioned under no source", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "r1"),
+        granted(T0 + 2_000, "r1", "l1", "teleported"),
+        requested(T0 + 3_000, "r2"),
+        granted(T0 + 4_000, "r2", "l2", "warm"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.granted).toBe(2);
+    expect(usage.totals.bySource).toEqual({ booted: 0, provisioned: 0, warm: 1 });
+  });
+
+  it("keeps durations and incidents out of errors.byCode when device events of every kind are present", () => {
+    const usage = computeUsage(
+      [
+        at(T0 + 1_000, "device.provisioned", {
+          deviceId: "d1",
+          driver: "fake",
+          duration: 90_000,
+          spec: { platform: "ios" },
+        }),
+        at(T0 + 2_000, "device.ready", { bootDuration: 20_000, deviceId: "d1" }),
+        at(T0 + 3_000, "device.quarantined", { deviceId: "d1", reason: "x" }),
+        at(T0 + 4_000, "device.purge-failed", {
+          attemptedStrategy: "erase",
+          deviceId: "d1",
+          duration: 1,
+          error: "x",
+          leaseId: "l",
+        }),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.errors.byCode).toEqual({ "device.purge-failed": 1 });
+    expect(usage.totals.incidents.quarantined).toBe(1);
+    expect(usage.totals.boot.count).toBe(1);
+    expect(usage.totals.provisioning.count).toBe(1);
+  });
+
+  it("gives each worker only its own capacity steps and each platform only its own entry in them", () => {
+    const usage = computeUsage(
+      [
+        capacity(T0 - 1_000, figures(1, 0, 2), undefined, {
+          android: figures(0, 0, 1),
+          ios: figures(1, 0, 2),
+          workerId: "w1",
+        }),
+        capacity(T0 - 1_000, figures(3, 0, 6), undefined, {
+          android: figures(3, 0, 5),
+          ios: figures(0, 0, 1),
+          workerId: "w2",
+        }),
+      ],
+      WINDOW,
+      FLEET,
+    );
+    const byId = Object.fromEntries(usage.workers.map((worker) => [worker.id, worker]));
+
+    expect(byId.w1?.utilisation.slots).toEqual({ max: 2, mean: 1, peak: 1 });
+    expect(byId.w2?.utilisation.slots).toEqual({ max: 6, mean: 3, peak: 3 });
+    expect(usage.totals.utilisation.slots).toEqual({ max: 8, mean: 4, peak: 4 });
+    expect(usage.platforms.ios.utilisation.slots).toEqual({ max: 3, mean: 1, peak: 1 });
+    expect(usage.platforms.android.utilisation.slots).toEqual({ max: 6, mean: 3, peak: 3 });
+  });
+
+  it("reports slots.max as the highest total across the window, from stretches that last, and null when no step is known", () => {
+    const usage = computeUsage(
+      [
+        capacity(T0 + 10 * MINUTE, figures(0, 0, 2)),
+        capacity(T0 + 20 * MINUTE, figures(0, 0, 9)),
+        // Two steps at one instant: the 9 holds for no time at all.
+        capacity(T0 + 30 * MINUTE, figures(0, 0, 4)),
+        capacity(T0 + 30 * MINUTE, figures(0, 0, 4)),
+        capacity(T0 + 30 * MINUTE, figures(0, 0, 3)),
+      ],
+      { from: T0, to: T0 + 40 * MINUTE },
+      WORKER,
+    );
+    const none = computeUsage([], WINDOW, WORKER);
+
+    expect(usage.totals.utilisation.slots.max).toBe(9);
+    expect(none.totals.utilisation.slots).toEqual({ max: null, mean: null, peak: null });
+  });
+
+  it("does not let a zero-length stretch between two steps at one instant set slots.max", () => {
+    const usage = computeUsage(
+      [
+        capacity(T0 - 1_000, figures(0, 0, 2)),
+        capacity(T0 + 10 * MINUTE, figures(0, 0, 50)),
+        capacity(T0 + 10 * MINUTE, figures(0, 0, 3)),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.utilisation.slots.max).toBe(3);
+  });
+
+  it("orders requesters by requests descending, then by id ascending whichever order they arrive in", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "r1", "b"),
+        requested(T0 + 2_000, "r2", "a"),
+        requested(T0 + 3_000, "r3", "c"),
+        requested(T0 + 4_000, "r4", "c"),
+        requested(T0 + 5_000, "r5", "d"),
+        requested(T0 + 6_000, "r6", "d"),
+        requested(T0 + 7_000, "r7", "e"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.requesters.map((entry) => [entry.id, entry.requests])).toEqual([
+      ["c", 2],
+      ["d", 2],
+      ["a", 1],
+      ["b", 1],
+      ["e", 1],
+    ]);
+  });
+
+  it("counts a rejection refused before admission under rejected for its requester and not under requests", () => {
+    const usage = computeUsage(
+      [
+        rejected(T0 + 1_000, "r1", "already-leased", "gw-tok"),
+        requested(T0 + 2_000, "r2", "gw-tok"),
+      ],
+      WINDOW,
+      { ...WORKER, labels: { "gw-tok": "ci" } },
+    );
+
+    expect(usage.requesters).toEqual([
+      { granted: 0, heldTotalMs: 0, id: "gw-tok", label: "ci", rejected: 1, requests: 1 },
+    ]);
+    expect(usage.totals.requests).toBe(1);
+    expect(usage.totals.rejected).toEqual({ byReason: { "already-leased": 1 }, total: 1 });
+  });
+
+  it("carries queue depth on a worker's own row and none on a gateway's worker rows", () => {
+    const events = [
+      queueChanged(T0 - 1_000, 2),
+      capacity(T0 - 1_000, figures(0, 0, 2), undefined, { workerId: "w1" }),
+    ];
+
+    const worker = computeUsage(events, WINDOW, WORKER);
+    const fleet = computeUsage(events, WINDOW, { ...FLEET, workers: [{ id: "w1" }] });
+
+    expect(worker.workers[0]?.queue).toEqual({ meanDepth: 2, peakDepth: 2 });
+    expect(fleet.workers[0]?.queue).toEqual({ meanDepth: null, peakDepth: null });
+  });
+
+  it("counts a request as waiting from the instant it is made until the instant it settles, per series point", () => {
+    const usage = computeUsage(
+      [
+        // Refused before admission: no request, so it never waits.
+        rejected(T0 + 10_000, "x", "killed", "z"),
+        // Made first of all, settled last.
+        requested(T0 + 20_000, "c", "c"),
+        // Made, never settled.
+        requested(T0 + 30_000, "open", "o"),
+        // Made on a bucket end, settled on a bucket end.
+        requested(T0 + MINUTE, "a", "a"),
+        granted(T0 + 2 * MINUTE, "a", "la", "warm", "a"),
+        // Made after a, settled before it.
+        requested(T0 + 70_000, "b", "b"),
+        granted(T0 + 100_000, "b", "lb", "warm", "b"),
+        rejected(T0 + 5 * MINUTE + 30_000, "c", "timeout", "c"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+    const waiting = usage.series.slice(0, 7).map((point) => point.waiting);
+
+    // Ends at 1m, 2m, ... 7m: c, open and a (made at exactly 1m) wait at 1m; b is made, and b and
+    // a settle (a at exactly 2m), by 2m; c settles at 5m30s.
+    expect(waiting).toEqual([3, 2, 2, 2, 2, 1, 1]);
+    expect(usage.series.at(-1)?.waiting).toBe(1);
+  });
 });

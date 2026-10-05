@@ -110,12 +110,10 @@ const objectOf = (value: unknown): Payload | undefined =>
   typeof value === "object" && value !== null ? (value as Payload) : undefined;
 
 /** A relayed grant or rejection, kept for the request that will claim it. */
-interface Relayed {
-  readonly index: number;
-  readonly kind: "granted" | "rejected";
-  readonly at: number;
-  readonly payload: Payload;
-}
+type RelayedAnswer =
+  | { readonly kind: "granted"; readonly source: string; readonly leaseId: string }
+  | { readonly kind: "rejected"; readonly reason: string };
+type Relayed = { readonly index: number; readonly at: number } & RelayedAnswer;
 
 interface Dispatch {
   readonly index: number;
@@ -162,7 +160,10 @@ class Reader {
   readonly #requested = new Map<string, Request>();
   readonly #ownRejections = new Map<
     string,
-    Rejected & { readonly requester: string; readonly platform: Platform | undefined }
+    Omit<Rejected, "kind"> & {
+      readonly requester: string;
+      readonly platform: Platform | undefined;
+    }
   >();
   readonly #grants = new Map<string, Granted & { readonly leaseId: string }>();
   readonly #ends = new Map<string, number>();
@@ -193,7 +194,7 @@ class Reader {
     const seen: Seen = {
       event,
       index,
-      own: !this.options.fleet || event.event === "request.dispatched" || relayedFrom === undefined,
+      own: !this.options.fleet || relayedFrom === undefined,
       payload,
       within: event.timestamp > this.window.from && event.timestamp <= this.window.to,
       worker: this.options.fleet ? relayedFrom : this.options.self,
@@ -211,21 +212,21 @@ class Reader {
     };
   }
 
-  #key(worker: string | undefined, id: string): string {
-    return `${worker ?? ""}\u0000${id}`;
+  #key(worker: string, id: string): string {
+    return `${worker}\u0000${id}`;
   }
 
   /** On a gateway a device fact needs a worker behind it; on a worker it is always its own. */
-  #counts(seen: Seen): boolean {
+  #counts(seen: Seen): seen is Seen & { readonly worker: string } {
     return seen.within && (!this.options.fleet || seen.worker !== undefined);
   }
 
   #capacityChanged(seen: Seen): void {
     const { event, payload, worker } = seen;
-    if (event.timestamp > this.window.to || (this.options.fleet && worker === undefined)) return;
-    const step = capacityStep(payload, event.timestamp, worker ?? "");
+    if (event.timestamp > this.window.to || worker === undefined) return;
+    const step = capacityStep(payload, event.timestamp, worker);
     if (step !== undefined) this.#capacity.push(step);
-    if (worker !== undefined) this.#workers.add(worker);
+    this.#workers.add(worker);
   }
 
   #queueChanged(seen: Seen): void {
@@ -236,7 +237,11 @@ class Reader {
 
   #boundary(requester: string | undefined, index: number): void {
     if (requester === undefined) return;
-    this.#boundaries.set(requester, [...(this.#boundaries.get(requester) ?? []), index]);
+    this.#boundaries.set(requester, [...this.#boundariesOf(requester), index]);
+  }
+
+  #boundariesOf(requester: string): readonly number[] {
+    return this.#boundaries.get(requester) ?? [];
   }
 
   #leaseRequested(seen: Seen): void {
@@ -263,12 +268,12 @@ class Reader {
     this.#dispatches.set(requestId, { index: seen.index, requestId, requester, worker });
   }
 
-  #relay(seen: Seen, kind: Relayed["kind"]): void {
+  #relay(seen: Seen, relayed: RelayedAnswer): void {
     const requester = text(seen.payload, "requester");
     if (requester === undefined || seen.worker === undefined) return;
     const key = this.#key(seen.worker, requester);
-    const relayed = { at: seen.event.timestamp, index: seen.index, kind, payload: seen.payload };
-    this.#relayed.set(key, [...(this.#relayed.get(key) ?? []), relayed]);
+    const entry = { ...relayed, at: seen.event.timestamp, index: seen.index } as Relayed;
+    this.#relayed.set(key, [...(this.#relayed.get(key) ?? []), entry]);
   }
 
   #rejected(seen: Seen): void {
@@ -280,20 +285,23 @@ class Reader {
       if (requester === undefined) return;
       this.#ownRejections.set(requestId, {
         at: seen.event.timestamp,
-        kind: "rejected",
         platform: requestPlatform(seen.payload),
         reason,
         requester,
       });
     } else {
-      this.#relay(seen, "rejected");
+      this.#relay(seen, { kind: "rejected", reason });
     }
   }
 
   #granted(seen: Seen): void {
     if (!seen.within) return;
     if (this.options.fleet) {
-      this.#relay(seen, "granted");
+      this.#relay(seen, {
+        kind: "granted",
+        leaseId: text(seen.payload, "leaseId") ?? "",
+        source: text(seen.payload, "source") ?? "",
+      });
       return;
     }
     const requestId = text(seen.payload, "requestId");
@@ -331,7 +339,7 @@ class Reader {
     if (!this.#counts(seen) || duration === undefined) return;
     this.#addDevice(seen, {
       kind: "boot",
-      platform: this.#platformOfDevice(seen, deviceId),
+      platform: this.#platformOfDevice(seen.worker, deviceId),
       value: duration,
     });
   }
@@ -342,7 +350,7 @@ class Reader {
       return;
     const platform =
       platformOf(seen.payload.platform) ??
-      this.#platformOfDevice(seen, text(seen.payload, "deviceId"));
+      this.#platformOfDevice(seen.worker, text(seen.payload, "deviceId"));
     this.#addDevice(seen, {
       kind: incident === undefined ? "error" : "incident",
       platform,
@@ -350,10 +358,10 @@ class Reader {
     });
   }
 
-  #platformOfDevice(seen: Seen, deviceId: string | undefined): Platform | undefined {
+  #platformOfDevice(worker: string, deviceId: string | undefined): Platform | undefined {
     return deviceId === undefined
       ? undefined
-      : this.#devicePlatform.get(this.#key(seen.worker, deviceId));
+      : this.#devicePlatform.get(this.#key(worker, deviceId));
   }
 
   #addDevice(seen: Seen, fact: Omit<DeviceFact, "worker">): void {
@@ -386,10 +394,10 @@ class Reader {
     }
     return this.options.fleet
       ? this.#fleetFact(base, requestId, request)
-      : this.#workerFact(base, requestId, own);
+      : this.#workerFact(base, requestId, this.options.self);
   }
 
-  #workerFact(base: RequestFactBase, requestId: string, own: string | undefined): RequestFact {
+  #workerFact(base: RequestFactBase, requestId: string, own: string): RequestFact {
     const grant = this.#grants.get(requestId);
     return grant === undefined
       ? { ...base, worker: own }
@@ -405,18 +413,14 @@ class Reader {
     const relayed = this.#fleetOutcome(dispatch, request.index);
     if (relayed === undefined) return { ...base, worker };
     if (relayed.kind === "rejected") {
-      const reason = text(relayed.payload, "reason") ?? "";
-      return { ...base, outcome: { at: relayed.at, kind: "rejected", reason }, worker };
+      const outcome: Rejected = { at: relayed.at, kind: "rejected", reason: relayed.reason };
+      return { ...base, outcome, worker };
     }
-    const source = text(relayed.payload, "source") ?? "";
-    return this.#withEnd(
-      { ...base, outcome: { at: relayed.at, kind: "granted", source }, worker },
-      text(relayed.payload, "leaseId") ?? "",
-      worker,
-    );
+    const outcome: Granted = { at: relayed.at, kind: "granted", source: relayed.source };
+    return this.#withEnd({ ...base, outcome, worker }, relayed.leaseId, worker);
   }
 
-  #withEnd(fact: RequestFact, leaseId: string, worker: string | undefined): RequestFact {
+  #withEnd(fact: RequestFact, leaseId: string, worker: string): RequestFact {
     const endedAt = this.#ends.get(this.#key(worker, leaseId));
     return endedAt === undefined ? fact : { ...fact, endedAt };
   }
@@ -429,9 +433,7 @@ class Reader {
    * request.
    */
   #fleetOutcome(dispatch: Dispatch, requestIndex: number): Relayed | undefined {
-    const next = (this.#boundaries.get(dispatch.requester) ?? []).find(
-      (index) => index > dispatch.index,
-    );
+    const next = this.#boundariesOf(dispatch.requester).find((index) => index > dispatch.index);
     const key = this.#key(dispatch.worker, `${this.options.requesterPrefix}${dispatch.requester}`);
     return (this.#relayed.get(key) ?? []).find(
       (candidate) =>
