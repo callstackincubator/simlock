@@ -490,9 +490,7 @@ export const platformCatalogSchema = z.object({
    */
   modelClasses: z
     .record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema)
-    .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX, {
-      message: `modelClasses lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
-    }),
+    .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX),
   /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run

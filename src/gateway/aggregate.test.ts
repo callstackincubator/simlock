@@ -725,9 +725,31 @@ describe("aggregateCatalog", () => {
       expect(aliasedModels).toHaveLength(4096);
       expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
-      expect(Object.keys(platform?.modelClasses ?? {})).toHaveLength(4096);
+      const classedModels = Object.keys(platform?.modelClasses ?? {});
+      expect(classedModels).toHaveLength(4096);
+      expect(classedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.customModels).toHaveLength(4096);
       expect(platform?.customModels?.filter((model) => model.startsWith("bm"))).toEqual([]);
+    });
+
+    it("cuts the fleet's model classes by sort order, not arrival order, when the union is over the bound", () => {
+      const names = (prefix: string) =>
+        Array.from({ length: 4096 }, (_, index) => `${prefix}${index}`);
+      const worker = (prefix: string) =>
+        androidOn({
+          modelClasses: Object.fromEntries(names(prefix).map((model) => [model, "phone" as const])),
+          models: names(prefix),
+        });
+
+      // The worker first in id order holds the names that sort last.
+      const catalog = aggregateCatalog([
+        view({ catalog: [worker("zm")], id: "wrk_a" }),
+        view({ catalog: [worker("am")], id: "wrk_b" }),
+      ]);
+
+      const classed = Object.keys(catalog.platforms[0]?.modelClasses ?? {});
+      expect(classed).toHaveLength(4096);
+      expect(classed.every((model) => model.startsWith("am"))).toBe(true);
     });
 
     it("marks a model custom when one worker marks it and another lists it as built-in", () => {
