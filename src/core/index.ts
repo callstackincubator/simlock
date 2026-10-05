@@ -99,7 +99,6 @@ export {
   ReplayedLeaseRequestError,
 } from "./lease-request-book.js";
 export { Nuke } from "./nuke.js";
-export { FakeDriver, FakeDriverUnknownDeviceError } from "./fake-driver.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
 export {
   ComponentInstaller,

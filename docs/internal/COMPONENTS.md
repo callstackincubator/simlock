@@ -87,7 +87,7 @@ coordinator into the components below.
 | iOS driver | `src/drivers/ios/` | `IosSimctlDriver`: every `simctl` call scoped to the owned device set, erase as the reclaim, the slim pass inside `makeReady`, the label list, runtime install, prerequisites. | Decide the default mode or anything about leases. |
 | Android driver | `src/drivers/android/` | `AndroidDriver`: AVDs in the owned AVD home, Simlock's own adb server (`AdbServerSupervisor`, `AdbRegistrar`), the clean-baseline snapshot as the reclaim, device profiles, system-image install, prerequisites. | Same as iOS. |
 | Installer process | `src/drivers/installer-process.ts` | Running a platform's installer command with streamed progress. | Decide whether to install. |
-| `FakeDriver` | `src/core/fake-driver.ts` | A scripted in-memory driver for the fast test lane and `SIMLOCK_DRIVERS_MODULE` setups. | Touch a real device. |
+| `FakeDriver` | `src/core/fake-driver.ts`, exported from `src/core/testing.ts` | A scripted in-memory driver for the fast test lane and `SIMLOCK_DRIVERS_MODULE` setups. | Touch a real device. |
 
 ## Event bus
 

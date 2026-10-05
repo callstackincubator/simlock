@@ -3,14 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "../core/testing.js";
+import { FakeDriver, testComponentWiring } from "../core/testing.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
 import {
   CleanupReaper,
   type Config,
   type DriverRejection,
-  FakeDriver,
   LeaseEngine,
   PassthroughRefusedError,
   Registry,

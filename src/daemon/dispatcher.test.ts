@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   capacityChangedPayload,
+  FakeDriver,
   testComponentWiring,
   type FakeDriverOptions,
 } from "../core/testing.js";
@@ -13,7 +14,6 @@ import {
   DiskSpaceGuard,
   Doctor,
   DriverCatalog,
-  FakeDriver,
   type HostFacts,
   HostFactsReader,
   LeaseEngine,

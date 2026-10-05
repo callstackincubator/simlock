@@ -7,11 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type Config,
   type DriverToolVersion,
-  FakeDriver,
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
   REDACTED_VALUE,
 } from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";

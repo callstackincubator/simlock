@@ -12,6 +12,7 @@ import { SerializedDecision } from "./serialized-decision.js";
  * also uses belongs on `index.ts`.
  */
 export { capacityChangedPayload } from "./capacity/index.js";
+export { FakeDriver } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 
 /**

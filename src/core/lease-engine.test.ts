@@ -16,12 +16,12 @@ import {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 import type { ModelPreferences } from "./driver-catalog.js";
+import { FakeDriver } from "./fake-driver.js";
 import {
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
   DriverCrashError,
-  FakeDriver,
   LeaseEngine,
   type LeaseProgress,
   NoCapacityError,
