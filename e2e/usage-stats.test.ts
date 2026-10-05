@@ -93,10 +93,14 @@ describe("simlock stats", () => {
     ).toBe(0);
 
     const usage = await stats(env);
-    const history = inWindow(await env.events(), usage.window);
+    const everything = await env.events();
+    const history = inWindow(everything, usage.window);
     const named = (name: string) => history.filter((event) => event.event === name);
 
-    expect(usage.partial).toBe(false);
+    // The daemon is a minute old, so the history does not reach back an hour: the figures say
+    // where they start.
+    expect(usage.partial).toBe(true);
+    expect(usage.coversFrom).toBe(Math.min(...everything.map((event) => event.timestamp)));
     expect(usage.totals.requests).toBe(named("lease.requested").length);
     expect(usage.totals.granted).toBe(2);
     expect(usage.totals.bySource).toMatchObject(

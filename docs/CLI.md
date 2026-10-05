@@ -3,7 +3,7 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, and
+agents are the primary audience. `status`, `catalog`, `stats`, and
 `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
@@ -80,6 +80,7 @@ command starts it again) to bring the platform up.
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
+| 12 | `HISTORY_NOT_KEPT` | `stats` for a window that ends before the oldest event the history holds |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
 | 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
@@ -1801,6 +1802,120 @@ gateway's order. A replay (`simlock events`, `--since`) prints events by
 `timestamp`, then in the order the daemon recorded them within the same
 millisecond. `--follow` prints each live push as it arrives, so a relayed event
 from a worker whose clock is behind prints after a later gateway event.
+
+## `simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json]`
+
+The usage figures for a window: how many requests there were, how long they
+waited and held their devices, how full the host was, and what went wrong. They
+are worked out when you ask, from the same event history `simlock events`
+prints, so they agree with it for the same window and they survive a daemon
+restart. Nothing is counted separately and nothing is kept beyond the history,
+so a window reaches back only as far as `eventLog.retention` and
+`eventLog.maxBytes` keep events (see [CONFIGURATION.md](CONFIGURATION.md)).
+
+- `--since 6h` is the last six hours, up to now. Durations take `ms`, `s`, `m`,
+  `h` and `d` units, as for `simlock events`.
+- `--from 2026-10-04T00:00:00Z --to 2026-10-05T00:00:00Z` names the window. With
+  `--from` alone the window runs to now.
+- With none of them, the window is the last 24 hours.
+- `--since` with `--from`, `--to` without `--from`, and a `--from` that is not
+  earlier than `--to` are usage errors (exit 2). A window can be at most 90
+  days long.
+- `--json` prints the daemon's answer unchanged, as one JSON object; without it
+  you get a table.
+
+The table opens with the window, then the totals, then a row for each platform,
+each worker and each requester:
+
+```
+Usage from 2026-10-04T10:00:00.000Z to 2026-10-05T10:00:00.000Z
+
+Totals
+  Requests:     12 (10 granted, 2 rejected)
+  Granted:      warm 6, booted 3, provisioned 1
+  Rejected:     no-wait 1, timeout 1
+  Wait:         p50 1.2s, p95 4s, max 9.1s (11 samples)
+  Held:         p50 5m 0s, p95 30m 0s, max 1h 2m (9 samples)
+  Turnaround:   p50 5m 10s, p95 31m 40s, max 1h 3m (9 samples)
+  Provisioning: p50 1m 30s, p95 1m 30s, max 1m 30s (1 sample)
+  Boot:         p50 20s, p95 40s, max 40s (2 samples)
+  Slots:        peak 3 of 4, mean 1.5
+  Queue:        peak depth 2, mean 0.4
+  Incidents:    0 quarantined, 1 recovered after a crash, 0 recovered from quarantine, 0 lost
+
+Platforms
+  ios      12 requests, 10 granted, 2 rejected, wait p50 1.2s, held p50 5m 0s, slots peak 3
+  android  0 requests, 0 granted, 0 rejected, wait p50 -, held p50 -, slots peak -
+
+Workers
+  mac-mini-1 (wrk_1)  12 requests, 10 granted, 2 rejected, wait p50 1.2s, held p50 5m 0s, slots peak 3
+
+Requesters
+  ci-bot (tok_a)  3 requests, 2 granted, 1 rejected, held 12m 5s
+```
+
+What the figures count:
+
+- **Requests** are the lease requests made in the window. A request belongs to
+  the window it was made in: its grant, rejection and end are joined from
+  events up to the end of the window, so a lease still held at the end of the
+  window counts as a request and a grant and gives no held or turnaround time.
+  A request made before the window that is granted or rejected inside it is in
+  no count.
+- **Granted** is the grants of those requests, by how the device came to be
+  ready: `warm` was already ready, `booted` was started from shutdown,
+  `provisioned` was created for the request.
+- **Rejected** are the requests that ended without a device, by reason
+  (`timeout`, `no-wait`, `cancelled`, ...), plus the requests refused before
+  they were stored (a requester that already holds a lease). Those are in the
+  window their rejection falls in and are not requests, so granted plus
+  rejected can be more than requests.
+- **Wait** is the time from the request to its grant or rejection. **Held** is
+  the time from the grant to the release or expiry of the lease. **Turnaround**
+  is the time from the request to that end. **Provisioning** and **Boot** are the
+  durations of creating and starting devices in the window. Each shows its median
+  (`p50`), `p95` and longest, and how many samples it has; `-` or "no samples"
+  where there are none.
+- **Slots** is how many devices were running or reserved against the most the
+  host allows: the highest value and the average over time. **RAM** appears when
+  the host keeps a RAM budget. **Queue** is how many requests were waiting. Where
+  the history has nothing before the first record in the window, that stretch of
+  time is left out of the figures rather than counted as zero.
+- **Incidents** count devices quarantined, devices recovered after a crash,
+  devices recovered from quarantine, and devices lost (a recovery that failed, or
+  a quarantined device given up on). **Errors** counts failures that carry no
+  reason of their own among the rejections: purges that failed and component
+  installs that failed.
+- A requester that is a token shows the token's label beside its id.
+
+The window is widened to whole steps of the time series `--json` carries, which
+is 1 minute for a window of a few hours and grows to 1 day for 90 days; the
+window in the answer is the widened one.
+
+Against a **gateway** the totals are the fleet's and there is a row for each
+worker, with the grants, hold times and device figures of that worker. Requests,
+waits and rejections come from the gateway's own queue; the queue figure is the
+fleet queue's. A worker's own `simlock stats` covers that worker only: its row
+is itself, and a request that arrived through a gateway shows under the
+requester id the gateway gave it.
+
+If the history does not reach back to the start of the window (a new daemon, or
+older events deleted by retention), the figures cover what it does hold and say
+so:
+
+```
+Usage from 2026-09-05T12:00:00.000Z to 2026-10-05T12:00:00.000Z
+Figures cover from 2026-10-05T11:59:00.000Z: the history does not reach back to the start of the window.
+```
+
+In `--json` that is `partial: true` and `coversFrom`. If the window ends before
+the oldest event the history holds, there is nothing to show: the command fails
+with `HISTORY_NOT_KEPT` (exit 12), and the message names the time the history
+reaches back to. A daemon with no history at all has nothing to refuse and
+answers with zeros.
+
+`stats` needs the daemon, and the admin credential (see
+[Admin credential resolution](#admin-credential-resolution)).
 
 ## `simlock daemon <start|stop|status|logs [--follow]>`
 
