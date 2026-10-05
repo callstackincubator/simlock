@@ -10,8 +10,8 @@
 // "n findings" instead of "b blocking, k notes"; all its findings count as raised. Then this week's rejected findings, its handoffs, and the PRs
 // waiting on hardware, for someone to read.
 //
-// GitHub is read through REST only: a cloud session's GitHub proxy serves a fixed set of GraphQL
-// queries, and `gh pr list --json` is GraphQL. --input reads the same data from a file instead:
+// GitHub is read through repo-scoped REST only: a cloud session's GitHub proxy serves a fixed set
+// of GraphQL queries (`gh pr list --json` is GraphQL) and refuses unscoped endpoints like search. --input reads the same data from a file instead:
 // { now, prs: [{ number, title, mergedAt, body }], handoffs: [{ issue, createdAt, body }],
 //   needsHardware: [{ number, title }] }.
 import { execFileSync } from "node:child_process";
@@ -60,17 +60,7 @@ function ghJson(args) {
 function fetchFromGitHub(now, weekCount) {
   const repo = repository();
   const since = new Date(now.getTime() - weekCount * WEEK_MS);
-  const day = since.toISOString().slice(0, 10);
-  const prs = ghJson([
-    "search/issues",
-    "-f",
-    `q=repo:${repo} is:pr is:merged merged:>=${day}`,
-    "-f",
-    "per_page=100",
-    "--paginate",
-    "--jq",
-    ".items[] | {number, title, body, mergedAt: .pull_request.merged_at} | @json",
-  ]);
+  const prs = mergedSince(repo, since);
   const handoffs = ghJson([
     `repos/${repo}/issues/comments`,
     "-f",
@@ -83,13 +73,52 @@ function fetchFromGitHub(now, weekCount) {
       ' | {issue: (.issue_url | split("/") | last | tonumber), createdAt: .created_at, body} | @json',
   ]);
   const needsHardware = ghJson([
-    "search/issues",
+    `repos/${repo}/issues`,
     "-f",
-    `q=repo:${repo} is:pr is:open label:needs-hardware`,
+    "state=open",
+    "-f",
+    "labels=needs-hardware",
+    "-f",
+    "per_page=100",
+    "--paginate",
     "--jq",
-    ".items[] | {number, title} | @json",
+    ".[] | select(.pull_request) | {number, title} | @json",
   ]);
   return { now: now.toISOString(), prs, handoffs, needsHardware };
+}
+
+/**
+ * PRs merged at or after `since`. Only repo-scoped endpoints: a cloud session's GitHub proxy
+ * refuses `search/issues`. Closed PRs come newest-updated first, and a PR merged in the window was
+ * updated in it too, so paging stops at the first page that reaches past `since`. Newest merge first.
+ */
+function mergedSince(repo, since) {
+  const prs = [];
+  for (let page = 1; ; page++) {
+    const batch = ghJson([
+      `repos/${repo}/pulls`,
+      "-f",
+      "state=closed",
+      "-f",
+      "sort=updated",
+      "-f",
+      "direction=desc",
+      "-f",
+      "per_page=100",
+      "-f",
+      `page=${page}`,
+      "--jq",
+      ".[] | {number, title, body, mergedAt: .merged_at, updatedAt: .updated_at} | @json",
+    ]);
+    for (const pr of batch) {
+      if (pr.mergedAt !== null && new Date(pr.mergedAt) >= since) {
+        prs.push({ number: pr.number, title: pr.title, body: pr.body, mergedAt: pr.mergedAt });
+      }
+    }
+    if (batch.length < 100 || new Date(batch[batch.length - 1].updatedAt) < since) {
+      return prs.sort((a, b) => b.mergedAt.localeCompare(a.mergedAt));
+    }
+  }
 }
 
 /** What one PR's `## Review` section says, or null when it has no counts line. */
