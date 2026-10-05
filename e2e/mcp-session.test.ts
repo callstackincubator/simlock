@@ -202,6 +202,25 @@ describe("MCP session semantics", () => {
     }
   });
 
+  it("lease_simulator refuses a malformed osVersion range as BAD_REQUEST naming the accepted forms", async () => {
+    const env = await withDaemon({
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "range-agent" } });
+
+    try {
+      const result = await mcp.client.callTool({
+        name: "lease_simulator",
+        arguments: { model: "iPhone 16", osVersion: "^18", platform: "ios" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("18 - 26");
+    } finally {
+      await mcp.close();
+    }
+  });
+
   it("lease_simulator accepts a class or only a platform and grants a device naming its model, and refuses a class beside a model", async () => {
     const env = await withDaemon({
       driverScript: {

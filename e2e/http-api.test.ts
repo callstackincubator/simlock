@@ -309,6 +309,39 @@ describe("HTTP API", () => {
     await env.cli(["release", lease?.id ?? ""]);
   });
 
+  it("POST /v1/lease-requests refuses a malformed os range as BAD_REQUEST naming the accepted forms", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
+      secret: string;
+    };
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections" },
+    );
+
+    const response = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ device: "iPhone 16", os: "^18", platform: "ios" }),
+      headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(400);
+    const { error } = (await response.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe("BAD_REQUEST");
+    expect(error.message).toContain("18 - 26");
+  });
+
   it("POST /v1/lease-requests takes a class, or only a platform, and refuses a device beside a class", async () => {
     const port = await reservePort();
     const env = await withDaemon({

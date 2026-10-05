@@ -853,6 +853,24 @@ describe("GatewayDispatcher", () => {
       },
     );
 
+    it("answers a lease.request whose osVersion is a range BAD_REQUEST, as a gateway does not route OS ranges yet", async () => {
+      const { directory, dispatcher } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", osVersion: ">=18", platform: "ios" },
+          session({ role: "agent" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("does not route OS ranges yet"),
+      });
+      expect(client.lastRequestLeaseInput).toBeUndefined();
+    });
+
     it("forwards a lease.request's image tag to the worker unchanged", async () => {
       const { directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
