@@ -569,6 +569,7 @@ describe("aggregateCatalog", () => {
         ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
+        modelClasses: {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
         models,
         platform: "android" as const,

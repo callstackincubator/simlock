@@ -33,7 +33,7 @@ import {
   UnsupportedRequestOptionError,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
-import type { DeviceMode, DeviceSpec } from "../../core/index.js";
+import type { DeviceClass, DeviceMode, DeviceSpec } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -255,6 +255,18 @@ type SlimApplyOutcome =
     }
   | { readonly kind: "failed"; readonly detail: string };
 
+/**
+ * ADR 0015 §3: which simctl product family is which device class. A family not listed here has
+ * no class, and its models stay in the catalog without one.
+ */
+const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string, DeviceClass> = new Map([
+  ["iPhone", "phone"],
+  ["iPad", "tablet"],
+  ["Apple Watch", "watch"],
+  ["Apple TV", "tv"],
+  ["Apple Vision", "vision"],
+]);
+
 interface DeviceType {
   readonly identifier: string;
   readonly name: string;
@@ -262,6 +274,8 @@ interface DeviceType {
   readonly minRuntimeVersion: number;
   /** Same encoding; `UNBOUNDED_VERSION` means "no upper bound". */
   readonly maxRuntimeVersion: number;
+  /** simctl's `productFamily` ("iPhone", "iPad", ...), absent when simctl names none. */
+  readonly productFamily: string | undefined;
 }
 
 interface Runtime {
@@ -1274,6 +1288,15 @@ export class IosSimctlDriver implements Driver {
       // so two device types that differ only in letter case both list the first one's runtimes.
       // A device type answers to its name only, in any letter case (`findDeviceType`).
       modelAliases: {},
+      modelClasses: Object.fromEntries(
+        catalog.deviceTypes.flatMap((deviceType) => {
+          const deviceClass =
+            deviceType.productFamily === undefined
+              ? undefined
+              : PRODUCT_FAMILY_CLASSES.get(deviceType.productFamily);
+          return deviceClass === undefined ? [] : [[deviceType.name, deviceClass]];
+        }),
+      ),
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, pairedVersions(catalog, findDeviceType(catalog, model))]),
       ),
@@ -2008,6 +2031,7 @@ function parseDeviceType(value: unknown): readonly DeviceType[] {
       maxRuntimeVersion: versionIntOr(value.maxRuntimeVersion, UNBOUNDED_VERSION),
       minRuntimeVersion: versionIntOr(value.minRuntimeVersion, 0),
       name: value.name,
+      productFamily: typeof value.productFamily === "string" ? value.productFamily : undefined,
     },
   ];
 }

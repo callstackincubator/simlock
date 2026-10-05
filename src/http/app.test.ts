@@ -238,6 +238,7 @@ describe("GET /v1/status, /v1/catalog", () => {
         platforms: [
           {
             defaultRuntime: "26.5",
+            modelClasses: { "iPhone 17 Pro": "phone" },
             models: ["iPhone 17 Pro"],
             platform: "ios",
             runtimes: ["26.5"],
@@ -248,7 +249,13 @@ describe("GET /v1/status, /v1/catalog", () => {
     const response = await app.request("/v1/catalog?platform=ios", { headers: agentAuth });
     expect(await response.json()).toEqual({
       platforms: [
-        { defaultRuntime: "26.5", models: ["iPhone 17 Pro"], platform: "ios", runtimes: ["26.5"] },
+        {
+          defaultRuntime: "26.5",
+          modelClasses: { "iPhone 17 Pro": "phone" },
+          models: ["iPhone 17 Pro"],
+          platform: "ios",
+          runtimes: ["26.5"],
+        },
       ],
     });
   });

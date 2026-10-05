@@ -242,7 +242,8 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 //    runtimes: ["18.4", "26.0"],
 //    defaultRuntime: "26.0",
 //    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
-//    modelAliases: {} }]
+//    modelAliases: {},
+//    modelClasses: { "iPhone 16": "phone", "iPhone XS": "phone" } }]
 ```
 
 - `models` and `runtimes` are what is installed. A model and a runtime that
@@ -255,6 +256,9 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
   it, in any letter case. Only models with another name appear. On Android
   a built-in profile's AVD id is one (`{ "Pixel 8": ["pixel_8"] }`); iOS
   has none.
+- `modelClasses` maps a model to its class, one of `"phone"`, `"tablet"`,
+  `"watch"`, `"tv"`, `"vision"`, `"auto"` or `"desktop"`, when its tooling
+  reports one. A model with no entry is still listed and leasable by name.
 - `images` is on Android entries only: every installed system image as
   `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
   image whose ABI the host cannot run natively is listed too.
@@ -275,7 +279,8 @@ model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
 runtime. The gateway sends a request only to a worker that pairs the model
 with the runtime. `modelAliases` and `images` are the unions of each
-worker's own. A model is in `customModels` when any worker that lists it
+worker's own, and so is `modelClasses`: when two workers class a model
+differently, the worker with the smallest id wins. A model is in `customModels` when any worker that lists it
 marks it custom; each worker's own list is in its catalog on
 `listWorkers()` from the admin client. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.

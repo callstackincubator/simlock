@@ -1162,7 +1162,7 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [{ customModels, modelAliases, models }, images] = await Promise.all([
+    const [{ customModels, modelAliases, modelClasses, models }, images] = await Promise.all([
       this.#deviceProfiles.catalog(),
       this.#installedImages(),
     ]);
@@ -1175,6 +1175,7 @@ export class AndroidDriver implements Driver {
         .map((image) => ({ abi: image.abi, runtime: image.apiLevel, tag: image.tag }))
         .sort(compareCatalogImages),
       modelAliases,
+      modelClasses,
       modelRuntimes: Object.fromEntries(models.map((model) => [model, [...runtimes]])),
       models: [...models],
       runtimes,

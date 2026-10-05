@@ -14,7 +14,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /**
- * The range this contract's daemon speaks. Both ends are 11, and every move that got it there
+ * The range this contract's daemon speaks. Both ends are 12, and every move that got it there
  * was breaking with no shim kept behind them, which is exactly when ADR 0003 §6's honesty
  * rule says a range must *not* widen: ADR 0004 removed `lease.heartbeat` and `mode` from the
  * wire (taking it to 4), and ADR 0005 adds `device.exec` and its `output` push family, a
@@ -29,7 +29,7 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * workers, so a worker without it must be `incompatible` rather than fail in the middle of a
  * relay. ADR 0014 gives every event envelope an `id` (taking it to 10): a worker's pushed events
  * without one would fail the gateway's schema, so a worker on 9 is `incompatible` instead. ADR 0009 §7 makes `atRamBudget` a required field of each platform's `status.get`
- * capacity (taking it to 11), which a gateway routing on it depends on. It only ever widens once a second version is actually kept alive side by side with the
+ * capacity (taking it to 11), which a gateway routing on it depends on. ADR 0015 §3 makes `modelClasses` a required field of each platform's catalog (taking it to 12): a gateway reading a worker's catalog would fail its schema without it, so a worker on 11 is `incompatible`. It only ever widens once a second version is actually kept alive side by side with the
  * first, which nothing here does.
  *
  * A client from before any of those changes simply does not overlap this daemon, and `hello`
@@ -42,9 +42,9 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
  * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
  * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10), and so is one on 7
- * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), and one on 10 (ADR 0009 §7).
+ * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), and one on 11 (ADR 0015 §3).
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 11, max: 11 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 12, max: 12 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the

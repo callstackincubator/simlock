@@ -523,7 +523,13 @@ describe("operation input/output round trips", () => {
   });
 
   it("catalog.get rejects a platform entry without modelRuntimes", () => {
-    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"], modelAliases: {} };
+    const entry = {
+      platform: "ios",
+      models: ["iPhone 17"],
+      runtimes: ["26.0"],
+      modelAliases: {},
+      modelClasses: {},
+    };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
       /modelRuntimes/,
     );
@@ -540,7 +546,6 @@ describe("operation input/output round trips", () => {
       models: ["iPhone 17"],
       runtimes: ["26.0"],
       modelAliases: {},
-      modelClasses: {},
       modelRuntimes: { "iPhone 17": ["26.0"] },
     };
     const parse = (modelClasses?: unknown) =>
@@ -561,6 +566,7 @@ describe("operation input/output round trips", () => {
       platform: "android",
       models: ["Pixel 8"],
       runtimes: ["35"],
+      modelClasses: {},
       modelRuntimes: { "Pixel 8": ["35"] },
     };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(

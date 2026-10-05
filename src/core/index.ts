@@ -11,6 +11,7 @@ export {
   redactConfig,
 } from "./config.js";
 export {
+  type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,

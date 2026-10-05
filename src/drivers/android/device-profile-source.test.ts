@@ -421,6 +421,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: ["My Custom Phone"],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
       models: ["Pixel 8", "My Custom Phone"],
     });
   });
@@ -441,6 +442,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: [],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "Pixel 8": "phone", "Pixel 8 Copy": "phone" },
       models: ["Pixel 8", "Pixel 8 Copy"],
     });
   });
@@ -476,6 +478,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: ["My Custom Phone"],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
       models: ["Pixel 8", "My Custom Phone"],
     });
   });
@@ -591,6 +594,7 @@ describe("DeviceProfileRegistry", () => {
       await expect(registry.catalog()).resolves.toEqual({
         customModels: [],
         modelAliases: { "Pixel 8": ["pixel_8"] },
+        modelClasses: { "Pixel 8": "phone" },
         models: ["Pixel 8"],
       });
       expect(diagnostics).toEqual([
