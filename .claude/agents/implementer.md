@@ -83,10 +83,22 @@ as you go, so a resumed run sees it.
 
 Implement the smallest change that turns the next test green. Each commit
 lowers the failing count and says so in its body: `3 failing -> 1 failing`.
-Run `pnpm typecheck`, `pnpm lint` and the test files you touched before
-each commit; the hooks run the rest (format and lint on commit, `fallow` on
-push). Never pass `--no-verify`. Push once per step, not after every commit:
-the pre-push hook audits the whole branch.
+
+**You run tests, and only tests; the hooks run every other check when its
+time comes.** Two commands, nothing else:
+
+```bash
+pnpm test:changed                # unit tests that import what this branch changed
+pnpm test:e2e <e2e files>        # only the e2e files you added or edited
+```
+
+Never run `pnpm check`, `pnpm test`, `pnpm typecheck`, `pnpm lint`,
+`pnpm format:check`, `pnpm mutate`, the whole e2e suite or the console lane.
+Commit runs format, lint and typecheck. Push runs Fallow, the e2e typecheck
+and `pnpm mutate` on the lines this branch changed; it takes minutes, so run
+`git push` in the background and read its output when it ends. CI runs the
+full suite on every push. Never pass `--no-verify`. Push once per step, not
+after every commit.
 
 Build what `always-in-scope.md` lists as you go: both `EVENTS.md` files for
 a new or changed event; a search of `README.md`, `docs/` and every
@@ -140,15 +152,9 @@ tests of every surface that publishes it (MCP `tools/list`, HTTP error
 bodies, CLI help) — a refinement can empty a published schema while every
 unit test stays green.
 
-Then run the suite once:
-
-```bash
-pnpm check     # typecheck, lint, format, unit, fast e2e
-pnpm mutate    # mutants on the lines this branch changed
-```
-
-`pnpm check` must pass. Run it once per round, after the last change, and
-never start a second one while one runs. A failing test you did not touch:
+Then `pnpm test:changed` and the e2e files you touched must pass, and you
+push. A failing test you did not touch, locally or in CI
+(`gh pr checks <M>`, then `gh run view <id> --log-failed`):
 if an open `flaky-test` issue names it (`gh issue list --label flaky-test
 --search "<title>"`), list it under Flaky and move on. Otherwise apply
 testing rule 5 to that one file: run `pnpm vitest run <file>` in a worktree
@@ -159,8 +165,8 @@ move on. If it never fails there, it is yours. Do not stash your work or
 re-run the whole suite or the whole e2e project to decide. Never skip,
 disable or loosen a test.
 
-Every mutant `pnpm mutate` reports alive is a line you can change or delete
-with a green suite. Write the test that kills it, or delete the line if it
+The push output lists every mutant left alive. Each is a line you can
+change or delete with a green suite. Write the test that kills it, or delete the line if it
 does nothing. A mutant that cannot be killed because it changes nothing
 observable (an equivalent mutant) goes in the report with the reason.
 
@@ -187,7 +193,7 @@ End with exactly this block, nothing after it:
 Issue: #N  Branch: <kind>/<N>  PR: #M (draft)
 Tests: k of n spec tests green (red commit <short sha>)
 Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
-Check: pass | fail (<what failed>)
+Run: test:changed pass | fail (<what failed>); CI <pass | fail | running>
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
 Hardware: <Done when lines that need real devices, or "none">
 Flaky: <test title — #issue per line, or "none">
