@@ -48,6 +48,29 @@ async function stats(
   return result.json as Usage;
 }
 
+/**
+ * The figures once the window has closed over the newest event: the window is rounded down to the
+ * series bucket, so what happened in the minute now running is counted when the minute is over.
+ */
+async function settledStats(
+  env: {
+    cli: (args: string[]) => Promise<{ code: number | null; json?: unknown }>;
+    events: () => Promise<readonly RecordedEvent[]>;
+  },
+  until: (usage: Usage) => boolean = () => true,
+): Promise<Usage> {
+  let usage: Usage | undefined;
+  await waitFor(
+    async () => {
+      const newest = Math.max(...(await env.events()).map((event) => event.timestamp));
+      usage = await stats(env);
+      return usage.window.to >= newest && until(usage);
+    },
+    { interval: 1_000, label: "the window closed over the newest event", timeout: 90_000 },
+  );
+  return usage as Usage;
+}
+
 function countBy(values: readonly string[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
@@ -93,7 +116,7 @@ describe("simlock stats", () => {
       (await env.cli(["release", (second.json as { lease: { id: string } }).lease.id])).code,
     ).toBe(0);
 
-    const usage = await stats(env);
+    const usage = await settledStats(env);
     const everything = await env.events();
     const history = inWindow(everything, usage.window);
     const named = (name: string) => history.filter((event) => event.event === name);
@@ -161,11 +184,11 @@ describe("simlock stats", () => {
     expect(
       (await env.cli(["release", (lease.json as { lease: { id: string } }).lease.id])).code,
     ).toBe(0);
-    const before = await stats(env);
+    const before = await settledStats(env);
     expect(before.totals.granted).toBe(1);
 
     await env.restartDaemon();
-    const after = await stats(env);
+    const after = await settledStats(env);
 
     expect(after.totals).toMatchObject({
       boot: before.totals.boot,
@@ -219,19 +242,16 @@ describe("simlock stats", () => {
     }
 
     let fleet: Usage | undefined;
-    await waitFor(
-      async () => {
-        fleet = await stats(gateway);
-        return fleet.totals.granted === 2 && fleet.workers.length === 2;
-      },
-      { label: "the gateway's figures show both grants", timeout: 30_000 },
+    fleet = await settledStats(
+      gateway,
+      (usage) => usage.totals.granted === 2 && usage.workers.length === 2,
     );
     expect(fleet?.totals.requests).toBe(2);
     expect(fleet?.workers.map((worker) => worker.label).sort()).toEqual(["worker-a", "worker-b"]);
     expect(fleet?.workers.map((worker) => worker.granted)).toEqual([1, 1]);
 
     for (const worker of [workerA, workerB]) {
-      const own = await stats(worker);
+      const own = await settledStats(worker);
       expect(own.workers).toHaveLength(1);
       expect(own.totals.granted).toBe(1);
       expect(own.workers[0]?.granted).toBe(1);
