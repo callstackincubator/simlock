@@ -34,7 +34,7 @@ export function selectManagedVictim(
     .sort(compareLeastRecentlyUsed)[0];
 }
 
-export function compareLeastRecentlyUsed(left: DeviceRecord, right: DeviceRecord): number {
+function compareLeastRecentlyUsed(left: DeviceRecord, right: DeviceRecord): number {
   return (
     (left.lastLeaseEndedAt ?? left.createdAt) - (right.lastLeaseEndedAt ?? right.createdAt) ||
     left.id.localeCompare(right.id)
