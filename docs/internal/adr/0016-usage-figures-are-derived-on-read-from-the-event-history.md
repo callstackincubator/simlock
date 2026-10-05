@@ -39,7 +39,8 @@ gateway's own fleet-queue events and the worker's relayed copies, with
 ### 1. The event history is the only source, and figures are computed when asked
 
 There is no metrics store and no counter in the lease path. One read
-operation, `usage.get`, takes a window, reads the events the history holds
+operation, `usage.get`, behind the `admin` role as `events.replay` is (ADR
+0006), takes a window, reads the events the history holds
 for it, and hands them to a pure function that returns the figures. The CLI,
 the HTTP API and the console all call that operation; none of them computes
 a figure of its own. The function is platform-agnostic and takes an array of
@@ -101,7 +102,10 @@ When the current file passes `rotateBytes` it rotates, and the rotated
 generations are numbered from `.1`, the newest, upward. After a rotation,
 every generation whose newest line is older than `retention` is deleted,
 then the oldest generations are deleted until the total fits `maxBytes`.
-Retention is judged per generation, so a line older than `retention` stays
+The same sweep runs once at daemon start, so a host that never fills a
+generation still drops old ones. `maxBytes` below twice `rotateBytes` is
+rejected at load, naming the key: the current file and one generation must
+fit. Retention is judged per generation, so a line older than `retention` stays
 while a newer line shares its generation. The current file is never
 deleted. The reader reads the current file first, then the generations
 newest to oldest, and sorts and deduplicates by id as it already does, so a
@@ -117,7 +121,9 @@ Every answer from `usage.get` carries the window it was asked for and
 history holds. When `coversFrom` is later than the window's start the answer
 is marked `partial`, and every surface shows that beside the figures. A
 window that ends before the oldest held event is refused with
-`HISTORY_NOT_KEPT`, naming the oldest time the history reaches. An empty
+`HISTORY_NOT_KEPT`: a `domain` error, CLI exit code 12 and HTTP status 422
+like the other "what you asked for is not there" codes, with details
+`{ oldestTs }`, the oldest time the history reaches. An empty
 history covers any window: nothing happened that was not recorded.
 
 ### 6. On a gateway, the figures are the fleet's, from the gateway's own history
@@ -136,11 +142,14 @@ from the worker that request went to, for its namespaced requester, at or
 after the dispatch, and carries the worker's reason. The gateway emits no
 rejection of its own for a request that failed on its worker.
 
-A fleet request is joined to its grant through `request.dispatched`: the
+A fleet request is joined to its outcome through `request.dispatched`: the
 gateway's request id names the worker and the requester, and the first
-relayed `lease.granted` from that worker for the namespaced requester at or
-after the dispatch is the grant. The core allows one open request per
-requester, so that match is unique.
+relayed `lease.granted` or `lease.rejected` from that worker for the
+namespaced requester at or after the dispatch, and before the gateway's
+next `request.dispatched` or `lease.requested` for the same requester, is
+that request's outcome. The core allows one open request per requester, so
+within those bounds the match is unique, and a request with no outcome in
+them is open.
 
 The answer has fleet totals and one entry per worker. A worker answers the
 same shape as a fleet of one (ADR 0012): totals, and one entry for itself.
@@ -179,15 +188,18 @@ re-buckets.
 - `usage.get` reads the whole retained history for a wide window; at the
   default cap that is a few hundred thousand lines, read once per call. The
   console refetches on events, so the daemon may compute often. The
-  handler memoises its last answer by window and newest event id, so a call
-  while nothing happened reads nothing, and the console's usage view
+  handler rounds the window down to the bucket width and memoises its last
+  answer by that rounded window and the newest event id, so a sliding
+  window asked for again inside one bucket, while nothing happened, reads
+  nothing; the answer's window is the rounded one, and the console's usage view
   refetches every 15 seconds and never more often. The per-request ledger
   is returned only when asked for, so the console never carries it. A
   stats read still runs on the daemon; "costs an agent nothing" is a claim
   about the lease path.
 - A worker's own `usage.get` after it joined a fleet shows requests with the
-  `gw:` prefix and `noWait`, with zero wait, since the gateway queued them.
-  The fleet view on the gateway is where their wait shows.
+  `gw:` prefix and `noWait`. Their wait on the worker is the boot or
+  creation time only, since the gateway queued them; the time in the fleet
+  queue shows on the gateway.
 - Both `EVENTS.md` files gain two events and two changed payloads;
   `CONFIGURATION.md` gains two keys; `CLI.md`, `HTTP-API.md` and
   `CONSOLE.md` gain the command, the route and the view.
