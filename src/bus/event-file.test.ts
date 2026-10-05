@@ -114,7 +114,7 @@ describe("EventHistory", () => {
     history({ bus: earlier, path, sink: earlierSink });
     const granted = earlier.emit(
       "lease.granted",
-      { leaseId: "l-1", deviceId: "d-1", requester: "agent" },
+      { leaseId: "l-1", deviceId: "d-1", requester: "agent", requestId: "req_1", source: "warm" },
       "leases",
     );
     earlierSink.close();

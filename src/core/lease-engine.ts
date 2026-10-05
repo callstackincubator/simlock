@@ -2,7 +2,13 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
 import type { CapacityDevice, RamBudget, RunningCapacity } from "./capacity/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
+import {
+  buildCapacityFigures,
+  CapacityCoordinator,
+  capacityDevices,
+  CapacityObserver,
+  createCapacityStrategy,
+} from "./capacity/index.js";
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
@@ -108,6 +114,7 @@ export class LeaseEngine {
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
   readonly #acquisition: LeaseAcquisitionCoordinator;
   readonly #capacity: CapacityCoordinator;
+  readonly #capacityObserver: CapacityObserver;
   readonly #claims = new DeviceOperationClaims();
   readonly #drivers: DriverCatalog;
   readonly #deviceLifecycle: ManagedDeviceLifecycle;
@@ -129,7 +136,13 @@ export class LeaseEngine {
     this.#decisions = options.decisions;
     this.#capacity = new CapacityCoordinator(
       createCapacityStrategy(options.config.capacity, options.systemStats),
+      () => this.#capacityObserver.changed(),
     );
+    this.#capacityObserver = new CapacityObserver({
+      eventBus: options.eventBus,
+      figures: () => buildCapacityFigures(options.registry.snapshot.devices, this),
+    });
+    options.registry.onCommit(() => this.#capacityObserver.changed());
     this.claimReader = this.#claims;
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
     this.#drivers = new DriverCatalog(options.drivers, {
@@ -169,10 +182,17 @@ export class LeaseEngine {
     this.#queue = new WaitQueue({
       clock: options.clock,
       idGenerator: options.idGenerator,
+      onDepthChange: (depth) =>
+        this.options.eventBus.emit("queue.changed", { depth }, "wait-queue"),
       onTimeout: (waiter) => {
         this.options.eventBus.emit(
           "lease.rejected",
-          { requestSpec: waiter.request, reason: "timeout" },
+          {
+            requestId: waiter.id,
+            requester: waiter.options.requesterId,
+            requestSpec: waiter.request,
+            reason: "timeout",
+          },
           "wait-queue",
         );
         this.#acquisition.kick();
@@ -191,6 +211,7 @@ export class LeaseEngine {
       defaultModes: options.defaultModes ?? {},
       drivers: this.#drivers,
       eventBus: options.eventBus,
+      idGenerator: options.idGenerator,
       leases: this.#leases,
       lifecycle: this.#deviceLifecycle,
       modelPreferences: options.modelPreferences ?? {},
@@ -391,6 +412,9 @@ export class LeaseEngine {
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
+    // Every run begins with a step in both: what the figures and the queue depth are now.
+    this.#capacityObserver.start();
+    this.options.eventBus.emit("queue.changed", { depth: this.#queue.depth }, "wait-queue");
   }
 
   /** Every request waiting for a device on this host, for `list.get` and `status.get`. */
