@@ -47,7 +47,7 @@
     "test:unit": "vitest run --project unit",
     "test:changed": "vitest run --project unit --changed origin/main",
     "test:e2e": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --tags-filter='!slow'",
-    "test:e2e:slow": "pnpm run build && pnpm run build:e2e && vitest run --project e2e",
+    "test:e2e:slow": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --no-file-parallelism",
     "test:console": "pnpm run build && pnpm run build:e2e && playwright test",
     "typecheck": "tsc --noEmit && tsc -p ui/tsconfig.json",
     "typecheck:e2e": "pnpm run build && tsc -p e2e/tsconfig.typecheck.json",
