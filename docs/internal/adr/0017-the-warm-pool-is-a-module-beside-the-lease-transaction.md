@@ -8,9 +8,12 @@
   0002](0002-opt-in-slim-ios-simulators.md) §5: the pool absorbs the slim
   cost by policy, not by accident of a release. Leaves [ADR
   0007](0007-a-lease-request-chooses-the-device-mode.md) §6 (pool identity
-  is the spec's mode) and [ADR
-  0015](0015-a-lease-request-is-a-set-of-constraints.md) §6 (`fits` is the
-  one place a requirement meets a device) as they are and builds on both.
+  is the spec's mode) as it is. Narrows [ADR
+  0015](0015-a-lease-request-is-a-set-of-constraints.md) §6: `fits` stays
+  the one place a requirement meets a device, but the warm pool's keep
+  decision now uses it, with the pool-mode test, instead of `sameSpec`;
+  `sameSpec` still names pool identity for reclaim and the idempotency
+  check.
 - **Depends on:** [ADR 0015](0015-a-lease-request-is-a-set-of-constraints.md)
   for `fits`; the capacity strategies (ARCHITECTURE.md, "Running capacity")
   for every limit the pool asks about; architecture rules 14, 15 and 16.
@@ -95,8 +98,10 @@ No component of the lease transaction imports, calls or holds a port to the
 warm pool (architecture rule 15). The composition root (`LeaseEngine`) wires
 the pool with: a read-only registry snapshot, the capacity coordinator's
 questions and reservations, the acquisition coordinator's read-only
-`waitingRequests()`, the device lifecycle and provisioner, the claims, the
-bus, the clock, and a `kick` into acquisition.
+`waitingRequests()`, the `DeviceModeReader` the dispatcher already gets
+(so the platform's default mode is still resolved in one place, ADR 0007
+§2), the device lifecycle and provisioner, the claims, the bus, the clock,
+and a `kick` into acquisition.
 
 The pool reacts to committed facts on the bus, as the reaper does:
 `daemon.started` (which fires after startup convergence), `device.reclaimed`,
@@ -125,7 +130,9 @@ candidate boot or provision the pool asks the capacity coordinator the same
 question the planner asks (`tryReserveRewarm`, `tryReserveProvisioning`),
 so a reclaimed slim iOS device still needs room at full size for its boot
 and slim pass. The pool counts per platform and mode, because a slim warm
-device cannot serve a full request (ADR 0007 §6).
+device cannot serve a full request (ADR 0007 §6). The global budget
+subtracts the sum of the per-platform reserves from the global running
+limit.
 
 The startup converger's excess-ready shutdown is deleted. The pool's first
 pass, on `daemon.started`, shuts down whatever is over budget, by LRU, and
@@ -143,19 +150,25 @@ downloaded (safety rule 4).
 
 In order, within one pass:
 
+A device **serves** a waiting request when it fits the request's
+requirement (ADR 0015 §5) and its spec's mode is the mode the request
+resolved to: the same two tests the planner applies before it grants, so a
+slim device never serves a `full` request and a full device never serves a
+`slim` one.
+
 1. **Over budget.** Shut down idle ready devices, least recently used
-   first, until the budget holds. A device that fits a waiting request is
+   first, until the budget holds. A device that serves a waiting request is
    never chosen here.
 2. **Keep.** A device the reclaim left `shutdown` (iOS) is booted back when
-   it fits a waiting request, or when a target of its kind is short, or
+   it serves a waiting request, or when a target of its kind is short, or
    when the budget has room and it was released less than
    `idle.shutdownAfterMs` ago. The boot holds a rewarm reservation. A device
    the reclaim left `ready` (Android) stays as it is unless step 1 took it.
 3. **Targets.** For each target below its count, boot a shut-down device of
    that kind if one exists, otherwise create one, up to the budget and the
    boot cap. A target's kind is a platform, a model, an OS version (the
-   newest installed when absent), and a mode (the platform's default mode
-   when absent, resolved where the acquisition coordinator resolves it).
+   newest installed when absent), and a mode (when absent, the pool mode
+   that serves a request naming none, asked of the `DeviceModeReader`).
    Under `lease.identity: fresh` the created device has never served a
    lease, serves one, is deleted by the reclaim coordinator, and the next
    pass creates the next.
@@ -171,16 +184,17 @@ down every idle ready device, targets are ignored, and the reserve has no
 effect. Android still purges through its snapshot restore; the pass shuts
 the emulator down afterwards.
 
-### 6. A request waits for a boot that fits it
+### 6. A request waits for a device on its way that serves it
 
-The planner's rule gains one case, about claims and not about the pool: a
-device that fits the request and is under a `boot` claim is a reason to
-`wait`, not to provision. The pool's boots and the planner's own
-`boot-shutdown` both take that claim kind, so a request for a device the
-pool is booting is granted the moment the boot settles, and a second
-request for the same model behind the first is treated as it is today.
-Claims of other kinds (eviction, cleanup, nuke, reclaim) keep making a
-device invisible.
+The planner's rule gains one case, about device state and claims and not
+about the pool: a device that serves the request and is either under a
+`boot` claim or in `provisioning` is a reason to `wait`, not to provision
+another. The pool's boots and creations and the planner's own
+`boot-shutdown` and `provision` all leave that trace, so a request for a
+device the pool is booting, or creating for a target, is granted the moment
+it is ready, and a second request for the same model behind the first is
+treated as it is today. Claims of other kinds (eviction, cleanup, nuke,
+reclaim) keep making a device invisible.
 
 ### 7. What the operator sees
 
@@ -229,8 +243,10 @@ does not list; both load and are reported by doctor.
 ## Consequences
 
 - Warmth has one owner and one rule. #350 is fixed by construction: the
-  keep decision uses `fits` over the waiting requests, in the one module
-  that decides warmth.
+  keep decision asks whether the device serves a waiting request, with
+  `fits` and the pool mode, in the one module that decides warmth. ADR 0015
+  §6's "the warm pool" clause is narrowed to reclaim and the idempotency
+  check.
 - The first lease of a targeted kind is a warm hit, including under `fresh`
   identity. A targeted device holds RAM and disk for as long as it is
   configured; status shows it.
@@ -240,9 +256,9 @@ does not list; both load and are reported by doctor.
   cannot break a grant or a release, and the policy's tests run on a view
   with no engine.
 - The startup converger loses one step and one copy of the budget rule.
-- A request for a device under a `boot` claim waits instead of
-  provisioning. The wait is bounded by the boot's own timeout and the
-  request's own deadline, as today.
+- A request for a device under a `boot` claim or in `provisioning` that
+  serves it waits instead of creating another. The wait is bounded by the
+  boot's own timeout and the request's own deadline, as today.
 - The reaper reads one more thing from its view, the targeted set. With the
   pool off it is empty.
 - Status, doctor and the catalog of events change, each with its docs. Two
