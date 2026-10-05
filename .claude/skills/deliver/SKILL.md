@@ -33,18 +33,40 @@ its block, or with narration in place of it, is not a result: start the
 same agent again with the same prompt plus "the last run ended without its
 report block; report on the work already done".
 
-**Progress.** The maintainer may be watching. Each time you start or
-receive a stage, write one line in the session, and keep a table of what is
-in flight:
+**Progress.** The maintainer may be watching. Keep them oriented two ways.
+
+The session title says what the run is on. Rename the session with
+`mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it
+with ToolSearch first) when the run starts, whenever the task in flight
+changes, and at the end, not at every stage. If the tool is missing or the
+rename is declined, carry on without it: the title is never a reason to
+stop or ask.
 
 ```
-#362 implement → done, PR #370, 5/5 green. Starting review.
-| Issue | PR | Stage | Since |
+[Delivery #U, X/Z] <feature title>        one task in flight
+[Delivery #U, X+Y/Z] <feature title>      two tasks in flight
+[Delivery #N] <issue title>               a single task, bug or feature
+[Delivery #U, done M/Z, P parked] <feature title>   end of run
 ```
 
-When asked how it is going, answer from that table and the PR status lines
-(step 3); to look inside a running agent, ask it with SendMessage rather
-than waiting for it to finish.
+`#U` is the feature, `Z` its number of tasks, and `X` a task's position in
+the dependency order you walk (step 4), not a count of merged tasks.
+
+The transcript is the history. Every time a stage starts or ends, print one
+status line, nothing else around it:
+
+```
+HH:MM #<task> (X/Z) <stage> → <started | outcome in a few words>
+```
+
+Stages are `spec`, `implement`, `implement fix`, `review r<n>`, `hardware`,
+`gate` and `park`. Outcomes are facts from the report: `done, PR #380, 6/6
+green`, `2 fixes`, `pass`, `merged`, `parked: <reason>`. Drop `(X/Z)` for a
+single issue. Take the time from `date +%H:%M`.
+
+When asked how it is going, answer from the PR status lines (step 3) and
+the status lines so far; to look inside a running agent, ask it with
+SendMessage rather than waiting for it to finish.
 
 **Ask once, then run.** A person in this session is asked at most one
 question per run up front: whether the slow lane may run for every PR of
