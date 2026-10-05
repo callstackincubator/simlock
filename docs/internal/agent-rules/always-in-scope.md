@@ -37,7 +37,11 @@ spec says otherwise in its own words, the spec wins.
 8. **Wire input bounded.** Anything new that arrives over the wire is
    validated for shape and bounds before it is used or stored (safety rule
    10).
-9. **Fallow stays green.** A new file that nothing imports statically — an
+9. **A module keeps its surface.** A new component that is a directory
+   exposes what others use from its `index.ts`, nothing outside reaches past
+   it (architecture rule 14), and its row in `docs/internal/COMPONENTS.md`
+   is added or updated with the change (architecture rule 13).
+10. **Fallow stays green.** A new file that nothing imports statically — an
    entry point, a dynamically loaded module, a config file only a tool reads
    — gets its entry in `.fallowrc.json`, and so does a new dependency
    nothing imports. `main` takes no change whose Fallow check failed

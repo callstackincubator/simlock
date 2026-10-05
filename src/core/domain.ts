@@ -1,3 +1,4 @@
+import { type OsConstraint as RequestedOs, satisfies } from "../contract/os-range.js";
 import type { DeviceRequest } from "./driver.js";
 
 export type Platform = "ios" | "android";
@@ -63,10 +64,11 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
 /**
  * The OS a requirement accepts (ADR 0015 §5). `exact` is one version, the one an exact request
  * resolves to or one the request named; `installed` is any runtime the catalog lists as installed,
- * which is what a class request with no OS accepts.
+ * which is what a class request with no OS accepts. A `range` is the request's own range, parsed
+ * by the contract's `os-range`, the one grammar.
  */
-export type OsConstraint =
-  | { readonly kind: "exact"; readonly version: string }
+export type OsRequirement =
+  | RequestedOs
   | { readonly kind: "installed"; readonly versions: readonly string[] };
 
 /**
@@ -79,7 +81,7 @@ export interface DeviceRequirement {
   readonly target:
     | { readonly kind: "model"; readonly model: string }
     | { readonly kind: "class"; readonly class: DeviceClass };
-  readonly osVersion: OsConstraint;
+  readonly osVersion: OsRequirement;
   readonly imageTag: string | undefined;
 }
 
@@ -126,13 +128,10 @@ function fitsTarget(
   }
 }
 
-function satisfiesOs(constraint: OsConstraint, osVersion: string): boolean {
-  switch (constraint.kind) {
-    case "exact":
-      return constraint.version === osVersion;
-    case "installed":
-      return constraint.versions.includes(osVersion);
-  }
+function satisfiesOs(constraint: OsRequirement, osVersion: string): boolean {
+  return constraint.kind === "installed"
+    ? constraint.versions.includes(osVersion)
+    : satisfies(osVersion, constraint);
 }
 
 /**

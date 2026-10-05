@@ -5,17 +5,17 @@
  * `LeaseRequestOptions` (`requesterId`, `ownerId`, `timeoutMs`, `noWait`, `allowDownload`,
  * `onProgress`, `ttlMs`) are already the fields a fleet request carries. This module only
  * narrows `WaitQueue`'s generic `Waiter`/`LeaseGrant` shapes to what the fleet actually produces
- * (a `ExactDeviceRequest` for the request, and a lease record that may additionally carry `worker`
+ * (a `DeviceRequest` for the request, and a lease record that may additionally carry `worker`
  * once it names a machine) and forwards every method through.
  *
- * `ExactDeviceRequest`/`DeviceRecord`/`LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive
+ * `DeviceRequest`/`DeviceRecord`/`LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive
  * type imports (`core/domain.js`, `core/driver.js`) -- see `boundary.test.ts`'s
  * `ALLOWED_CORE_IMPORTS` -- not a reach into the registry, capacity, or lifecycle engine ADR 0005
  * §33 keeps off limits.
  */
 import type { Clock, IdGenerator } from "../ports/index.js";
 import type { LeaseRecord } from "../core/domain.js";
-import type { ExactDeviceRequest } from "../core/driver.js";
+import type { DeviceRequest } from "../core/driver.js";
 import {
   WaitQueue,
   type LeaseProgress,
@@ -52,7 +52,7 @@ export interface FleetLeaseGrant {
 
 export interface FleetWaiter {
   readonly id: string;
-  readonly request: ExactDeviceRequest;
+  readonly request: DeviceRequest;
   readonly options: LeaseRequestOptions;
   readonly promise: Promise<FleetLeaseGrant>;
   readonly state: WaiterState;
@@ -122,7 +122,7 @@ export class FleetQueue {
     return asFleet(this.#queue.findPendingWaiter(requesterId));
   }
 
-  create(request: ExactDeviceRequest, options: LeaseRequestOptions, id?: string): FleetWaiter {
+  create(request: DeviceRequest, options: LeaseRequestOptions, id?: string): FleetWaiter {
     return asFleet(this.#queue.create(request, options, id));
   }
 

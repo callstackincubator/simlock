@@ -51,7 +51,9 @@ await client.requestLease({ platform: "ios", class: "tablet" });
 await client.requestLease({ platform: "android" }); // a phone
 ```
 
-Through a gateway, a request that names no `model` is a `BAD_REQUEST` for now.
+Through a gateway the same requests work: any worker that has something fitting
+serves one, a warm device first, and one nothing in the fleet can serve fails at
+once with the code a single machine gives.
 
 `requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
 mode the lease asks for. Without it the lease gets the default mode of the
@@ -66,14 +68,25 @@ device) is granted `"full"`, and a `"full"` request is never granted
 `"slim"`. A slim device lacks some system features — push notifications,
 Spotlight, StoreKit sheets, universal links, system pickers — so check it
 before treating such a failure as a bug. Every device in `getStatus()` and in
-an admin's `list({ kind: "devices" })` carries the same `mode`.
+an admin's `list({ kind: "devices" })` carries the same `mode`, and
+`servesDefaultMode`: `true` when a request with no `mode` would draw from the
+device's pool on that daemon (the default mode of the device's platform).
 
 On Android, `requestLease` also takes an optional `imageTag`: the system image
 type to create the device from, such as `"google_apis_playstore"`, as
 `getCatalog()` lists it under each image's `tag`. Without it Simlock picks the
 image itself (`google_apis` for the host's ABI when installed). With it the
 device comes from an installed image of that tag, and without `osVersion` from
-the newest API level that has one. A request with `imageTag` never downloads:
+the newest API level that has one.
+
+`osVersion` is an exact version (`"18.4"`) or a range: one or more of `>=`,
+`>`, `<=`, `<` followed by a version, joined by single spaces (`">=18 <26"`),
+or a hyphen range (`"18 - 26"`). A short version covers everything under it, so
+`">=18"` is 18.0 and newer. Anything written like a range but outside those forms (`^18`, `~18`, `18.x`, `*`, `||`) is `BAD_REQUEST`; any other string, such as `Baklava` or `34-ext12`, is an exact version. A range is served
+by an idle device whose OS satisfies it or by a new device on the newest
+installed runtime in it, and when none is installed it fails at once with
+`RUNTIME_MISSING`, whatever `allowDownload` says. Through a gateway a range is
+served by any worker with a paired runtime in it. A request with `imageTag` never downloads:
 when no image of that tag is installed for the API level it fails with
 `RUNTIME_MISSING`, whatever `allowDownload` says. On iOS it is a
 `BAD_REQUEST`, and so is a tag that is not 1 to 64 letters, digits, `_`, `.`

@@ -51,6 +51,7 @@ describe("the workers views", () => {
     const leased = {
       id: "dev_leased",
       mode: "full",
+      servesDefaultMode: true,
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       state: "leased",
     } as const;
@@ -117,6 +118,7 @@ describe("the workers views", () => {
     const provisioning = {
       id: "dev_new",
       mode: "full",
+      servesDefaultMode: true,
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       state: "provisioning",
       transitionAgeMs: 4_000,

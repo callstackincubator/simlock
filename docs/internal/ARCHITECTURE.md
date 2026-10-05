@@ -1,5 +1,9 @@
 # Architecture
 
+This file narrates the system: the why and the flows.
+[COMPONENTS.md](COMPONENTS.md) is the inventory beside it: one row per
+component, what it owns and what it leaves to others.
+
 ## Topology
 
 ```
@@ -269,8 +273,8 @@ relays that operation to workers, so a worker without it must be
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
 required capacity field, taking it to 11, and ADR 0015 §3 makes
 `modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
-`classDefaults` one too, taking it to 13. So the range both
-sides advertise is `{min: 13, max: 13}`, an older client and a current daemon simply
+`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15). So the range both
+sides advertise is `{min: 16, max: 16}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -655,10 +659,14 @@ The v1 policy (`warm-then-free`) is eight stages:
 2. `can-serve` (filter): drop workers whose catalog cannot serve the request
    (ADR 0009 §3, `routing/request-match.ts`). The model is the first entry of
    the worker's `models` whose name or `modelAliases` entry equals the
-   requested name, ignoring letter case. A named runtime must be in that
-   model's `modelRuntimes`; with none named the list must be non-empty. Only
-   installed runtimes count, so a download never makes a worker able to
-   serve;
+   requested name, ignoring letter case (`findCatalogModel`, the core's one
+   matcher). A class request (the class `requestedClass` gives, `phone` for
+   neither a model nor a class, ADR 0015 §8) matches when the catalog's
+   `modelClasses` puts any model in that class. Either way a model needs a
+   paired runtime in `modelRuntimes` that satisfies the request's OS
+   constraint (`os-range`, the contract's one grammar: an exact version or a
+   range); with none named the list must be non-empty. Only installed
+   runtimes count, so a download never makes a worker able to serve;
 3. `healthy` (filter): keep a worker whose health is `running`;
 4. `idle-queue` (filter): keep a worker whose own `queueDepth` is zero, since a
    worker with a local waiter refuses every `noWait` request (ADR 0005
@@ -666,8 +674,19 @@ The v1 policy (`warm-then-free`) is eight stages:
    not known to be healthy or idle, so it is dropped. Stages 3 and 4 drop a
    worker that is busy, not unable: its requests wait;
 5. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
-   matching the request, compared against the worker's own name for the
-   model — a **warm hit**, and a sub-second grant;
+   matching the request — a **warm hit**, and a sub-second grant. "Matching"
+   is the core's `fits` (ADR 0015 §6, §8) over a requirement built from the
+   worker's own catalog: its own name for an exact model, or the class with
+   the worker's `modelClasses` as `classOf`. The OS is the one requested or
+   the range requested; with none requested, an exact model needs the runtime
+   the worker would pick (the catalog's `defaultRuntime` when the model pairs
+   with it, otherwise its only paired runtime; none when several pair and no
+   default does) and a class accepts any installed runtime. The mode must
+   fit (ADR 0009 §6): `full` needs a device reporting `mode: "full"`, `slim` one
+   reporting `slim`, and a request naming none a device reporting
+   `servesDefaultMode`, which the worker computes in
+   `LeaseAcquisitionCoordinator#servesDefaultMode`, where it resolves the
+   default;
 6. `free-slot` (filter): keep a worker with a free running slot for the platform
    and globally, counting a running device that is not leased as free (the
    planner evicts it);
@@ -684,9 +703,12 @@ same function `tryReserveProvisioning` calls, so status and the planner cannot
 disagree.
 
 The same matcher gives the name the gateway forwards: the worker is sent its
-own name for the model, so it resolves exactly what routing matched, and
-`allowDownload` is always forwarded as `false`. `lease.requested` keeps the
-name the client sent.
+own name for an exact model, so it resolves exactly what routing matched, and
+`allowDownload` is always forwarded as `false`. A class and an OS range are
+forwarded as they arrived, with no `model` for a class request: the worker
+resolves them by its own rules (ADR 0015 §5), and the gateway compares no
+versions. `lease.requested` keeps the request as the client sent it, and
+`request.dispatched` carries `model` or `class`, whichever the request named.
 
 #### A request that cannot be served
 
@@ -698,9 +720,11 @@ arriving request on rows 1 to 5 is rejected without entering the queue (no
 `lease.queued`, no `queued` progress), and a drain or a lost uplink re-runs the
 walk, which rejects a waiting request that has moved onto those rows. In
 order: no worker takes requests, `NO_CAPACITY` (reason `no-worker`); no known
-worker has the platform, `NO_DRIVER`; none lists the model, `UNKNOWN_MODEL`;
-none has the runtime or pairs it with the model, `RUNTIME_MISSING` with
-`downloadable: false` and `osVersion: "default"` for an unnamed runtime (the
+worker has the platform, `NO_DRIVER`; none lists the model, or for a class
+request any model of it, `UNKNOWN_MODEL` (its details carry `class` instead of
+`model`); none has the runtime or pairs it with the model, or with a model of
+the class, `RUNTIME_MISSING` with `downloadable: false` and `osVersion` the
+constraint as typed, `"default"` for an unnamed runtime (the
 last three with reason `unresolvable-spec`); a known worker can serve it but
 none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
 wait. A worker *takes requests* when it passes `takes-requests`; the gateway
@@ -911,7 +935,7 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
   ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
   ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
-  to `{min: 13, max: 13}`, because its `classDefaults` is; a
+  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
@@ -1951,6 +1975,18 @@ pool-mode comparison and looks for a `ready` device that fits, then a
 still names pool identity for the warm pool, reclaim and the idempotency
 check. A class is read from the catalog entry (`modelClasses`) at the moment
 a fit is decided; a device record stores none.
+
+`osVersion` is an exact version or an OS range (ADR 0015 §2). The one grammar
+is `src/contract/os-range.ts`: the contract schema refines `osVersion`
+through its parser (a refinement over the request object, so the MCP SDK's own
+field validation never answers first), so a malformed range is `BAD_REQUEST` on
+every transport; a string that is not range-like is a bare version and stays
+exact, as `Baklava` or `34-ext12` on Android,
+and the core and the gateway import `satisfies` and `compareVersions` from it.
+For a range the coordinator picks the newest `modelRuntimes` entry in range
+(of the requested image tag) for the exact model, or for the first class
+candidate that has one, and hands the driver that exact version; none is
+`RUNTIME_MISSING` with `downloadable: false`, and a range never installs.
 
 For an exact model: **platform + device model + OS version**.
 OS defaults to the newest runtime already installed on the machine that can

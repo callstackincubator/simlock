@@ -92,10 +92,12 @@ export function deviceFixture(
   id: string,
   state: "ready" | "leased" = "ready",
   mode: "slim" | "full" = "full",
+  servesDefaultMode: boolean = true,
 ) {
   return {
     id,
     mode,
+    servesDefaultMode,
     spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
     state,
   };

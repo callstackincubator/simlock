@@ -194,6 +194,45 @@ describe("a gateway fails a request no worker can serve at once", () => {
     expect((await gateway.cli(["release", held.id], FAST)).code).toBe(0);
   });
 
+  it("fails a class or range request nothing in the fleet can serve at once, with the code a single worker gives", async () => {
+    const { gateway, join } = await startGateway();
+    await join("worker-a", {
+      ios: {
+        availableOsVersions: ["18.4", "26.0"],
+        defaultModels: { phone: ["iPhone 17"] },
+        knownModels: ["iPhone 17"],
+        modelClasses: { "iPhone 17": "phone" },
+      },
+    });
+    await waitForWorkers(gateway, ["worker-a"]);
+    const ask = (...args: string[]) =>
+      gateway.cli(
+        ["lease", "--platform", "ios", ...args, "--agent-id", "agent-1", "--detach"],
+        FAST,
+      );
+
+    // No worker lists a model of the class.
+    const watch = await ask("--class", "watch");
+    expectFailure(watch, "UNKNOWN_MODEL", EXIT_UNSERVABLE);
+    expect(watch.stderr).toContain("watch");
+    // Every model of the class pairs with a runtime outside the range, with or without a download.
+    expectFailure(
+      await ask("--class", "phone", "--os", "<=17"),
+      "RUNTIME_MISSING",
+      EXIT_UNSERVABLE,
+    );
+    expectFailure(
+      await ask("--class", "phone", "--os", "<=17", "--allow-download"),
+      "RUNTIME_MISSING",
+      EXIT_UNSERVABLE,
+    );
+    // A request that names neither model nor class means phone, and the fleet has one.
+    const granted = await ask();
+    expect(granted.code, granted.stderr).toBe(0);
+    const { lease: held } = granted.json as { lease: { id: string } };
+    expect((await gateway.cli(["release", held.id], FAST)).code).toBe(0);
+  });
+
   it("fails the HTTP POST of a request no worker can serve, with allowDownload too", async () => {
     const { baseUrl, gateway, join } = await startGateway();
     await join("worker-a", { ios: IPHONE_17 });

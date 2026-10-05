@@ -176,7 +176,7 @@ a timer and releasing it when it exits.
 
 ```
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
-              [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+              [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
               [--timeout <duration>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -192,6 +192,18 @@ granted.
   or `desktop`); with neither, the lease asks for a `phone`. Naming both is a
   `BAD_REQUEST` (exit 2). `--os` defaults to the newest runtime already
   installed for that platform. See [What a lease asks for](#what-a-lease-asks-for).
+- `--os <version|range>` — an exact version (`18.4`), or a range: one or more
+  of `>=`, `>`, `<=`, `<` followed by a version, joined by single spaces
+  (`>=18 <26`), or a hyphen range (`18 - 26`). A short version covers
+  everything under it: `>=18` is 18.0 and newer, `<=26` includes every 26.x,
+  `>26` excludes them, `18 - 26` is `>=18 <=26`. Anything written like
+  a range but outside these forms (`^18`, `~18`, `18.x`, `*`, `||`) is
+  `BAD_REQUEST` (exit 2) and the message names these forms; any other string,
+  such as the Android runtimes `Baklava` or `34-ext12`, is an exact version.
+  A range is served by a fitting idle device first, or else by a new device
+  on the newest installed runtime in the range; when no installed runtime is
+  in the range the lease fails at once with `RUNTIME_MISSING` (exit 12), with
+  or without `--allow-download`, because a range never downloads.
 - `--class <class>` — the kind of device to lease, in place of a model. See
   [What a lease asks for](#what-a-lease-asks-for).
 - `--agent-id` — this invocation's requester identity; see
@@ -446,7 +458,8 @@ A class lease is served by the first of these that applies: an idle device
 that is already running and fits, then an idle device that is shut down and
 fits (it is booted), then a new device. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
-lease fits a device on any installed runtime, `--mode full` and `--image-tag`
+lease fits a device on any installed runtime, with `--os` a device whose OS
+satisfies it, `--mode full` and `--image-tag`
 are never relaxed, and a lease that names no mode fits only the worker's
 default mode. When several devices fit, which one is granted is not promised.
 
@@ -466,8 +479,10 @@ got. A class is a claim about the device type the platform's tools report:
 on iOS the product family, on Android the profile's tag, and every untagged
 Android profile is a `phone`, so `tablet` holds no Android model.
 
-Through a gateway, a lease that names no model is refused with `BAD_REQUEST`
-for now.
+Through a gateway the same requests work: a class, no model at all, and an
+`--os` range are served by any worker that has something fitting, and the
+gateway passes them on to that worker as they arrived (see
+[Against a gateway](#against-a-gateway)).
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
@@ -704,11 +719,30 @@ has the model and the runtime but cannot pair them is passed over. With
 runtime when `--os` is given. Among the
 workers that can serve it, one that is not healthy or has requests of its own
 waiting is passed over (the request waits for it rather than failing). Of the
-rest, a machine with a matching warm device gets the request first. Otherwise a
+rest, a machine with a matching warm device gets the request first. A warm device
+matches when its model and runtime fit and its mode fits the request: with
+`--mode full` it must be a `full` device, with `--mode slim` a `slim` one, and
+with no `--mode` it must be one that `status` shows as serving the default mode
+(see [`simlock status`](#simlock-status)). With no `--os`, the runtime must be the one
+the worker would pick: its default runtime when the model pairs with it,
+otherwise the model's only paired runtime. A worker whose model pairs with
+several runtimes and no default has no warm match for such a request. A request
+with no warm match goes to a machine with free capacity, which boots a device.
+Otherwise a
 worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
 is preferred over one at it, and the one with the most free capacity gets the
 request. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
+
+A request with `--class`, or with neither `--device` nor `--class` (which means
+`--class phone`), is served by a worker whose catalog lists a model of that
+class paired with an installed runtime that satisfies `--os` (any installed
+runtime when you give none). With `--os` as a range, a model matches when one of
+its paired runtimes is in the range. A warm device matches a class request when
+its model is of that class on that worker, its runtime is in the range (any
+installed runtime with no `--os`), and its mode and image tag fit as above. The
+gateway does not pick the model or the runtime: the worker does, by its own
+rules, so the grant names what you got.
 
 ### A request no worker can serve
 
@@ -724,8 +758,8 @@ catalog has not arrived, is neither.
 | --- | --- |
 | No worker takes requests | `NO_CAPACITY` (exit 11) at once |
 | At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
-| ... and no known worker lists the model | `UNKNOWN_MODEL` (exit 12) at once |
-| ... and no known worker has the runtime, or can pair it with the model | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is `default` when you named none |
+| ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
+| ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
 | A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
 | A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
 
@@ -1149,7 +1183,7 @@ A device currently `provisioning` or `reclaiming` carries a derived
 and `list --devices` well before it crosses the threshold that would make
 `doctor` flag it as stalled. Once it crosses it, with nothing working on it,
 `status` marks it `stalled`
-(`Device dev_7: provisioning, mode full (mid-transition 412000ms, stalled)`),
+(`Device dev_7: provisioning, mode full, serves default mode: yes (mid-transition 412000ms, stalled)`),
 and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
@@ -1161,12 +1195,20 @@ when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
 managed device with its state and device mode
-(`Device dev_7: ready, mode slim`), current leases (who — the agent
+(`Device dev_7: ready, mode slim, serves default mode: no`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
 renewed), the component installs in progress, and queue depth. `--json` for
 the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
+
+Each device line says, after its mode, whether the device serves the default
+mode: `serves default mode: yes` when its pool is the one a lease with no
+`--mode` draws from on this machine (the mode `ios.defaultMode` names, `full`
+for Android and for iOS unless configured), `no` when it is the other one. A
+device's `mode` is what it is; this is what a lease with no `--mode` would
+get. In `--json` it is `servesDefaultMode`, a boolean on every device, next to
+`mode`; `list --devices --json` carries it too.
 
 Each platform's capacity line ends in `(at RAM budget)` when creating one more
 full device of that platform would be refused for RAM. In `--json` it is
@@ -1202,7 +1244,7 @@ answers for the whole fleet, in the same shape: the daemon line reads
 budget over those that report one, over its limit when any worker is; a
 platform is `at RAM budget` only when every connected worker is), one line
 per worker precedes the devices, and every device, lease and install names the
-worker it lives on (`Device dev_7 on wrk_a: leased, mode full`,
+worker it lives on (`Device dev_7 on wrk_a: leased, mode full, serves default mode: yes`,
 `Install ios 26.4 on wrk_a: waiting for 3s, 1 waiter`). Installs are listed
 for the connected workers, the 16 oldest across the fleet. `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each

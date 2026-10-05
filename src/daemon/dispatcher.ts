@@ -24,6 +24,7 @@ import {
 } from "../core/index.js";
 import type {
   CapacityReader,
+  DeviceModeReader,
   CatalogReader,
   LeaseCommands,
   PassthroughResolver,
@@ -93,7 +94,7 @@ export class NukeUnavailableError extends Error {
 }
 
 export interface DispatcherOptions {
-  readonly capacity: CapacityReader;
+  readonly capacity: CapacityReader & DeviceModeReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
@@ -813,17 +814,21 @@ export class Dispatcher {
 
   /**
    * A device as `status.get` and `list.get` report it: with `transitionAgeMs` while it is
-   * mid-transition, and `stalled: true` once that transition is a stall by the rule `doctor`
+   * mid-transition, `servesDefaultMode` always (ADR 0009 §6), and `stalled: true` once that transition is a stall by the rule `doctor`
    * reports (`isStalledTransition`). A device that is not stalled carries no `stalled` at all.
    */
-  #decorateDevice(
-    device: DeviceRecord,
-  ): DeviceRecord & { readonly transitionAgeMs?: number; readonly stalled?: true } {
+  #decorateDevice(device: DeviceRecord): DeviceRecord & {
+    readonly servesDefaultMode: boolean;
+    readonly transitionAgeMs?: number;
+    readonly stalled?: true;
+  } {
+    const servesDefaultMode = this.options.capacity.servesDefaultMode(device.spec);
     const enteredAt = transitionEnteredAt(device);
-    if (enteredAt === undefined) return device;
+    if (enteredAt === undefined) return { ...device, servesDefaultMode };
     const now = this.options.clock.now();
     return {
       ...device,
+      servesDefaultMode,
       transitionAgeMs: now - enteredAt,
       ...(this.#isStalled(device, now) ? { stalled: true as const } : {}),
     };

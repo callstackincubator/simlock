@@ -45,6 +45,7 @@ const HOST: WorkerView = {
     {
       id: "dev_1",
       mode: "slim",
+      servesDefaultMode: false,
       spec: { imageTag: "base", model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       state: "leased",
     },

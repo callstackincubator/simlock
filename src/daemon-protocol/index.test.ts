@@ -18,8 +18,8 @@ describe("daemon protocol", () => {
     // lets a lease request choose it, taking it to 8, each the same way. ADR 0010 adds
     // `component.install` and its `component-progress` push, which a gateway relays to its
     // workers, taking it to 9. ADR 0014 gives every event envelope an `id`, taking it to 10. ADR 0009 §7 makes `atRamBudget` a
-    // required field of each platform's `status.get` capacity, taking it to 11, then ADR 0015 §3 made `modelClasses` a required field of each platform catalog, taking it to 12, then ADR 0015 §4 made `classDefaults` a required field of each platform catalog too, taking it to 13, then ADR 0015 §1 made a lease request's `model` optional beside a new `class`, taking it to 14.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(14);
+    // required field of each platform's `status.get` capacity, taking it to 11, then ADR 0015 §3 made `modelClasses` a required field of each platform catalog, taking it to 12, then ADR 0015 §4 made `classDefaults` a required field of each platform catalog too, taking it to 13, then ADR 0015 §1 made a lease request's `model` optional beside a new `class`, taking it to 14, then ADR 0015 §2 let `osVersion` be a range, taking it to 15, then ADR 0009 §6 made `servesDefaultMode` a required field of each device in `status.get`, taking it to 16.
+    expect(DAEMON_PROTOCOL_VERSION).toBe(16);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

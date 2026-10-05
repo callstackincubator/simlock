@@ -314,7 +314,12 @@ export interface EventMap {
     readonly workerId: string;
     readonly requesterId: string;
     readonly platform: string;
-    readonly model: string;
+    /** The exact model the request named; absent for a class request (ADR 0015 §9). */
+    readonly model?: string;
+    /** The class the request named; absent for an exact one or one naming neither. */
+    readonly class?: string;
+    /** The mode the request named (ADR 0009 §8); absent when it named none. */
+    readonly mode?: "slim" | "full";
     readonly reason: "warm-hit" | "free-capacity";
     /** The routing stage that decided the pick (ADR 0009 §8). */
     readonly stage: string;

@@ -1,5 +1,5 @@
 import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/index.js";
-import type { LeaseRecord, Platform } from "./domain.js";
+import type { DeviceSpec, LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest, PassthroughCommand, PassthroughContext } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 import type { WaitingRequest } from "./lease-request-book.js";
@@ -43,6 +43,14 @@ export interface CapacityReader {
   /** Whether creating one more full device of `platform` would be refused for RAM, by the same
    * check the planner makes. */
   atRamBudget(platform: CapacityPlatform): boolean;
+}
+
+/**
+ * Whether a device's pool is the one a request naming no mode draws from. Answered where the
+ * default mode is resolved (ADR 0007 §2), so status never re-derives it.
+ */
+export interface DeviceModeReader {
+  servesDefaultMode(spec: DeviceSpec): boolean;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */

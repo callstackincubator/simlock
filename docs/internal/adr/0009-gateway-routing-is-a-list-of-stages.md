@@ -215,10 +215,13 @@ that adds each raises the protocol version by one.
   feature is specified.
 - A foreign-ABI Android image still makes a worker able to serve. Routing
   does not read the ABI.
-- Two accepted gaps in warm hits: a slim-pool device whose slim pass failed
+- Three accepted gaps in warm hits: a slim-pool device whose slim pass failed
   reports `full` and can be a false hit for a `full` request; on a
   default-slim worker, a full device on a runtime that cannot be slimmed is
-  not counted as a hit for a request with no mode.
+  not counted as a hit for a request with no mode; and a `--mode slim` request
+  on a runtime that cannot be slimmed (Android, iOS below 18.5) is not a hit
+  on a ready full device the worker itself would reuse, because `warm-hit`
+  requires `mode: "slim"` for a slim request.
 - The download policy on the view becomes display-only.
 - The docs change with the implementation. Each task updates the docs it
   makes true.

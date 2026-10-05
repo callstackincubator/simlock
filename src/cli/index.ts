@@ -956,7 +956,7 @@ async function runLease(
   if (values.help) {
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
-        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -2401,7 +2401,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
-    return `Device ${device.id}${where}: ${device.state}, mode ${device.mode}${suffix}`;
+    return `Device ${device.id}${where}: ${device.state}, mode ${device.mode}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}${suffix}`;
   });
   // ADR 0004: `lastRenewedAt` is a stored field written at grant and on every renew, so unlike
   // the derived `lastHeartbeatAt` it replaces, every lease has one to render.

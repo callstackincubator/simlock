@@ -119,4 +119,29 @@ describe("routing pipeline", () => {
       workerId: "wrk_a",
     });
   });
+
+  it("adds a stage to a list and removes it again without any other stage changing what it does", () => {
+    // The same three stage objects, untouched, in three lists.
+    const keepsAB = only("wrk_a", "wrk_b");
+    const prefersB = rank("prefers-b", { wrk_a: 1, wrk_b: 2 });
+    const decides = rank("decides", { wrk_a: 1, wrk_b: 1 });
+    const dropsB = only("wrk_a");
+
+    const base = runStages([keepsAB, decides], REQUEST, workers);
+    const withPrefersB = [keepsAB, prefersB, decides];
+    const added = runStages(withPrefersB, REQUEST, workers);
+    const addedFilter = runStages([keepsAB, dropsB, prefersB, decides], REQUEST, workers);
+    // Removed from the list that just ran with it, after it ran: the shared stage objects
+    // must carry nothing over, so the result is the literal the list without it gives.
+    const removed = runStages(
+      withPrefersB.filter((stage) => stage !== prefersB),
+      REQUEST,
+      workers,
+    );
+
+    expect(base).toEqual({ stage: "decides", workerId: "wrk_a" });
+    expect(added).toEqual({ stage: "prefers-b", workerId: "wrk_b" });
+    expect(addedFilter).toEqual({ stage: "decides", workerId: "wrk_a" });
+    expect(removed).toEqual({ stage: "decides", workerId: "wrk_a" });
+  });
 });

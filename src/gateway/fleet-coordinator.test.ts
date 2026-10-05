@@ -203,6 +203,33 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
 
 describe("FleetLeaseCoordinator device mode", () => {
   it.each([
+    ["full", "wrk_a_cold", "free-capacity"],
+    ["slim", "wrk_z_slim", "warm-hit"],
+  ] as const)(
+    "routes a %s request to %s by the %s stage when the only warm device is slim and another worker has more room",
+    async (mode, expectedWorker, expectedStage) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      for (const id of ["wrk_a_cold", "wrk_z_slim"]) {
+        const client = new ScriptedWorkerClient();
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+        directory.add(id, client);
+      }
+      connectWorker(workers, "wrk_a_cold", { capacity: roomierIos() });
+      connectWorker(workers, "wrk_z_slim", {
+        devices: [deviceFixture("dev_slim", "ready", "slim")],
+      });
+      const dispatched: { workerId: string; stage: string }[] = [];
+      eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+      await coordinator.request({ ...REQUEST, mode }, requestOptions());
+
+      expect(dispatched).toEqual([
+        expect.objectContaining({ stage: expectedStage, workerId: expectedWorker }),
+      ]);
+    },
+  );
+
+  it.each([
     ["slim", { mode: "slim" as const }],
     ["full", { mode: "full" as const }],
   ])("forwards a request's mode %s to the worker unchanged", async (_label, mode) => {
@@ -1006,6 +1033,42 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
     // Sanity: the request really did land where the event says it did.
     expect(grant.lease.worker?.id).toBe("wrk_a");
+  });
+
+  it.each(["full", "slim"] as const)(
+    "request.dispatched carries the requested mode %s",
+    async (mode) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      connectWorker(workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        grant: grantFixture(),
+        kind: "grant",
+        progress: [{ etaMs: 5_000, stage: "provisioning" }],
+      });
+      const dispatched: unknown[] = [];
+      eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+      await coordinator.request({ ...REQUEST, mode }, requestOptions());
+
+      expect(dispatched).toEqual([expect.objectContaining({ mode })]);
+    },
+  );
+
+  it("request.dispatched carries no mode key when the request named none", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: object[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).not.toHaveProperty("mode");
   });
 
   it("relays a worker's downloading pushes to the requester unchanged", async () => {
@@ -3164,5 +3227,193 @@ describe("FleetLeaseCoordinator: queue.changed", () => {
         .filter((event) => event.event === "queue.changed")
         .map((event) => event.module),
     ).toEqual(["fleet-lease-coordinator", "fleet-lease-coordinator", "fleet-lease-coordinator"]);
+  });
+});
+
+describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)", () => {
+  const phones = {
+    modelClasses: { "iPhone 16": "phone", "iPhone 17": "phone" } as const,
+    models: ["iPhone 16", "iPhone 17"],
+    platform: "ios" as const,
+    runtimes: ["18.0", "26.0"],
+  };
+
+  function connectWith(
+    workers: WorkerRegistry,
+    workerId: string,
+    entry: Parameters<typeof catalogFixture>[0][number],
+    options: {
+      readonly capacity?: ReturnType<typeof statusFixture>["capacity"];
+      readonly devices?: ReturnType<WorkerRegistry["views"]>[number]["devices"];
+    } = {},
+  ): void {
+    workers.connected(workerId, undefined, "0.3.0");
+    workers.refresh(workerId, {
+      capacity: options.capacity ?? statusFixture().capacity,
+      catalog: catalogFixture([entry]).platforms,
+      devices: options.devices ?? [],
+      downloads: { policy: "on-request" },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  function single() {
+    const fleet = harness();
+    const client = new ScriptedWorkerClient();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    fleet.directory.add("wrk_a", client);
+    connectWith(fleet.workers, "wrk_a", phones);
+    return { ...fleet, client };
+  }
+
+  it("forwards the class and the range as they arrived, with no model", async () => {
+    const { client, coordinator } = single();
+
+    await coordinator.request(
+      { class: "phone", osVersion: ">=18 <26", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(client.lastRequestLeaseInput).toMatchObject({
+      class: "phone",
+      osVersion: ">=18 <26",
+      platform: "ios",
+    });
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("model");
+  });
+
+  it("forwards a request naming neither model nor class with neither", async () => {
+    const { client, coordinator } = single();
+
+    await coordinator.request({ platform: "ios" }, requestOptions({ noWait: true }));
+
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("model");
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("class");
+  });
+
+  it("still forwards an exact model under the worker's own name, with no class", async () => {
+    const { client, coordinator } = single();
+
+    await coordinator.request(
+      { model: "iphone 17", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(client.lastRequestLeaseInput?.model).toBe("iPhone 17");
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("class");
+  });
+
+  it("emits request.dispatched with class and no model for a class request, and model and no class for an exact one", async () => {
+    const byClass = single();
+    const dispatchedByClass: object[] = [];
+    byClass.eventBus.subscribe("request.dispatched", (envelope) =>
+      dispatchedByClass.push(envelope.payload),
+    );
+    await byClass.coordinator.request(
+      { class: "phone", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+    const exact = single();
+    const dispatchedExact: object[] = [];
+    exact.eventBus.subscribe("request.dispatched", (envelope) =>
+      dispatchedExact.push(envelope.payload),
+    );
+    await exact.coordinator.request(
+      { model: "iPhone 17", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(dispatchedByClass).toEqual([expect.objectContaining({ class: "phone" })]);
+    expect(dispatchedByClass[0]).not.toHaveProperty("model");
+    expect(dispatchedExact).toEqual([expect.objectContaining({ model: "iPhone 17" })]);
+    expect(dispatchedExact[0]).not.toHaveProperty("class");
+  });
+
+  it("sends a request for a class only one worker lists a model of to that worker", async () => {
+    const { coordinator, directory, workers } = harness();
+    const phonesOnly = new ScriptedWorkerClient();
+    const withTablet = new ScriptedWorkerClient();
+    directory.add("wrk_a", phonesOnly);
+    directory.add("wrk_b", withTablet);
+    withTablet.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a sorts first and has the same room, so only the class can send it to wrk_b.
+    connectWith(workers, "wrk_a", phones);
+    connectWith(workers, "wrk_b", {
+      ...phones,
+      modelClasses: { ...phones.modelClasses, "iPad Pro": "tablet" },
+      models: [...phones.models, "iPad Pro"],
+    });
+
+    await coordinator.request(
+      { class: "tablet", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(phonesOnly)).toEqual([]);
+    expect(withTablet.lastRequestLeaseInput).toMatchObject({ class: "tablet" });
+  });
+
+  it("retries a worker's UNKNOWN_MODEL for a class request, before any progress, on another worker", async () => {
+    const { coordinator, directory, workers } = harness();
+    const a = new ScriptedWorkerClient();
+    const b = new ScriptedWorkerClient();
+    directory.add("wrk_a", a);
+    directory.add("wrk_b", b);
+    connectWith(workers, "wrk_a", phones);
+    connectWith(workers, "wrk_b", phones);
+    a.requestLeaseQueue.push({
+      error: new SimlockError("UNKNOWN_MODEL", "domain", "no model of class phone", {
+        class: "phone",
+        platform: "ios",
+      }),
+      kind: "error",
+    });
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(
+      { class: "phone", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(a)).toHaveLength(1);
+    expect(leaseRequests(b)).toHaveLength(1);
+    expect(grant.lease.worker?.id).toBe("wrk_b");
+  });
+
+  it("dispatches an Android phone request to the worker with a warm Pixel over one with free capacity", async () => {
+    const { coordinator, directory, workers } = harness();
+    const free = new ScriptedWorkerClient();
+    const warm = new ScriptedWorkerClient();
+    directory.add("wrk_a", free);
+    directory.add("wrk_b", warm);
+    warm.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const pixels = {
+      modelClasses: { "Pixel 8": "phone" } as const,
+      models: ["Pixel 8"],
+      platform: "android" as const,
+      runtimes: ["35"],
+    };
+    const ready = deviceFixture("dev_1", "ready");
+    // wrk_a sorts first and has the same room, so only the warm device can send it to wrk_b.
+    connectWith(workers, "wrk_a", pixels);
+    connectWith(workers, "wrk_b", pixels, {
+      devices: [
+        { ...ready, spec: { model: "Pixel 8", osVersion: "35", platform: "android" as const } },
+      ],
+    });
+
+    await coordinator.request(
+      { class: "phone", platform: "android" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(warm)).toHaveLength(1);
+    expect(leaseRequests(free)).toEqual([]);
   });
 });

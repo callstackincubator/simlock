@@ -2847,6 +2847,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           id: "dev_1",
           spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
           mode: "full" as const,
+          servesDefaultMode: true,
           state: "leased" as const,
           workerId: "wrk_1",
         },
@@ -2888,7 +2889,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     // A gateway runs no drivers: its host line names the machine and nothing after it.
     expect(output.stdout).toContain("Host: Linux 6.8.0 x64\n");
     expect(output.stdout).toContain("wrk_1: connected, drained");
-    expect(output.stdout).toContain("Device dev_1 on wrk_1: leased, mode full");
+    expect(output.stdout).toContain(
+      "Device dev_1 on wrk_1: leased, mode full, serves default mode: yes",
+    );
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
@@ -3049,14 +3052,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).not.toContain(" on wrk_");
   });
 
-  it("prints each device's mode", async () => {
+  it("prints each device's mode and whether it serves a request naming no mode", async () => {
     const output = outputCapture();
     const spec = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
       devices: [
-        { id: "dev_slim", mode: "slim", spec, state: "ready" },
-        { id: "dev_full", mode: "full", spec, state: "leased" },
+        { id: "dev_slim", mode: "slim", servesDefaultMode: false, spec, state: "ready" },
+        { id: "dev_full", mode: "full", servesDefaultMode: true, spec, state: "leased" },
       ],
     };
     const environment = output.environmentWith({
@@ -3065,8 +3068,10 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
     await runCli(["status"], environment);
 
-    expect(output.stdout).toContain("Device dev_slim: ready, mode slim");
-    expect(output.stdout).toContain("Device dev_full: leased, mode full");
+    expect(output.stdout).toContain("Device dev_slim: ready, mode slim, serves default mode: no\n");
+    expect(output.stdout).toContain(
+      "Device dev_full: leased, mode full, serves default mode: yes\n",
+    );
   });
 
   it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
@@ -3127,6 +3132,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const device = (id: string, extra: object) => ({
       id,
       mode: "full" as const,
+      servesDefaultMode: true,
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" as const },
       state: "provisioning" as const,
       ...extra,
@@ -3147,10 +3153,10 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     );
 
     expect(output.stdout).toContain(
-      "Device dev_stuck: provisioning, mode full (mid-transition 120000ms, stalled)\n",
+      "Device dev_stuck: provisioning, mode full, serves default mode: yes (mid-transition 120000ms, stalled)\n",
     );
     expect(output.stdout).toContain(
-      "Device dev_fresh: provisioning, mode full (mid-transition 2000ms)\n",
+      "Device dev_fresh: provisioning, mode full, serves default mode: yes (mid-transition 2000ms)\n",
     );
   });
 });
@@ -5276,7 +5282,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
 
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
-        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -5336,6 +5342,31 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Request req_1: a, ios class watch, queued at 1, waiting 0s\n" +
         "Request req_2: b, android class phone, queued at 2, waiting 0s\n",
+    );
+  });
+
+  it("prints a waiting request's OS range as typed", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { osVersion: ">=18 <26", platform: "ios" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios class phone >=18 <26, queued at 1, waiting 0s\n",
     );
   });
 });

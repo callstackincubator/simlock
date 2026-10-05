@@ -18,6 +18,7 @@ import {
 } from "../core/index.js";
 import type {
   CapacityReader,
+  DeviceModeReader,
   CatalogReader,
   LeaseCommands,
   PassthroughResolver,
@@ -138,7 +139,7 @@ interface Connection {
  * surprise.
  */
 export interface DaemonServerEngineOptions {
-  readonly capacity: CapacityReader;
+  readonly capacity: CapacityReader & DeviceModeReader;
   readonly catalog: CatalogReader;
   /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
    * `component.install`, `component.list`, `component.remove` and `status.get`'s installs; the same

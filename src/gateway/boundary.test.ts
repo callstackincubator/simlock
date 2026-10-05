@@ -54,12 +54,14 @@ const ALLOWED_DAEMON_IMPORTS = ["daemon/dispatch.js"];
  * (now-removed) blanket `core` entry above asked the PR that widened this list to do: they are
  * `wait-queue.js`'s own transitive *type* imports (`DeviceRecord`/`LeaseRecord`/`DeviceSpec` and
  * `DeviceRequest`), which the fleet queue and coordinator need to name the same shapes wait-queue
- * itself is typed against rather than redeclaring them. `usage/usage-reader.js` is `usage.get`'s one
+ * itself is typed against rather than redeclaring them. `usage/index.js` is `usage.get`'s one
  * answerer (ADR 0016 §1, §6): the same reader serves a worker and a gateway, so the window rounding
  * and the memo exist once. It imports the bus, the contract and the pure figures module, nothing of
  * the registry, capacity or lifecycle engine. Neither module is the registry, capacity,
  * or lifecycle engine §33 keeps off limits -- `domain.js` is pure data shapes and a spec-equality
- * predicate, `driver.js` is interface declarations only.
+ * predicate, `driver.js` is interface declarations only. `catalog-match.js` is the one place a
+ * request's model or class is read against a catalog (ADR 0015 §8; architecture rule 10): pure
+ * functions over a catalog entry, so the gateway matches exactly as a worker does.
  */
 const ALLOWED_CORE_IMPORTS = [
   "core/wait-queue.js",
@@ -67,7 +69,8 @@ const ALLOWED_CORE_IMPORTS = [
   "core/serialized-decision.js",
   "core/domain.js",
   "core/driver.js",
-  "core/usage/usage-reader.js",
+  "core/catalog-match.js",
+  "core/usage/index.js",
 ];
 
 describe("gateway module boundary", () => {

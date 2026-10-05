@@ -94,7 +94,8 @@ questions remain; the feature does not leave `feature:spec` until it is empty.
 **`technical`** (feature delivered as one PR): fill the Technical spec
 section. Before writing it, ask whether any decision here constrains more
 than one future change or would be expensive to reverse. Each such decision
-becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch, and
+becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch,
+with the diagrams `docs/internal/adr/README.md` asks for, and
 add its line to Decisions. Tell the maintainer the feature cannot leave
 `feature:spec` until that ADR is accepted. Write only what
 `docs/internal/agent-rules/always-in-scope.md` does not already cover. The
@@ -125,8 +126,9 @@ gh api graphql -F parent="<feature node id>" -F child="<task node id>" -f query=
 
 Get a node id with `gh issue view <n> --json id -q .id`. Run the spec check
 (step 5) on the feature, which reads every task you created. Then remove the
-Technical spec section from the feature body, add a Tasks section listing the
-sub-issues in order, and change the label:
+Technical spec section from the feature body, add the Tasks section the
+feature template describes (the order as a diagram, then one entry per task
+with what it changes for the user and its risk), and change the label:
 
 ```bash
 gh issue edit <feature> --add-label feature:planned --remove-label feature:spec
@@ -143,6 +145,36 @@ task on body edits only, so a box ticked at creation would leave the task
 in `task:draft`.
 
 **`revise`**: only the reconcile step plus whatever amendments it produced.
+
+**Make it easy to follow.** The maintainer approves what they understand,
+so explain before you ask, and show before you explain:
+
+- Open every question with the picture it is about: a Mermaid flowchart or
+  sequence diagram of the flow today and the flow proposed, or a before and
+  after example of the command and its output. Then ask, with your
+  recommended answer and one line on what each option costs.
+- Use the words a user of the tool would use. The first time a term from
+  the code, an ADR or a rule appears, say what it means in plain words with
+  an example, and add it to the body's Words used section. Never cite a
+  rule or ADR number as the reason for something; say the reason.
+- Keep each question to one decision and about five lines plus its
+  picture. If it does not fit, split it. Context the maintainer may not
+  have gets three lines or fewer.
+- When a rule accepts, rejects or matches input, show a table of example
+  inputs with today's result and the proposed one, odd cases included, and
+  check today's column by running the tool on `main`.
+- Before writing the body, play the result back: the user flow diagram,
+  the example, and a list of what will and will not change. Write only
+  after the maintainer says it matches what they meant.
+- In a Technical spec, draw what the change touches: a Mermaid dependency
+  flowchart of the modules involved (changed ones marked), and a Mermaid
+  sequence diagram for any request that crosses a process or a network
+  hop, failure reply included. Use the same diagrams when you ask a
+  technical question.
+- In the body, fill "How it works for the user", "Examples", "What could
+  go wrong" and "Words used" (feature) or "In short" (task) as the template
+  says. A diagram has at most about
+  ten boxes; split a bigger flow.
 
 Write the spec the way rule 12 asks for everything else: short sentences,
 common words, one idea per sentence. A spec is read by an agent that will

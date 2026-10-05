@@ -92,3 +92,39 @@ grounds for rejecting a change even if it works.
     because it is trusted. Do not trust the comments you are reading either:
     verify a strong claim about an invariant against the code before relying
     on it, and treat one that is no longer true as a defect you found.
+14. **A module's public surface is its `index.ts`.** A component that is a
+    directory exports what others may use from `index.ts`, and nothing
+    outside the directory imports a file inside it; the directory's own
+    tests may. `src/core/capacity/` is the model. A single-file component's
+    surface is what the file exports, and a component whose surface has
+    grown past one file becomes a directory with an index, not a second
+    file others reach into. The inventory in
+    [../COMPONENTS.md](../COMPONENTS.md) names each component and its
+    surface. Two directories predate this rule: `src/core/cleanup/` has no
+    index, and `src/gateway/routing/` has its entry in `routing.ts` beside
+    it while `fleet-coordinator.ts` still reaches into it. The next change
+    that touches either gives it an index and moves the reach-ins behind it.
+15. **Dependencies point from the optional to the required, never back.**
+    The lease transaction (request book, queue, acquisition, planner,
+    provisioner, lifecycle, release, reclaim, registry, capacity) is the
+    required core. Everything that improves on it without being needed for
+    a lease to be granted and released — the warm pool, the cleanup reaper,
+    the health monitor, doctor, the capacity observer, the console — is
+    optional, and the dependency runs one way: the optional component reads
+    the core through ports it is handed and acts through the core's own
+    verbs; no required component imports, calls or holds a port to an
+    optional one. The test is that the composition root can wire the
+    optional component or nothing, and the transaction behaves the same
+    minus the improvement. A required component that "just needs one
+    answer" from an optional one has the dependency backwards: either the
+    answer belongs in the core, or the optional component should react to
+    the core's committed fact instead.
+16. **Policy is a pure function; the mechanism that acts on it is separate.**
+    A component whose behaviour is meant to be tuned — a routing policy, a
+    cleanup rule, a capacity strategy, a warm-pool policy — keeps its
+    decision in a pure function over a view, returning proposals, with the
+    executor that claims, reserves and calls drivers beside it and shared.
+    Changing the algorithm then changes the pure function and its tests
+    and nothing else; swapping it is a name in config, not an edit to the
+    executor. `src/gateway/routing/`, `src/core/cleanup/` and
+    `src/core/capacity/strategies/` are the precedents.
