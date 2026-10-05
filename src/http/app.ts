@@ -8,7 +8,6 @@ import {
   describeSchemaIssues,
   deviceClassSchema,
   imageTagSchema,
-  refuseModelWithClass,
 } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
@@ -106,11 +105,7 @@ const leaseRequestBodySchema = z
     timeoutMs: z.number().int().positive().optional(),
     ttlMs: z.number().int().positive().optional(),
   })
-  .strict()
-  // The refusal is the contract's (ADR 0015 §1); `device` is this route's name for the model.
-  .superRefine((body, context) => {
-    refuseModelWithClass({ class: body.class, model: body.device }, context);
-  });
+  .strict();
 
 /**
  * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path
