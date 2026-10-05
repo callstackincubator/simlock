@@ -162,7 +162,7 @@ describe("LeaseReleaseCoordinator", () => {
   // test below) rather than surfaced. What must still hold is that the registry-only
   // half committed first: the lease is gone and the device is `reclaiming`, which is
   // the state `QuarantineCoordinator` and startup recovery both expect to find.
-  it("commits beginRelease before a warm-pool failure, and keeps the device reclaiming", async () => {
+  it("commits beginRelease before a reclaim failure, and keeps the device reclaiming", async () => {
     const harness = await createHarness();
     const granted = await grant(harness);
     let leasesAtReclaim = -1;

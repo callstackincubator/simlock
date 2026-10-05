@@ -152,7 +152,10 @@ describe("ReclaimCoordinator", () => {
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
   });
 
-  it("commits ready when the driver returns ready, even when running capacity is over its limit", async () => {
+  // ReclaimCoordinator takes no capacity input at all, so "over its limit" cannot be configured
+  // here; another device already running is the strongest state the harness can set up, and
+  // the reclaim must still commit `ready` without shutting anything down.
+  it("commits ready when the driver returns ready, without shutting it down, even with another device already running", async () => {
     const harness = await createHarness();
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
     const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
