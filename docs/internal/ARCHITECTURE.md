@@ -1369,8 +1369,9 @@ core never imports leasing. `createCore` wires one shared `SerializedDecision`,
 `DeviceOperationClaims`, `DriverCatalog`, registry, and capacity coordinator and
 returns them with a `connect` step; `createLeasing({ core, ... })` builds leasing
 on top of them, and `daemon/main.ts` calls both. Where core must act on a lease
-it declares a port (nuke's release-all during maintenance, the kick it gives
-acquisition once a device is back, the queue head's spec the warm pool reads),
+it declares a port (nuke's release-all during maintenance, the lease expiry doctor uses on a
+lapsed lease, the kick it gives acquisition once a device is back, the queue
+head's spec the warm pool reads),
 leasing implements it, and the daemon hands it over through `core.connect`; a
 core service called before `connect` fails with an error naming the missing
 port. The health monitor is optional: no other leasing part imports it, and

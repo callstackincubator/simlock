@@ -226,7 +226,7 @@ describe("createCore", () => {
     expect(order).toEqual([`leaseExpirer.expire:${lease.id}`]);
   });
 
-  it("converge re-arms the quarantine retry timers, and dispose cancels the ones armed", async () => {
+  it("converge restores the quarantine state once, and dispose disposes the quarantine only when called", async () => {
     const { core } = await build();
     core.connect(ports());
     const restore = vi.spyOn(core.quarantine, "restore");

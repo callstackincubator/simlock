@@ -52,9 +52,9 @@ below, and returns them with a `connect` step. Core never imports leasing
 (ADR 0018 §2): where it needs something from leasing it declares a port, and
 the daemon fills it by calling `connect` with what `createLeasing` built. A core
 service called before `connect` fails with an error naming the missing port.
-The ports are nuke's release-all during maintenance, the kick the reclaim
-coordinator and cleanup give acquisition once a device is back, and the queue
-head's spec the warm pool reads.
+The ports are nuke's release-all during maintenance, the lease expiry doctor
+uses on a lapsed lease, the kick the reclaim coordinator and cleanup give
+acquisition once a device is back, and the queue head's spec the warm pool reads.
 
 | Component | Where | Owns | Does not |
 |---|---|---|---|
@@ -88,7 +88,7 @@ modules with.
 
 | Component | Where | Owns | Does not |
 |---|---|---|---|
-| `createLeasing`, `LeaseStartup` | `src/leasing/create-leasing.ts`, `src/leasing/lease-startup.ts` | The composition root for leasing, built on `createCore`'s services: it wires the health monitor or leaves it out, then hands core its ports through `connect`. The lease half of startup, run before core's: settle every request the previous process left open as failed, then restore every lease's TTL timer. | Run a device operation: it calls core's services. |
+| `createLeasing`, `LeaseStartup` | `src/leasing/create-leasing.ts`, `src/leasing/lease-startup.ts` | The composition root for leasing, built on `createCore`'s services: it wires the health monitor or leaves it out, and builds the ports core needs as `corePorts`, which the daemon hands to `core.connect`. The lease half of startup, run before core's: settle every request the previous process left open as failed, then restore every lease's TTL timer. | Run a device operation: it calls core's services. |
 | `LeaseRequestBook` | `src/leasing/lease-request-book.ts` | The lease-request rules: store before queueing, answer a repeat under the same idempotency key, write a result once. Shared with the gateway over an in-memory store. | Queue or serve the request. |
 | `WaitQueue` | `src/leasing/wait-queue.ts` | FIFO membership, timeouts, cancellation, progress, and settlement of pending requests. | Decide whether capacity exists or perform lease work. |
 | `LeaseAcquisitionCoordinator` | `src/leasing/lease-acquisition-coordinator.ts` | Admission, resolving a request into a requirement and a create spec (class, OS range, default mode, image tag), driving plans to a grant, eviction by demand, maintenance fencing for nuke. Exposes the queue head's spec and the waiting requests, read only. | Choose which device: the planner does. Reclaim: the release side does. |
