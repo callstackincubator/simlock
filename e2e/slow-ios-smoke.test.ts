@@ -53,9 +53,11 @@ async function iosPhoneDefault(env: TestEnv): Promise<string | undefined> {
  */
 async function expectConfiguredPhoneDefaults(
   env: TestEnv,
-  models: readonly string[],
+  models: readonly string[] | undefined,
 ): Promise<void> {
-  expect(models, "this lane needs the host's simctl to list iPhone 15").toContain("iPhone 15");
+  expect(models ?? [], "this lane needs the host's simctl to list iPhone 15").toContain(
+    "iPhone 15",
+  );
   await env.withConfig({ ios: { defaultModels: { phone: ["iPhone 15"] } } }, async () => {
     expect(await iosPhoneDefault(env)).toBe("iPhone 15");
   });
