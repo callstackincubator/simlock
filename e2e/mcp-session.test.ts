@@ -223,6 +223,17 @@ describe("MCP session semantics", () => {
       expect(both.isError).toBe(true);
       expect(JSON.stringify(both.content)).toContain("class");
 
+      const asClass = await mcp.client.callTool({
+        name: "lease_simulator",
+        arguments: { class: "phone", platform: "ios" },
+      });
+      expect(asClass.isError).not.toBe(true);
+      expect(asClass.structuredContent).toMatchObject({
+        device: { spec: { model: "iPhone 16", osVersion: "18.4" } },
+      });
+      const classLease = (asClass.structuredContent as { lease: { id: string } }).lease.id;
+      await mcp.client.callTool({ name: "release_simulator", arguments: { leaseId: classLease } });
+
       const granted = await mcp.client.callTool({
         name: "lease_simulator",
         arguments: { platform: "ios" },

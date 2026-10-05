@@ -347,7 +347,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (candidates.length === 0) {
       throw new UnknownModelError(request.platform, undefined, deviceClass);
     }
-    const chosen = candidates.find((candidate) => pairs(entry, candidate, request.imageTag));
+    const chosen = candidates.find((candidate) => pairs(entry, candidate, request));
     if (chosen === undefined) {
       throw new RuntimeMissingError(request.platform, request.osVersion ?? "default");
     }
@@ -942,13 +942,18 @@ interface ResolvedTarget {
 }
 
 /**
- * Whether a model pairs with an installed runtime, counting only runtimes that have an image of
- * the requested tag when the request names one (the rule the gateway's `matchRequest` applies).
+ * Whether a model pairs with an installed runtime, counting only the requested OS version when the
+ * request names one, and only runtimes that have an image of the requested tag when it names one (the rule the gateway's `matchRequest` applies).
  */
-function pairs(entry: DriverCatalogEntry, model: string, imageTag: string | undefined): boolean {
+function pairs(
+  entry: DriverCatalogEntry,
+  model: string,
+  { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
+): boolean {
   return pairedRuntimes(entry, model).some(
     (runtime) =>
-      imageTag === undefined ||
-      (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag),
+      (osVersion === undefined || runtime === osVersion) &&
+      (imageTag === undefined ||
+        (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
   );
 }

@@ -345,6 +345,24 @@ describe("HTTP API", () => {
     expect(both.status).toBe(400);
     expect(((await both.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
 
+    const asClass = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ class: "phone", platform: "ios" }),
+      headers,
+      method: "POST",
+    });
+    expect(asClass.status).toBe(201);
+    const classRequest = ((await asClass.json()) as { request: RequestResource }).request;
+    let classPolled = classRequest;
+    while (classPolled.state !== "granted" && classPolled.state !== "failed") {
+      const response = await fetch(`${baseUrl}/v1/lease-requests/${classRequest.id}?wait=10`, {
+        headers,
+      });
+      classPolled = ((await response.json()) as { request: RequestResource }).request;
+    }
+    expect(classPolled.state).toBe("granted");
+    expect(classPolled.lease).toMatchObject({ device: "iPhone 16", platform: "ios" });
+    await env.cli(["release", classPolled.lease?.id ?? ""]);
+
     const created = await fetch(`${baseUrl}/v1/lease-requests`, {
       body: JSON.stringify({ platform: "ios" }),
       headers,

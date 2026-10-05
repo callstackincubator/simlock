@@ -435,7 +435,7 @@ describe("POST /v1/lease-requests", () => {
     const { error } = (await response.json()) as { error: { code: string; message: string } };
     expect(error.code).toBe("BAD_REQUEST");
     expect(error.message).toBe(
-      "class: a request names a device or a class, not both: send only one of `device` and `class`",
+      "class: a request names a model or a class, not both: send only one of `model` and `class`",
     );
     expect(dispatcher.calls).toHaveLength(0);
   });

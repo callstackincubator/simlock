@@ -22,7 +22,9 @@ export interface WaitingList {
  */
 export function requestedDevice(spec: WaitingRequest["spec"]): string {
   return [
-    `${platformName(spec.platform)} ${spec.model}`,
+    [platformName(spec.platform), spec.model ?? spec.class]
+      .filter((part) => part !== undefined)
+      .join(" "),
     spec.osVersion === undefined ? undefined : `runtime ${spec.osVersion}`,
     spec.mode === undefined ? undefined : `mode ${spec.mode}`,
     spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,

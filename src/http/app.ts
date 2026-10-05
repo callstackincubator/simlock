@@ -8,6 +8,7 @@ import {
   describeSchemaIssues,
   deviceClassSchema,
   imageTagSchema,
+  refuseModelWithClass,
 } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
@@ -106,15 +107,9 @@ const leaseRequestBodySchema = z
     ttlMs: z.number().int().positive().optional(),
   })
   .strict()
+  // The refusal is the contract's (ADR 0015 §1); `device` is this route's name for the model.
   .superRefine((body, context) => {
-    if (body.device !== undefined && body.class !== undefined) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "a request names a device or a class, not both: send only one of `device` and `class`",
-        path: ["class"],
-      });
-    }
+    refuseModelWithClass({ class: body.class, model: body.device }, context);
   });
 
 /**
