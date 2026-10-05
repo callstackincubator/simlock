@@ -540,6 +540,7 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.bootCalls).toEqual(["x"]);
+    expect(rig.sink.records).toEqual([]);
   });
 
   it("disposes without error when it was never started", async () => {

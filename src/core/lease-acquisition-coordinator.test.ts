@@ -2395,6 +2395,28 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       });
     });
 
+    it("lists a queued class request's class requirement and the catalog's class lookup", async () => {
+      const harness = await createHarness({
+        drivers: [iosDriver()],
+        maxDevices: 1,
+        maxRunning: 1,
+        preferences: iosPreferences,
+      });
+      await harness.coordinator.request(phone, owner("holder"));
+      void harness.coordinator.request(phone, owner("waiter")).catch(() => undefined);
+      await settle();
+
+      const [demand] = harness.coordinator.waitingDemand();
+
+      expect(demand).toMatchObject({
+        inFlight: false,
+        mode: "full",
+        platform: "ios",
+        requirement: { platform: "ios", target: { class: "phone", kind: "class" } },
+      });
+      expect(demand?.classOf("iPhone 15")).toBe("phone");
+    });
+
     it("lists no waiting demand for a request whose class is still being resolved", async () => {
       let open: () => void = () => undefined;
       const gate = new Promise<void>((resolve) => {
