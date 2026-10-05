@@ -147,7 +147,9 @@ state left by the previous lease — indistinguishable from the app itself
 misbehaving.
 
 **Fix (#21):** a failed purge now commits the device to `quarantined` instead
-of readiness-checking it back into circulation. `quarantined` is a shared
+of readiness-checking it back into circulation. The reclaim coordinator
+(`ReclaimCoordinator`), which runs the purge after a release, hands the
+failed device to quarantine with the strategy it attempted. `quarantined` is a shared
 "present in the registry, counts against running capacity, not grantable"
 disposition (see `docs/internal/ARCHITECTURE.md`, "Quarantine: present but not
 grantable") — `AcquisitionPlanner` and the idle-order eviction helpers select

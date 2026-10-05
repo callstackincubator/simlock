@@ -407,7 +407,7 @@ export class LeaseEngine {
     return this.#capacity.ramBudget(this.#capacityDevices());
   }
 
-  /** Safely converges unleased running devices after startup reconciliation. */
+  /** Runs the startup sequence after reconciliation, then starts the capacity observer. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
     // Every run begins with a step in both: what the figures and the queue depth are now.

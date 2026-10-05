@@ -55,7 +55,7 @@ export interface QuarantineCoordinatorOptions {
  * stalled-transition timeout via `enterFromStalledTransition()`), retry, and give-up.
  * `quarantined` is the shared "present in the registry, counts against running
  * capacity, but not grantable" disposition (see domain.ts): AcquisitionPlanner and
- * the warm-pool eviction helpers already select targets by exact state, so a
+ * the idle-order eviction helpers already select targets by exact state, so a
  * quarantined device is invisible to every one of them with no special-casing
  * required.
  *
