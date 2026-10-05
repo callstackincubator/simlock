@@ -308,4 +308,58 @@ describe("HTTP API", () => {
 
     await env.cli(["release", lease?.id ?? ""]);
   });
+
+  it("POST /v1/lease-requests takes a class, or only a platform, and refuses a device beside a class", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    });
+    await env.driverScript.set({
+      ios: {
+        availableOsVersions: ["18.4"],
+        defaultModels: { phone: ["iPhone 16"] },
+        knownModels: ["iPhone 16"],
+        modelClasses: { "iPhone 16": "phone" },
+      },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
+    const { secret } = tokenResult.json as { secret: string };
+    const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections" },
+    );
+
+    const both = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ class: "phone", device: "iPhone 16", platform: "ios" }),
+      headers,
+      method: "POST",
+    });
+    expect(both.status).toBe(400);
+    expect(((await both.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+
+    const created = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ platform: "ios" }),
+      headers,
+      method: "POST",
+    });
+    expect(created.status).toBe(201);
+    const { request } = (await created.json()) as { request: RequestResource };
+    let polled = request;
+    while (polled.state !== "granted" && polled.state !== "failed") {
+      const response = await fetch(`${baseUrl}/v1/lease-requests/${request.id}?wait=10`, {
+        headers,
+      });
+      polled = ((await response.json()) as { request: RequestResource }).request;
+    }
+    expect(polled.state).toBe("granted");
+    expect(polled.lease).toMatchObject({ device: "iPhone 16", os: "18.4", platform: "ios" });
+  });
 });

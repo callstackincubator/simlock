@@ -421,9 +421,36 @@ describe("POST /v1/lease-requests", () => {
 
   it("400s a malformed body before ever dispatching", async () => {
     const { app, dispatcher } = buildHarness();
-    const response = await postLeaseRequest(app, { platform: "ios" });
+    const response = await postLeaseRequest(app, { device: "iPhone 17 Pro" });
     expect(response.status).toBe(400);
     expect(dispatcher.calls).toHaveLength(0);
+  });
+
+  it("400s a body naming both a device and a class as BAD_REQUEST before dispatching, the message naming both fields", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const response = await postLeaseRequest(app, { ...defaultBody, class: "phone" });
+
+    expect(response.status).toBe(400);
+    const { error } = (await response.json()) as { error: { code: string; message: string } };
+    expect(error.code).toBe("BAD_REQUEST");
+    expect(error.message).toContain("device");
+    expect(error.message).toContain("class");
+    expect(dispatcher.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ["a class", { class: "tablet", platform: "ios" }, { class: "tablet", platform: "ios" }],
+    ["only a platform", { platform: "android" }, { platform: "android" }],
+  ])("dispatches a body naming %s with no model", async (_label, body, expected) => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, body);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
+    await responsePromise;
+
+    expect(call.input).toMatchObject(expected);
+    expect(call.input).not.toHaveProperty("model");
   });
 
   it.each([

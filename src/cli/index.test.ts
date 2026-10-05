@@ -5175,3 +5175,111 @@ describe("simlock list --requests", () => {
     },
   );
 });
+
+describe("simlock lease: a request names a model, a class, or nothing", () => {
+  const grant = {
+    device: {
+      driverDeviceId: "dev_1",
+      id: "dev_1",
+      mode: "full",
+      spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+    },
+    environment: {},
+    lease: {
+      deviceId: "dev_1",
+      grantedAt: 0,
+      id: "lse_1",
+      lastRenewedAt: 0,
+      ownerId: "test-requester",
+      requesterId: "test-requester",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    },
+    timing: {
+      estimatedBootMs: 0,
+      estimatedProvisionMs: 0,
+      estimatedReadyMs: 0,
+      estimatedReclaimMs: 0,
+    },
+  };
+
+  async function sentFor(args: readonly string[]): Promise<Record<string, unknown> | undefined> {
+    let sent: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        sent = input as unknown as Record<string, unknown>;
+        return Promise.resolve(grant);
+      },
+    });
+    const output = outputCapture();
+    await runCli(
+      ["lease", ...args, "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    return sent;
+  }
+
+  it("sends neither model nor class for a lease with only a platform", async () => {
+    const sent = await sentFor(["--platform", "ios"]);
+
+    expect(sent).toMatchObject({ platform: "ios" });
+    expect(sent).not.toHaveProperty("model");
+    expect(sent).not.toHaveProperty("class");
+  });
+
+  it("sends the class for --class, and no model", async () => {
+    const sent = await sentFor(["--platform", "ios", "--class", "phone"]);
+
+    expect(sent).toMatchObject({ class: "phone", platform: "ios" });
+    expect(sent).not.toHaveProperty("model");
+  });
+
+  it("sends both fields for --class beside --device, leaving the refusal to the daemon", async () => {
+    const sent = await sentFor(["--platform", "ios", "--class", "phone", "--device", "iPhone 16"]);
+
+    expect(sent).toMatchObject({ class: "phone", model: "iPhone 16", platform: "ios" });
+  });
+
+  it("names --class in the lease usage text, with --device optional", async () => {
+    const output = outputCapture();
+
+    await runCli(["lease", "--help"], output.environmentWith({}));
+
+    expect(output.stdout).toContain("--class");
+    expect(output.stdout).not.toMatch(/--platform <ios\|android> --device <model>/);
+  });
+
+  it("prints the class of a waiting request that names no model, phone when it names none", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { class: "watch", platform: "ios" },
+          stage: "queued",
+        },
+        {
+          createdAt: 0,
+          id: "req_2",
+          queuePosition: 2,
+          requesterId: "b",
+          spec: { platform: "android" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios class watch, queued at 1, waiting 0s\n" +
+        "Request req_2: b, android class phone, queued at 2, waiting 0s\n",
+    );
+  });
+});

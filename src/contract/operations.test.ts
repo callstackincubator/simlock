@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS, type Effect, type OperationName } from "./operations.js";
+import {
+  OPERATIONS,
+  type Effect,
+  type OperationName,
+  requestedClass,
+  requestedDevice,
+} from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
@@ -297,8 +303,8 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["lease.request"].output.parse(grant)).toBeDefined();
   });
 
-  it("lease.request: rejects a malformed input (missing model)", () => {
-    expect(() => OPERATIONS["lease.request"].input.parse({ platform: "ios" })).toThrow();
+  it("lease.request: rejects a malformed input (missing platform)", () => {
+    expect(() => OPERATIONS["lease.request"].input.parse({ model: "iPhone 17" })).toThrow();
   });
 
   it("doctor.run: round-trips a driver-advisory finding", () => {
@@ -860,5 +866,46 @@ describe("operation input/output round trips", () => {
     const shape = OPERATIONS["config.get"].output.shape.capacity;
 
     expect(shape.parse(capacity)).toEqual(capacity);
+  });
+});
+
+describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () => {
+  const input = OPERATIONS["lease.request"].input;
+
+  it("refuses a request with both a class and a model, with a message naming the two fields", () => {
+    const result = input.safeParse({ class: "phone", model: "iPhone 16", platform: "ios" });
+
+    expect(result.success).toBe(false);
+    const message = result.success ? "" : result.error.issues.map((issue) => issue.message).join();
+    expect(message).toContain("class");
+    expect(message).toContain("model");
+  });
+
+  it("accepts a request with a class only, a model only, or neither", () => {
+    expect(input.safeParse({ class: "tablet", platform: "ios" }).success).toBe(true);
+    expect(input.safeParse({ model: "iPhone 16", platform: "ios" }).success).toBe(true);
+    expect(input.safeParse({ platform: "ios" }).success).toBe(true);
+  });
+
+  it("refuses a class that is not one of the seven", () => {
+    expect(input.safeParse({ class: "phablet", platform: "ios" }).success).toBe(false);
+  });
+
+  it("requestedDevice copies the class and leaves out the model a request did not name", () => {
+    expect(requestedDevice(input.parse({ class: "watch", platform: "ios" }))).toEqual({
+      class: "watch",
+      platform: "ios",
+    });
+    expect(requestedDevice(input.parse({ platform: "android" }))).toEqual({ platform: "android" });
+    expect(requestedDevice(input.parse({ model: "Pixel 8", platform: "android" }))).toEqual({
+      model: "Pixel 8",
+      platform: "android",
+    });
+  });
+
+  it("requestedClass answers the class named, phone for neither field, and none for an exact model", () => {
+    expect(requestedClass({ class: "tv" })).toBe("tv");
+    expect(requestedClass({})).toBe("phone");
+    expect(requestedClass({ model: "iPhone 16" })).toBeUndefined();
   });
 });

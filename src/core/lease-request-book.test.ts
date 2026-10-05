@@ -110,6 +110,21 @@ describe("Registry lease requests", () => {
     expect(await storedRequestIds(filesystem)).toEqual([created.id]);
   });
 
+  it("loads a stored class request after a reload, with its class and no model", async () => {
+    const { clock, filesystem, registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest({
+      ownerId: "agent",
+      request: { class: "phone", platform: "ios" },
+      requesterId: "agent",
+    });
+
+    const { registry: reloaded } = await loadRegistry({ clock, filesystem });
+
+    expect(reloaded.leaseRequests().map((record) => [record.id, record.request])).toEqual([
+      [created.id, { class: "phone", platform: "ios" }],
+    ]);
+  });
+
   it("reads a stored request back after a reload, result included", async () => {
     const { clock, filesystem, registry } = await loadRegistry();
     const created = await registry.createLeaseRequest({

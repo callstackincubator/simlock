@@ -333,9 +333,25 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
 describe("Dispatcher: parsing", () => {
   it("rejects a malformed input with BAD_REQUEST before the handler runs", async () => {
     const { dispatcher } = await buildDispatcher();
-    const rejection = dispatcher.dispatch("lease.request", { platform: "ios" }, session());
+    const rejection = dispatcher.dispatch("lease.request", { model: "iPhone 17" }, session());
     await expect(rejection).rejects.toBeInstanceOf(DispatchError);
     await expect(rejection).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("rejects a lease.request naming both a class and a model with BAD_REQUEST, the message naming both fields", async () => {
+    const { dispatcher, registry } = await buildDispatcher();
+
+    const rejection = dispatcher.dispatch(
+      "lease.request",
+      { class: "phone", model: "iPhone 17 Pro", platform: "ios" },
+      session(),
+    );
+
+    await expect(rejection).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/class.*model|model.*class/s),
+    });
+    expect(registry.snapshot.leases).toEqual([]);
   });
 
   it.each([

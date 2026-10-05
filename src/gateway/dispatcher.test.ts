@@ -833,6 +833,26 @@ describe("GatewayDispatcher", () => {
       else expect(client.lastRequestLeaseInput).not.toHaveProperty("mode");
     });
 
+    it.each([
+      ["a class", { class: "phone", platform: "ios" }],
+      ["neither a model nor a class", { platform: "ios" }],
+    ] as const)(
+      "answers a lease.request naming %s BAD_REQUEST, as a gateway does not route class requests yet",
+      async (_label, input) => {
+        const { directory, dispatcher } = harness();
+        const client = new ScriptedWorkerClient();
+        directory.add("wrk_1", client);
+
+        await expect(
+          dispatcher.dispatch("lease.request", input, session({ role: "agent" })),
+        ).rejects.toMatchObject({
+          code: "BAD_REQUEST",
+          message: expect.stringContaining("does not route class requests yet"),
+        });
+        expect(client.lastRequestLeaseInput).toBeUndefined();
+      },
+    );
+
     it("forwards a lease.request's image tag to the worker unchanged", async () => {
       const { directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();

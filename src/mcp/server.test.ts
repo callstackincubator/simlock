@@ -230,6 +230,46 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("refuses a lease_simulator call naming both a class and a model, the message naming both fields, before asking", async () => {
+    const client = new FakeSimlockClient();
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const result = await call(mcpClient, "lease_simulator", {
+        class: "phone",
+        model: "iPhone 17 Pro",
+        platform: "ios",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("class");
+      expect(text(result)).toContain("model");
+      expect(client.calls).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it.each([
+    ["a class", { class: "watch", platform: "ios" }],
+    ["only a platform", { platform: "android" }],
+  ])("passes a lease_simulator call naming %s on with no model", async (_label, args) => {
+    const client = new FakeSimlockClient();
+    const inputs: unknown[] = [];
+    client.requestLeaseImpl = (input) => {
+      inputs.push(input);
+      return Promise.resolve(sampleGrant());
+    };
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const result = await call(mcpClient, "lease_simulator", args);
+
+      expect(result.isError).not.toBe(true);
+      expect(inputs).toEqual([args]);
+    } finally {
+      await close();
+    }
+  });
+
   it("passes lease_simulator's imageTag to the lease request, and refuses one outside the allowed characters before asking", async () => {
     const client = new FakeSimlockClient();
     const inputs: unknown[] = [];
