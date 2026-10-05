@@ -9,7 +9,7 @@ import {
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
-import { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
+import { classCandidates, modelClass, pairedRuntimes } from "./catalog-match.js";
 import {
   type DeviceClass,
   type DeviceMode,
@@ -338,12 +338,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const deviceClass = requestedClass({ class: request.class });
     const entry = (await this.options.catalog.listCatalog(request.platform))[0];
     if (entry === undefined) throw new UnknownModelError(request.platform, undefined, deviceClass);
-    const candidates = (
-      this.options.modelPreferences[request.platform]?.[deviceClass] ?? []
-    ).flatMap((name) => {
-      const listed = findCatalogModel(entry, name);
-      return listed !== undefined && modelClass(entry, listed) === deviceClass ? [listed] : [];
-    });
+    const candidates = classCandidates(
+      entry,
+      deviceClass,
+      this.options.modelPreferences[request.platform]?.[deviceClass] ?? [],
+    );
     if (candidates.length === 0) {
       throw new UnknownModelError(request.platform, undefined, deviceClass);
     }

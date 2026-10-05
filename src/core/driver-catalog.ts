@@ -1,5 +1,5 @@
 import { type Logger, NoopLogger } from "../ports/index.js";
-import { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
+import { classCandidates, pairedRuntimes } from "./catalog-match.js";
 import { DEVICE_CLASSES, type DeviceClass, type DeviceSpec, type Platform } from "./domain.js";
 import type {
   ExactDeviceRequest,
@@ -137,10 +137,11 @@ export class DriverCatalog {
   ): Partial<Record<DeviceClass, string>> {
     const defaults: Partial<Record<DeviceClass, string>> = {};
     for (const deviceClass of DEVICE_CLASSES) {
-      const counted = (this.#preferences[platform]?.[deviceClass] ?? []).flatMap((name) => {
-        const model = findCatalogModel(entry, name);
-        return model !== undefined && modelClass(entry, model) === deviceClass ? [model] : [];
-      });
+      const counted = classCandidates(
+        entry,
+        deviceClass,
+        this.#preferences[platform]?.[deviceClass] ?? [],
+      );
       const chosen = counted.find((model) => pairedRuntimes(entry, model).length > 0) ?? counted[0];
       if (chosen !== undefined) defaults[deviceClass] = chosen;
     }

@@ -48,3 +48,18 @@ export function pairedRuntimes(
 ): readonly string[] {
   return (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ?? [];
 }
+
+/**
+ * The names on a class's preference list that count on this host (ADR 0015 §4): each one the
+ * entry lists, as the listed spelling, and that the entry classes as `deviceClass`, in list order.
+ */
+export function classCandidates(
+  entry: CatalogNames & { readonly modelClasses: Readonly<Record<string, DeviceClass>> },
+  deviceClass: DeviceClass,
+  preferences: readonly string[],
+): readonly string[] {
+  return preferences.flatMap((name) => {
+    const model = findCatalogModel(entry, name);
+    return model !== undefined && modelClass(entry, model) === deviceClass ? [model] : [];
+  });
+}
