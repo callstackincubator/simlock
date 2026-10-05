@@ -26,6 +26,7 @@ import {
   type LeaseRecord,
   type Platform,
   sameSpec,
+  specMode,
 } from "./domain.js";
 import {
   ComponentBeingRemovedError,
@@ -198,6 +199,19 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
+   * Whether a device with this spec is in the pool a request naming no mode draws from: its pool
+   * mode (the spec's mode, full when it names none) is the platform's default mode (ADR 0009 §6).
+   */
+  servesDefaultMode(spec: DeviceSpec): boolean {
+    return specMode(spec) === this.#defaultMode(spec.platform);
+  }
+
+  /** The one place a platform's default mode is read (ADR 0007 §2): full when none is set. */
+  #defaultMode(platform: Platform): DeviceMode {
+    return this.options.defaultModes[platform] ?? "full";
+  }
+
+  /**
    * The session principal a pending request was created under (ADR §4: `ownerId` on
    * `LeaseRequestOptions`, always the session principal, never the caller-suppliable
    * `requesterId`). `undefined` when no pending request exists for this requester id --
@@ -336,7 +350,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     try {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
-      const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
+      const mode = request.mode ?? this.#defaultMode(request.platform);
       const range = requestedRange(request);
       const target =
         range === undefined

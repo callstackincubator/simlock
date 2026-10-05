@@ -101,6 +101,9 @@ export const deviceRecordSchema = z.object({
   /** Decoration added by `status.get`/`list.get`: `true` for a device whose transition is a
    * stall by the rule `doctor` reports; absent otherwise. */
   stalled: z.boolean().optional(),
+  /** Decoration added by `status.get`/`list.get` (ADR 0009 §6): whether the device's pool mode is
+   * the worker's default mode for its platform. Absent on a record the registry holds. */
+  servesDefaultMode: z.boolean().optional(),
 });
 
 /**
@@ -144,6 +147,13 @@ export const statusDeviceSchema = z.object({
   state: deviceStateSchema,
   /** The device mode (see `DeviceRecord.mode`) -- not the daemon's own `worker`/`gateway` mode. */
   mode: deviceModeSchema,
+  /**
+   * ADR 0009 §6: whether the device's pool mode (its spec's mode, full when it names none) is the
+   * worker's default mode for the device's platform -- the pool a request naming no mode draws
+   * from. The gateway reads it to tell a warm hit for such a request. Not `mode`: `mode` is what
+   * the device actually is, this is what a request with no mode would get.
+   */
+  servesDefaultMode: z.boolean(),
   foreignStateDetectedAt: z.number().optional(),
   foreignProvenanceDetectedAt: z.number().optional(),
   quarantineAttempts: z.number().optional(),

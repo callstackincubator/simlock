@@ -25,6 +25,7 @@ function device(id: string, overrides: Partial<WorkerDevice> = {}): WorkerDevice
   return {
     id,
     mode: "full",
+    servesDefaultMode: true,
     spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
     state: "ready",
     ...overrides,

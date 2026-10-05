@@ -68,6 +68,35 @@ describe("the registered warm-then-free policy", () => {
     });
   });
 
+  it("does not dispatch a full request as a warm hit to a slim warm device while another worker has free capacity", () => {
+    // The slim worker sorts last and has less room, so only a warm hit could pick it.
+    const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });
+    const slim = view("wrk_z_slim", {
+      capacity: withIos({ maxRunning: 1 }),
+      devices: [deviceFixture("dev_slim", "ready", "slim")],
+    });
+
+    expect(policy.select({ ...REQUEST, mode: "full" }, [cold, slim])).toEqual({
+      reason: "free-capacity",
+      stage: "free-capacity",
+      workerId: "wrk_a_cold",
+    });
+  });
+
+  it("does not dispatch a slim request as a warm hit to a full warm device while another worker has free capacity", () => {
+    const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });
+    const full = view("wrk_z_full", {
+      capacity: withIos({ maxRunning: 1 }),
+      devices: [deviceFixture("dev_full", "ready", "full")],
+    });
+
+    expect(policy.select({ ...REQUEST, mode: "slim" }, [cold, full])).toEqual({
+      reason: "free-capacity",
+      stage: "free-capacity",
+      workerId: "wrk_a_cold",
+    });
+  });
+
   it.each([
     ["starting", "starting" as const],
     ["failed", "failed" as const],

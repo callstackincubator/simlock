@@ -203,6 +203,33 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
 
 describe("FleetLeaseCoordinator device mode", () => {
   it.each([
+    ["full", "wrk_a_cold", "free-capacity"],
+    ["slim", "wrk_z_slim", "warm-hit"],
+  ] as const)(
+    "routes a %s request to %s by the %s stage when the only warm device is slim and another worker has more room",
+    async (mode, expectedWorker, expectedStage) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      for (const id of ["wrk_a_cold", "wrk_z_slim"]) {
+        const client = new ScriptedWorkerClient();
+        client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+        directory.add(id, client);
+      }
+      connectWorker(workers, "wrk_a_cold", { capacity: roomierIos() });
+      connectWorker(workers, "wrk_z_slim", {
+        devices: [deviceFixture("dev_slim", "ready", "slim")],
+      });
+      const dispatched: { workerId: string; stage: string }[] = [];
+      eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+      await coordinator.request({ ...REQUEST, mode }, requestOptions());
+
+      expect(dispatched).toEqual([
+        expect.objectContaining({ stage: expectedStage, workerId: expectedWorker }),
+      ]);
+    },
+  );
+
+  it.each([
     ["slim", { mode: "slim" as const }],
     ["full", { mode: "full" as const }],
   ])("forwards a request's mode %s to the worker unchanged", async (_label, mode) => {
@@ -1006,6 +1033,42 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
     // Sanity: the request really did land where the event says it did.
     expect(grant.lease.worker?.id).toBe("wrk_a");
+  });
+
+  it.each(["full", "slim"] as const)(
+    "request.dispatched carries the requested mode %s",
+    async (mode) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      connectWorker(workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        grant: grantFixture(),
+        kind: "grant",
+        progress: [{ etaMs: 5_000, stage: "provisioning" }],
+      });
+      const dispatched: unknown[] = [];
+      eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+      await coordinator.request({ ...REQUEST, mode }, requestOptions());
+
+      expect(dispatched).toEqual([expect.objectContaining({ mode })]);
+    },
+  );
+
+  it("request.dispatched carries no mode key when the request named none", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: object[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).not.toHaveProperty("mode");
   });
 
   it("relays a worker's downloading pushes to the requester unchanged", async () => {

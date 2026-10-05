@@ -208,6 +208,8 @@ async function buildDispatcher(
     readonly claims?: { isClaimed(deviceId: string): boolean };
     /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
     readonly otherStallDrivers?: readonly FakeDriver[];
+    /** Extra lease engine options, such as `defaultModes` (a platform's default device mode). */
+    readonly engine?: Pick<ConstructorParameters<typeof LeaseEngine>[0], "defaultModes">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -250,6 +252,7 @@ async function buildDispatcher(
     ...wiring,
     clock,
     config,
+    ...overrides.engine,
     drivers: [driver],
     eventBus,
     idGenerator: sequence(),
@@ -1207,6 +1210,48 @@ describe("Dispatcher: device mode on every surface", () => {
       expected,
     );
   });
+
+  it.each([
+    ["slim", true, false],
+    ["full", false, true],
+  ] as const)(
+    "status.get and list.get report servesDefaultMode for every device: on a worker whose default is %s, a slim pool is %s and a full pool is %s",
+    async (defaultMode, slimServes, fullServes) => {
+      const { dispatcher, registry } = await buildDispatcher({
+        engine: { defaultModes: { ios: defaultMode } },
+      });
+      const register = (driverDeviceId: string, slim: boolean) =>
+        registry.registerDevice({
+          driverData: {},
+          driverDeviceId,
+          provisionDuration: 0,
+          spec: {
+            model: "iPhone 17 Pro",
+            osVersion: "26.5",
+            platform: "ios",
+            ...(slim ? { mode: "slim" as const } : {}),
+          },
+        });
+      const slim = await register("driver-slim", true);
+      const full = await register("driver-full", false);
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+      const list = await dispatcher.dispatch(
+        "list.get",
+        { kind: "devices" },
+        session({ role: "admin" }),
+      );
+
+      const expected = [
+        { id: slim.id, servesDefaultMode: slimServes },
+        { id: full.id, servesDefaultMode: fullServes },
+      ];
+      const project = (devices: readonly { id: string; servesDefaultMode?: boolean }[]) =>
+        devices.map(({ id, servesDefaultMode }) => ({ id, servesDefaultMode }));
+      expect(project(status.devices)).toEqual(expected);
+      expect(project(list as { id: string; servesDefaultMode?: boolean }[])).toEqual(expected);
+    },
+  );
 
   it("status marks a stalled device with stalled: true and leaves others without it", async () => {
     const { clock, dispatcher, registry } = await buildDispatcher();

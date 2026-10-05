@@ -716,7 +716,16 @@ has the model and the runtime but cannot pair them is passed over. With
 runtime when `--os` is given. Among the
 workers that can serve it, one that is not healthy or has requests of its own
 waiting is passed over (the request waits for it rather than failing). Of the
-rest, a machine with a matching warm device gets the request first. Otherwise a
+rest, a machine with a matching warm device gets the request first. A warm device
+matches when its model and runtime fit and its mode fits the request: with
+`--mode full` it must be a `full` device, with `--mode slim` a `slim` one, and
+with no `--mode` it must be one that `status` shows as serving the default mode
+(see [`simlock status`](#simlock-status)). With no `--os`, the runtime must be the one
+the worker would pick: its default runtime when the model pairs with it,
+otherwise the model's only paired runtime. A worker whose model pairs with
+several runtimes and no default has no warm match for such a request. A request
+with no warm match goes to a machine with free capacity, which boots a device.
+Otherwise a
 worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
 is preferred over one at it, and the one with the most free capacity gets the
 request. You do not name a machine and there is no flag to; where
@@ -1161,7 +1170,7 @@ A device currently `provisioning` or `reclaiming` carries a derived
 and `list --devices` well before it crosses the threshold that would make
 `doctor` flag it as stalled. Once it crosses it, with nothing working on it,
 `status` marks it `stalled`
-(`Device dev_7: provisioning, mode full (mid-transition 412000ms, stalled)`),
+(`Device dev_7: provisioning, mode full, serves default mode: yes (mid-transition 412000ms, stalled)`),
 and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
@@ -1173,12 +1182,20 @@ when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
 managed device with its state and device mode
-(`Device dev_7: ready, mode slim`), current leases (who — the agent
+(`Device dev_7: ready, mode slim, serves default mode: no`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
 renewed), the component installs in progress, and queue depth. `--json` for
 the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
+
+Each device line says, after its mode, whether the device serves the default
+mode: `serves default mode: yes` when its pool is the one a lease with no
+`--mode` draws from on this machine (the mode `ios.defaultMode` names, `full`
+for Android and for iOS unless configured), `no` when it is the other one. A
+device's `mode` is what it is; this is what a lease with no `--mode` would
+get. In `--json` it is `servesDefaultMode`, a boolean on every device, next to
+`mode`; `list --devices --json` carries it too.
 
 Each platform's capacity line ends in `(at RAM budget)` when creating one more
 full device of that platform would be refused for RAM. In `--json` it is
@@ -1214,7 +1231,7 @@ answers for the whole fleet, in the same shape: the daemon line reads
 budget over those that report one, over its limit when any worker is; a
 platform is `at RAM budget` only when every connected worker is), one line
 per worker precedes the devices, and every device, lease and install names the
-worker it lives on (`Device dev_7 on wrk_a: leased, mode full`,
+worker it lives on (`Device dev_7 on wrk_a: leased, mode full, serves default mode: yes`,
 `Install ios 26.4 on wrk_a: waiting for 3s, 1 waiter`). Installs are listed
 for the connected workers, the 16 oldest across the fleet. `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each

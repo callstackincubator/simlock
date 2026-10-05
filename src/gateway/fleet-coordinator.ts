@@ -876,6 +876,7 @@ export class FleetLeaseCoordinator {
       const createdAt = this.#createdAt.get(waiter);
       this.#emit("request.dispatched", {
         model: waiter.request.model,
+        ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
         platform: waiter.request.platform,
         queuedMs: createdAt === undefined ? 0 : Math.max(0, this.options.clock.now() - createdAt),
         reason: decision.reason,
@@ -1263,5 +1264,6 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     model: waiter.request.model,
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
+    ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
   };
 }

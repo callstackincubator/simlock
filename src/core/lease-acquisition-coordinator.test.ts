@@ -1180,6 +1180,40 @@ describe("LeaseAcquisitionCoordinator", () => {
       },
     );
 
+    it.each([
+      ["slim", "slim", true],
+      ["slim", "full", false],
+      ["full", "full", true],
+      ["full", "slim", false],
+    ] as const)(
+      "on a worker whose default is %s, a device whose pool mode is %s reports servesDefaultMode %s",
+      async (defaultMode, poolMode, served) => {
+        const harness = await createHarness({
+          defaultModes: { ios: defaultMode },
+          drivers: [slimmingDriver()],
+        });
+        const spec = {
+          model: "iPhone 17",
+          osVersion: "26.5",
+          platform: "ios" as const,
+          ...(poolMode === "slim" ? { mode: "slim" as const } : {}),
+        };
+
+        expect(harness.coordinator.servesDefaultMode(spec)).toBe(served);
+      },
+    );
+
+    it("compares a device's pool mode with its own platform's default, full when that platform has none", async () => {
+      const harness = await createHarness({
+        defaultModes: { ios: "slim" },
+        drivers: [slimmingDriver()],
+      });
+      const android = { model: "Pixel 9", osVersion: "35", platform: "android" as const };
+
+      expect(harness.coordinator.servesDefaultMode(android)).toBe(true);
+      expect(harness.coordinator.servesDefaultMode({ ...android, mode: "slim" })).toBe(false);
+    });
+
     it("passes the resolved mode to resolveSpec, the default filled in for a request that named none", async () => {
       const driver = slimmingDriver();
       const harness = await createHarness({ defaultModes: { ios: "slim" }, drivers: [driver] });

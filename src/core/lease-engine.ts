@@ -16,6 +16,7 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type {
   DeviceMode,
+  DeviceSpec,
   LeaseGrant as StoredLeaseGrant,
   LeaseRecord,
   LeaseRequestFailure,
@@ -402,6 +403,11 @@ export class LeaseEngine {
   // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
   atRamBudget(platform: Platform): boolean {
     return this.#capacity.atRamBudget(platform, this.#capacityDevices());
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the DeviceModeReader port by the dispatcher.
+  servesDefaultMode(spec: DeviceSpec): boolean {
+    return this.#acquisition.servesDefaultMode(spec);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
