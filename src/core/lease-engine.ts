@@ -266,7 +266,15 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#nuke = new NukeService({
-      acquisition: this.#acquisition,
+      acquisition: {
+        // Closing acquisition first makes the pool skip every new action; then a boot or
+        // shutdown it already has in flight is waited for, so the reset sees a settled pool.
+        beginMaintenance: async () => {
+          await this.#acquisition.beginMaintenance();
+          await this.#warmPool.settle();
+        },
+        endMaintenance: async () => this.#acquisition.endMaintenance(),
+      },
       devices: this.#deviceLifecycle,
       leases: this.#releaseCoordinator,
       registry: options.registry,

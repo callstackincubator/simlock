@@ -162,7 +162,8 @@ describe("warm pool policy", () => {
     const full = device("full", "shutdown", { endedAgo: 1_000 });
 
     const forFull = evaluate(view([slim, full], { waiting: [classDemand("full")], limit: 5 }));
-    const forSlim = evaluate(view([slim, full], { waiting: [classDemand("slim")], limit: 5 }));
+    // Full first: a check that refuses only slim-for-full would pick `full` here.
+    const forSlim = evaluate(view([full, slim], { waiting: [classDemand("slim")], limit: 5 }));
 
     // `reason` tells the waiting-request boot from the recently-released one: both devices were
     // released a moment ago, so each is booted back either way once a slot is free.
@@ -299,6 +300,17 @@ describe("warm pool policy", () => {
     expect(evaluate(view([recent, busy, served], { limit: 3, waiting: [classDemand()] }))).toEqual([
       { action: "boot", deviceId: "recent", reason: "recently-released" },
     ]);
+  });
+
+  it("boots a device only for the head of the queue, not for a request behind it", () => {
+    const tablet = device("tablet", "shutdown", { endedAgo: 20 * minute, spec: spec("iPad Pro") });
+    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
+    // The head wants an Android device nothing serves; the iOS phone request is behind it.
+    const proposals = evaluate(
+      view([tablet, phone], { waiting: [classDemand("full", "android"), classDemand()] }),
+    );
+
+    expect(proposals).toEqual([]);
   });
 
   it("holds a slot for a request whose device work is in flight, and boots nothing for it", () => {

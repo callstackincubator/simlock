@@ -149,15 +149,21 @@ function boots(
   };
 
   const unserved: WaitingDemand[] = [];
+  let headSeen = false;
   for (const demand of view.waiting) {
     if (demand.inFlight) {
       unserved.push(demand);
       continue;
     }
-    const device = bootable.find(
-      (candidate) =>
-        !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
-    );
+    // Only the head of the queue is granted a device (strict FIFO), so a device booted for a
+    // request behind it would sit idle, be shut down by the idle rule, and be booted again.
+    const device = headSeen
+      ? undefined
+      : bootable.find(
+          (candidate) =>
+            !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
+        );
+    headSeen = true;
     if (device !== undefined) boot(device, "waiting-request");
     else if (!running.some((candidate) => serves(candidate, demand))) unserved.push(demand);
   }

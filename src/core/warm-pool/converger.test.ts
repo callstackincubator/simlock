@@ -74,7 +74,7 @@ function harness(
     setState(id, "leased");
     state.leases.push(leaseOn(id));
   };
-  const reservations: { released: number; claimedAtBoot?: boolean }[] = [];
+  const reservations: { released: number; claimedAtBoot?: boolean; releasedAtBoot?: number }[] = [];
   const kick = vi.fn();
   const waitingDemand = vi.fn(options.waiting ?? (() => []));
   const shutdownCalls: string[] = [];
@@ -131,7 +131,10 @@ function harness(
         bootCalls.push(target.id);
         const claimed = claims.isClaimed(target.id) && claims.isActive(claim);
         const last = reservations.at(-1);
-        if (last !== undefined) last.claimedAtBoot = claimed;
+        if (last !== undefined) {
+          last.claimedAtBoot = claimed;
+          last.releasedAtBoot = last.released;
+        }
         // Unlike the real lifecycle this leaves the claim to the caller, so what the pool does
         // about it is what the test sees.
         if (options.boot !== undefined) return options.boot(target);
@@ -312,6 +315,7 @@ describe("warm pool converger", () => {
 
     expect(rig.reservations).toHaveLength(1);
     expect(rig.reservations[0]?.claimedAtBoot).toBe(true);
+    expect(rig.reservations[0]?.releasedAtBoot).toBe(0);
     expect(rig.reservations[0]?.released).toBe(1);
     expect(rig.claims.isClaimed("shut")).toBe(false);
   });

@@ -111,17 +111,23 @@ describe("ManagedDeviceLifecycle", () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);
     const shutdown = await shutdownDevice(harness, ready);
-    const claim = harness.claims.tryClaim(shutdown.id, "boot");
-    if (claim === undefined) throw new Error("expected boot claim");
+    const leaseClaim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (leaseClaim === undefined) throw new Error("expected boot claim");
 
-    const booted = await harness.lifecycle.bootWarm(shutdown, claim);
+    const handoff = await harness.lifecycle.bootForLease(shutdown, leaseClaim);
+
+    expect(handoff?.device.state).toBe("ready");
+    expect(harness.claims.isClaimed(shutdown.id)).toBe(true);
+    handoff?.claim.release();
+    const again = await shutdownDevice(harness, handoff?.device ?? ready);
+    const warmClaim = harness.claims.tryClaim(again.id, "boot");
+    if (warmClaim === undefined) throw new Error("expected boot claim");
+
+    const booted = await harness.lifecycle.bootWarm(again, warmClaim);
 
     expect(booted).toMatchObject({ id: shutdown.id, state: "ready" });
     expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
     expect(harness.claims.isClaimed(shutdown.id)).toBe(false);
-    expect(
-      harness.eventBus.replay().filter((event) => event.event === "device.ready"),
-    ).toHaveLength(2);
   });
 
   it("bootWarm ends the boot claim and leaves the device shut down when the boot fails", async () => {

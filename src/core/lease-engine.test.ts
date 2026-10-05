@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { capacityChangedPayload, testComponentWiring } from "./testing.js";
 
 import { EventBus, type EventMap } from "../bus/index.js";
@@ -2660,6 +2660,36 @@ describe("LeaseEngine warm pool", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+  });
+
+  it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { makeReady: 50 },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    await flush();
+    clock.advance(50);
+    const grant = await granting;
+    await harness.engine.release(grant.lease.id, "explicit");
+    // The reclaim commits `shutdown`; the pool then starts booting it back, held on the clock.
+    await vi.waitFor(() =>
+      expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
+    );
+
+    const nuking = harness.engine.nuke(true);
+    await flush();
+    clock.advance(50);
+    await nuking;
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
   it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {
