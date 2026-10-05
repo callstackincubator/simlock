@@ -1,6 +1,6 @@
 # 0019. Startup ends every lease whose device is not running
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)
 - **Supersedes:** nothing. Narrows [ADR

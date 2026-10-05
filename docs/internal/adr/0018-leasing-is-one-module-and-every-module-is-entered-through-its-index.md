@@ -1,6 +1,6 @@
 # 0018. Leasing is one module, and every module is entered through its index
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-05
 - **Issue:** [#358](https://github.com/callstackincubator/simlock/issues/358)
 - **Supersedes:** nothing. Narrows [ADR 0005](0005-gateway-and-worker-modes.md)
