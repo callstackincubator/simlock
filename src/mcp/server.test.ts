@@ -25,6 +25,7 @@ describe("MCP server (smoke)", () => {
           {
             defaultRuntime: "26.5",
             modelAliases: {},
+            modelClasses: {},
             modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
             models: ["iPhone 17 Pro"],
             platform: "ios",
@@ -63,6 +64,9 @@ describe("MCP server (smoke)", () => {
         "release_simulator",
         "lease_status",
       ]);
+      expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
+        "modelClasses",
+      );
       for (const tool of tools.tools) {
         expect(tool.inputSchema).toEqual(expect.any(Object));
         expect(tool.outputSchema).toEqual(expect.any(Object));
@@ -82,6 +86,7 @@ describe("MCP server (smoke)", () => {
           {
             defaultRuntime: "26.5",
             modelAliases: {},
+            modelClasses: {},
             modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
             models: ["iPhone 17 Pro"],
             platform: "ios",

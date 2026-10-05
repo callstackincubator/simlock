@@ -40,7 +40,7 @@ import {
   type StatusGetOutput,
   type WorkerView,
 } from "../admin/index.js";
-import { type Role, waitingRequestSchema } from "../contract/index.js";
+import { deviceClassSchema, type Role, waitingRequestSchema } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import {
   awaitWithin,
@@ -2362,6 +2362,8 @@ function quarantineMarker(device: StatusGetOutput["devices"][number]): string {
   return `purge retry ${attempts}${nextRetryAt}`;
 }
 
+const DEVICE_CLASS_ORDER: readonly string[] = deviceClassSchema.options;
+
 function formatCatalog(response: CatalogGetOutput): string {
   if (response.platforms.length === 0) return "No platforms available.";
   return response.platforms
@@ -2372,16 +2374,25 @@ function formatCatalog(response: CatalogGetOutput): string {
       // A model's other names follow it on a line of their own.
       // A model that exists only because of something on that machine is marked `(custom)`.
       const custom = new Set(entry.customModels ?? []);
-      const models = entry.models.flatMap((model) => {
+      const modelLine = (model: string): string[] => {
         const paired =
           (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
           [];
         const aliases =
           (Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined) ?? [];
         return [
-          `    ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
-          ...(aliases.length > 0 ? [`      Other names: ${aliases.join(", ")}`] : []),
+          `      ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
+          ...(aliases.length > 0 ? [`        Other names: ${aliases.join(", ")}`] : []),
         ];
+      };
+      // Models sit under a line for their class, in the order of the enum, then `(no class)`.
+      const classOf = (model: string): string | undefined =>
+        Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+      const models = [...DEVICE_CLASS_ORDER, undefined].flatMap((deviceClass) => {
+        const members = entry.models.filter((model) => classOf(model) === deviceClass);
+        return members.length === 0
+          ? []
+          : [`    ${deviceClass ?? "(no class)"}:`, ...members.flatMap(modelLine)];
       });
       const images = (entry.images ?? []).map(
         (image) => `    ${image.runtime} ${image.tag} ${image.abi}`,

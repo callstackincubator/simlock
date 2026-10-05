@@ -22,6 +22,21 @@ import { z } from "zod";
 export const platformSchema = z.enum(["ios", "android"]);
 export type Platform = z.infer<typeof platformSchema>;
 
+/**
+ * ADR 0015 §3: the kind of device a model is. The contract and the core name the classes; which
+ * product family or tag of a platform's tools is which class lives in that platform's driver.
+ */
+export const deviceClassSchema = z.enum([
+  "phone",
+  "tablet",
+  "watch",
+  "tv",
+  "vision",
+  "auto",
+  "desktop",
+]);
+export type DeviceClass = z.infer<typeof deviceClassSchema>;
+
 const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
@@ -468,6 +483,15 @@ export const platformCatalogSchema = z.object({
       message: `modelAliases lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
     }),
   /**
+   * ADR 0015 §3: for a name in `models`, its class, when the platform's tools report one. A model
+   * the tools say nothing usable about has no entry. On a gateway it is the union over the
+   * connected workers; when two workers class a model differently, the first worker in id order
+   * wins.
+   */
+  modelClasses: z
+    .record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema)
+    .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX),
+  /**
    * ADR 0008 §1: every installed image, present only for a platform whose driver has images
    * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
    * natively is listed too. On a gateway it is the union by runtime, tag, and ABI.
@@ -498,15 +522,27 @@ export const platformCatalogSchema = z.object({
  * answer. A name that does not fit loses its mark and stays in `models`; the list stops at its
  * maximum, and an empty list is left out. Lives beside the schema so the bounds are written once.
  */
-export function fitPlatformCatalog<Entry extends { readonly customModels?: readonly string[] }>(
-  entry: Entry,
-): Entry {
-  if (entry.customModels === undefined) return entry;
-  const { customModels, ...rest } = entry;
-  const fitting = customModels
+export function fitPlatformCatalog<
+  Entry extends {
+    readonly customModels?: readonly string[];
+    readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
+  },
+>(entry: Entry): Entry {
+  const { customModels, modelClasses, ...rest } = entry;
+  const fitting = (customModels ?? [])
     .filter((model) => model.length <= CATALOG_NAME_MAX)
     .slice(0, CATALOG_CUSTOM_MODELS_MAX);
-  return (fitting.length === 0 ? rest : { ...rest, customModels: fitting }) as Entry;
+  return {
+    ...rest,
+    ...(modelClasses === undefined
+      ? {}
+      : {
+          modelClasses: Object.fromEntries(
+            Object.entries(modelClasses).filter(([model]) => model.length <= CATALOG_NAME_MAX),
+          ),
+        }),
+    ...(fitting.length === 0 ? {} : { customModels: fitting }),
+  } as unknown as Entry;
 }
 
 export const proposalSchema = z.object({

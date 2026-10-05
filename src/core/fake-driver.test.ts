@@ -144,6 +144,7 @@ describe("FakeDriver", () => {
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
       modelAliases: {},
+      modelClasses: {},
       modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17 Pro": ["18.4", "26.5"] },
       models: ["iPhone 16", "iPhone 17 Pro"],
       runtimes: ["18.4", "26.5"],
@@ -183,6 +184,23 @@ describe("FakeDriver", () => {
       modelAliases: { "Pixel 8": ["pixel_8"] },
     });
     expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("images");
+  });
+
+  it("reports the model classes its options name, and none without them", async () => {
+    const options = {
+      availableOsVersions: ["35"],
+      clock: new FakeClock(),
+      knownModels: ["Pixel 8", "Television (1080p)"],
+      platform: "android" as const,
+    };
+
+    await expect(
+      new FakeDriver({
+        ...options,
+        modelClasses: { "Pixel 8": "phone", "Television (1080p)": "tv" },
+      }).listCatalog(),
+    ).resolves.toMatchObject({ modelClasses: { "Pixel 8": "phone", "Television (1080p)": "tv" } });
+    expect((await new FakeDriver(options).listCatalog()).modelClasses).toEqual({});
   });
 
   it("reports the custom models its options name, and no customModels field without them", async () => {

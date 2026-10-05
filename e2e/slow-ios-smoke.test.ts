@@ -67,7 +67,12 @@ describe.skipIf(process.platform !== "darwin")(
         expect(catalog.code).toBe(0);
         const platforms = (
           catalog.json as {
-            platforms: { platform: string; models: string[]; runtimes: string[] }[];
+            platforms: {
+              platform: string;
+              models: string[];
+              runtimes: string[];
+              modelClasses: Record<string, string>;
+            }[];
           }
         ).platforms;
         const iosCatalog = platforms.find((platform) => platform.platform === "ios");
@@ -76,6 +81,9 @@ describe.skipIf(process.platform !== "darwin")(
           iosCatalog?.models.length ?? 0,
           "simlock catalog reported no iOS models",
         ).toBeGreaterThan(0);
+        // The class comes from the device type's product family, read off this host's simctl.
+        expect(iosCatalog?.modelClasses["iPhone 17"]).toBe("phone");
+        expect(iosCatalog?.modelClasses["Apple Watch Series 11 (46mm)"]).toBe("watch");
         for (const runtime of iosCatalog?.runtimes ?? []) {
           expect(
             availableRuntimes,

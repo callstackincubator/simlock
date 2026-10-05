@@ -4,6 +4,7 @@ import { MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import {
   BuiltinDeviceProfileSource,
   DeviceProfileRegistry,
+  parseAvdmanagerDeviceProfiles,
   parseDevicesXml,
   UserDeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
@@ -22,6 +23,7 @@ describe("BuiltinDeviceProfileSource", () => {
       {
         avdmanagerId: "pixel_8",
         custom: false,
+        deviceClass: "phone",
         kind: "builtin",
         name: "Pixel 8",
         names: ["Pixel 8", "pixel_8"],
@@ -60,6 +62,7 @@ describe("BuiltinDeviceProfileSource", () => {
       {
         avdmanagerId: "TV_1080p",
         custom: false,
+        deviceClass: "phone",
         kind: "builtin",
         name: "tv_1080p",
         names: ["tv_1080p"],
@@ -324,6 +327,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.resolve("Pixel 8")).resolves.toEqual({
       avdmanagerId: "pixel_8",
       custom: false,
+      deviceClass: "phone",
       kind: "builtin",
       name: "Pixel 8",
       names: ["Pixel 8", "pixel_8"],
@@ -417,6 +421,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: ["My Custom Phone"],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
       models: ["Pixel 8", "My Custom Phone"],
     });
   });
@@ -437,6 +442,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: [],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "Pixel 8": "phone", "Pixel 8 Copy": "phone" },
       models: ["Pixel 8", "Pixel 8 Copy"],
     });
   });
@@ -472,6 +478,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.catalog()).resolves.toEqual({
       customModels: ["My Custom Phone"],
       modelAliases: { "Pixel 8": ["pixel_8"] },
+      modelClasses: { "My Custom Phone": "phone", "Pixel 8": "phone" },
       models: ["Pixel 8", "My Custom Phone"],
     });
   });
@@ -587,6 +594,7 @@ describe("DeviceProfileRegistry", () => {
       await expect(registry.catalog()).resolves.toEqual({
         customModels: [],
         modelAliases: { "Pixel 8": ["pixel_8"] },
+        modelClasses: { "Pixel 8": "phone" },
         models: ["Pixel 8"],
       });
       expect(diagnostics).toEqual([
@@ -667,3 +675,89 @@ function processResult(stdout: string) {
     result: { code: 0, stderr: "", stdout },
   };
 }
+
+describe("device classes", () => {
+  const entry = (id: string, name: string, tag?: string) =>
+    `id: 1 or "${id}"\n    Name: ${name}\n    OEM : Google\n` +
+    (tag === undefined ? "" : `    Tag : ${tag}\n`) +
+    "---------\n";
+
+  async function modelClasses(output: string, devicesXmlText?: string) {
+    const sources = [
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)]),
+      ),
+      ...(devicesXmlText === undefined
+        ? []
+        : [
+            new UserDeviceProfileSource(
+              devicesXmlPath,
+              await filesystemWithDevicesXml(devicesXmlText),
+            ),
+          ]),
+    ];
+    return (await new DeviceProfileRegistry(sources).catalog()).modelClasses;
+  }
+
+  it("classes a profile by its tag: android-tv is tv, android-wear is watch, android-automotive, android-automotive-playstore and android-automotive-distantdisplay are auto, android-desktop is desktop", async () => {
+    const classes = await modelClasses(
+      entry("tv", "Television", "android-tv") +
+        entry("wear", "Wear Round", "android-wear") +
+        entry("auto1", "Auto One", "android-automotive") +
+        entry("auto2", "Auto Two", "android-automotive-playstore") +
+        entry("auto3", "Auto Three", "android-automotive-distantdisplay") +
+        entry("desk", "Desktop Large", "android-desktop"),
+    );
+
+    expect(classes).toEqual({
+      "Auto One": "auto",
+      "Auto Three": "auto",
+      "Auto Two": "auto",
+      "Desktop Large": "desktop",
+      Television: "tv",
+      "Wear Round": "watch",
+    });
+  });
+
+  it("classes an untagged avdmanager profile and a devices.xml profile as phone", async () => {
+    const classes = await modelClasses(entry("pixel_8", "Pixel 8"), devicesXml());
+
+    expect(classes).toEqual({ "My Custom Phone": "phone", "Pixel 8": "phone" });
+  });
+
+  it("lists no class for a profile whose tag is outside the table, and keeps the model", async () => {
+    const output = entry("odd", "Odd Device", "android-toaster") + entry("pixel_8", "Pixel 8");
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)]),
+      ),
+    ]);
+
+    const catalog = await registry.catalog();
+
+    expect(catalog.models).toEqual(["Odd Device", "Pixel 8"]);
+    expect(catalog.modelClasses).toStrictEqual({ "Pixel 8": "phone" });
+  });
+});
+
+describe("parseAvdmanagerDeviceProfiles", () => {
+  it("keeps the Tag line of the entry it belongs to and reads none before the first id", () => {
+    const output =
+      "Available devices:\n    Tag : android-wear\n" +
+      'id: 0 or "a"\n    Name: A\n---------\n' +
+      'id: 1 or "b"\n    Name: B\n    Tag : android-tv\n' +
+      'id: 2 or "c"\n    Name: C\n    Tag: android-desktop\n' +
+      'id: 3 or "d"\n    Name: D\n    Tag  :android-wear\n' +
+      'id: 4 or "e"\n    Name: E\n    Some Tag : android-tv\n';
+
+    expect(parseAvdmanagerDeviceProfiles(output).map((p) => [p.name, p.tag])).toEqual([
+      ["A", undefined],
+      ["B", "android-tv"],
+      ["C", "android-desktop"],
+      ["D", "android-wear"],
+      ["E", undefined],
+    ]);
+  });
+});
