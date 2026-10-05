@@ -13,7 +13,7 @@ import { LeaseEngine } from "./lease-engine.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { testComponentWiring } from "./test-wiring.js";
+import { testComponentWiring } from "./testing.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {

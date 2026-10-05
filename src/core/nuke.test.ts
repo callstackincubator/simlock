@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testComponentWiring } from "./test-wiring.js";
+import { testComponentWiring } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";

@@ -31,9 +31,11 @@ import {
   sameReceipt,
   UnknownModelError,
   UnsupportedRequestOptionError,
+  type ObservedMark,
+  type DeviceClass,
+  type DeviceMode,
+  type DeviceSpec,
 } from "../../core/index.js";
-import type { ObservedMark } from "../../core/driver.js";
-import type { DeviceClass, DeviceMode, DeviceSpec } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -2608,3 +2610,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+export { iosPrerequisites } from "./prerequisites.js";
+export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";

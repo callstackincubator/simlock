@@ -1,4 +1,4 @@
-import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/driver.js";
+import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/index.js";
 import { ProcessSpawnError, type ProcessResult, type ProcessRunner } from "../../ports/index.js";
 
 const XCODEBUILD_TIMEOUT_MS = 15_000;

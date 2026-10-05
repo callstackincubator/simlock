@@ -31,7 +31,7 @@ import type { FleetLeaseIndex } from "./lease-index.js";
  * Structurally identical to `src/daemon/owner-routed-facts.ts`'s own `OwnerRoutedFact`/
  * `OwnerRoutedFacts` -- declared again here, rather than imported, because ADR 0005 §33 allows
  * `src/gateway` exactly one `src/daemon` import (`daemon/dispatch.js`, enforced by
- * `boundary.test.ts`) and this shape does not need to be the second one: `DaemonServer` accepts
+ * `pnpm lint`) and this shape does not need to be the second one: `DaemonServer` accepts
  * anything satisfying it, and main.ts is what hands this class to a `DaemonServer` built outside
  * `src/gateway`, where the two names line up with no cast required.
  */

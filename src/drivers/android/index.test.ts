@@ -3,13 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { Driver } from "../../core/driver.js";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
+  type Driver,
 } from "../../core/index.js";
 import {
   FakeClock,

@@ -28,7 +28,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeDriver } from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
 import type { Filesystem } from "../ports/index.js";
 import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";

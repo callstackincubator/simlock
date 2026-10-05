@@ -1,4 +1,4 @@
-import type { Driver, PrerequisiteCheck } from "../../dist/core/driver.js";
+import type { Driver, PrerequisiteCheck } from "../../dist/core/index.js";
 import { OutOfProcessFakeDriver, readPlatformScript, type FakeDriverClock } from "./fake-driver.js";
 import { DEFAULT_LOG_ENV, DEFAULT_PLATFORMS_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
 

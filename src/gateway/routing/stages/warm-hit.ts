@@ -1,4 +1,4 @@
-import type { DeviceSpec } from "../../../core/domain.js";
+import type { DeviceSpec } from "../../../core/index.js";
 import type { WorkerView } from "../../worker-registry.js";
 import { deviceFit } from "../request-match.js";
 import type { RankStage } from "../pipeline.js";

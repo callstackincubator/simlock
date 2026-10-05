@@ -35,10 +35,14 @@ import {
   hostAbiFor,
   SdkMissingError,
   type AndroidEmulatorLaunchOptions,
+  androidPrerequisites,
 } from "../drivers/android/index.js";
-import { androidPrerequisites } from "../drivers/android/prerequisites.js";
-import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
-import { iosPrerequisites } from "../drivers/ios/prerequisites.js";
+import {
+  IOS_PASSTHROUGH_TOOL,
+  IosSimctlDriver,
+  type SlimmedFact,
+  iosPrerequisites,
+} from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";

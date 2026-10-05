@@ -9,7 +9,7 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
-import { resourceStrategy } from "./capacity/strategies/resource/index.js";
+import { resourceStrategy } from "./capacity/testing.js";
 import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";

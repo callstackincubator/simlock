@@ -15,7 +15,7 @@
  * see `DaemonServer`'s output parsing -- not a silent drift.
  *
  * This module must never import from src/core, src/daemon, src/drivers, src/http, src/cli,
- * src/mcp, or src/ports -- enforced by a test, see `boundary.test.ts`.
+ * src/mcp, or src/ports -- enforced by `pnpm lint` (`.oxlintrc.json`).
  */
 import { z } from "zod";
 
