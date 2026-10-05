@@ -3335,6 +3335,30 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
     expect(dispatchedExact[0]).not.toHaveProperty("class");
   });
 
+  it("sends a request for a class only one worker lists a model of to that worker", async () => {
+    const { coordinator, directory, workers } = harness();
+    const phonesOnly = new ScriptedWorkerClient();
+    const withTablet = new ScriptedWorkerClient();
+    directory.add("wrk_a", phonesOnly);
+    directory.add("wrk_b", withTablet);
+    withTablet.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a sorts first and has the same room, so only the class can send it to wrk_b.
+    connectWith(workers, "wrk_a", phones);
+    connectWith(workers, "wrk_b", {
+      ...phones,
+      modelClasses: { ...phones.modelClasses, "iPad Pro": "tablet" },
+      models: [...phones.models, "iPad Pro"],
+    });
+
+    await coordinator.request(
+      { class: "tablet", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(phonesOnly)).toEqual([]);
+    expect(withTablet.lastRequestLeaseInput).toMatchObject({ class: "tablet" });
+  });
+
   it("retries a worker's UNKNOWN_MODEL for a class request, before any progress, on another worker", async () => {
     const { coordinator, directory, workers } = harness();
     const a = new ScriptedWorkerClient();

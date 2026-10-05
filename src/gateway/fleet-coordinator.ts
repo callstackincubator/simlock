@@ -821,9 +821,9 @@ export class FleetLeaseCoordinator {
    * `#settleGrant` while `queue.resolve` quietly answers `false`, leaving an orphan lease no
    * client holds a reference to release.
    */
-  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, model: string | undefined): void {
+  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, rename: ModelName): void {
     if (!this.#queue.markProcessing(waiter)) return;
-    void this.#attempt(waiter, decision, model);
+    void this.#attempt(waiter, decision, rename);
   }
 
   /**
@@ -856,11 +856,7 @@ export class FleetLeaseCoordinator {
    * queued waiter needs, and nothing else would ever schedule that second look.
    */
   // fallow-ignore-next-line complexity -- one attempt, every exit of which is named in the doc comment above.
-  async #attempt(
-    waiter: FleetWaiter,
-    decision: RoutingDecision,
-    model: string | undefined,
-  ): Promise<void> {
+  async #attempt(waiter: FleetWaiter, decision: RoutingDecision, rename: ModelName): Promise<void> {
     const workerId = decision.workerId;
     const client = liveClient(this.options.directory.target(workerId));
     if (client === undefined) {
@@ -909,7 +905,7 @@ export class FleetLeaseCoordinator {
         client.requestLease(
           {
             // The request as it arrived, under the worker's own name for an exact model.
-            ...requestedDevice(model === undefined ? waiter.request : { ...waiter.request, model }),
+            ...requestedDevice({ ...waiter.request, ...rename }),
             requesterId: namespacedRequesterId,
             // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
             // session may set `owner` -- and this RPC always travels over exactly that
@@ -1259,10 +1255,15 @@ function forwardedModel(
   request: RoutableRequest,
   views: readonly WorkerView[],
   decision: RoutingDecision,
-): string | undefined {
-  if (request.model === undefined) return undefined;
+): ModelName {
+  if (request.model === undefined) return {};
   const view = views.find((worker) => worker.id === decision.workerId);
-  return (view === undefined ? undefined : matchRequest(view, request)) ?? request.model;
+  return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };
+}
+
+/** The `model` a forward overrides the request's own with: none for a class request. */
+interface ModelName {
+  readonly model?: string;
 }
 
 function routable(waiter: FleetWaiter): RoutableRequest {

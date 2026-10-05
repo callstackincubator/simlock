@@ -185,8 +185,11 @@ describe("assess", () => {
         details: { class: "watch", platform: "ios" },
         reason: "unresolvable-spec",
       });
-      const details = rejectionOf([view("wrk_a", PHONE)], { ...request, class: "watch" }).details;
-      expect(details).not.toHaveProperty("model");
+      const rejection = rejectionOf([view("wrk_a", PHONE)], { ...request, class: "watch" });
+      expect(rejection.details).not.toHaveProperty("model");
+      expect(rejection.message).toBe(
+        "No ios model of class watch is listed by any worker in the fleet; name one in ios.defaultModels.watch on a worker",
+      );
     });
 
     it("row 3: treats a request naming neither model nor class as phone", () => {

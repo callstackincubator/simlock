@@ -206,6 +206,10 @@ describe("matchRequest", () => {
       expect(listsModel(worker(PHONES), { platform: "ios" })).toBe(true);
     });
 
+    it("matches no runtime for a string the OS grammar refuses", () => {
+      expect(matchRequest(worker(PHONES), { ...phone, osVersion: "^18" })).toBeUndefined();
+    });
+
     it("reads no inherited key as a class", () => {
       const view = worker({ ...PHONES, modelClasses: {} as const, models: ["constructor"] });
 

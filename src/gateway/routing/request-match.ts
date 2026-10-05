@@ -6,7 +6,12 @@
 import { requestedClass } from "../../contract/index.js";
 import { type OsConstraint, parseOsConstraint, satisfies } from "../../contract/os-range.js";
 import { findCatalogModel, modelClass, pairedRuntimes } from "../../core/catalog-match.js";
-import type { DeviceClass, DeviceRequirement } from "../../core/domain.js";
+import {
+  type DeviceClass,
+  type DeviceRequirement,
+  type DeviceSpec,
+  fits,
+} from "../../core/domain.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 
@@ -23,69 +28,60 @@ import type { RoutableRequest } from "./pipeline.js";
  */
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
   const catalog = catalogOf(worker, request);
-  if (catalog === undefined) return undefined;
+  return catalog === undefined ? undefined : servingModel(catalog, request);
+}
+
+/** The first model of the entry that could serve the request: a pairing in the OS constraint. */
+function servingModel(catalog: PlatformEntry, request: RoutableRequest): string | undefined {
   return candidates(catalog, request).find((model) =>
     pairedRuntimesOf(catalog, model, request).some((runtime) => osFits(runtime, request)),
   );
 }
 
 /**
- * The runtime the worker would pick for an exact request, or `undefined` when the gateway cannot
- * say (ADR 0009 §6). The one the request names, when it names an exact version. With none named:
- * the catalog's `defaultRuntime` when the model pairs with it, otherwise the model's only paired
- * runtime. A model with several paired runtimes and no paired default has no answer: the worker's
- * choice then depends on what it would boot, and the gateway compares no versions.
+ * What a ready device must satisfy, on this worker, to serve the request (ADR 0015 §6, §8): the
+ * core's `fits` over a requirement built from the worker's own catalog. `undefined` when the
+ * worker cannot serve the request. The mode is not part of it; `warm-hit` keeps that rule.
  */
-export function pickedRuntime(worker: WorkerView, request: RoutableRequest): string | undefined {
-  const constraint = osConstraintOf(request);
-  if (constraint?.kind === "exact") return constraint.version;
-  if (constraint !== undefined) return undefined;
+export function deviceFit(
+  worker: WorkerView,
+  request: RoutableRequest,
+): ((spec: DeviceSpec) => boolean) | undefined {
   const catalog = catalogOf(worker, request);
-  if (catalog === undefined || request.model === undefined) return undefined;
-  const model = findCatalogModel(catalog, request.model);
+  if (catalog === undefined) return undefined;
+  const model = servingModel(catalog, request);
   if (model === undefined) return undefined;
-  const runtimes = pairedRuntimesOf(catalog, model, request);
-  const paired = runtimes.find((runtime) => runtime === catalog.defaultRuntime);
-  return paired ?? (runtimes.length === 1 ? runtimes[0] : undefined);
+  const requirement: DeviceRequirement = {
+    imageTag: request.imageTag,
+    osVersion: osRequirement(catalog, model, request),
+    platform: request.platform,
+    target:
+      request.model === undefined
+        ? { class: wantedClass(request), kind: "class" }
+        : { kind: "model", model },
+  };
+  return (spec) => fits(requirement, spec, (listed) => modelClass(catalog, listed));
 }
 
 /**
- * The requirement a ready device must `fit` to serve the request on this worker (ADR 0015 §6), or
- * `undefined` when the gateway cannot say which runtime the worker would pick. A class request
- * with no OS accepts any installed runtime; an exact one with no OS, the runtime the worker would
- * pick. The mode is not part of it.
+ * The OS a device must have. What the request names, exact or a range. With none named: a class
+ * accepts any installed runtime, and an exact model needs the runtime the worker would pick -- the
+ * catalog's `defaultRuntime` when the model pairs with it, otherwise its only paired runtime. A
+ * model with several paired runtimes and no paired default has no answer: the worker's choice then
+ * depends on what it would boot, and the gateway compares no versions, so no device fits.
  */
-export function requirementOf(
-  worker: WorkerView,
+function osRequirement(
+  catalog: PlatformEntry,
+  model: string,
   request: RoutableRequest,
-): DeviceRequirement | undefined {
-  const catalog = catalogOf(worker, request);
-  const model = matchRequest(worker, request);
-  if (catalog === undefined || model === undefined) return undefined;
-  const target: DeviceRequirement["target"] =
-    request.model === undefined
-      ? { class: wantedClass(request), kind: "class" }
-      : { kind: "model", model };
+): DeviceRequirement["osVersion"] {
   const constraint = osConstraintOf(request);
-  let osVersion: DeviceRequirement["osVersion"] | undefined;
-  if (constraint !== undefined) osVersion = constraint;
-  else if (request.model === undefined)
-    osVersion = { kind: "installed", versions: catalog.runtimes };
-  else {
-    const picked = pickedRuntime(worker, request);
-    osVersion = picked === undefined ? undefined : { kind: "exact", version: picked };
-  }
-  if (osVersion === undefined) return undefined;
-  return { imageTag: request.imageTag, osVersion, platform: request.platform, target };
-}
-
-/** The class a model is listed under on this worker, for `fits`. */
-export function classOfModel(
-  worker: WorkerView,
-  request: RoutableRequest,
-): (model: string) => DeviceClass | undefined {
-  const catalog = catalogOf(worker, request);
-  return (model) => (catalog === undefined ? undefined : modelClass(catalog, model));
+  if (constraint !== undefined) return constraint;
+  if (request.model === undefined) return { kind: "installed", versions: catalog.runtimes };
+  const runtimes = pairedRuntimesOf(catalog, model, request);
+  const picked = runtimes.find((runtime) => runtime === catalog.defaultRuntime);
+  const versions = picked === undefined ? (runtimes.length === 1 ? runtimes : []) : [picked];
+  return { kind: "installed", versions };
 }
 
 /**

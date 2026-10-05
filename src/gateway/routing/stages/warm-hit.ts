@@ -1,6 +1,6 @@
-import { type DeviceSpec, fits } from "../../../core/domain.js";
+import type { DeviceSpec } from "../../../core/domain.js";
 import type { WorkerView } from "../../worker-registry.js";
-import { classOfModel, requirementOf } from "../request-match.js";
+import { deviceFit } from "../request-match.js";
 import type { RankStage } from "../pipeline.js";
 
 /**
@@ -19,13 +19,12 @@ export const warmHit: RankStage = {
   kind: "rank",
   name: "warm-hit",
   score(worker, request) {
-    const requirement = requirementOf(worker, request);
-    if (requirement === undefined) return 0;
-    const classOf = classOfModel(worker, request);
+    const fitsRequest = deviceFit(worker, request);
+    if (fitsRequest === undefined) return 0;
     const warm = worker.devices.some(
       (device) =>
         device.state === "ready" &&
-        fits(requirement, deviceSpec(device.spec), classOf) &&
+        fitsRequest(deviceSpec(device.spec)) &&
         (request.mode === undefined ? device.servesDefaultMode : device.mode === request.mode),
     );
     return warm ? 1 : 0;
