@@ -98,8 +98,34 @@ not in the spec becomes a `bug:new` issue or one line under Open.
 
 ## 5. Prove it
 
-**Check your own tests first**, the way the reviewers will. For each test
-you added or changed:
+**Audit the diff before the reviewers do.** Read `git diff origin/main`
+as someone who has not seen the spec, and answer four questions. Each miss
+here has cost a review round before.
+
+- **What did I take away?** For every name, behaviour, limit or guarantee
+  the diff removes, renames or narrows, search the whole repo (code
+  comments, `docs/` including `docs/internal/`, test titles, config, help
+  text) by its name and by the plain words that describe it. Fix every line
+  that now states the old fact. Your change is not done while the repo
+  still describes the old world.
+- **What did I replace?** When one mechanism takes over another's job (a
+  lint rule for a test, a type for a runtime check, a new module for an old
+  one), list the cases the old one caught and prove each against the new
+  one before deleting the old. A case the new one misses is a gap, not a
+  cleanup.
+- **What does the new code accept that it should not?** For every rule,
+  pattern, filter or validator you add, try the inputs a careless or
+  creative caller would use: other spellings, other paths, other import or
+  call forms, empty and boundary values. Each one it lets through either
+  gets a fixture or an `Open:` line.
+- **What did I promise?** Walk every Scope and Done when line and name the
+  hunk or test that delivers it. A line you cannot point to is not done:
+  do it, or leave it unticked and say why under Open. Never tick a box on
+  intent.
+
+**Check your own tests**, the way the reviewers will. For each test you
+added or changed, including every test whose setup or assertions you
+edited after the red commit:
 
 - Its title, its assertions and its fixture state make the same claim. A
   title naming two claims has an assertion for each.
@@ -149,8 +175,9 @@ behaviour, write the test that fails first, then the fix; for a stale doc or
 comment, just fix it. A line ending in `(record as Assumption: ...)` also
 adds that assumption to the PR body. A hardware Evidence line is a failing
 slow-lane test: fix the code, not the test. One commit per finding or per
-closely related group. Then step 5 again, including the self-check on every
-test the fix touched: a fix that leaves a test vacuous costs a review round.
+closely related group. Then step 5 again, including the audit (a fix
+removes or renames things too) and the self-check on every test the fix
+touched: a fix that leaves a test vacuous costs a review round.
 
 ## Report
 
@@ -159,6 +186,7 @@ End with exactly this block, nothing after it:
 ```
 Issue: #N  Branch: <kind>/<N>  PR: #M (draft)
 Tests: k of n spec tests green (red commit <short sha>)
+Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
 Check: pass | fail (<what failed>)
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
 Hardware: <Done when lines that need real devices, or "none">
