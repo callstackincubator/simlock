@@ -338,6 +338,23 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     ]);
   });
 
+  it("settles wait() on the pipe's close, without waiting out the exit grace window", async () => {
+    // A grace far longer than the bound below: only `close` can settle in time.
+    const runner = new NodeProcessRunner({ exitGraceMs: 30_000 });
+
+    const handle = runner.spawnStreaming(process.execPath, ["-e", "process.exitCode = 4"], {
+      onChunk: () => {},
+    });
+    const outcome = await Promise.race([
+      handle.wait(),
+      new Promise<"not settled within 3 s">((resolve) => {
+        setTimeout(() => resolve("not settled within 3 s"), 3_000).unref();
+      }),
+    ]);
+
+    expect(outcome).toEqual({ code: 4, signal: null });
+  }, 6_000);
+
   it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
     // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
     // implementation from throwing synchronously. Called bare inside a `data` listener (round
