@@ -38,6 +38,20 @@ await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();
 ```
 
+`requestLease` names its device in one of three ways: `model`, an exact model;
+`class`, one of `"phone"`, `"tablet"`, `"watch"`, `"tv"`, `"vision"`, `"auto"` or
+`"desktop"`, in place of a model; or neither, which asks for a `"phone"`. Naming both is a
+`BAD_REQUEST`. A request that names a class or nothing is granted an idle device
+that fits before any device is created, and `grant.device.spec` names the model
+you got:
+
+```ts
+await client.requestLease({ platform: "ios", class: "tablet" });
+await client.requestLease({ platform: "android" }); // a phone
+```
+
+Through a gateway, a request that names no `model` is a `BAD_REQUEST` for now.
+
 `requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
 mode the lease asks for. Without it the lease gets the default mode of the
 worker that serves it (`ios.defaultMode`, `full` unless configured). Any

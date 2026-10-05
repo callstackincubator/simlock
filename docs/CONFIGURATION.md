@@ -501,6 +501,22 @@ set to an iPad, the `phone` default is the first of Simlock's own names that
 qualifies. Which class a model belongs to is what the platform's tools report;
 see `modelClasses` in [`simlock catalog`](CLI.md#simlock-catalog---platform-iosandroid---json).
 
+### How a lease for a class picks a model
+
+A lease that names a class, or no model at all (which means `phone`), is
+granted an idle device of the class that fits before a new one is created. Only
+when nothing idle fits does the list above decide: Simlock creates the first
+name on it that this machine's catalog lists, that is a model of the class, and
+that pairs with an installed runtime. With `--image-tag`, only runtimes that
+have an installed image of that tag count as pairings. Unlike the default shown
+by `simlock catalog`, the pick can land further down the list than the catalog
+shows when the tag or the OS rules out the first names. It never downloads.
+A class with no listed name fails the lease at once with `UNKNOWN_MODEL`,
+naming `ios.defaultModels.<class>` or `android.defaultModels.<class>`, and a
+class whose listed names pair with no installed runtime fails with
+`RUNTIME_MISSING`. Android has no `tablet` model, and setting
+`android.defaultModels.tablet` does not add one.
+
 ## Android emulator launch options
 
 `android.emulator` sets how this machine's Android emulators are launched.

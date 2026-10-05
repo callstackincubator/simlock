@@ -346,8 +346,19 @@ Role: `agent`. Enqueues a device request.
 }
 ```
 
-`platform` and `device` are required; `os` defaults to the newest installed
-runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
+`platform` is required. A request names its device in one of three ways:
+`device`, an exact model; `class`, a kind of device (`phone`, `tablet`, `watch`,
+`tv`, `vision`, `auto` or `desktop`) in place of a model; or neither, which asks
+for a `phone`. Sending both `device` and `class` is `400 BAD_REQUEST`. A request
+with a `class`, or with neither, is granted an idle device that fits before any
+device is created; when nothing idle fits it creates the first model on the
+class's preference list that the machine lists (see
+[Default models per class](CONFIGURATION.md#default-models-per-class)). A class
+with no listed model fails with `422 UNKNOWN_MODEL`, naming the config key, and
+one whose listed models pair with no installed runtime fails with `RUNTIME_MISSING`.
+The granted lease's `device`, `os`, `mode` and `imageTag` always name the device
+you got. Through a gateway a request that names no `device` is `400 BAD_REQUEST`
+for now. `os` defaults to the newest installed runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
 above `lease.maxTtlMs`; `timeoutMs` (optional) is enforced daemon-side so a
 vanished client can't hold a queue slot forever. `mode` (optional, `"slim"`
 or `"full"`) is the device mode the request asks for; without it the request

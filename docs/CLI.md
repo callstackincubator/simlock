@@ -174,8 +174,8 @@ and booting, then — unless `--detach` — keeps running, renewing the lease on
 a timer and releasing it when it exits.
 
 ```
-simlock lease --platform <ios|android> --device <model> [--os <version>]
-              [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+simlock lease --platform <ios|android> [--device <model> | --class <class>]
+              [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
               [--timeout <duration>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -186,8 +186,13 @@ TTL and lives until it expires, is renewed, or is released. `--detach`
 changes what *this process* does after the grant, not what the daemon
 granted.
 
-- `--platform`, `--device` — required. `--os` defaults to the newest runtime
-  already installed for that platform.
+- `--platform` — required. `--device` names an exact model; `--class` names
+  a kind of device instead (`phone`, `tablet`, `watch`, `tv`, `vision`, `auto`
+  or `desktop`); with neither, the lease asks for a `phone`. Naming both is a
+  `BAD_REQUEST` (exit 2). `--os` defaults to the newest runtime already
+  installed for that platform. See [What a lease asks for](#what-a-lease-asks-for).
+- `--class <class>` — the kind of device to lease, in place of a model. See
+  [What a lease asks for](#what-a-lease-asks-for).
 - `--agent-id` — this invocation's requester identity; see
   [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
   agent tool's session id, then a pid-derived value.
@@ -426,6 +431,42 @@ here, but equally `expired` or `killed`. A reboot cannot bring back
 anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
+
+### What a lease asks for
+
+A lease names its device in one of three ways:
+
+- `--device <model>` asks for exactly that model. It is granted an idle device
+  of that model, OS, mode and image tag, as always.
+- `--class <class>` asks for any model of that class.
+- With neither, the lease asks for a `phone`.
+
+A class lease is served by the first of these that applies: an idle device
+that is already running and fits, then an idle device that is shut down and
+fits (it is booted), then a new device. A device fits when its platform,
+class, OS, mode and image tag all satisfy the request: with no `--os` a class
+lease fits a device on any installed runtime, `--mode full` and `--image-tag`
+are never relaxed, and a lease that names no mode fits only the worker's
+default mode. When several devices fit, which one is granted is not promised.
+
+When nothing idle fits, Simlock creates a device of the class on the newest
+installed runtime that the model pairs with. The model is the first on the
+class's preference list that this machine's catalog lists and that pairs with
+an installed runtime (of the requested image tag, when `--image-tag` is
+given); see [Default models per class](CONFIGURATION.md#default-models-per-class).
+It never downloads to do so. A class with no listed model fails the lease at
+once with `UNKNOWN_MODEL` (exit 12), naming the config key, such as
+`android.defaultModels.tablet`, whatever is idle; a class whose listed models
+pair with no installed runtime fails with `RUNTIME_MISSING` (exit 12), with or
+without `--allow-download`.
+
+The grant always names the model, OS, mode and image tag of the device you
+got. A class is a claim about the device type the platform's tools report:
+on iOS the product family, on Android the profile's tag, and every untagged
+Android profile is a `phone`, so `tablet` holds no Android model.
+
+Through a gateway, a lease that names no model is refused with `BAD_REQUEST`
+for now.
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
@@ -1209,7 +1250,8 @@ Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 1
 ```
 
 Each line names the request, the agent that sent it, the device it asked for
-(only the fields it named), where it stands, and how long it has waited.
+(only the fields it named; a request that named no model shows its class,
+`phone` when it named none), where it stands, and how long it has waited.
 `queued at 2` is its place in the queue, counting from 1, the requests ahead
 of it that are already starting included. `starting` means the daemon is working
 on it: placing it as it arrives, or finding, creating, booting or downloading
