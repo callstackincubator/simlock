@@ -1126,6 +1126,19 @@ leave the budget over its limit; the strategy then refuses every
 new device and every boot that adds RAM, and the core stops or reclaims nothing for
 it. `fixed` ignores mode, never refuses a boot, and reports no budget.
 
+The **warm pool** (`core/warm-pool/`) is the one place that decides what stays
+warm against those limits (ADR 0017). Its budget is the running limit minus
+every slot a leased, reclaiming, quarantined or reserved device holds, per
+platform and globally. `WarmPool` subscribes to the bus (`daemon.started`,
+`device.reclaimed`, `lease.granted`, `capacity.changed` and the other
+facts that change the budget) and to a 30 s tick, runs one pass at a time, and
+acts by direct calls: the pure `policy.ts` returns shutdown and boot proposals,
+and each is revalidated (no lease, no operation claim) before
+`ManagedDeviceLifecycle` runs it. A boot holds a boot reservation, which counts
+as one running slot, until its `ready` commit. A pass proposes no budget
+shutdown while a booted device is on its way to a lease, because that device
+counts as running and as reserved until the grant.
+
 At startup, `StartupConverger` restores the persisted TTL timer of **every**
 lease it finds, and re-arms retry timers for devices still `quarantined` (see
 below) from their persisted next-retry deadline. A lease survives a daemon
@@ -1144,17 +1157,17 @@ reclaim coordinator's recovery port — a backgrounded reclaim marks its device 
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and
 deletes spent `fresh` devices. It shuts nothing down for being over a running
-limit, so a lowered limit may leave `ready` devices running (and the pool
-visibly over-limit) until a lease's demand eviction or idle shutdown brings it
-back under. Leased devices are never touched by any of this.
+limit: the warm pool's first pass, which `daemon.started` triggers, does
+that, so a lowered limit leaves `ready` devices running only until that pass
+shuts the least recently used idle ones down. Leased devices are never
+touched by any of this.
 
 A completed reclaim (`ReclaimCoordinator#reclaim`) commits exactly the state
 the driver's reclaim returned: `shutdown` on iOS; on Android `ready` after a
 snapshot restore, or `shutdown` when the driver falls back to a wipe. It makes
-no keep-or-shutdown decision and boots nothing, so an Android device released
-over the running limit stays `ready` after a snapshot restore: nothing brings
-the pool back under the limit at release time, and only idle shutdown or a
-later demand eviction shuts it down meanwhile.
+no keep-or-shutdown decision and boots nothing; the warm pool decides that in
+a pass of its own (below), so an Android device released over the running
+limit is `ready` for the moment between the commit and that pass.
 
 ## Device state machine
 
@@ -1180,10 +1193,15 @@ iOS and Android because of this.
 
 A warm device is derived inventory, not a state: any registry-managed,
 unleased `ready` device is warm. Release always purges while the device is
-`reclaiming`; it returns to `ready` when capacity permits, otherwise it is
-shut down, or, if the purge itself failed, `quarantined`. Active demand may
-evict deterministic LRU warm inventory before starting requested work,
-without bypassing the FIFO head.
+`reclaiming`; the purge commits what the driver returns (`ready` or
+`shutdown`), or, if it failed, `quarantined`. What stays warm is the warm
+pool's call, made in a pass after the commit: it shuts idle devices down when
+the running count is over its budget, least recently used first and never one
+that serves a waiting request, and boots a shut-down device back when it
+serves a waiting request or was released a moment ago and there is room.
+`warmPool.enabled: false` keeps nothing warm. Active demand may still evict
+deterministic LRU warm inventory before starting requested work, without
+bypassing the FIFO head.
 
 ### Quarantine: present but not grantable
 

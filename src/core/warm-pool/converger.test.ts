@@ -50,6 +50,7 @@ function harness(
   options: {
     limit?: number;
     enabled?: boolean;
+    refuseBoot?: boolean;
     shutdown?: (target: DeviceRecord) => Promise<DeviceRecord | undefined>;
     boot?: (target: DeviceRecord) => Promise<DeviceRecord | undefined>;
     waiting?: () => readonly WaitingDemand[];
@@ -92,6 +93,7 @@ function harness(
         return { android: entry, global: entry, ios: entry };
       },
       tryReserveBoot: () => {
+        if (options.refuseBoot === true) return { ok: false, reason: "ram-budget" };
         const reservation = { released: 0 };
         reservations.push(reservation);
         return {
@@ -254,6 +256,61 @@ describe("warm pool converger", () => {
 
     expect(rig.waitingDemand).toHaveBeenCalledTimes(2);
     rig.pool.dispose();
+  });
+
+  it("does not try a device again within a tick of its boot failing, and does after", async () => {
+    const rig = harness([device("shut", "shutdown", 1_000)], {
+      boot: async () => {
+        throw new Error("boot failed");
+      },
+    });
+
+    await rig.pool.pass();
+    await rig.pool.pass();
+    expect(rig.bootCalls).toEqual(["shut"]);
+
+    rig.clock.advance(WARM_POOL_TICK_MS);
+    await rig.pool.pass();
+    expect(rig.bootCalls).toEqual(["shut", "shut"]);
+  });
+
+  it("does not boot a device that was claimed between the proposal and the action", async () => {
+    let claimY: () => void = () => undefined;
+    const rig = harness([device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)], {
+      boot: async (target) => {
+        // The first boot runs outside the decision gate; another operation takes `y` meanwhile.
+        claimY();
+        return { ...target, state: "ready" };
+      },
+    });
+    claimY = () => void rig.claims.tryClaim("y", "eviction");
+
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual(["x"]);
+    expect(rig.reservations).toHaveLength(1);
+  });
+
+  it("boots nothing, takes no claim and does not kick when capacity refuses the reservation", async () => {
+    const rig = harness([device("shut", "shutdown", 1_000)], { refuseBoot: true });
+
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.claims.isClaimed("shut")).toBe(false);
+    expect(rig.kick).not.toHaveBeenCalled();
+  });
+
+  it("proposes no budget shutdown while a ready device is claimed for a boot on its way to a lease", async () => {
+    const rig = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], { limit: 1 });
+    const handoff = rig.claims.tryClaim("b", "boot");
+
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+
+    handoff?.release();
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
   it("logs one line for a shutdown that fails and leaves the device ready", async () => {

@@ -34,7 +34,11 @@ const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
-function config(overrides: Partial<Config["lease"]> = {}, warmPoolEnabled = true): Config {
+function config(
+  overrides: Partial<Config["lease"]> = {},
+  warmPoolEnabled = true,
+  idleShutdownAfterMs = 10_000,
+): Config {
   return {
     mode: "worker",
     exec: { timeoutMs: 600_000 },
@@ -63,7 +67,7 @@ function config(overrides: Partial<Config["lease"]> = {}, warmPoolEnabled = true
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    idle: { deleteAfterMs: 60_000, shutdownAfterMs: idleShutdownAfterMs },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 14_400_000,
@@ -149,6 +153,8 @@ async function createHarness(
     readonly ramBudget?: ResourceStrategyOptions["ramBudget"];
     readonly totalRamBytes?: number;
     readonly warmPoolEnabled?: boolean;
+    /** `0` leaves no device recently released, so the pool boots none back unasked. */
+    readonly idleShutdownAfterMs?: number;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -171,6 +177,7 @@ async function createHarness(
       ...(options.identity === undefined ? {} : { identity: options.identity }),
     },
     options.warmPoolEnabled ?? true,
+    options.idleShutdownAfterMs,
   );
   const engineConfig: Config = {
     ...baseConfig,
@@ -329,30 +336,7 @@ describe("LeaseEngine", () => {
     expect(progress).toEqual([{ queuePosition: 1, stage: "queued" }]);
   });
 
-  it("an iOS release ends with the device shutdown, and nothing boots it back", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    const harness = await createHarness({ driver });
-    const first = await harness.engine.request(request, {
-      ownerId: "first",
-      requesterId: "first",
-    });
-
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-
-    expect(
-      harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
-    ).toBe("shutdown");
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
-  });
-
-  it("a release whose reclaim leaves the device ready keeps it ready when running capacity is over its limit", async () => {
+  it("a release whose reclaim leaves the device ready, with running capacity over its limit, has the pool shut the least recently used idle device down", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -365,6 +349,7 @@ describe("LeaseEngine", () => {
       requesterId: "first",
     });
     const excess = await seedReady(harness);
+    harness.clock.advance(5);
 
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
@@ -374,9 +359,11 @@ describe("LeaseEngine", () => {
       harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
     ).toBe("ready");
     expect(harness.registry.snapshot.devices.find((item) => item.id === excess.id)?.state).toBe(
-      "ready",
+      "shutdown",
     );
-    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
+    expect(harness.bus.replay().filter((event) => event.event === "device.shutdown")).toMatchObject(
+      [{ payload: { deviceId: excess.id, initiator: "warm-pool" } }],
+    );
   });
 
   it("evicts warm inventory for active new-spec demand, including no-wait", async () => {
@@ -637,7 +624,7 @@ describe("LeaseEngine", () => {
     ).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
   });
 
-  it("leaves ready devices over maxRunning running at startup, and is idempotent", async () => {
+  it("shuts down an unleased ready device over maxRunning at startup with initiator warm-pool, never a leased one, and is idempotent", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -656,14 +643,19 @@ describe("LeaseEngine", () => {
     });
 
     await harness.engine.convergeRunningCapacity();
+    await harness.engine.settle();
     await harness.engine.convergeRunningCapacity();
+    await harness.engine.settle();
 
     expect(harness.registry.snapshot.devices).toMatchObject([
       { id: leasedDevice.id, state: "leased" },
-      { id: unleasedDevice.id, state: "ready" },
+      { id: unleasedDevice.id, state: "shutdown" },
     ]);
-    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
-    expect(harness.engine.runningCapacity.global.overLimit).toBe(true);
+    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    expect(harness.engine.runningCapacity.global.overLimit).toBe(false);
+    expect(harness.bus.replay().filter((event) => event.event === "device.shutdown")).toMatchObject(
+      [{ payload: { deviceId: unleasedDevice.id, initiator: "warm-pool" } }],
+    );
   });
 
   it("retains in-limit warm devices at startup and never boots shutdown inventory", async () => {
@@ -922,7 +914,7 @@ describe("LeaseEngine", () => {
       estimateMs: { boot: 20, provision: 10, reclaim: 15 },
       platform: "ios",
     });
-    const harness = await createHarness({ driver });
+    const harness = await createHarness({ driver, idleShutdownAfterMs: 0 });
     const provisioned: string[] = [];
 
     const provisionedGrant = await harness.engine.request(request, {
@@ -1214,7 +1206,8 @@ describe("LeaseEngine", () => {
     });
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
-    expect(harness.clock.pendingTimerCount).toBe(0);
+    // The warm pool's tick is the one timer left; the lease's TTL timer is gone.
+    expect(harness.clock.pendingTimerCount).toBe(1);
     await expect(
       harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).resolves.toMatchObject({ lease: { ownerId: "agent-1", requesterId: "agent-1" } });
@@ -1250,7 +1243,8 @@ describe("LeaseEngine", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.map((call) => call.operation)).toContain("destroy");
-    expect(harness.clock.pendingTimerCount).toBe(0);
+    // The warm pool's tick is the one timer left; no lease timer leaked.
+    expect(harness.clock.pendingTimerCount).toBe(1);
   });
 
   it("emits committed happy-path facts in lifecycle order", async () => {
@@ -1391,6 +1385,7 @@ describe("LeaseEngine RAM budget by mode", () => {
     const small = { ...ramBudget, iosSlimBytesPerDevice: 0.5 * gibibyte };
     const before = await createHarness({
       driver,
+      idleShutdownAfterMs: 0,
       limits: roomy,
       ramBudget: small,
       totalRamBytes: 9 * gibibyte,
@@ -1415,6 +1410,7 @@ describe("LeaseEngine RAM budget by mode", () => {
     const after = await createHarness({
       driver,
       filesystem: before.filesystem,
+      idleShutdownAfterMs: 0,
       limits: roomy,
       ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 2 * gibibyte },
       totalRamBytes: 9 * gibibyte,

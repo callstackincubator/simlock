@@ -86,11 +86,14 @@ export interface DeviceRequirement {
 }
 
 /**
- * A lease request still waiting for a device (`new` or `queued`), reduced to what decides whether
- * a device serves it: its platform, what a device must satisfy, and the pool mode its spec
- * resolved to. `classOf` is the catalog's model-to-class lookup the requirement may need.
+ * A lease request that has no device yet, reduced to what decides whether a device serves it: its
+ * platform, what a device must satisfy, and the pool mode its spec resolved to. `classOf` is the
+ * catalog's model-to-class lookup the requirement may need. `inFlight` is a request whose device
+ * work has begun (a provision, boot or eviction): it is being served, not waiting, but it still
+ * has a slot coming that is not yet reserved.
  */
 export interface WaitingDemand {
+  readonly inFlight: boolean;
   readonly platform: Platform;
   readonly requirement: DeviceRequirement;
   readonly mode: DeviceMode;

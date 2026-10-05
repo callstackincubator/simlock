@@ -76,9 +76,14 @@ function capacityOf(
   };
 }
 
-function classDemand(mode: "slim" | "full" = "full", platform: "ios" | "android" = "ios") {
+function classDemand(
+  mode: "slim" | "full" = "full",
+  platform: "ios" | "android" = "ios",
+  inFlight = false,
+) {
   return {
     classOf,
+    inFlight,
     mode,
     platform,
     requirement: {
@@ -93,6 +98,7 @@ function classDemand(mode: "slim" | "full" = "full", platform: "ios" | "android"
 function modelDemand(model: string): WaitingDemand {
   return {
     classOf,
+    inFlight: false,
     mode: "full",
     platform: "ios",
     requirement: {
@@ -204,7 +210,7 @@ describe("warm pool policy", () => {
     const third = device("third", "ready", { endedAgo: 60 * minute });
 
     const proposals = evaluate(
-      view([leased, claimed, first, second, third], { limit: 2, claimed: ["claimed"] }),
+      view([leased, claimed, first, second, third], { limit: 3, claimed: ["claimed"] }),
     );
 
     expect(proposals.map((item) => item.deviceId)).toEqual(["first", "second"]);
@@ -277,6 +283,33 @@ describe("warm pool policy", () => {
     );
 
     expect(proposals).toEqual([{ action: "boot", deviceId: "serving", reason: "waiting-request" }]);
+  });
+
+  it("holds the free slot for a waiting request no idle device serves instead of booting a recently released device into it", () => {
+    const recent = device("recent", "shutdown", { endedAgo: 1_000, spec: spec("iPad Pro") });
+    const busy = device("busy", "leased");
+    const unserved = classDemand("full", "android");
+    const served = device("served", "ready", { endedAgo: 1_000 });
+
+    expect(evaluate(view([recent, busy], { limit: 2, waiting: [unserved] }))).toEqual([]);
+    expect(evaluate(view([recent, busy], { limit: 2 }))).toEqual([
+      { action: "boot", deviceId: "recent", reason: "recently-released" },
+    ]);
+    // A request an idle ready device serves takes no free slot.
+    expect(evaluate(view([recent, busy, served], { limit: 3, waiting: [classDemand()] }))).toEqual([
+      { action: "boot", deviceId: "recent", reason: "recently-released" },
+    ]);
+  });
+
+  it("holds a slot for a request whose device work is in flight, and boots nothing for it", () => {
+    const recent = device("recent", "shutdown", { endedAgo: 1_000 });
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+
+    const proposals = evaluate(
+      view([recent, busy], { limit: 2, waiting: [classDemand("full", "ios", true)] }),
+    );
+
+    expect(proposals).toEqual([]);
   });
 
   it("proposes no boot at the budget, and none for a claimed, leased or spent device", () => {

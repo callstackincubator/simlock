@@ -2620,3 +2620,67 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
     ]);
   });
 });
+
+describe("LeaseAcquisitionCoordinator waiting demand", () => {
+  it("lists a request waiting for a device with what a device must satisfy, and drops it once it is granted", async () => {
+    const harness = await createHarness();
+    const held = await harness.coordinator.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+
+    const waiting = harness.coordinator.request(request, {
+      ownerId: "waiter",
+      requesterId: "waiter",
+    });
+    await flush();
+
+    expect(harness.coordinator.waitingDemand()).toEqual([
+      {
+        classOf: expect.any(Function),
+        inFlight: false,
+        mode: "full",
+        platform: "ios",
+        requirement: {
+          imageTag: undefined,
+          osVersion: { kind: "exact", version: "26.5" },
+          platform: "ios",
+          target: { kind: "model", model: "iPhone 16" },
+        },
+      },
+    ]);
+
+    await harness.registry.beginRelease(held.lease.id);
+    await harness.registry.transitionDevice(held.device.id, "ready", {
+      event: "device.reclaimed",
+      payload: { deviceId: held.device.id, duration: 0, strategy: "wipe" },
+    });
+    harness.coordinator.kick();
+    await waiting;
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+  });
+
+  it("reports the mode a request resolved to, and marks a request whose device work has begun as in flight", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+      slimmableOsVersions: ["26.5"],
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const pending = harness.coordinator.request(
+      { ...request, mode: "slim" },
+      { ownerId: "slim", requesterId: "slim" },
+    );
+    await flush();
+
+    expect(harness.coordinator.waitingDemand()).toMatchObject([{ inFlight: true, mode: "slim" }]);
+
+    clock.advance(50);
+    await pending;
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+  });
+});

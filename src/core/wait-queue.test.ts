@@ -303,6 +303,23 @@ describe("WaitQueue", () => {
     expect(queue.findPendingWaiter("queued")).toBeUndefined();
   });
 
+  it("lists every waiter not yet granted or rejected, in arrival order", async () => {
+    const { queue } = createQueue();
+    const first = createWaiter(queue, "first");
+    const second = createWaiter(queue, "second");
+    const third = createWaiter(queue, "third");
+    queue.enqueue(second);
+    queue.markProcessing(third);
+
+    expect(queue.pending()).toEqual([first, second, third]);
+
+    queue.resolve(first, grant());
+    queue.reject(second, new RequestCancelledError(second.id));
+    await expect(second.promise).rejects.toBeInstanceOf(RequestCancelledError);
+
+    expect(queue.pending()).toEqual([third]);
+  });
+
   it("cancels every pending waiter and clears their pending requester state", async () => {
     const { queue } = createQueue();
     const first = createWaiter(queue, "first");

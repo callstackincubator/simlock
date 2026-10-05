@@ -163,6 +163,9 @@ async function createHarness(
       totalRamBytes: 32 * gibibyte,
     }),
   });
+  // These tests seed released and shut-down devices by hand and drive the reaper over them; the
+  // engine's warm pool would boot a device it just saw released back before the reaper looks.
+  engine.dispose();
   const executor = options.useLeaseEngineExecutor
     ? engine.cleanup
     : (() => {

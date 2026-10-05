@@ -41,6 +41,7 @@ import { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WaitQueue } from "./wait-queue.js";
+import { WarmPool } from "./warm-pool/index.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
@@ -132,6 +133,7 @@ export class LeaseEngine {
   readonly #decisions: SerializedDecision;
   readonly #startup: StartupConverger;
   readonly #reclaim: ReclaimCoordinator;
+  readonly #warmPool: WarmPool;
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#decisions = options.decisions;
@@ -247,7 +249,13 @@ export class LeaseEngine {
       decisions: this.#decisions,
       lifecycle: this.#leases,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
-      notifyAvailability: () => this.#acquisition.kick(),
+      // Called once a backgrounded reclaim has given up its claim. `device.reclaimed` fires while
+      // that claim is still held, so the pass it triggers sees the device as busy; this is the
+      // first moment the pool can act on it.
+      notifyAvailability: () => {
+        this.#acquisition.kick();
+        void this.#warmPool.pass();
+      },
       registry: options.registry,
       reclaim: this.#reclaim,
     });
@@ -291,6 +299,22 @@ export class LeaseEngine {
       },
       timers: this.#leases,
     });
+    // Built after the startup converger so its first pass is the one `daemon.started` triggers:
+    // by then convergence has finished, and a lowered `maxRunning` is converged here.
+    this.#warmPool = new WarmPool({
+      acquisition: this.#acquisition,
+      capacity: this.#capacity,
+      claims: this.#claims,
+      clock: options.clock,
+      config: options.config.warmPool,
+      decisions: this.#decisions,
+      eventBus: options.eventBus,
+      idle: options.config.idle,
+      lifecycle: this.#deviceLifecycle,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      registry: options.registry,
+    });
+    this.#warmPool.start();
     this.healthMonitor = new LeaseHealthMonitor({
       clock: options.clock,
       config: options.config,
@@ -343,6 +367,7 @@ export class LeaseEngine {
    */
   async settle(): Promise<void> {
     await this.#releaseCoordinator.settleBackgroundReclaims();
+    await this.#warmPool.settle();
   }
 
   /**
@@ -357,6 +382,7 @@ export class LeaseEngine {
    * one is there to expire it.
    */
   dispose(): void {
+    this.#warmPool.dispose();
     this.#quarantine.dispose();
     this.#expiry.dispose();
   }

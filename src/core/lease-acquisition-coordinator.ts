@@ -549,19 +549,18 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * The requests still waiting for a device, oldest first: those in state `new` or `queued` whose
-   * spec has resolved. A `processing` waiter has device work in flight, a provision, boot or
-   * eviction, and is being served, not waiting. The warm pool's read port; the wire-shaped
+   * The requests that have no device yet, oldest first, whose spec has resolved: those in state
+   * `new` or `queued` are waiting; one in `processing` has device work in flight, a provision, boot
+   * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
    * `LeaseEngine#waitingRequests` is a different view and does not change.
    */
   waitingDemand(): readonly WaitingDemand[] {
     return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
-      (waiter.state === "new" || waiter.state === "queued") &&
-      waiter.spec !== undefined &&
-      waiter.requirement !== undefined
+      waiter.spec !== undefined && waiter.requirement !== undefined
         ? [
             {
               classOf: waiter.classOf ?? (() => undefined),
+              inFlight: waiter.state === "processing",
               mode: specMode(waiter.spec),
               platform: waiter.spec.platform,
               requirement: waiter.requirement,
