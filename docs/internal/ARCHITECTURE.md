@@ -1,5 +1,9 @@
 # Architecture
 
+This file narrates the system: the why and the flows.
+[COMPONENTS.md](COMPONENTS.md) is the inventory beside it: one row per
+component, what it owns and what it leaves to others.
+
 ## Topology
 
 ```
