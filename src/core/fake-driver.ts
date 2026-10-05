@@ -5,7 +5,7 @@ import {
   type ComponentInstallResult,
   type ComponentReceipt,
   type ComponentRemoval,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
@@ -248,7 +248,7 @@ export class FakeDriver implements Driver {
   }
 
   /** Never installs: a version that is not available throws, naming it as the component. */
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     await this.#beforeCall("resolveSpec", request);
     this.#assertMatchingPlatform(request.platform);
 

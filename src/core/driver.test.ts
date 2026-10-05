@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "../ports/index.js";
-import { DiskSpaceGuard, InsufficientDiskSpaceError, sameReceipt } from "./driver.js";
+import {
+  DiskSpaceGuard,
+  InsufficientDiskSpaceError,
+  sameReceipt,
+  UnknownModelError,
+} from "./driver.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -100,5 +105,23 @@ describe("sameReceipt", () => {
     expect(sameReceipt(receipt, { ...receipt, stamp: "x" })).toBe(false);
     expect(sameReceipt({ ...receipt, stamp: "x" }, receipt)).toBe(false);
     expect(sameReceipt({ build: "23F77" }, { image: "23F77" })).toBe(false);
+  });
+});
+
+describe("UnknownModelError", () => {
+  it("names the model of an exact request, and has no class", () => {
+    const error = new UnknownModelError("ios", "iPhone 99");
+
+    expect(error.message).toBe("Unknown ios model: iPhone 99");
+    expect(error).toMatchObject({ class: undefined, model: "iPhone 99", platform: "ios" });
+  });
+
+  it("names the class and the config key to set for a class with no listed model", () => {
+    const error = new UnknownModelError("android", undefined, "tablet");
+
+    expect(error.message).toBe(
+      "No android model of class tablet is listed on this host; name one in android.defaultModels.tablet",
+    );
+    expect(error).toMatchObject({ class: "tablet", model: undefined, platform: "android" });
   });
 });

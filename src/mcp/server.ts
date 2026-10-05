@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
+import { SimlockError } from "../client/index.js";
+import { describeSchemaIssues } from "../contract/index.js";
 import {
+  leaseSimulatorCheckedInputSchema,
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
   leaseStatusInputSchema,
@@ -120,7 +123,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "Lease simulator",
       description:
-        "Lease one simulator or emulator for this MCP session. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. Downloads are disabled by default and require allowDownload: true. On Android, imageTag picks the system image type (a tag from list_devices' images, such as google_apis_playstore); a request with imageTag uses only an installed image and never downloads.",
+        "Lease one simulator or emulator for this MCP session. Name an exact model (`model`), or a device class (`class`: phone, tablet, watch, tv, vision, auto or desktop), or name neither to get a phone; naming both is an error. A class or no-model request is served by a fitting idle device before a new one is created. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. Downloads are disabled by default and require allowDownload: true. On Android, imageTag picks the system image type (a tag from list_devices' images, such as google_apis_playstore); a request with imageTag uses only an installed image and never downloads.",
       inputSchema: leaseSimulatorInputSchema,
       outputSchema: leaseSimulatorOutputSchema,
     },
@@ -131,7 +134,16 @@ export function createMcpServer(session: McpSession): McpServer {
           progressToken === undefined
             ? undefined
             : createLeaseProgressReporter(progressToken, extra.sendNotification);
-        const output = await session.lease(input, extra.signal, onProgress);
+        const checked = leaseSimulatorCheckedInputSchema.safeParse(input);
+        if (!checked.success) {
+          throw new SimlockError(
+            "BAD_REQUEST",
+            "protocol",
+            describeSchemaIssues(checked.error.issues),
+            {},
+          );
+        }
+        const output = await session.lease(checked.data, extra.signal, onProgress);
         return success(output);
       } catch (error: unknown) {
         return failure(error);

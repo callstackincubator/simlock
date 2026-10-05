@@ -432,10 +432,16 @@ export class GatewayDispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
+    // ADR 0015 §8 is a later task: until the gateway matches a class against its workers, a
+    // request that names no exact model is refused here rather than routed on a guess.
+    if (input.model === undefined) {
+      throw new DispatchError("BAD_REQUEST", "a gateway does not route class requests yet");
+    }
+    const { model } = input;
     return this.options.coordinator.request(
       // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
       // relays an image tag unread.
-      requestedDevice(input),
+      { ...requestedDevice(input), model },
       {
         // `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).

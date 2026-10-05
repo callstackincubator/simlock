@@ -11,6 +11,7 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import type { CapacityLimits, ResourceStrategyOptions } from "./capacity/index.js";
+import type { ModelPreferences } from "./driver-catalog.js";
 import {
   BootTimeoutError,
   type ComponentInstaller,
@@ -109,6 +110,7 @@ function withCapacity(
   };
 }
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
@@ -121,6 +123,7 @@ async function createHarness(
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
     readonly logger?: Logger;
+    readonly modelPreferences?: ModelPreferences;
     readonly ramBudget?: ResourceStrategyOptions["ramBudget"];
     readonly totalRamBytes?: number;
   } = {},
@@ -163,6 +166,9 @@ async function createHarness(
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.modelPreferences === undefined
+      ? {}
+      : { modelPreferences: options.modelPreferences }),
     registry,
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes }),
   });
@@ -2300,5 +2306,80 @@ describe("LeaseEngine restart recovery of stored lease requests", () => {
     expect(
       after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
     ).toMatchObject({ state: "failed" });
+  });
+});
+
+describe("LeaseEngine class requests", () => {
+  it("creates the first model on the class's preference list the catalog lists, for a request naming a class", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 15", "iPhone 16"],
+      modelClasses: { "iPhone 15": "phone", "iPhone 16": "phone" },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17", "iPhone 16", "iPhone 15"] } },
+    });
+
+    const granted = await harness.engine.request(
+      { class: "phone", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec.model).toBe("iPhone 16");
+  });
+
+  it("creates the first listed model that pairs with the requested OS version, not one that pairs with another", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 16", "iPhone 17"],
+      modelClasses: { "iPhone 16": "phone", "iPhone 17": "phone" },
+      modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17": ["26.5"] },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17", "iPhone 16"] } },
+    });
+
+    const granted = await harness.engine.request(
+      { class: "phone", osVersion: "18.4", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec).toMatchObject({ model: "iPhone 16", osVersion: "18.4" });
+  });
+
+  it("refuses a class request naming an OS that is not installed as RUNTIME_MISSING without calling the installer, whatever allowDownload says", async () => {
+    const asked: unknown[] = [];
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 17"],
+      modelClasses: { "iPhone 17": "phone" },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      components: {
+        claimProvision: () => () => undefined,
+        install: async (call) => {
+          asked.push(call);
+          return { outcome: "installed", version: "18.4" };
+        },
+      },
+      driver,
+      modelPreferences: { ios: { phone: ["iPhone 17"] } },
+    });
+
+    await expect(
+      harness.engine.request(
+        { class: "phone", osVersion: "18.4", platform: "ios" },
+        { allowDownload: true, ownerId: "agent", requesterId: "agent" },
+      ),
+    ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+    expect(asked).toEqual([]);
   });
 });

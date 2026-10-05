@@ -16,7 +16,7 @@ import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { ComponentInstaller } from "./component-installer.js";
-import { DriverCatalog } from "./driver-catalog.js";
+import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import {
   DiskSpaceGuard,
   type Driver,
@@ -27,6 +27,7 @@ import {
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
+import type { CatalogReader } from "./lease-ports.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import {
   IdempotencyConflictError,
@@ -104,6 +105,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
   };
 }
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
@@ -115,6 +117,10 @@ async function createHarness(
     readonly logger?: Logger;
     readonly maxDevices?: number;
     readonly maxRunning?: number;
+    /** The class preference lists the daemon would build from config and the drivers. */
+    readonly preferences?: ModelPreferences;
+    /** Stands in for the catalog reader a class request reads, when a test scripts it. */
+    readonly catalogReader?: Pick<CatalogReader, "listCatalog">;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -134,7 +140,7 @@ async function createHarness(
   });
   const decisions = new SerializedDecision();
   const claims = new DeviceOperationClaims();
-  const catalog = new DriverCatalog(drivers);
+  const catalog = new DriverCatalog(drivers, { preferences: options.preferences ?? {} });
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(
       config(options.maxDevices, options.maxRunning).capacity,
@@ -184,6 +190,7 @@ async function createHarness(
       timeoutMs: 1_200_000,
     });
   coordinator = new LeaseAcquisitionCoordinator({
+    catalog: options.catalogReader ?? catalog,
     claims,
     components,
     decisions,
@@ -193,6 +200,7 @@ async function createHarness(
     leases,
     lifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    modelPreferences: options.preferences ?? {},
     planner: new AcquisitionPlanner(capacity, claims),
     provisioner,
     queue,
@@ -1695,9 +1703,460 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
       const harness = await createHarness({ drivers: [driver] });
 
       await expect(harness.coordinator.request(asked, owner("agent"))).rejects.toThrow(
-        /resolved image tag/,
+        /driver resolved image tag .* for a request naming/,
       );
       expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
     },
   );
+});
+
+describe("LeaseAcquisitionCoordinator: class requests", () => {
+  const owner = (id: string) => ({ ownerId: id, requesterId: id });
+  const iosModels = ["iPhone 15", "iPhone 16", "iPhone 17", "Apple Watch", "iPad Pro"];
+  const iosClasses = {
+    "Apple Watch": "watch",
+    "iPad Pro": "tablet",
+    "iPhone 15": "phone",
+    "iPhone 16": "phone",
+    "iPhone 17": "phone",
+  } as const;
+  const iosPreferences: ModelPreferences = {
+    ios: {
+      phone: ["iPhone 17", "iPhone 16", "iPhone 15"],
+      tablet: ["iPad Pro"],
+      watch: ["Apple Watch"],
+    },
+  };
+  const phone = { class: "phone", platform: "ios" } as const;
+  const iphone15 = { model: "iPhone 15", osVersion: "18.4", platform: "ios" } as const;
+
+  function iosDriver(options: Partial<ConstructorParameters<typeof FakeDriver>[0]> = {}) {
+    return new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock: new FakeClock(1_000),
+      knownModels: iosModels,
+      modelClasses: iosClasses,
+      platform: "ios",
+      ...options,
+    });
+  }
+
+  function deviceWork(driver: FakeDriver): number {
+    return driver.calls.filter((call) => ["provision", "makeReady"].includes(call.operation))
+      .length;
+  }
+
+  function provisioned(harness: Awaited<ReturnType<typeof createHarness>>) {
+    return harness.bus
+      .replay()
+      .filter((event) => event.event === "device.provisioned")
+      .map((event) => (event.payload as { spec: DeviceSpec }).spec);
+  }
+
+  async function classHarness(driver = iosDriver(), preferences = iosPreferences) {
+    return createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2, preferences });
+  }
+
+  it("resolves a request with neither model nor class as the phone class, and lease.requested carries neither", async () => {
+    const harness = await classHarness();
+
+    const granted = await harness.coordinator.request({ platform: "ios" }, owner("agent"));
+
+    expect(granted.device.spec).toMatchObject({ model: "iPhone 17", osVersion: "26.5" });
+    const requested = harness.bus.replay().filter((event) => event.event === "lease.requested");
+    expect(
+      requested.map((event) => (event.payload as { requestSpec: unknown }).requestSpec),
+    ).toEqual([{ platform: "ios" }]);
+  });
+
+  it("grants a phone request one ready idle iPhone 15 with no boot and no provision", async () => {
+    const driver = iosDriver();
+    const harness = await classHarness(driver);
+    const warm = await seedReady(harness, iphone15);
+    const before = deviceWork(driver);
+
+    const granted = await harness.coordinator.request(phone, owner("agent"));
+
+    expect(granted.device.id).toBe(warm.id);
+    expect(deviceWork(driver)).toBe(before);
+  });
+
+  it("does not grant an exact iPhone 16 request a ready idle iPhone 15", async () => {
+    const harness = await classHarness();
+    const warm = await seedReady(harness, { ...iphone15, osVersion: "26.5" });
+
+    const granted = await harness.coordinator.request(
+      { model: "iPhone 16", platform: "ios" },
+      owner("agent"),
+    );
+
+    expect(granted.device.id).not.toBe(warm.id);
+    expect(granted.device.spec.model).toBe("iPhone 16");
+  });
+
+  it("does not grant a request with no class a ready idle Apple Watch, and grants a watch request it", async () => {
+    const watch = { model: "Apple Watch", osVersion: "26.5", platform: "ios" } as const;
+    const first = await classHarness();
+    const warm = await seedReady(first, watch);
+
+    const noClass = await first.coordinator.request({ platform: "ios" }, owner("agent"));
+    expect(noClass.device.id).not.toBe(warm.id);
+
+    const second = await classHarness();
+    const warmWatch = await seedReady(second, watch);
+    const granted = await second.coordinator.request(
+      { class: "watch", platform: "ios" },
+      owner("agent"),
+    );
+    expect(granted.device.id).toBe(warmWatch.id);
+  });
+
+  it("boots a shut-down device of the class before creating any device", async () => {
+    const driver = iosDriver();
+    const harness = await classHarness(driver);
+    const cold = await seedShutdown(harness, iphone15);
+    const provisions = () => driver.calls.filter((call) => call.operation === "provision").length;
+    const before = provisions();
+
+    const granted = await harness.coordinator.request(phone, owner("agent"));
+
+    expect(granted.device.id).toBe(cold.id);
+    expect(provisions()).toBe(before);
+  });
+
+  describe("device mode", () => {
+    const slimming = () =>
+      iosDriver({ availableOsVersions: ["26.5"], slimmableOsVersions: ["26.5"] });
+    const full15 = { ...iphone15, osVersion: "26.5" } as const;
+    const slim15 = { ...full15, mode: "slim" } as const;
+
+    it("never grants a full request a slim device of the class", async () => {
+      const harness = await classHarness(slimming());
+      const slim = await seedReady(harness, slim15);
+
+      const granted = await harness.coordinator.request({ ...phone, mode: "full" }, owner("agent"));
+
+      expect(granted.device.id).not.toBe(slim.id);
+      expect(granted.device.mode).toBe("full");
+    });
+
+    it("does not grant a request with no mode a slim device when the default mode is full", async () => {
+      const harness = await createHarness({
+        defaultModes: { ios: "full" },
+        drivers: [slimming()],
+        maxDevices: 2,
+        preferences: iosPreferences,
+      });
+      const slim = await seedReady(harness, slim15);
+
+      const granted = await harness.coordinator.request(phone, owner("agent"));
+
+      expect(granted.device.id).not.toBe(slim.id);
+    });
+
+    it("does not grant a request with no mode a full device when the default mode is slim", async () => {
+      const harness = await createHarness({
+        defaultModes: { ios: "slim" },
+        drivers: [slimming()],
+        maxDevices: 2,
+        preferences: iosPreferences,
+      });
+      const full = await seedReady(harness, full15);
+
+      const granted = await harness.coordinator.request(phone, owner("agent"));
+
+      expect(granted.device.id).not.toBe(full.id);
+      expect(granted.device.mode).toBe("slim");
+    });
+  });
+
+  describe("image tags", () => {
+    const pixel = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    const androidPhone = { class: "phone", platform: "android" } as const;
+    const androidPreferences: ModelPreferences = { android: { phone: ["Pixel 9", "Pixel 8"] } };
+    const androidDriver = () =>
+      new FakeDriver({
+        availableOsVersions: ["34", "35"],
+        clock: new FakeClock(1_000),
+        images: [
+          { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+          { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+          { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        ],
+        knownModels: ["Pixel 8", "Pixel 9"],
+        modelClasses: { "Pixel 8": "phone", "Pixel 9": "phone" },
+        modelRuntimes: { "Pixel 8": ["34"], "Pixel 9": ["35"] },
+        platform: "android",
+      });
+
+    it.each([
+      ["of another tag", { imageTag: "google_apis" }, "google_apis_playstore"],
+      ["with no tag", {}, "google_apis_playstore"],
+    ] as const)(
+      "does not grant a request naming a tag an idle device %s",
+      async (_label, seeded, asked) => {
+        const harness = await classHarness(androidDriver(), androidPreferences);
+        const other = await seedReady(harness, { ...pixel, ...seeded });
+
+        const granted = await harness.coordinator.request(
+          { ...androidPhone, imageTag: asked },
+          owner("agent"),
+        );
+
+        expect(granted.device.id).not.toBe(other.id);
+        expect(granted.device.spec.imageTag).toBe(asked);
+      },
+    );
+
+    it("does not grant a request naming no tag an idle device with a tag", async () => {
+      const harness = await classHarness(androidDriver(), androidPreferences);
+      const tagged = await seedReady(harness, { ...pixel, imageTag: "google_apis_playstore" });
+
+      const granted = await harness.coordinator.request(androidPhone, owner("agent"));
+
+      expect(granted.device.id).not.toBe(tagged.id);
+      expect(granted.device.spec).not.toHaveProperty("imageTag");
+    });
+
+    it("grants a request naming a tag an idle device of that tag", async () => {
+      const harness = await classHarness(androidDriver(), androidPreferences);
+      const tagged = await seedReady(harness, { ...pixel, imageTag: "google_apis_playstore" });
+
+      const granted = await harness.coordinator.request(
+        { ...androidPhone, imageTag: "google_apis_playstore" },
+        owner("agent"),
+      );
+
+      expect(granted.device.id).toBe(tagged.id);
+    });
+
+    it("skips a candidate whose only pairings carry another tag", async () => {
+      const harness = await classHarness(androidDriver(), androidPreferences);
+
+      const granted = await harness.coordinator.request(
+        { ...androidPhone, imageTag: "google_apis_playstore" },
+        owner("agent"),
+      );
+
+      expect(granted.device.spec).toMatchObject({ model: "Pixel 8", osVersion: "34" });
+    });
+  });
+
+  describe("OS", () => {
+    it("fits a class request with no OS to a device on any runtime the catalog lists, and not one on a runtime no longer listed", async () => {
+      const listed = await classHarness();
+      const old = await seedReady(listed, iphone15);
+      const grantedListed = await listed.coordinator.request(phone, owner("agent"));
+      expect(grantedListed.device.id).toBe(old.id);
+
+      const gone = await classHarness();
+      const stale = await seedReady(gone, { ...iphone15, osVersion: "17.0" });
+      const grantedGone = await gone.coordinator.request(phone, owner("agent"));
+      expect(grantedGone.device.id).not.toBe(stale.id);
+      expect(grantedGone.device.spec.osVersion).toBe("26.5");
+    });
+
+    it("fits an exact request with no OS only to the runtime the driver picks, as on main", async () => {
+      const harness = await classHarness();
+      const old = await seedReady(harness, iphone15);
+
+      const granted = await harness.coordinator.request(
+        { model: "iPhone 15", platform: "ios" },
+        owner("agent"),
+      );
+
+      expect(granted.device.id).not.toBe(old.id);
+      expect(granted.device.spec.osVersion).toBe("26.5");
+    });
+  });
+
+  describe("creating a device for a class", () => {
+    it("creates the first name on the class's list the catalog lists, and device.provisioned carries that model", async () => {
+      const harness = await classHarness();
+
+      const granted = await harness.coordinator.request(phone, owner("agent"));
+
+      expect(granted.device.spec.model).toBe("iPhone 17");
+      expect(provisioned(harness).map((spec) => spec.model)).toEqual(["iPhone 17"]);
+    });
+
+    it.each([
+      ["a name the catalog does not list", "Unlisted Phone", {}],
+      ["a name of another class", "iPad Pro", {}],
+      ["a name with no pairing", "Orphan", { modelRuntimes: { Orphan: [] } }],
+    ] as const)("skips %s for the next on the list", async (_label, skipped, driverOptions) => {
+      const driver = iosDriver({
+        ...driverOptions,
+        knownModels: [...iosModels, "Orphan"],
+        modelClasses: { ...iosClasses, Orphan: "phone" },
+      });
+      const harness = await classHarness(driver, {
+        ios: { phone: [skipped, "iPhone 16"] },
+      });
+
+      const granted = await harness.coordinator.request(phone, owner("agent"));
+
+      expect(granted.device.spec.model).toBe("iPhone 16");
+    });
+
+    it.each([
+      ["without allowDownload", false],
+      ["with allowDownload", true],
+    ])(
+      "fails a class whose listed models pair with no installed runtime at once with RuntimeMissingError, not downloadable, %s",
+      async (_label, allowDownload) => {
+        const asked: unknown[] = [];
+        const driver = iosDriver({ modelRuntimes: { "iPhone 16": [] } });
+        const harness = await createHarness({
+          components: {
+            install: async (call) => {
+              asked.push(call);
+              return { outcome: "installed", version: "27.0" };
+            },
+          },
+          drivers: [driver],
+          preferences: { ios: { phone: ["iPhone 16"] } },
+        });
+
+        await expect(
+          harness.coordinator.request(phone, { ...owner("agent"), allowDownload }),
+        ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+        expect(asked).toEqual([]);
+        expect(deviceWork(driver)).toBe(0);
+      },
+    );
+
+    it.each([
+      ["ios", "ios.defaultModels.phone", { ...phone }],
+      ["android", "android.defaultModels.tablet", { class: "tablet", platform: "android" }],
+    ] as const)(
+      "fails a class with no listed name at once with UnknownModelError naming the class and %s, whatever is idle",
+      async (platform, key, asked) => {
+        const driver = new FakeDriver({
+          availableOsVersions: ["18.4"],
+          clock: new FakeClock(1_000),
+          knownModels: ["iPhone 15"],
+          modelClasses: { "iPhone 15": "phone" },
+          platform,
+        });
+        const harness = await classHarness(driver, {
+          [platform]: { phone: ["Unlisted Phone"], tablet: ["Unlisted Tablet"] },
+        });
+        if (platform === "ios") await seedReady(harness, iphone15);
+
+        await expect(harness.coordinator.request(asked, owner("agent"))).rejects.toMatchObject({
+          class: asked.class,
+          message: expect.stringContaining(key),
+          name: "UnknownModelError",
+          platform,
+        });
+      },
+    );
+
+    it("fails a class request at once with UnknownModelError when the platform has no preference list at all", async () => {
+      const harness = await classHarness(iosDriver(), {});
+
+      await expect(harness.coordinator.request(phone, owner("agent"))).rejects.toMatchObject({
+        class: "phone",
+        name: "UnknownModelError",
+        message: expect.stringContaining("ios.defaultModels.phone"),
+      });
+    });
+
+    it("fails a class request with UnknownModelError when the catalog reader answers no entry for the platform", async () => {
+      const harness = await createHarness({
+        catalogReader: { listCatalog: async () => [] },
+        drivers: [iosDriver()],
+        preferences: iosPreferences,
+      });
+
+      await expect(harness.coordinator.request(phone, owner("agent"))).rejects.toMatchObject({
+        name: "UnknownModelError",
+      });
+    });
+
+    it.each([
+      ["names none", undefined, "default"],
+      ["names a version", "18.4", "18.4"],
+    ])(
+      "names the OS in the RuntimeMissingError of a class whose models pair with no runtime when the request %s",
+      async (_label, osVersion, named) => {
+        const driver = iosDriver({ modelRuntimes: { "iPhone 16": [] } });
+        const harness = await classHarness(driver, { ios: { phone: ["iPhone 16"] } });
+
+        await expect(
+          harness.coordinator.request(
+            { ...phone, ...(osVersion === undefined ? {} : { osVersion }) },
+            owner("agent"),
+          ),
+        ).rejects.toMatchObject({ name: "RuntimeMissingError", osVersion: named });
+      },
+    );
+
+    it("fits a class request naming an OS only a device on that OS, and creates a device on it otherwise", async () => {
+      const harness = await classHarness();
+      const newest = await seedReady(harness, { ...iphone15, osVersion: "26.5" });
+
+      const older = await harness.coordinator.request(
+        { ...phone, osVersion: "18.4" },
+        owner("agent"),
+      );
+
+      expect(older.device.id).not.toBe(newest.id);
+      expect(older.device.spec.osVersion).toBe("18.4");
+
+      const sameOs = await classHarness();
+      const warm = await seedReady(sameOs, iphone15);
+      const granted = await sameOs.coordinator.request(
+        { ...phone, osVersion: "18.4" },
+        owner("agent"),
+      );
+      expect(granted.device.id).toBe(warm.id);
+    });
+
+    it("fails a class request naming an image tag on a driver with no images with RuntimeMissingError, not downloadable", async () => {
+      const harness = await classHarness();
+
+      await expect(
+        harness.coordinator.request({ ...phone, imageTag: "google_apis" }, owner("agent")),
+      ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+    });
+
+    it("passes the driver an exact model, never a class", async () => {
+      const driver = iosDriver();
+      const harness = await classHarness(driver);
+
+      await harness.coordinator.request(phone, owner("agent"));
+
+      const resolved = driver.calls.find((call) => call.operation === "resolveSpec");
+      expect(resolved?.arguments[0]).toMatchObject({ model: "iPhone 17" });
+      expect(resolved?.arguments[0]).not.toHaveProperty("class");
+    });
+  });
+
+  describe("idempotency", () => {
+    const keyed = { ...owner("agent"), idempotencyKey: "key-1" };
+
+    it("returns the stored grant to a repeat of the same class request", async () => {
+      const harness = await classHarness();
+      const first = await harness.coordinator.request(phone, keyed);
+
+      const second = await harness.coordinator.request(phone, keyed);
+
+      expect(second.lease.id).toBe(first.lease.id);
+    });
+
+    it.each([
+      ["an exact request", { model: "iPhone 17", platform: "ios" }],
+      ["a request of another class", { class: "watch", platform: "ios" }],
+      ["a request with neither field", { platform: "ios" }],
+    ] as const)("refuses the key of a class request used for %s", async (_label, other) => {
+      const harness = await classHarness();
+      await harness.coordinator.request(phone, keyed);
+
+      await expect(harness.coordinator.request(other, keyed)).rejects.toBeInstanceOf(
+        IdempotencyConflictError,
+      );
+    });
+  });
 });

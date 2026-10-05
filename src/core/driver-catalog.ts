@@ -1,8 +1,8 @@
 import { type Logger, NoopLogger } from "../ports/index.js";
-import { findCatalogModel } from "./catalog-match.js";
+import { classCandidates, pairedRuntimes } from "./catalog-match.js";
 import { DEVICE_CLASSES, type DeviceClass, type DeviceSpec, type Platform } from "./domain.js";
 import type {
-  DeviceRequest,
+  ExactDeviceRequest,
   Driver,
   DriverCatalogEntry,
   PassthroughCommand,
@@ -90,7 +90,7 @@ export class DriverCatalog {
     throw new UnknownPassthroughToolError(tool);
   }
 
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     return this.get(request.platform).resolveSpec(request);
   }
 
@@ -137,10 +137,11 @@ export class DriverCatalog {
   ): Partial<Record<DeviceClass, string>> {
     const defaults: Partial<Record<DeviceClass, string>> = {};
     for (const deviceClass of DEVICE_CLASSES) {
-      const counted = (this.#preferences[platform]?.[deviceClass] ?? []).flatMap((name) => {
-        const model = findCatalogModel(entry, name);
-        return model !== undefined && classOf(entry, model) === deviceClass ? [model] : [];
-      });
+      const counted = classCandidates(
+        entry,
+        deviceClass,
+        this.#preferences[platform]?.[deviceClass] ?? [],
+      );
       const chosen = counted.find((model) => pairedRuntimes(entry, model).length > 0) ?? counted[0];
       if (chosen !== undefined) defaults[deviceClass] = chosen;
     }
@@ -156,14 +157,4 @@ export class DriverCatalog {
     const driver = this.#drivers.get(platform);
     return driver === undefined ? [] : [driver];
   }
-}
-
-/** A model's class; an inherited property of a name like `constructor` is never a class string. */
-function classOf(entry: DriverCatalogEntry, model: string): DeviceClass | undefined {
-  return entry.modelClasses[model];
-}
-
-/** The installed runtimes a model pairs with, reading own keys only. */
-function pairedRuntimes(entry: DriverCatalogEntry, model: string): readonly string[] {
-  return (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ?? [];
 }

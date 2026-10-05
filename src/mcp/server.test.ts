@@ -12,6 +12,7 @@ import { SimlockError } from "../client/index.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession } from "./session.js";
+import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
 
 describe("MCP server (smoke)", () => {
@@ -67,6 +68,13 @@ describe("MCP server (smoke)", () => {
       ]);
       expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
         "modelClasses",
+      );
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {}).sort()).toEqual(
+        Object.keys(leaseSimulatorInputSchema.shape).sort(),
+      );
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toEqual(
+        expect.arrayContaining(["platform", "model", "class"]),
       );
       for (const tool of tools.tools) {
         expect(tool.inputSchema).toEqual(expect.any(Object));
@@ -225,6 +233,62 @@ describe("MCP server (smoke)", () => {
           level: "info",
         }),
       ]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("describes the three ways lease_simulator names a device", async () => {
+    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
+    try {
+      const { tools } = await mcpClient.listTools();
+
+      const description = tools.find((tool) => tool.name === "lease_simulator")?.description;
+      expect(description).toContain("`model`");
+      expect(description).toContain("`class`");
+      expect(description).toContain("neither");
+    } finally {
+      await close();
+    }
+  });
+
+  it("refuses a lease_simulator call naming both a class and a model, the message naming both fields, before asking", async () => {
+    const client = new FakeSimlockClient();
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const result = await call(mcpClient, "lease_simulator", {
+        class: "phone",
+        model: "iPhone 17 Pro",
+        platform: "ios",
+      });
+
+      expect(result.isError).toBe(true);
+      const refusal = JSON.parse(text(result)) as { code: string; message: string };
+      expect(refusal.code).toBe("BAD_REQUEST");
+      expect(refusal.message).toContain("`model`");
+      expect(refusal.message).toContain("`class`");
+      expect(client.calls).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it.each([
+    ["a class", { class: "watch", platform: "ios" }],
+    ["only a platform", { platform: "android" }],
+  ])("passes a lease_simulator call naming %s on with no model", async (_label, args) => {
+    const client = new FakeSimlockClient();
+    const inputs: unknown[] = [];
+    client.requestLeaseImpl = (input) => {
+      inputs.push(input);
+      return Promise.resolve(sampleGrant());
+    };
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const result = await call(mcpClient, "lease_simulator", args);
+
+      expect(result.isError).not.toBe(true);
+      expect(inputs).toEqual([args]);
     } finally {
       await close();
     }

@@ -165,7 +165,7 @@ describe("connectSimlock: handshake", () => {
     const client = await connectPromise;
 
     const before = connection.sent.length;
-    // `model` is required and non-empty per the contract's input schema.
+    // `model`, when given, must be non-empty per the contract's input schema.
     await expect(client.requestLease({ model: "", platform: "ios" })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });

@@ -13,7 +13,12 @@
  */
 import { z } from "zod";
 
-import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
+import {
+  leaseRecordSchema,
+  leaseRequestFields,
+  OPERATIONS,
+  refuseModelWithClass,
+} from "../contract/index.js";
 
 // ---- lease_simulator ---------------------------------------------------------------------
 
@@ -25,11 +30,19 @@ import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
  * inherits it from the contract like every other field -- `lease.defaultTtlMs` when the caller
  * names none, `BAD_REQUEST` above `lease.maxTtlMs`. `mode` is the device mode, inherited the
  * same way: `slim` or `full`, absent for the worker's default, anything else `BAD_REQUEST`.
- * `imageTag` is inherited too, bounded by the contract.
+ * `imageTag` is inherited too, bounded by the contract. `model` and `class` are both optional and
+ * refused together (ADR 0015 §1) by the contract's own refinement when the request reaches
+ * `lease.request`, not here: a refined schema has no `.shape`, so the SDK would list the tool with
+ * no fields at all.
  */
-export const leaseSimulatorInputSchema = OPERATIONS["lease.request"].input.omit({
-  requesterId: true,
-});
+export const leaseSimulatorInputSchema = leaseRequestFields.omit({ requesterId: true });
+
+/**
+ * The tool's input with the contract's model-or-class check on top, for the handler to run
+ * before asking: the SDK lists and validates the plain object above, which is all it can read.
+ */
+export const leaseSimulatorCheckedInputSchema =
+  leaseSimulatorInputSchema.superRefine(refuseModelWithClass());
 
 /** `lease.request`'s output verbatim -- the device/lease/timing grant. */
 export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;

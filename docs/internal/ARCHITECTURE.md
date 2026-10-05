@@ -1919,7 +1919,23 @@ pushes, so the join neither loses nor repeats an event.
 
 ## Device requests
 
-Required to identify a device: **platform + device model + OS version**.
+A request names a device in one of three forms (ADR 0015 §1): an exact
+model, a class, or neither, which the contract's `requestedClass` reads as
+`phone`; naming both is `BAD_REQUEST`, decided by the schema so every
+transport answers alike. `LeaseAcquisitionCoordinator` resolves it once,
+before planning, into the exact request a driver takes (a driver never sees
+a class: the first name on the class's preference list that the catalog
+lists, classes alike, and pairs with an installed runtime, of the requested
+image tag if one is named) and a `DeviceRequirement` kept on the waiter
+beside its spec. `fits` in `domain.ts` is the one place a requirement meets
+a device (platform, model or class, OS, image tag); the planner adds the
+pool-mode comparison and looks for a `ready` device that fits, then a
+`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+still names pool identity for the warm pool, reclaim and the idempotency
+check. A class is read from the catalog entry (`modelClasses`) at the moment
+a fit is decided; a device record stores none.
+
+For an exact model: **platform + device model + OS version**.
 OS defaults to the newest runtime already installed on the machine that can
 actually run the requested model — for iOS specifically, the newest
 installed runtime that both falls inside the device type's supported range

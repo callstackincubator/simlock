@@ -7,7 +7,7 @@ import {
   type ComponentReceipt,
   type ComponentRemoval,
   COMPONENT_REMOVAL_TIMEOUT_MS,
-  type DeviceRequest,
+  type ExactDeviceRequest,
   type Driver,
   type DriverAdvisory,
   type DriverToolVersion,
@@ -419,7 +419,7 @@ export class IosSimctlDriver implements Driver {
    * Never downloads: a runtime a download could supply throws, naming it as the component. An iOS
    * runtime comes in one type, so a request naming an image tag is refused.
    */
-  async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
     if (request.imageTag !== undefined) {
       throw new UnsupportedRequestOptionError("ios", "imageTag");

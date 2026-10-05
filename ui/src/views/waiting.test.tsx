@@ -54,6 +54,11 @@ describe("the Waiting view", () => {
     ).toBe("Android Pixel 8, runtime 35, mode slim, image tag google_apis");
   });
 
+  it("writes a request that named a class or only a platform without a model, never as undefined", () => {
+    expect(requestedDevice({ class: "phone", platform: "ios" })).toBe("iOS phone");
+    expect(requestedDevice({ platform: "android" })).toBe("Android");
+  });
+
   it("names the worker a request waits on: by its workerId, or on a single host the worker whose view lists the same request", () => {
     const onGateway = request({ id: "req_w", workerId: "wrk_2" });
     const onHost = request({ id: "req_h" });

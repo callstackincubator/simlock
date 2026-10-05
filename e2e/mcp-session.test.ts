@@ -201,4 +201,49 @@ describe("MCP session semantics", () => {
       await mcp.close();
     }
   });
+
+  it("lease_simulator accepts a class or only a platform and grants a device naming its model, and refuses a class beside a model", async () => {
+    const env = await withDaemon({
+      driverScript: {
+        ios: {
+          availableOsVersions: ["18.4"],
+          defaultModels: { phone: ["iPhone 16"] },
+          knownModels: ["iPhone 16"],
+          modelClasses: { "iPhone 16": "phone" },
+        },
+      },
+    });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "class-agent" } });
+
+    try {
+      const both = await mcp.client.callTool({
+        name: "lease_simulator",
+        arguments: { class: "phone", model: "iPhone 16", platform: "ios" },
+      });
+      expect(both.isError).toBe(true);
+      expect(JSON.stringify(both.content)).toContain("class");
+
+      const asClass = await mcp.client.callTool({
+        name: "lease_simulator",
+        arguments: { class: "phone", platform: "ios" },
+      });
+      expect(asClass.isError).not.toBe(true);
+      expect(asClass.structuredContent).toMatchObject({
+        device: { spec: { model: "iPhone 16", osVersion: "18.4" } },
+      });
+      const classLease = (asClass.structuredContent as { lease: { id: string } }).lease.id;
+      await mcp.client.callTool({ name: "release_simulator", arguments: { leaseId: classLease } });
+
+      const granted = await mcp.client.callTool({
+        name: "lease_simulator",
+        arguments: { platform: "ios" },
+      });
+      expect(granted.isError).not.toBe(true);
+      expect(granted.structuredContent).toMatchObject({
+        device: { spec: { model: "iPhone 16", osVersion: "18.4" } },
+      });
+    } finally {
+      await mcp.close();
+    }
+  });
 });

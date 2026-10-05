@@ -6,6 +6,8 @@ import {
   DEFAULT_LEASE_TTL_MS,
 } from "./config.js";
 import {
+  DEVICE_CLASSES,
+  type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
@@ -1164,7 +1166,14 @@ function isDeviceRequest(value: unknown): value is DeviceRequest {
   return (
     isObject(value) &&
     isPlatform(value.platform) &&
-    typeof value.model === "string" &&
+    isOptionalString(value.model) &&
+    (value.class === undefined || isDeviceClass(value.class)) &&
+    hasOptionalRequestFields(value)
+  );
+}
+
+function hasOptionalRequestFields(value: Record<string, unknown>): boolean {
+  return (
     isOptionalString(value.osVersion) &&
     (value.mode === undefined || value.mode === "slim" || value.mode === "full") &&
     isOptionalString(value.imageTag)
@@ -1197,6 +1206,10 @@ function isDeviceSpec(value: unknown): value is DeviceSpec {
     typeof value.osVersion === "string" &&
     isOptionalString(value.imageTag)
   );
+}
+
+function isDeviceClass(value: unknown): value is DeviceClass {
+  return DEVICE_CLASSES.some((deviceClass) => deviceClass === value);
 }
 
 function isPlatform(value: unknown): value is Platform {

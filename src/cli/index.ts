@@ -40,7 +40,13 @@ import {
   type StatusGetOutput,
   type WorkerView,
 } from "../admin/index.js";
-import { deviceClassSchema, type Role, waitingRequestSchema } from "../contract/index.js";
+import {
+  type DeviceClass,
+  deviceClassSchema,
+  requestedClass,
+  type Role,
+  waitingRequestSchema,
+} from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
 import {
   awaitWithin,
@@ -935,6 +941,7 @@ async function runLease(
     "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
     "bind-pid": { type: "string" },
+    class: { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
     "export-env": { type: "boolean" },
@@ -949,8 +956,8 @@ async function runLease(
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
-        "                     [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+      "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
+        "                     [--os <version>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
         "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -960,8 +967,8 @@ async function runLease(
   if (values.platform !== "ios" && values.platform !== "android")
     throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
-  if (typeof values.device !== "string" || values.device === "")
-    throw new UsageError(withHelpHint("lease requires --device <model>"));
+  if (values.device === "") throw new UsageError("lease --device must not be empty");
+  if (values.class === "") throw new UsageError("lease --class must not be empty");
   if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
   const requesterId = (values["agent-id"] as string | undefined) ?? environment.requesterId;
   const detached = values.detach ?? false;
@@ -1098,7 +1105,10 @@ async function runLease(
         allowDownload: values["allow-download"] === true,
         noWait: values["no-wait"] === true,
         requesterId,
-        model: values.device,
+        // Sent as typed, both of them: the contract refuses a request naming a model and a
+        // class, and a request naming neither means `phone` (ADR 0015 §1).
+        ...(typeof values.device === "string" ? { model: values.device } : {}),
+        ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
         platform,
         // Sent as typed: the contract, not the CLI, decides which modes exist, and answers
@@ -1330,7 +1340,7 @@ function formatWaitingRequests(requests: readonly WaitingRequestEntry[], now: nu
       const { spec } = request;
       const device = [
         spec.platform,
-        spec.model,
+        spec.model ?? `class ${String(requestedClass(spec))}`,
         spec.osVersion,
         spec.mode === undefined ? undefined : `mode ${spec.mode}`,
         spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,

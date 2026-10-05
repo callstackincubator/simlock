@@ -219,5 +219,57 @@ describe.skipIf(process.platform !== "darwin")(
         });
       },
     );
+
+    it(
+      "a platform-only lease grants the first listed phone model booted in Simlock's device set, and the same request after release gets that device back without a second boot",
+      { timeout: 300_000 },
+      async () => {
+        await sweepStaleDeviceSets();
+        const env = await withDaemon({ driver: "real" });
+        const deviceSet = iosDeviceSet(env.home);
+        const phone = await iosPhoneDefault(env);
+        expect(phone, "the catalog lists no default phone for iOS").toBeDefined();
+        const request = ["lease", "--platform", "ios", "--agent-id", "ios-class", "--detach"];
+        type Grant = {
+          device: { driverDeviceId: string; spec: { model: string } };
+          lease: { id: string };
+        };
+
+        const first = await env.cli(request, { timeout: 120_000 });
+        expect(first.code, `lease failed: ${first.stderr}`).toBe(0);
+        const firstGrant = first.json as Grant;
+        const udid = firstGrant.device.driverDeviceId;
+        expect(firstGrant.device.spec.model).toBe(phone);
+        const bootedDevice = (await setDevices(deviceSet)).find((device) => device.udid === udid);
+        expect(bootedDevice?.state).toBe("Booted");
+
+        const release = await env.cli(["release", firstGrant.lease.id]);
+        expect(release.code, `release failed: ${release.stderr}`).toBe(0);
+        await waitFor(
+          async () => {
+            const rows = (await env.cli(["list", "--devices"])).json as {
+              driverDeviceId: string;
+              state: string;
+            }[];
+            return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
+          },
+          { timeout: 60_000, label: "device returns to ready after release" },
+        );
+
+        const second = await env.cli(request, { timeout: 120_000 });
+        expect(second.code, `second lease failed: ${second.stderr}`).toBe(0);
+        const secondGrant = second.json as Grant;
+        expect(
+          secondGrant.device.driverDeviceId,
+          "the same request must reuse the idle device",
+        ).toBe(udid);
+        // Reused, not recreated: Simlock's set holds one simulator, still the one that booted first.
+        expect(await setDevices(deviceSet)).toHaveLength(1);
+
+        await env.cli(["release", secondGrant.lease.id]);
+        const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
+        expect(nuke.code).toBe(0);
+      },
+    );
   },
 );

@@ -266,7 +266,9 @@ export const leaseGrantSchema = z.object({
 /** The device a lease request named, with every field it left out left out. */
 const requestedDeviceSchema = z.object({
   platform: platformSchema,
-  model: z.string(),
+  /** Present only when the request named a model; one that named a class or nothing has none. */
+  model: z.string().optional(),
+  class: deviceClassSchema.optional(),
   osVersion: z.string().optional(),
   mode: deviceModeSchema.optional(),
   imageTag: imageTagSchema.optional(),

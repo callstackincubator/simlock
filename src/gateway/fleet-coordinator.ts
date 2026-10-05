@@ -52,7 +52,7 @@ import {
 } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { LeaseRequestFailure } from "../core/domain.js";
-import type { DeviceRequest } from "../core/driver.js";
+import type { ExactDeviceRequest } from "../core/driver.js";
 import {
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
@@ -226,7 +226,7 @@ export class FleetLeaseCoordinator {
    * Everything past admission -- reaching a worker at all -- is I/O and stays outside it.
    */
   async request(
-    deviceRequest: DeviceRequest,
+    deviceRequest: ExactDeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
     const admitted = await this.#decisions.run(async () => {
@@ -253,7 +253,7 @@ export class FleetLeaseCoordinator {
   }
 
   /** One lease or pending request per requester, fleet-wide (§14). */
-  #refuseIfAlreadyLeased(deviceRequest: DeviceRequest, requesterId: string): void {
+  #refuseIfAlreadyLeased(deviceRequest: ExactDeviceRequest, requesterId: string): void {
     const existingLeaseId = this.options.leaseIndex.existingLeaseId(requesterId);
     if (existingLeaseId !== undefined || this.#queue.hasPendingRequester(requesterId)) {
       this.#emit("lease.rejected", { requestSpec: deviceRequest, reason: "already-leased" });
