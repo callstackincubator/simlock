@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "../core/test-wiring.js";
+import { testComponentWiring } from "../core/testing.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
 import {

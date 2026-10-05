@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "../core/test-wiring.js";
+import { testComponentWiring } from "../core/testing.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
 import { CleanupReaper, type Config, FakeDriver, LeaseEngine, Registry } from "../core/index.js";

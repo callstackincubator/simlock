@@ -5,13 +5,15 @@
  */
 import { requestedClass } from "../../contract/index.js";
 import { type OsConstraint, parseOsConstraint, satisfies } from "../../contract/os-range.js";
-import { findCatalogModel, modelClass, pairedRuntimes } from "../../core/catalog-match.js";
 import {
+  findCatalogModel,
+  modelClass,
+  pairedRuntimes,
   type DeviceClass,
   type DeviceRequirement,
   type DeviceSpec,
   fits,
-} from "../../core/domain.js";
+} from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 

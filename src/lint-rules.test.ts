@@ -106,6 +106,34 @@ describe("import rules enforced by pnpm lint", () => {
     expectLintPass("src/core/x.ts", `import { x } from "./capacity/index.js";\n`);
   });
 
+  it("fails a file importing a private driver file, and passes the driver's index", () => {
+    expectLintError("src/http/x.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
+    expectLintError("src/http/x.ts", `import { x } from "../drivers/android/prerequisites.js";\n`);
+    expectLintError("src/daemon/main.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
+    expectLintError(
+      "src/daemon/x.ts",
+      `import { x } from "../drivers/android/prerequisites.js";\n`,
+    );
+    expectLintError("src/daemon/x.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
+    expectLintPass("src/daemon/main.ts", `import { x } from "../drivers/ios/index.js";\n`);
+  });
+
+  it("fails a core file importing a private gateway file", () => {
+    expectLintError("src/core/x.ts", `import { x } from "../gateway/queue.js";\n`);
+  });
+
+  it("fails a test file importing a private file, and passes the component's testing file", () => {
+    expectLintError("src/http/x.test.ts", `import { x } from "../core/lease-ports.js";\n`);
+    expectLintError("src/http/x.test.ts", `import { x } from "../gateway/queue.js";\n`);
+    expectLintError("src/http/x.test.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
+    expectLintError(
+      "src/http/x.test.ts",
+      `import { x } from "../drivers/android/prerequisites.js";\n`,
+    );
+    expectLintError("src/core/x.test.ts", `import { x } from "./capacity/limits.js";\n`);
+    expectLintPass("src/core/x.test.ts", `import { x } from "./capacity/testing.js";\n`);
+  });
+
   it("passes a file inside capacity importing its sibling", () => {
     expectLintPass("src/core/capacity/x.ts", `import { x } from "./limits.js";\n`);
   });

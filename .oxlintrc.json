@@ -4,7 +4,200 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {},
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["**/core/**", "!**/core/index.js"],
+            "message": "core is entered through its index.js"
+          },
+          {
+            "group": ["**/gateway/**", "!**/gateway/index.js"],
+            "message": "gateway is entered through its index.js"
+          },
+          {
+            "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+            "message": "drivers/ios is entered through its index.js"
+          },
+          {
+            "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+            "message": "drivers/android is entered through its index.js"
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/core/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/gateway/**", "!**/gateway/index.js"],
+                "message": "gateway is entered through its index.js"
+              },
+              {
+                "group": ["**/capacity/**", "!**/capacity/index.js"],
+                "message": "capacity is entered through its index.js"
+              },
+              {
+                "group": ["**/drivers/**"],
+                "message": "platform behaviour reaches this module only through the Driver interface"
+              },
+              {
+                "group": [
+                  "fs",
+                  "fs/**",
+                  "node:fs",
+                  "node:fs/**",
+                  "child_process",
+                  "child_process/**",
+                  "node:child_process",
+                  "node:child_process/**"
+                ],
+                "message": "core and leasing reach the filesystem and processes only through injected ports"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/gateway/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "core/(?:[^i]|i[^n]|in[^d]|ind[^e]|inde[^x]|index[^.]|index\\.[^j]|index\\.j[^s]|index\\.js.).*",
+                "message": "core is entered through index.js"
+              },
+              {
+                "group": ["**/core/index.js"],
+                "allowImportNames": [
+                  "DeviceClass",
+                  "DeviceRequest",
+                  "DeviceRequirement",
+                  "DeviceSpec",
+                  "InMemoryLeaseRequestStore",
+                  "LeaseProgress",
+                  "LeaseRecord",
+                  "LeaseRequestBook",
+                  "LeaseRequestFailure",
+                  "LeaseRequestLimits",
+                  "LeaseRequestOptions",
+                  "QueuePlace",
+                  "RequestCancelledError",
+                  "RequesterAlreadyLeasedError",
+                  "SerializedDecision",
+                  "WaitQueue",
+                  "WaiterState",
+                  "WaitingRequest",
+                  "findCatalogModel",
+                  "fits",
+                  "modelClass",
+                  "newLeaseRequestId",
+                  "pairedRuntimes"
+                ],
+                "message": "the gateway may import only the names its allow-list gives"
+              },
+              {
+                "group": ["**/drivers/**", "**/http/**", "**/cli/**", "**/mcp/**"],
+                "message": "the gateway imports no driver, HTTP, CLI or MCP module"
+              },
+              {
+                "group": ["**/daemon/**", "!**/daemon/dispatch.js"],
+                "message": "the gateway imports only the daemon's dispatch contract"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/daemon/**"],
+      "excludeFiles": ["src/daemon/main.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/core/**", "!**/core/index.js"],
+                "message": "core is entered through its index.js"
+              },
+              {
+                "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+                "message": "drivers/ios is entered through its index.js"
+              },
+              {
+                "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+                "message": "drivers/android is entered through its index.js"
+              },
+              {
+                "group": ["**/gateway/**"],
+                "message": "only the composition root, main.ts, knows a gateway exists"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/contract/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../**", "./../**"],
+                "message": "the contract imports nothing outside src/contract/"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/test-*.ts", "**/testing.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/core/**", "!**/core/testing.js", "!**/core/index.js"],
+                "message": "core is entered through its index.js"
+              },
+              {
+                "group": ["**/gateway/**", "!**/gateway/index.js"],
+                "message": "gateway is entered through its index.js"
+              },
+              {
+                "group": ["**/capacity/**", "!**/capacity/testing.js", "!**/capacity/index.js"],
+                "message": "capacity is entered through its index.js"
+              },
+              {
+                "group": ["**/drivers/ios/**", "!**/drivers/ios/index.js"],
+                "message": "drivers/ios is entered through its index.js"
+              },
+              {
+                "group": ["**/drivers/android/**", "!**/drivers/android/index.js"],
+                "message": "drivers/android is entered through its index.js"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
   "env": {
     "builtin": true
   }

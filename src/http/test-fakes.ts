@@ -1,7 +1,13 @@
-import type { Config, DeviceRecord, LeaseRecord } from "../core/index.js";
-import { InMemoryLeaseRequestStore, LeaseRequestBook } from "../core/lease-request-book.js";
-import { SerializedDecision } from "../core/serialized-decision.js";
-import type { LeaseGrant, LeaseRequestOptions } from "../core/wait-queue.js";
+import {
+  type Config,
+  type DeviceRecord,
+  type LeaseRecord,
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  SerializedDecision,
+  type LeaseGrant,
+  type LeaseRequestOptions,
+} from "../core/index.js";
 import {
   describeSchemaIssues,
   OPERATIONS,

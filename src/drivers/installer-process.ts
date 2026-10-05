@@ -1,4 +1,4 @@
-import type { ComponentInstallProgress } from "../core/driver.js";
+import type { ComponentInstallProgress } from "../core/index.js";
 import type { Clock, ProcessHandle, ProcessResult, ProcessRunner } from "../ports/index.js";
 
 // A platform installer ignoring `SIGTERM` must not hold an aborted install open: after this long

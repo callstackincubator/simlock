@@ -9,23 +9,23 @@
  * once it names a machine) and forwards every method through.
  *
  * `DeviceRequest`/`DeviceRecord`/`LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive
- * type imports (`core/domain.js`, `core/driver.js`) -- see `boundary.test.ts`'s
- * `ALLOWED_CORE_IMPORTS` -- not a reach into the registry, capacity, or lifecycle engine ADR 0005
+ * type imports (`core/domain.js`, `core/driver.js`) -- both on core's index, and
+ * allowed to the gateway by name in `.oxlintrc.json` -- not a reach into the registry, capacity, or lifecycle engine ADR 0005
  * §33 keeps off limits.
  */
 import type { Clock, IdGenerator } from "../ports/index.js";
-import type { LeaseRecord } from "../core/domain.js";
-import type { DeviceRequest } from "../core/driver.js";
 import {
+  type LeaseRecord,
+  type DeviceRequest,
   WaitQueue,
   type LeaseProgress,
   type LeaseRequestOptions,
   type QueuePlace,
   type WaiterState,
-} from "../core/wait-queue.js";
+} from "../core/index.js";
 
-export type { LeaseProgress, LeaseRequestOptions } from "../core/wait-queue.js";
-export { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/wait-queue.js";
+export type { LeaseProgress, LeaseRequestOptions } from "../core/index.js";
+export { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
 
 /**
  * The lease record a fleet grant carries. Identical to a worker's own `LeaseRecord` plus the

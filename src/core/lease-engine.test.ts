@@ -15,7 +15,7 @@ import {
   type CapacityLimits,
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
-import { capacityChangedPayload } from "./capacity/observer.js";
+import { capacityChangedPayload } from "./capacity/testing.js";
 import type { ModelPreferences } from "./driver-catalog.js";
 import {
   BootTimeoutError,

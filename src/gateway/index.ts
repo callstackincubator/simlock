@@ -2,8 +2,8 @@
  * `src/gateway` -- the second implementation of the daemon contract (ADR 0005 §32), for a
  * daemon that owns no devices and fronts the workers connected to it.
  *
- * Boundaries (§33, enforced by `boundary.test.ts`): nothing here imports `src/drivers`, and
- * from `src/core` nothing at all in this PR -- no registry, no capacity, no lifecycle. The only
+ * Boundaries (§33, enforced by `pnpm lint`): nothing here imports `src/drivers`, and
+ * from `src/core`'s index only the names `.oxlintrc.json` lists -- no registry, no capacity, no lifecycle. The only
  * daemon-side import is `daemon/dispatch.js`, the transport-facing dispatch contract, which is
  * itself core-free.
  *

@@ -51,16 +51,16 @@ import {
   type Platform,
 } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
-import type { LeaseRequestFailure } from "../core/domain.js";
-import type { DeviceRequest } from "../core/driver.js";
 import {
+  type LeaseRequestFailure,
+  type DeviceRequest,
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
   type LeaseRequestLimits,
   newLeaseRequestId,
   type WaitingRequest,
-} from "../core/lease-request-book.js";
-import { SerializedDecision } from "../core/serialized-decision.js";
+  SerializedDecision,
+} from "../core/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
@@ -639,7 +639,7 @@ export class FleetLeaseCoordinator {
    * is needed there to answer the same code the worker's own `NoCapacityError` answers. Before
    * this, `src/daemon` (every worker-mode daemon, not just gateway mode) imported that class
    * from `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway
-   * module graph into ordinary worker startup with no boundary test covering that direction.
+   * module graph into ordinary worker startup with no lint rule covering that direction.
    */
   #admit(waiter: FleetWaiter): void {
     // Attempted. If that attempt is refused, `#attempt` decides the rest: one more walk for a

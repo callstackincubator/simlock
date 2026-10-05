@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { NoCapacityError } from "../core/lease-acquisition-coordinator.js";
-import { capacityChangedPayload } from "../core/capacity/observer.js";
-import { testComponentWiring } from "../core/test-wiring.js";
+import {
+  capacityChangedPayload,
+  testComponentWiring,
+  type FakeDriverOptions,
+} from "../core/testing.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
@@ -20,6 +22,9 @@ import {
   Registry,
   SerializedDecision,
   RuntimeMissingError,
+  NoCapacityError,
+  type CatalogReader,
+  type PassthroughResolver,
 } from "../core/index.js";
 import {
   OPERATIONS,
@@ -27,8 +32,6 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
 } from "../contract/index.js";
-import type { FakeDriverOptions } from "../core/fake-driver.js";
-import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
   ExecOutputDeliveryStalledError,

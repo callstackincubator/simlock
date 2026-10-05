@@ -8,7 +8,7 @@
  * of calling `core`. Both implementations are reached by the same transports (the socket
  * server, the HTTP app), so both need this vocabulary, and the gateway must be able to import
  * it without importing `src/core` through the back door -- which is exactly what importing
- * `dispatcher.ts` would do (see `src/gateway/boundary.test.ts`).
+ * `dispatcher.ts` would do (`src/gateway/boundary.test.ts` proves it stays core-free).
  *
  * Nothing here imports from `src/core`, `src/drivers`, or `src/http`; the contract module, its
  * zod-inferred types, and the `Clock`/`Logger` port types are the whole dependency surface.

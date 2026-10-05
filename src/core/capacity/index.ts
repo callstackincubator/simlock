@@ -4,6 +4,7 @@ export { buildCapacityFigures } from "./figures.js";
 export { CapacityObserver } from "./observer.js";
 export { capacityDevice, capacityDevices, plannedCapacityDevice } from "./devices.js";
 export type { CapacityLimits } from "./limits.js";
+export { resourceOptionValidators } from "./strategies/resource/index.js";
 export {
   capacityStrategyNames,
   capacityStrategyValidator,

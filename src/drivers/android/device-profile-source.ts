@@ -1,5 +1,4 @@
-import { DriverCrashError, UnknownModelError } from "../../core/driver.js";
-import type { DeviceClass } from "../../core/index.js";
+import { DriverCrashError, UnknownModelError, type DeviceClass } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 
 /**
