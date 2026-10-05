@@ -55,7 +55,16 @@ restart because the file does.
 `source`: `warm` for a device that was ready, `booted` for one booted from
 shutdown, `provisioned` for one created for this request, including the
 cases where an idle device was evicted to make room. `lease.rejected` gains
-`requestId` and `requester`. Both changes are additive (events rule 6).
+`requestId` and `requester`, on every reason: the request id is minted
+before the admission checks, so a request refused as `killed` or
+`already-leased` has one although no `lease.requested` was emitted for it.
+Both changes are additive (events rule 6).
+
+A request belongs to the window its `lease.requested` falls in. Its grant,
+rejection and end are joined from events up to the window's end; an end
+after it is unseen, so the lease is open at the window's end and gives no
+held or turnaround sample. Provisioning, boot and incident counts go by the
+device event's timestamp.
 
 From these, one request's life is four timestamps joined by ids: waited is
 `lease.requested` to `lease.granted` or `lease.rejected` by `requestId`;
@@ -140,8 +149,9 @@ label up for itself.
 
 Series over time (utilisation in slots and RAM, queue depth, waiting) come
 bucketed from `usage.get`, with the bucket width in the answer. The daemon
-picks the width from the window's length so a chart has a bounded number of
-points; a client never re-buckets.
+picks the smallest of 1 minute, 5 minutes, 15 minutes, 1 hour, 6 hours and
+1 day that keeps the series at or under 200 points; a client never
+re-buckets.
 
 ## Consequences
 
@@ -158,9 +168,12 @@ points; a client never re-buckets.
   generation" is narrowed to §4 above.
 - `usage.get` reads the whole retained history for a wide window; at the
   default cap that is a few hundred thousand lines, read once per call. The
-  console refetches on events, so the daemon may compute often. If that
-  proves costly the fix is a cache keyed on the newest event id, inside the
-  daemon, not a store.
+  console refetches on events, so the daemon may compute often. The
+  handler memoises its last answer by window and newest event id, so a call
+  while nothing happened reads nothing, and the console's usage view
+  refetches on events and every 15 seconds rather than every second. A
+  stats read still runs on the daemon; "costs an agent nothing" is a claim
+  about the lease path.
 - A worker's own `usage.get` after it joined a fleet shows requests with the
   `gw:` prefix and `noWait`, with zero wait, since the gateway queued them.
   The fleet view on the gateway is where their wait shows.
