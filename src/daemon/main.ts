@@ -406,7 +406,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
     eventHistory,
-    ...(leasing.healthMonitor === undefined ? {} : { healthMonitor: leasing.healthMonitor }),
+    healthMonitor: leasing.healthMonitor,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     // ADR 0012 §1: `worker.list` answers with this host under the id it presents to a gateway.
     instanceId,

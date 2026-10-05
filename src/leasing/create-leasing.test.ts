@@ -2728,6 +2728,56 @@ describe("createLeasing: lease.rejected names its request", () => {
   );
 });
 
+describe("createLeasing queue timeout and failure storage", () => {
+  const android = { model: "Pixel 9", osVersion: "35", platform: "android" } as const;
+
+  it("emits lease.rejected for a timed-out waiter under the wait queue's module, then lets the request behind it through", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const droid = new FakeDriver({ availableOsVersions: ["35"], clock, platform: "android" });
+    const harness = await createHarness({ driver: ios, drivers: [ios, droid] });
+    await harness.engine.request(request, { ownerId: "holder", requesterId: "holder" });
+    const blocking = harness.engine.request(request, {
+      ownerId: "head",
+      requesterId: "head",
+      timeoutMs: 10,
+    });
+    const behind = harness.engine.request(android, { ownerId: "behind", requesterId: "behind" });
+    await flush();
+    // The android request could be served now, but it waits behind the iOS one at the head.
+    expect(await settledOrPending(behind)).toBe("still pending");
+
+    harness.clock.advance(10);
+
+    expect(await settledOrPending(blocking)).toBeInstanceOf(QueueTimeoutError);
+    expect(await settledOrPending(behind)).toMatchObject({ lease: { requesterId: "behind" } });
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => ({
+          module: event.module,
+          reason: (event.payload as { reason: string }).reason,
+        })),
+    ).toEqual([{ module: "wait-queue", reason: "timeout" }]);
+  });
+
+  it("stores a failed request as INTERNAL with the error's own message when no classifier was given", async () => {
+    const harness = await createHarness();
+
+    await expect(
+      harness.engine.request(android, { ownerId: "agent", requesterId: "agent" }),
+    ).rejects.toThrow("No driver registered for platform: android");
+
+    expect(harness.registry.leaseRequests()).toMatchObject([
+      {
+        failure: { code: "INTERNAL", message: "No driver registered for platform: android" },
+        state: "failed",
+      },
+    ]);
+  });
+});
+
 describe("createLeasing wiring", () => {
   const components = {
     claimProvision: () => () => undefined,

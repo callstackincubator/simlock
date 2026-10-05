@@ -459,6 +459,18 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
+  it("keeps a settled record as it is when a second result arrives for it, and settles nothing for an unknown id", async () => {
+    const store = memoryStore();
+    const created = await store.createLeaseRequest(newRequest("agent"));
+    await store.settleLeaseRequest(created.id, { failure, state: "failed" });
+
+    const again = await store.settleLeaseRequest(created.id, { state: "cancelled" });
+    const unknown = await store.settleLeaseRequest("req_missing", { state: "cancelled" });
+
+    expect([again, unknown]).toEqual([undefined, undefined]);
+    expect(store.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
+  });
+
   it("stores a request under the id its owner minted before admission, and mints no other", async () => {
     const store = memoryStore();
     const book = bookOver(store);

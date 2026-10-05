@@ -156,7 +156,7 @@ export interface DaemonServerEngineOptions {
   readonly instanceId: string;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
-  readonly healthMonitor?: LeaseHealthMonitor;
+  readonly healthMonitor?: LeaseHealthMonitor | undefined;
   readonly nuke?: Nuke;
   /** Builds the scoped command behind `simlock simctl` / `simlock adb`; absent in tests that never use them. */
   readonly passthrough?: PassthroughResolver;

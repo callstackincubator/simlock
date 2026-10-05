@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
-import { type Core, createCore, loadConfig, Registry } from "./index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  JsonLinesLogger,
+  type Logger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
+import { type Core, createCore, DriverCrashError, loadConfig, Registry } from "./index.js";
 import { FakeDriver, testComponentWiring } from "./testing.js";
 
-async function build() {
+async function build(options: { readonly logger?: Logger; readonly fresh?: boolean } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
@@ -17,6 +24,9 @@ async function build() {
     eventBus,
     filesystem,
     idGenerator: { generate: () => `${next++}` },
+    ...(options.fresh === true
+      ? { leaseIdentity: { android: "fresh", ios: "fresh" } as const }
+      : {}),
     statePath: "/state.json",
   });
   const core = createCore({
@@ -24,6 +34,7 @@ async function build() {
     config: await loadConfig({ filesystem, systemStats }),
     drivers: [driver],
     eventBus,
+    logger: options.logger,
     registry,
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
@@ -140,5 +151,35 @@ describe("createCore", () => {
 
     core.dispose();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("logs a spent device it cannot delete at startup and keeps going, leaving the device shut down", async () => {
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink });
+    const harness = await build({ fresh: true, logger });
+    harness.driver.failOn("destroy", 1, new DriverCrashError("cannot delete"));
+    // A fresh device whose lease ended and whose previous process stopped before deleting it.
+    const { device, released } = await releasedLease(harness);
+    await harness.registry.completeReclaimWithoutPurge(released.device.id);
+    harness.core.connect(ports());
+
+    await harness.core.converge();
+
+    expect(
+      sink.records.filter((record) => record.message === "startup delete of a spent device failed"),
+    ).toMatchObject([{ level: "error", fields: { deviceId: device.id, error: "cannot delete" } }]);
+    expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
+  });
+
+  it("keeps going when a spent device cannot be deleted at startup and no logger was given", async () => {
+    const harness = await build({ fresh: true });
+    harness.driver.failOn("destroy", 1, new DriverCrashError("cannot delete"));
+    const { device, released } = await releasedLease(harness);
+    await harness.registry.completeReclaimWithoutPurge(released.device.id);
+    harness.core.connect(ports());
+
+    await expect(harness.core.converge()).resolves.toBeUndefined();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
   });
 });
