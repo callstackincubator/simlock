@@ -1277,9 +1277,9 @@ Platform: android
   Runtimes: 34, 35 (default: 35)
   Models:
     phone:
+      My Tablet (custom): 34, 35
       Pixel 8: 34, 35
         Other names: pixel_8
-      My Tablet (custom): 34, 35
   Images (runtime, tag, ABI):
     34 default x86_64
     35 google_apis arm64-v8a
