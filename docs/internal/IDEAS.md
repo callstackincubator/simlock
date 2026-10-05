@@ -2,23 +2,15 @@
 
 Things discussed and deliberately deferred. Roughly ordered by expected value.
 
-## Warm pool
+## Warm pool (decided: ADR 0017, #359)
 
-The benchmark showed ~30s of boot is a fixed floor on iOS (and Android without
-a snapshot). Keeping clean, unleased devices running after release would
-collapse a repeated lease acquisition to sub-second on both platforms. The
-pool is an adaptive cache across every requested spec rather than a set of
-per-spec quotas. Leased devices and active requests take priority, and the
-global and platform `maxRunning` limits bound leased, reclaiming, and ready
-devices together. A cache miss evicts the least-recently-used eligible device
-that frees the constrained capacity.
-
-The first warm-pool version is release-driven: it does not proactively boot
-shutdown devices on daemon startup or merely to fill unused running capacity.
-A device enters the warm pool only after an actual lease releases it. Simlock
-also does not provision devices solely to fill the warm pool. Warm devices
-still shut down after the existing T1 idle timeout; the pool is not refilled
-afterward until real lease activity releases another device.
+The release-driven pool shipped first: a device became warm only because a
+lease released it and capacity allowed it to stay running. [ADR
+0017](adr/0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md)
+makes the pool its own module with operator targets, a reserve of running
+slots, and an off switch; #359 delivers it. Still deferred from there:
+targets named by class, changing targets without a restart, and fleet-level
+targets on a gateway.
 
 ## Orphaned-holder fix (shipped)
 

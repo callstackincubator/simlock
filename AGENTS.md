@@ -65,6 +65,8 @@ End-user docs live directly under [docs/](docs/) and must stay self-contained
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
 - [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
+- [COMPONENTS.md](docs/internal/COMPONENTS.md) — the inventory: every component,
+  what it owns, what it leaves to others
 - [DESIGN.md](docs/internal/DESIGN.md) — the design guide for the web console
   (and the landing page): type, colour, status colours, spacing, voice
 - [DELIVERY.md](docs/internal/DELIVERY.md) — how work flows through GitHub
