@@ -317,10 +317,10 @@ gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 
 The repo's own skills encode these procedures; use them rather than
 retyping the steps. `deliver` is the orchestrator: it claims, then hands
-each stage to a forked skill — `implement`, `review`, `verify-hardware` —
-that runs on the model its frontmatter pins and returns a fixed report.
+each stage to a background agent — `implementer`, `reviewer`,
+`hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` ends its
-technical and split modes with the forked `check-spec` (rule 7).
+technical and split modes with the `spec-checker` agent (rule 7).
 
 ## Automation
 

@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:ready feature (spec its tasks, then walk them in dependency order, two at a time). Claims, delegates implement, review and hardware checks to their forked skills, reasons only over their report blocks, and merges each PR through the gate. Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
+description: Deliver a ready issue end to end, unattended — a task, a bug, or a whole feature:ready feature (spec its tasks, then walk them in dependency order, two at a time). Claims, delegates implement, review and hardware checks to background agents (two issues at once), reports progress as it goes, reasons only over their report blocks, and merges each PR through the gate. Use when the user says "deliver #N", "pick up the next ready issue", or "ship #N".
 model: opus
 effort: medium
 ---
@@ -16,17 +16,35 @@ carry a whole feature.
 Rules 1, 2, 3, 9, 14, 15 and 16 in `docs/internal/agent-rules/delivery.md`
 govern this skill.
 
-**Delegating.** Invoke a stage with the Skill tool and pass everything it
-needs as its arguments: the issue, the branch, the PR once there is one,
-the one thing to do, and anything pasted from an earlier report. `implement`,
-`review` and `verify-hardware` are forked: each runs in its own sub-agent on
-the model its frontmatter pins and hands back only its report. Never start
-an Agent that then loads one of them, and never pass a model: either
-overrides the frontmatter.
+**Delegating.** Start each stage with the Agent tool, in the background:
+`subagent_type` `implementer`, `reviewer` or `hardware-verifier`, a short
+`description` naming the issue and stage (`#362 implement`), and a prompt
+that carries everything it needs: the issue, the branch, the PR once there
+is one, the one thing to do, and anything pasted from an earlier report.
+Each agent runs on the model and effort its frontmatter in
+`.claude/agents/` pins and starts without this conversation. Never pass a
+model, and never invoke the stage skills from here: the skill waits while
+an earlier run of the same skill is still going, so two implements would
+run one after the other.
 
-A report without its block, or with narration in place of it, is not a
-result: invoke the skill again with the same arguments plus "the last run
-ended without its report block; report on the work already done".
+You are woken when an agent finishes; its report is the result. Do not
+poll, sleep or read an agent's transcript while it runs. A report without
+its block, or with narration in place of it, is not a result: start the
+same agent again with the same prompt plus "the last run ended without its
+report block; report on the work already done".
+
+**Progress.** The maintainer may be watching. Each time you start or
+receive a stage, write one line in the session, and keep a table of what is
+in flight:
+
+```
+#362 implement → done, PR #370, 5/5 green. Starting review.
+| Issue | PR | Stage | Since |
+```
+
+When asked how it is going, answer from that table and the PR status lines
+(step 3); to look inside a running agent, ask it with SendMessage rather
+than waiting for it to finish.
 
 **Ask once, then run.** A person in this session is asked at most one
 question per run up front: whether the slow lane may run for every PR of
@@ -173,8 +191,8 @@ readiness already encodes the order. After a merge that workflow takes a
 minute: watch its run (`gh run list --workflow "Issue state" --limit 1`,
 then `gh run watch <id>`) and list again, rather than diagnosing why a task
 is not ready yet. Deliver up to two runnable tasks at
-once: invoke each stage for both in the same message, and keep the two
-pipelines apart. Each task has its own worktree, so they never share files.
+once: start a stage for one as soon as the other's agent is running, and
+keep the two pipelines apart; never wait on one task to move the other. Each task has its own worktree, so they never share files.
 If both reach the hardware check at once, the second `verify-hardware`
 waits for the slow lane's lock (rule 16).
 After each merge, list again: merging closes the task, and the tasks that
