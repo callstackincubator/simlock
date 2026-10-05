@@ -430,6 +430,14 @@ describe("aggregateCatalog", () => {
     expect(catalog.platforms[0]?.classDefaults).toEqual({});
   });
 
+  it("drops a class default naming a model the worker does not list", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [{ ...iosOnB, classDefaults: { phone: "Ghost" } }], id: "wrk_a" }),
+    ]);
+
+    expect(catalog.platforms[0]?.classDefaults).toEqual({});
+  });
+
   it("keeps a class default a lone connected worker reports, and ignores a disconnected worker's", () => {
     const catalog = aggregateCatalog([
       view({ catalog: [{ ...iosOnA, classDefaults: { phone: "iPhone 17" } }], id: "wrk_a" }),

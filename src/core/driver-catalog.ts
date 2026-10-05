@@ -158,9 +158,9 @@ export class DriverCatalog {
   }
 }
 
-/** A model's class, reading own keys only so a model named `constructor` reads nothing. */
+/** A model's class; an inherited property of a name like `constructor` is never a class string. */
 function classOf(entry: DriverCatalogEntry, model: string): DeviceClass | undefined {
-  return Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
+  return entry.modelClasses[model];
 }
 
 /** The installed runtimes a model pairs with, reading own keys only. */

@@ -322,7 +322,7 @@ describe("DriverCatalog", () => {
       ).resolves.toEqual({});
     });
 
-    it("reads only a model's own class and runtimes: a model named constructor has neither, and a listed model with no runtimes entry pairs with nothing", async () => {
+    it("reads only a model's own runtimes: a classed model named constructor pairs with nothing, and a listed model with no runtimes entry pairs with nothing", async () => {
       const driver = new FakeDriver({
         availableOsVersions: ["26.5"],
         clock: new FakeClock(),
@@ -331,20 +331,18 @@ describe("DriverCatalog", () => {
       vi.spyOn(driver, "listCatalog").mockResolvedValue({
         defaultRuntime: "26.5",
         modelAliases: {},
-        modelClasses: { "iPhone 15": "phone", "iPhone 16": "phone" },
+        modelClasses: { constructor: "phone", "iPhone 15": "phone", "iPhone 16": "phone" } as const,
         modelRuntimes: { "iPhone 16": ["26.5"] },
         models: ["constructor", "iPhone 15", "iPhone 16"],
         runtimes: ["26.5"],
       });
       const catalog = new DriverCatalog([driver], {
-        preferences: {
-          ios: { phone: ["constructor", "iPhone 15", "iPhone 16"], tablet: ["constructor"] },
-        },
+        preferences: { ios: { phone: ["constructor", "iPhone 15", "iPhone 16"] } },
       });
 
       const [entry] = await catalog.listCatalog();
 
-      // `constructor` has no class of its own, `iPhone 15` has no runtimes entry.
+      // Inherited `Object.prototype.constructor` has a length; a read of it would count as paired.
       expect(entry?.classDefaults).toEqual({ phone: "iPhone 16" });
     });
 

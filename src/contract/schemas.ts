@@ -492,10 +492,11 @@ export const platformCatalogSchema = z.object({
     .record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema)
     .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX),
   /**
-   * ADR 0015 §4: for a class, the model Simlock would create for it on this host -- the first
-   * name of the class's preference list that `models` lists and that is of the class. A class
-   * in which no listed model counts has no entry. On a gateway a class's entry is kept only when
-   * every connected worker reports the same model for it.
+   * ADR 0015 §4: for a class, the model Simlock would create for it on this host -- of the
+   * names on the class's preference list that `models` lists and that are of the class, the
+   * first that pairs with an installed runtime, else the first of them. A class in which no
+   * listed model counts has no entry. On a gateway a class's entry is kept only when every
+   * connected worker reports the same model for it, and that worker lists it itself.
    */
   classDefaults: z.record(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
   /**

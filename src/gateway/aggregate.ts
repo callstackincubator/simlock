@@ -275,7 +275,20 @@ function addCatalogEntry(
   addCustomModels(bucket.customModels, entry);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
-  bucket.classDefaults.push(entry.classDefaults);
+  bucket.classDefaults.push(listedClassDefaults(entry));
+}
+
+/**
+ * A worker's class defaults with any naming a model the worker does not list itself dropped, so
+ * the fleet never shows a default nobody can lease; a dropped class counts as the worker having none.
+ */
+function listedClassDefaults(entry: PlatformCatalog): Partial<Record<DeviceClass, string>> {
+  const listed: Partial<Record<DeviceClass, string>> = {};
+  for (const deviceClass of deviceClassSchema.options) {
+    const model = entry.classDefaults[deviceClass];
+    if (model !== undefined && entry.models.includes(model)) listed[deviceClass] = model;
+  }
+  return listed;
 }
 
 /** Folds one worker's other names for `model` into the fleet's, once per spelling ignoring case. */
