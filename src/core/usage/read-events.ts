@@ -125,13 +125,6 @@ type Relayed = {
   readonly worker: string;
 } & RelayedAnswer;
 
-interface Dispatch {
-  readonly index: number;
-  readonly requestId: string;
-  readonly requester: string;
-  readonly worker: string;
-}
-
 interface Request {
   readonly index: number;
   readonly at: number;
@@ -180,7 +173,8 @@ class Reader {
   >();
   readonly #grants = new Map<string, Granted & { readonly leaseId: string }>();
   readonly #ends = new Map<string, number>();
-  readonly #dispatches = new Map<string, Dispatch>();
+  /** The worker each request was dispatched to, by request id. */
+  readonly #dispatches = new Map<string, string>();
   readonly #boundaries = new Map<string, number[]>();
   /** Relayed grants and rejections by the namespaced requester they are for. */
   readonly #relayed = new Map<string, Relayed[]>();
@@ -285,11 +279,10 @@ class Reader {
 
   #dispatched(seen: Seen): void {
     const requestId = text(seen.payload, "requestId");
-    const requester = text(seen.payload, "requesterId");
     const worker = text(seen.payload, "workerId");
     if (!this.options.fleet || !seen.within) return;
-    if (requestId === undefined || requester === undefined || worker === undefined) return;
-    this.#dispatches.set(requestId, { index: seen.index, requestId, requester, worker });
+    if (requestId === undefined || worker === undefined) return;
+    this.#dispatches.set(requestId, worker);
   }
 
   #relay(seen: Seen, relayed: RelayedAnswer): void {
@@ -453,7 +446,7 @@ class Reader {
 
   /** A fleet request's outcome is the worker's relayed answer for its requester (ADR 0016 §6). */
   #fleetFact(base: RequestFactBase, requestId: string, request: Request): RequestFact {
-    const dispatched = this.#dispatches.get(requestId)?.worker;
+    const dispatched = this.#dispatches.get(requestId);
     const relayed = this.#fleetOutcome(request);
     const worker = dispatched ?? relayed?.worker;
     if (worker !== undefined) this.#workers.add(worker);

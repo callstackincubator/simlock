@@ -422,6 +422,48 @@ describe("readEventFile", () => {
     expect([...read.requestedBefore].sort()).toEqual(["edge", "old"]);
   });
 
+  it("reports no requestId from a lease.requested that has none, or from another event that has one", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        { ...envelope(1, 100), event: "lease.requested", payload: {} } as EventEnvelope,
+        {
+          ...envelope(2, 110),
+          event: "lease.granted",
+          payload: { requestId: "g" },
+        } as EventEnvelope,
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.requestedBefore]).toEqual([]);
+  });
+
+  it("carries events whose worker and requester run together into the same text as two different ones", async () => {
+    const withPayload = (seq: number, payload: Record<string, string>): EventEnvelope =>
+      ({
+        event: "lease.requested",
+        id: `evt_${seq}`,
+        module: "test",
+        payload,
+        seq,
+        timestamp: 100 + seq,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        withPayload(1, { requester: "w1x" }),
+        withPayload(2, { requester: "x", workerId: "w1" }),
+      ),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["lease.requested"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.seq)).toEqual([1, 2]);
+  });
+
   it("reports the requests made before sinceTs from the ring too", async () => {
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);

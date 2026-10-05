@@ -242,6 +242,22 @@ describe("queue steps", () => {
 });
 
 describe("requests on a worker", () => {
+  it("counts a grant with no source as an empty source, and takes no grant without a leaseId", () => {
+    const result = read([
+      request(110, "r1"),
+      at(120, "lease.granted", { leaseId: "L1", requestId: "r1", requester: "a" }),
+      request(130, "r2", "b"),
+      at(140, "lease.granted", { requestId: "r2", requester: "b", source: "warm" }),
+    ]);
+    expect(result.requests[0]?.outcome).toEqual({
+      at: 120,
+      kind: "granted",
+      leaseId: "L1",
+      source: "",
+    });
+    expect(result.requests[1]).not.toHaveProperty("outcome");
+  });
+
   it("makes no request of an event at exactly the window start and one of an event at its end", () => {
     const result = read([request(100, "r0"), request(200, "r1"), request(201, "r2")]);
     expect(result.requests.map((r) => r.requestedAt)).toEqual([200]);
@@ -560,6 +576,15 @@ describe("device facts", () => {
 });
 
 describe("requests carried into the window", () => {
+  it("carries a request made exactly at the window's start, and treats an answer exactly then as answering it", () => {
+    expect(read([request(100, "edge")]).carried).toHaveLength(1);
+    const answered = read([
+      request(90, "old"),
+      at(100, "lease.granted", { leaseId: "L", requestId: "old", requester: "a", source: "warm" }),
+    ]);
+    expect(answered.carried).toEqual([]);
+  });
+
   const grant = (ts: number, requestId: string, requester = "a") =>
     at(ts, "lease.granted", { leaseId: `L${requestId}`, requestId, requester, source: "warm" });
 
@@ -700,12 +725,11 @@ describe("a gateway", () => {
     expect([...result.workers]).toEqual(["w9"]);
   });
 
-  it("ignores a dispatch missing requestId, requesterId or workerId, or outside the window", () => {
+  it("ignores a dispatch missing requestId or workerId, or outside the window", () => {
     const result = read(
       [
         request(110, "r"),
         at(111, "request.dispatched", { requesterId: "a", workerId: "w1" }),
-        at(112, "request.dispatched", { requestId: "r", workerId: "w1" }),
         at(113, "request.dispatched", { requestId: "r", requesterId: "a" }),
         dispatch(100, "r"),
         dispatch(201, "r"),
@@ -935,13 +959,12 @@ describe("a gateway", () => {
     expect(result.requests).toEqual([]);
   });
 
-  it("ignores a dispatch missing requesterId or workerId, recording no worker for it", () => {
+  it("names the worker from a dispatch that carries no requesterId, and records none for one with no workerId", () => {
     const noRequester = read(
       [request(110, "r"), at(111, "request.dispatched", { requestId: "r", workerId: "w1" })],
       FLEET,
     );
-    expect(noRequester.requests[0]?.worker).toBeUndefined();
-    expect([...noRequester.workers]).toEqual([]);
+    expect(noRequester.requests[0]?.worker).toBe("w1");
     const noWorker = read(
       [request(110, "r"), at(111, "request.dispatched", { requestId: "r", requesterId: "a" })],
       FLEET,
