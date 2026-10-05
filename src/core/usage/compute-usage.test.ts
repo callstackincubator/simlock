@@ -708,7 +708,7 @@ describe("computeUsage", () => {
       { ...WORKER, labels: { tok_b: "ci-bot" } },
     );
 
-    expect(usage.requesters).toEqual([
+    expect(usage.requesters).toStrictEqual([
       { granted: 0, heldTotalMs: 0, id: "tok_a", rejected: 1, requests: 3 },
       { granted: 1, heldTotalMs: 5_000, id: "tok_b", label: "ci-bot", rejected: 0, requests: 1 },
     ]);
