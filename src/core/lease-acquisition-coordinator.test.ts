@@ -1983,6 +1983,16 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
         ...options,
       });
 
+    it("sends a class request with no osVersion to the driver without pinning a runtime", async () => {
+      const driver = rangeDriver();
+      const harness = await classHarness(driver);
+
+      await harness.coordinator.request({ platform: "ios" }, owner("agent"));
+
+      const resolve = driver.calls.find((call) => call.operation === "resolveSpec");
+      expect(resolve?.arguments[0]).toEqual({ mode: "full", model: "iPhone 17", platform: "ios" });
+    });
+
     it("grants a ready idle device whose OS satisfies the range, and not one outside it", async () => {
       const inside = await classHarness(rangeDriver());
       const warm = await seedReady(inside, { ...iphone15, osVersion: "18.0" });
