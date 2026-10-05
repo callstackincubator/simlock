@@ -87,6 +87,49 @@ describe("event history", () => {
     expect(new Set(afterRestart.map((entry) => entry.id)).size).toBe(afterRestart.length);
   });
 
+  it("shows lease.granted with the requestId of the preceding lease.requested, provisioned for a first lease and warm for the next on the same device", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const firstId = await leaseDevice(env);
+    expect((await env.cli(["release", firstId])).code).toBe(0);
+    const secondId = await leaseDevice(env);
+
+    const history = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+
+    const granted = [firstId, secondId].map((leaseId) => grantOf(history, leaseId));
+    const requested = history.filter((entry) => entry.event === "lease.requested");
+    expect(requested).toHaveLength(2);
+    for (const [index, grant] of granted.entries()) {
+      const request = requested[index];
+      expect(request?.payload.requestId).toMatch(/^req_/);
+      expect(grant?.payload.requestId).toBe(request?.payload.requestId);
+      expect(history.indexOf(request as Envelope)).toBeLessThan(history.indexOf(grant as Envelope));
+    }
+    expect(granted.map((grant) => grant?.payload.source)).toEqual(["provisioned", "warm"]);
+  });
+
+  it("shows capacity.changed and queue.changed from daemon start, never two in a row with equal payloads", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const leaseId = await leaseDevice(env);
+    expect((await env.cli(["release", leaseId])).code).toBe(0);
+
+    const history = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
+
+    for (const name of ["capacity.changed", "queue.changed"]) {
+      const payloads = history
+        .filter((entry) => entry.event === name)
+        .map((entry) => entry.payload);
+      expect(payloads.length).toBeGreaterThan(0);
+      payloads.slice(1).forEach((payload, index) => expect(payload).not.toEqual(payloads[index]));
+    }
+    const firstCapacity = history.findIndex((entry) => entry.event === "capacity.changed");
+    expect(firstCapacity).toBeLessThan(
+      history.findIndex((entry) => entry.event === "lease.requested"),
+    );
+    expect(history.find((entry) => entry.event === "queue.changed")?.payload).toEqual({ depth: 0 });
+  });
+
   it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {
     const env = await withDaemon();
     await prepare(env);

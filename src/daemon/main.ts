@@ -733,6 +733,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // resolves is refused and redials on its own backoff.
     converge: async () => {
       await gatewayService.start();
+      fleetCoordinator.start();
     },
     dispose: async () => {
       fleetCoordinator.dispose();

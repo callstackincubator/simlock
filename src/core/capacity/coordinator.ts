@@ -44,7 +44,14 @@ export class CapacityCoordinator {
   readonly #runningReservations: ReservationEntry[] = [];
   readonly #bootReservations: BootEntry[] = [];
 
-  constructor(private readonly strategy: CapacityStrategy) {}
+  /**
+   * `onReservationsChanged` is called after a reservation is taken and after one is released, so
+   * an observer can read the figures that change with them.
+   */
+  constructor(
+    private readonly strategy: CapacityStrategy,
+    private readonly onReservationsChanged: () => void = () => undefined,
+  ) {}
 
   /**
    * Reserves both a future device slot and its future running slot.
@@ -181,14 +188,17 @@ export class CapacityCoordinator {
     );
   }
 
+  /** Wraps an entry already pushed onto `reservations`; reports the taking, and each release. */
   #reservation<Entry>(reservations: Entry[], reservation: Entry): CapacityReservation {
     let released = false;
+    this.onReservationsChanged();
     return {
       release: () => {
         if (released) return;
         released = true;
         const index = reservations.indexOf(reservation);
         if (index !== -1) reservations.splice(index, 1);
+        this.onReservationsChanged();
       },
     };
   }

@@ -119,6 +119,8 @@ export interface WaitQueueOptions {
   readonly idGenerator: IdGenerator;
   /** Called after a timed-out waiter has been removed and rejected. */
   readonly onTimeout?: (waiter: Waiter) => void;
+  /** Called with the new depth each time a waiter joins or leaves the FIFO. */
+  readonly onDepthChange?: (depth: number) => void;
 }
 
 /**
@@ -238,6 +240,7 @@ export class WaitQueue {
 
     if (!this.#waiters.includes(mutable)) {
       this.#waiters.push(mutable);
+      this.options.onDepthChange?.(this.#waiters.length);
       this.notifyProgress(mutable, { queuePosition: this.#waiters.length, stage: "queued" });
     }
     mutable.state = "queued";
@@ -387,7 +390,10 @@ export class WaitQueue {
 
   #remove(waiter: MutableWaiter): void {
     const index = this.#waiters.indexOf(waiter);
-    if (index !== -1) this.#waiters.splice(index, 1);
+    if (index !== -1) {
+      this.#waiters.splice(index, 1);
+      this.options.onDepthChange?.(this.#waiters.length);
+    }
     this.#pendingWaiters.delete(waiter);
     if (waiter.timer !== undefined) {
       this.options.clock.cancel(waiter.timer);

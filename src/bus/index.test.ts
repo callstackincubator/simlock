@@ -17,6 +17,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const EVENT_NAMES: Record<EventName, true> = {
   "lease.requested": true,
   "lease.queued": true,
+  "capacity.changed": true,
+  "queue.changed": true,
   "lease.granted": true,
   "lease.renewed": true,
   "lease.released": true,

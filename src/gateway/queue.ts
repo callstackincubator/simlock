@@ -69,6 +69,8 @@ export interface FleetQueueOptions {
    * terminal and gone from the queue, and nothing here re-runs `#dispatch` for the *other*
    * waiters still behind it). */
   readonly onTimeout?: (waiter: FleetWaiter) => void;
+  /** Called with the new depth each time a waiter joins or leaves the queue. */
+  readonly onDepthChange?: (depth: number) => void;
 }
 
 /**
@@ -90,6 +92,7 @@ export class FleetQueue {
     this.#queue = new WaitQueue({
       clock: options.clock,
       idGenerator: options.idGenerator,
+      ...(options.onDepthChange === undefined ? {} : { onDepthChange: options.onDepthChange }),
       ...(options.onTimeout === undefined
         ? {}
         : { onTimeout: (waiter) => options.onTimeout?.(asFleet(waiter)) }),
