@@ -11,6 +11,12 @@ Part of #NNN.
 <!-- The slice of the parent's outcome this task delivers: what a user can do
 after this PR merges that they could not after the previous one. -->
 
+## In short
+
+<!-- Two or three plain sentences: what changes for the user after this PR,
+then a small Mermaid diagram of the flow it touches, with the changed step
+marked. Define any new term here with an example. -->
+
 ## Technical spec
 
 ### Modules touched

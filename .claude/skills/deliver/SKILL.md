@@ -28,17 +28,21 @@ A report without its block, or with narration in place of it, is not a
 result: invoke the skill again with the same arguments plus "the last run
 ended without its report block; report on the work already done".
 
-**A person present or not.** If a person is in this session, show any text
-you are about to post and ask before the slow lane runs. Unattended, post
-directly and run the slow lane when the lock is free (rule 16).
+**Ask once, then run.** A person in this session is asked at most one
+question per run up front: whether the slow lane may run for every PR of
+this run (rule 16). After that, do not stop to ask. Post PR bodies and
+comments directly, merge every PR the gate accepts, and decide a round cap
+by rule 14 without asking. Ask a person only for what parks an issue: they
+may answer instead of reading the handoff. Unattended, nothing is asked:
+the slow lane runs when the lock is free.
 
 **Park only for a person's decision.** A small gap in the spec is not a
 reason to stop: implement closes it the conservative way and lists it as
 an `Assumption:` line in the PR body, and the spec review checks it (rule
 3). Park only for a contradiction with the body, a rule or an accepted ADR;
 for behaviour a user would see that nobody decided; for a real-device check
-that cannot run; for a blocking finding still confirmed after round 2; or
-for what the gate refuses (step 3).
+that cannot run; for a blocking finding the review reports as open after
+its last round (rule 14); or for what the gate refuses (step 3).
 
 ## 1. Take stock
 
@@ -72,18 +76,18 @@ Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 
 1. **Implement.** `implement` with `issue #N, branch <kind>/<N>, mode
 build`. A report with `spec needs` under Open: park (step 6).
-2. **Review and hardware, in parallel.** `review` with the PR number. If
-   implement reported Hardware lines, invoke `verify-hardware` in the
-   **same message**, with the PR, the branch and those lines, so both
-   check the commit implement pushed. With a person present, ask before
-   that message, since it starts the slow lane.
-3. **Decide**, once both reports are in.
-   - Fix lines, or Hardware `fail`: one `implement` run in mode `fix` with
-     the Fix lines and the hardware Evidence lines pasted together. Then
-     round 2: `review` with `round 2` and the report's Rerun value (`code`
-     at least when only the hardware failed), and in the same message
-     `verify-hardware` again when the fix changed anything but docs.
-   - Spec needs, or a confirmed blocking finding after round 2: park.
+2. **Review.** `review` with the PR number.
+3. **Decide** on its report.
+   - Fix lines: one `implement` run in mode `fix` with the Fix lines
+     pasted. Then the next round: `review` with `round 2` (or `round 3`)
+     and the report's Rerun value.
+   - Spec needs, or a blocking finding the review reports as open with
+     `Rerun: none`: park.
+   - No Fix lines, and implement reported Hardware lines: `verify-hardware`
+     with the PR, the branch and those lines, on the commit the review
+     passed (rule 16). On `fail`: one `implement` fix run with the Evidence
+     lines, then `review` with `round 2` (or the next round) and `Rerun:
+code`, and `verify-hardware` again on the commit that review passes.
    - Hardware `busy` or `unavailable`: finish the review rounds without it,
      do steps 4 and 5, run `gh pr ready <M>`, add the `needs-hardware`
      label to the PR, and park instead of running the gate. The gate would
@@ -139,6 +143,7 @@ build`. A report with `spec needs` under Open: park (step 6).
    .agents/scripts/merge-pr.sh <M>
    ```
 
+   Do not ask before this step: the gate is the check.
    Exit 0 merged it. Any other exit: park with the line it printed. An
    alive mutant implement could not explain also parks: the gate does not
    read the report, you do.
@@ -164,7 +169,10 @@ gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number=<N> -f query='
 
 Runnable means open, `task:ready`, and unassigned; the issue-state workflow
 only makes a task ready once everything under its Depends on is closed, so
-readiness already encodes the order. Deliver up to two runnable tasks at
+readiness already encodes the order. After a merge that workflow takes a
+minute: watch its run (`gh run list --workflow "Issue state" --limit 1`,
+then `gh run watch <id>`) and list again, rather than diagnosing why a task
+is not ready yet. Deliver up to two runnable tasks at
 once: invoke each stage for both in the same message, and keep the two
 pipelines apart. Each task has its own worktree, so they never share files.
 If both reach the hardware check at once, the second `verify-hardware`

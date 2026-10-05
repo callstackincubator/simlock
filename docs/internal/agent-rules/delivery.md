@@ -254,9 +254,13 @@ is open, done means closed as completed.
     what was overruled and by whom. Accepted findings are not narrated.
     Notes are not verified and never start a round: after the last round
     they go out once, as one comment on the PR, or as a `bug:new` issue when
-    one is a separate piece of work. Two rounds at most: a blocking finding
-    still confirmed after the second round means the agent stops and hands
-    off with the finding under Findings (rule 2), leaving the PR in draft. A
+    one is a separate piece of work. Two rounds, and a third only when every
+    blocking finding still confirmed after the second is a test that cannot
+    fail for the reason its title gives, or a stale doc or comment: those
+    have one obvious fix and need no person to decide. Any other blocking
+    finding still confirmed after round 2, or any after round 3, means the
+    agent stops and hands off with the finding under Findings (rule 2),
+    leaving the PR in draft. A
     PR from a person gets the same two reviews when the maintainer asks for
     them.
 
@@ -275,11 +279,12 @@ is open, done means closed as completed.
     two lanes at once produce timeouts that look like bugs. Agents run it
     only through `scripts/slow-e2e.sh`, which holds a machine-wide lock,
     runs detached so no tool time limit kills it halfway, and logs to a
-    file. It runs beside the two reviews, on the commit they review, not
-    after them. A failure joins the review's fixes in one fix run, and when
-    that run changed more than docs, the lane runs again beside the second
-    round. With a person present the agent
-    asks before starting it. Unattended, it runs when the lock is free; when
+    file. It runs once per PR, on the commit the last review round passed
+    (no blocking finding open), so review fixes do not each cost a lane run.
+    A failure gets one fix run, then the lane and the code review run again
+    on the new commit. With a person present the agent asks once per
+    delivery run, before the first lane, and that answer covers every PR in
+    the run. Unattended, it runs when the lock is free; when
     the lock stays busy or the machine has no devices, the PR gets
     `needs-hardware` and waits for the maintainer.
 

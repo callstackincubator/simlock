@@ -144,6 +144,26 @@ in `task:draft`.
 
 **`revise`**: only the reconcile step plus whatever amendments it produced.
 
+**Make it easy to follow.** The maintainer approves what they understand,
+so explain before you ask, and show before you explain:
+
+- Open every question with the picture it is about: a Mermaid flowchart or
+  sequence diagram of the flow today and the flow proposed, or a before and
+  after example of the command and its output. Then ask, with your
+  recommended answer and one line on what each option costs.
+- Use the words a user of the tool would use. The first time a term from
+  the code, an ADR or a rule appears, say what it means in plain words with
+  an example, and add it to the body's Words used section. Never cite a
+  rule or ADR number as the reason for something; say the reason.
+- Keep each question to one decision. If answering needs context the
+  maintainer may not have, give it in three lines or fewer.
+- Before writing the body, play the result back: the user flow diagram,
+  the example, and a list of what will and will not change. Write only
+  after the maintainer says it matches what they meant.
+- In the body, fill "How it works for the user" and "Words used" (feature)
+  or "In short" (task) as the template says. A diagram has at most about
+  ten boxes; split a bigger flow.
+
 Write the spec the way rule 12 asks for everything else: short sentences,
 common words, one idea per sentence. A spec is read by an agent that will
 build exactly what it says, so every sentence that does not constrain the

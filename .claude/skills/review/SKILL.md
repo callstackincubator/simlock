@@ -20,7 +20,7 @@ The two reviewers are the `spec-reviewer` and `code-reviewer` agents in
 This skill runs on Opus too: verifying decides whether a reviewer's claim
 is real, and a wrong rejection merges a defect nobody else will catch.
 
-Arguments: a PR number, optionally `round 2` and which review to re-run
+Arguments: a PR number, optionally `round 2` or `round 3` and which review to re-run
 (`spec`, `code`, or `both`). With a branch instead of a PR, find its PR
 with `gh pr list --head <branch>`. If the PR is not a delivery PR (a
 person's PR the maintainer asked about), post the findings as one comment
@@ -61,7 +61,11 @@ calls with `run_in_background: false`: `subagent_type: "spec-reviewer"`
 and `subagent_type: "code-reviewer"`. Never pass a model: it overrides
 the agent's frontmatter. They run in
 parallel, and your turn cannot end while they run, so you never hand back
-before the findings are in. On `round 2`, spawn only the review named.
+before the findings are in. If a reviewer's result is missing or has no
+findings block (it says it is still working, or it hands back narration),
+send that same agent a message asking for its findings block and wait for
+it; never report a review as missing or end your turn while one is out.
+On `round 2` or `round 3`, spawn only the review named.
 
 **Spec review.** Read-only. It reads every file in `$R` except `rules/`.
 Brief, verbatim, with the paths filled in (leave out the sentence for a
@@ -220,16 +224,19 @@ behaviour: then it is Spec needs.
 ## 4. Decide what runs again
 
 A confirmed blocking finding changes the diff, so the review that raised it
-runs again on the next round. Notes never start a round. After round 2
-there is no third: a blocking finding still confirmed is reported as open,
-and the orchestrator parks the issue.
+runs again on the next round. Notes never start a round. After round 2, a
+third round runs only when every confirmed blocking finding is a test that
+cannot fail for the reason its title gives, or a stale doc or comment
+(delivery rule 14); say so with `Rerun:` naming the review. Otherwise, and
+always after round 3, a blocking finding still confirmed is reported as
+open, and the orchestrator parks the issue.
 
 ## 5. Report
 
 End with exactly this block, nothing after it:
 
 ```
-PR: #M  Round: 1 | 2  Kind: code | adr-only
+PR: #M  Round: 1 | 2 | 3  Kind: code | adr-only
 Spec review: n findings (b blocking) | skipped  Code review: n findings (b blocking) | skipped
 Fix: <one confirmed blocking finding per line, as `path:line what is wrong`, or "none">
 Notes: <one per line, `spec|code: path:line what could be better`, or "none">

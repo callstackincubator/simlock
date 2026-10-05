@@ -21,6 +21,19 @@ Request: #NNN <!-- or "none" when the maintainer originated it -->
 <!-- What they can do after this lands that they cannot do now. Observable
 behaviour only. -->
 
+## How it works for the user
+
+<!-- A Mermaid flowchart or sequence diagram of what the user does and sees,
+step by step, including the failure paths. Then one short example: the
+command or request before this feature and after it, with its real output.
+GitHub renders ```mermaid blocks. -->
+
+## Words used
+
+<!-- Every term this spec relies on that a newcomer would not know, or that
+a rule depends on, one line each with an example: "bare version: an OS
+version with no range, e.g. `--os 18.4`". "none" if there are none. -->
+
 ## Non-goals
 
 <!-- What this feature deliberately does not do, so nobody scopes it back in. -->

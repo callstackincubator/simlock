@@ -84,7 +84,9 @@ as you go, so a resumed run sees it.
 Implement the smallest change that turns the next test green. Each commit
 lowers the failing count and says so in its body: `3 failing -> 1 failing`.
 Run `pnpm typecheck`, `pnpm lint` and the test files you touched before
-each commit; the pre-commit hook runs the rest. Never pass `--no-verify`.
+each commit; the hooks run the rest (format and lint on commit, `fallow` on
+push). Never pass `--no-verify`. Push once per step, not after every commit:
+the pre-push hook audits the whole branch.
 
 Build what `always-in-scope.md` lists as you go: both `EVENTS.md` files for
 a new or changed event; a search of `README.md`, `docs/` and every
@@ -96,17 +98,40 @@ not in the spec becomes a `bug:new` issue or one line under Open.
 
 ## 5. Prove it
 
+**Check your own tests first**, the way the reviewers will. For each test
+you added or changed:
+
+- Its title, its assertions and its fixture state make the same claim. A
+  title naming two claims has an assertion for each.
+- Break the code it covers once (flip the condition, drop the filter, return
+  early) and run that test file: it must fail on the assertion its title
+  names. Restore the code. A test that stays green is vacuous; fix it now.
+- A test that compares two outputs fails when both are wrong in the same
+  way: assert one of them against a literal.
+
+If the diff changed a schema, a contract type or a validator, rerun the
+tests of every surface that publishes it (MCP `tools/list`, HTTP error
+bodies, CLI help) — a refinement can empty a published schema while every
+unit test stays green.
+
+Then run the suite once:
+
 ```bash
 pnpm check     # typecheck, lint, format, unit, fast e2e
 pnpm mutate    # mutants on the lines this branch changed
 ```
 
-`pnpm check` must pass. A failing test you did not touch: if an open
-`flaky-test` issue names it (`gh issue list --label flaky-test --search
-"<title>"`), list it under Flaky and move on. Otherwise apply testing rule
-5: run it on the base commit; if it fails there too, open a `bug:new` issue
-labelled `flaky-test` naming the test, and list it. Never skip, disable or
-loosen a test.
+`pnpm check` must pass. Run it once per round, after the last change, and
+never start a second one while one runs. A failing test you did not touch:
+if an open `flaky-test` issue names it (`gh issue list --label flaky-test
+--search "<title>"`), list it under Flaky and move on. Otherwise apply
+testing rule 5 to that one file: run `pnpm vitest run <file>` in a worktree
+of the base commit (`git worktree add <scratch>/base origin/main`), up to
+three times. If it fails there, open a `bug:new` issue labelled
+`flaky-test` naming the file, the title and the error line, list it, and
+move on. If it never fails there, it is yours. Do not stash your work or
+re-run the whole suite or the whole e2e project to decide. Never skip,
+disable or loosen a test.
 
 Every mutant `pnpm mutate` reports alive is a line you can change or delete
 with a green suite. Write the test that kills it, or delete the line if it
@@ -124,7 +149,8 @@ behaviour, write the test that fails first, then the fix; for a stale doc or
 comment, just fix it. A line ending in `(record as Assumption: ...)` also
 adds that assumption to the PR body. A hardware Evidence line is a failing
 slow-lane test: fix the code, not the test. One commit per finding or per
-closely related group. Then step 5 again.
+closely related group. Then step 5 again, including the self-check on every
+test the fix touched: a fix that leaves a test vacuous costs a review round.
 
 ## Report
 
