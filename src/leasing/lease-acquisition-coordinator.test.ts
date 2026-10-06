@@ -889,6 +889,50 @@ describe("LeaseAcquisitionCoordinator", () => {
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
   });
 
+  it("grants a request queued behind a request whose shut-down device failed to boot and then to be destroyed, when another shut-down device and a running slot are free, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const held = await Promise.all([
+      harness.coordinator.request(request, { ownerId: "x", requesterId: "x" }),
+      harness.coordinator.request(request, { ownerId: "y", requesterId: "y" }),
+    ]);
+    const failing = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    void failing.catch(() => undefined);
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    const secondState = promiseState(second);
+    await settle();
+    expect(harness.coordinator.queueDepth).toBe(2);
+    // Makeready calls 1 and 2 readied the held devices; call 3 is the head's boot. Its device
+    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
+    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+    // Both devices come back shut down without the release path, so only the kick below wakes
+    // the queue; its head is the request that fails.
+    for (const grant of held) {
+      await harness.registry.beginRelease(grant.lease.id);
+      await harness.registry.transitionDevice(grant.device.id, "shutdown", {
+        event: "device.reclaimed",
+        payload: { deviceId: grant.device.id, duration: 0, strategy: "wipe" },
+      });
+    }
+    harness.coordinator.kick();
+    await settle();
+    await expect(failing).rejects.toMatchObject({ name: "BootTimeoutError" });
+    const failedDeviceId = (
+      harness.driver.calls.filter((call) => call.operation === "destroy")[0]?.arguments[0] as
+        | { readonly deviceId: string }
+        | undefined
+    )?.deviceId;
+    const otherDevice = held
+      .map((grant) => grant.device)
+      .find((device) => device.driverDeviceId !== failedDeviceId);
+
+    expect({ queueDepth: harness.coordinator.queueDepth, second: secondState.state }).toEqual({
+      queueDepth: 0,
+      second: "fulfilled",
+    });
+    expect((await second).device.id).toBe(otherDevice?.id);
+  });
+
   it("leaves a request that still cannot be served queued once, with no new work, when the device it queued behind is granted", async () => {
     const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
     harness.driver.hangMakeReady();
