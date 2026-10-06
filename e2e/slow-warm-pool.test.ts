@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
  * lease, and with the pool off a released device of each platform ends shut down. The fast lane
  * proves what the pool decides against fake drivers; only a real `simctl` and a real emulator can
  * prove that the create-and-boot path works end to end, that a released Android emulator comes
- * back ready from its snapshot, and that with the pool off a released device of each platform ends
+ * back ready from its snapshot (its `device.reclaimed` strategy is `snapshot`), and that with the pool off a released device of each platform ends
  * shut down and is the device the next lease boots.
  *
  * Run only through `scripts/slow-e2e.sh e2e/slow-warm-pool.test.ts`, never in CI.
@@ -169,7 +169,8 @@ interface Lane {
 
 /**
  * A real-driver daemon whose pool targets one device of the newest runtime of each platform; with
- * `enabled: false` the pool is off from the first start, so no device exists until a lease asks.
+ * `enabled: false` the config is rewritten and the daemon restarted with the pool off, so no
+ * device exists until a lease asks.
  */
 async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise<Lane> {
   await sweepStaleDeviceSets();
@@ -434,6 +435,18 @@ describe(
           for (const grant of granted) {
             await untilState(env, grant.device.driverDeviceId, "ready");
           }
+          // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
+          // so the state alone cannot tell the two apart: the reclaim's own strategy does.
+          const android = granted.find((grant) => grant.device.spec.platform === "android");
+          const reclaimed = (await env.events()).filter(
+            (entry) =>
+              entry.event === "device.reclaimed" &&
+              (entry.payload as { deviceId?: string }).deviceId === android?.device.id,
+          );
+          expect(
+            reclaimed.map((entry) => (entry.payload as { strategy?: string }).strategy),
+            "device.reclaimed strategy of the released emulator",
+          ).toEqual(["snapshot"]);
         } finally {
           await nuke(env);
         }
@@ -473,7 +486,7 @@ describe(
             timeout: MINUTE,
           });
 
-          // Shut down is an end state: the pool, were it still on, would boot both again within this window.
+          // Shut down is an end state: the pool, if it were on, would boot both again within this window.
           const androidId = first.android.grant.device.driverDeviceId;
           await holdsState(env, iosUdid, "shutdown", HOLD);
           await holdsState(env, androidId, "shutdown", HOLD);
