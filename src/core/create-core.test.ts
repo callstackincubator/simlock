@@ -255,6 +255,31 @@ describe("createCore", () => {
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
   });
 
+  it("logs an orphan device the doctor cannot purge through the logger createCore was given", async () => {
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink });
+    const { core, driver } = await build({ logger });
+    driver.setManagedReality({
+      devices: [
+        {
+          address: "orphan-address",
+          deviceId: "orphan-1",
+          driverData: { fakeDeviceId: "orphan-1" },
+          runState: "stopped",
+        },
+      ],
+      processes: [],
+    });
+    driver.failOn("destroy", 1, new DriverCrashError("cannot purge"));
+    core.connect(ports());
+
+    await core.doctor.reconcile({ purgeOrphans: true });
+
+    expect(
+      sink.records.filter((record) => record.message === "Could not purge orphan device"),
+    ).toMatchObject([{ level: "error", fields: { platform: "ios", reason: "cannot purge" } }]);
+  });
+
   it("keeps going when a spent device cannot be deleted at startup and no logger was given", async () => {
     const harness = await build({ fresh: true });
     harness.driver.failOn("destroy", 1, new DriverCrashError("cannot delete"));

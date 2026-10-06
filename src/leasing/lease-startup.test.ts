@@ -67,7 +67,7 @@ describe("LeaseStartup", () => {
           requestSpec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
           requester: "agent",
         },
-        module: "startup-converger",
+        module: "lease-startup",
       },
     ]);
   });

@@ -59,7 +59,7 @@ export class LeaseStartup {
           requestSpec: record.request,
           reason: "daemon-restarted",
         },
-        "startup-converger",
+        "lease-startup",
       );
     }
   }
