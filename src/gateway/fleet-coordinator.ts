@@ -665,7 +665,7 @@ export class FleetLeaseCoordinator {
    * flight gets one more look, oldest first; one no eligible worker can take right now is passed over,
    * not blocked on -- there is no early exit from this loop.
    *
-   * H6 (round 3 review): `routing.select` reads the same unchanged `views()` snapshot for every
+   * H6 (round 3 review): `routing.select` reads the same unchanged `routingViews()` snapshot for every
    * waiter in this loop, so a worker whose view over-reports free capacity relative to what it
    * can actually grant right now used to look equally eligible to every one of them -- N queued
    * waiters could all pick that one worker in a single pass, and every one past the first came
@@ -701,7 +701,7 @@ export class FleetLeaseCoordinator {
    *
    * The deferred passes above deliberately carry **no** candidate, and that is not a dropped
    * one (round 5 review): a nested `#dispatch` can only be raised from inside a `#beginAttempt`,
-   * `#dispatchPass` re-reads `views.views()` per waiter rather than once per pass, and the
+   * `#dispatchPass` re-reads `views.routingViews()` per waiter rather than once per pass, and the
    * candidate walks last. So every view change a deferred pass exists to react to was already
    * raised *before* the candidate's own iteration read the views, and was already visible to it.
    * There is no state a second pass could show the candidate that its first look did not have,
@@ -768,7 +768,9 @@ export class FleetLeaseCoordinator {
     // ADR 0009 §5: a worker that told this waiter it cannot serve it is out of every view below,
     // the table's included. A worker claimed this pass or one that answered `NO_CAPACITY` is
     // busy, not unable, so it stays in the table's view.
-    const views = this.options.views.views().filter((worker) => refusals?.has(worker.id) !== true);
+    const views = this.options.views
+      .routingViews()
+      .filter((worker) => refusals?.has(worker.id) !== true);
     const request = routable(waiter);
     // ADR 0009 §4: the table runs before the stages, over the views left above -- a worker
     // claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it still makes

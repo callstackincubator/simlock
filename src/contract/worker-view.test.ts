@@ -27,6 +27,12 @@ const CAPACITY = {
   },
 };
 
+// Only the two sections a view reads; the rest of a daemon's config is not what is under test.
+const CONFIG = {
+  downloads: { policy: "always", timeoutMs: 60_000 },
+  lease: { maxTtlMs: 900_000 },
+} as unknown as NonNullable<Parameters<typeof workerViewFields>[0]["config"]>;
+
 describe("workerViewFields", () => {
   it("builds a starting worker's view from its health and host alone, with every other field absent", () => {
     const view = workerViewFields({
@@ -39,6 +45,7 @@ describe("workerViewFields", () => {
   it("leaves a starting worker's view without the devices, catalog and config it would otherwise be given", () => {
     const view = workerViewFields({
       catalog: { platforms: [] },
+      config: CONFIG,
       devices: [],
       status: { daemon: { health: "starting", mode: "worker" }, host: HOST },
     });

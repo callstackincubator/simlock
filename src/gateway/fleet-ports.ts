@@ -76,6 +76,9 @@ export interface WorkerDirectory {
  */
 export interface FleetViews {
   views(): readonly WorkerView[];
+  /** `views()` as routing reads them: a worker that answered `starting` still carries the last
+   * catalog read from it, so it stays known. */
+  routingViews(): readonly WorkerView[];
   view(workerId: string): WorkerView | undefined;
   onViewsChanged(listener: () => void): () => void;
 }

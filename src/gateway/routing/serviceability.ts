@@ -34,10 +34,13 @@ export type Assessment = { readonly kind: "route-or-wait" } | Rejection;
  * Walks the table of ADR 0009 §4 in order over every view, busy or not: a worker that is merely
  * busy still makes a request servable, so it never reaches a rejection here.
  *
- * Two terms. A worker *takes requests* when it passes `takes-requests`. The gateway *knows* a
- * worker when it holds a catalog read from it and the worker is not `incompatible`; the view
- * keeps its last catalog across a lost uplink, so a disconnected worker stays known until
- * retention removes it. A worker connecting for the first time, with no catalog yet, is neither.
+ * Two terms. A worker *takes requests* when it passes `takes-requests`: that includes a worker
+ * that answered `starting` while the gateway holds a catalog for it, so a request only that worker
+ * can serve waits for it (`healthy` drops it from routing) rather than failing. The gateway
+ * *knows* a worker when it holds a catalog read from it and the worker is not `incompatible`; the
+ * views passed in carry the last catalog across a lost uplink and a `starting` answer, so a
+ * disconnected or restarting worker stays known until retention removes it. A worker connecting
+ * for the first time, with no catalog yet, is neither.
  */
 export function assess(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
   const takers = views.filter((worker) => takesRequests.keeps(worker, request));
@@ -69,8 +72,8 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
   return { kind: "route-or-wait" };
 }
 
-/** A worker whose catalog was never read holds an empty one, which says nothing about any
- * platform or model, so only `incompatible` needs ruling out here. */
+/** A worker whose catalog was never read has none, which says nothing about any platform or
+ * model, so only `incompatible` needs ruling out here. */
 function isKnown(worker: WorkerView): boolean {
   return worker.connection !== "incompatible";
 }

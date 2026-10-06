@@ -192,7 +192,10 @@ describe("GatewayService", () => {
     ]) {
       expect(Object.keys(view ?? {})).not.toContain(field);
     }
-    expect(worker.calls).not.toContain("list.get:devices");
+    // Nothing but the status read, and the event subscription, was asked of it.
+    expect(
+      worker.calls.filter((call) => !["status.get", "events.subscribe"].includes(call)),
+    ).toEqual([]);
 
     worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")] });
     await vi.waitFor(() => expect(worker.subscribed).toBe(true));

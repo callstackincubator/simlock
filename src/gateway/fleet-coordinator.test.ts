@@ -2722,6 +2722,20 @@ describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR
 
   it.each([
     ["is not healthy", { health: "failed" as const }, { health: "running" as const }],
+    [
+      "is still starting",
+      { health: "starting" as const },
+      // A worker that answers running again is read in full, as the gateway's link does.
+      {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        devices: [],
+        health: "running" as const,
+        leases: [],
+        queueDepth: 0,
+      },
+    ],
     ["has its own waiters queued", { queueDepth: 2 }, { queueDepth: 0 }],
   ])(
     "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
@@ -3518,11 +3532,40 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
     await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
   });
 
-  it("fails a request at once with NO_CAPACITY when the only worker has answered starting, as it does for a worker not yet read", async () => {
+  it("queues a request for the only worker that can serve it, which is starting, though another worker takes requests but lists no such model", async () => {
+    const { coordinator, directory, workers } = harness();
+    const other = new ScriptedWorkerClient();
+    const restarting = new ScriptedWorkerClient();
+    directory.add("wrk_a", other);
+    directory.add("wrk_b", restarting);
+    restarting.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a", { models: ["iPad Pro"] });
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_b", { health: "starting", host: hostFixture() });
+
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(1);
+    expect(restarting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+
+    workers.refresh("wrk_b", {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
+  it("fails a request at once with NO_CAPACITY when the only worker has answered starting without a catalog ever read from it, as it does for a worker not yet read", async () => {
     const { coordinator, directory, workers } = harness();
     const starting = new ScriptedWorkerClient();
     directory.add("wrk_a", starting);
-    connectWorker(workers, "wrk_a");
+    workers.connected("wrk_a", undefined, "0.3.0");
     workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
 
     await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
