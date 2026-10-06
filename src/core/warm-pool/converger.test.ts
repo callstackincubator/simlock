@@ -95,8 +95,8 @@ function harness(
   };
   const reservations: { released: number; claimedAtBoot?: boolean; releasedAtBoot?: number }[] = [];
   const kick = vi.fn();
-  // One read per pass: a pool that spins is stopped here, with a named count a test asserts on,
-  // instead of exhausting the worker's heap.
+  // One read per pass. A pool that spins fails every pass after the 200th here (the pass logs it
+  // and ends) instead of exhausting the worker's heap; no test asserts on this guard.
   const passes = { count: 0 };
   const waitingDemand = vi.fn(() => {
     passes.count += 1;
@@ -271,7 +271,6 @@ function harness(
     eventBus,
     kick,
     lease,
-    passes,
     pool,
     provisionCalls,
     provisionReservations,

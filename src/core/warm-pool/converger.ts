@@ -86,7 +86,7 @@ interface Flight {
 export class WarmPool {
   readonly #logger: Logger;
   readonly #unsubscribe: (() => void)[] = [];
-  /** When a device whose boot or shutdown failed may be tried again, by device id. */
+  /** When a device whose keep boot or shutdown failed may be tried again, by device id. */
   readonly #retryAfter = new Map<string, number>();
   /** When a target's spec whose boot or creation failed may be tried again. */
   readonly #schedule = new RetrySchedule();
