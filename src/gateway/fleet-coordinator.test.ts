@@ -3655,7 +3655,7 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
 
     const grant = await coordinator.request(REQUEST, requestOptions());
 
-    expect(forwardedLeaseId(client)).toBeUndefined();
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("leaseId");
     expect(grant.lease.id).toBe("wrk_a.lse_1");
   });
 
@@ -3689,7 +3689,11 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
     await tick();
 
     expect(secondState.state).toBe("rejected");
-    expect(await refusal).toMatchObject({ code: "LEASE_ID_TAKEN", details: { leaseId: "myid" } });
+    expect(await refusal).toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "myid" },
+      message: "lease ID myid is already in use",
+    });
     expect(rejected).toEqual([
       expect.objectContaining({ reason: "lease-id-taken", requester: "agent-2" }),
     ]);
@@ -3790,30 +3794,61 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
     });
   });
 
-  it("a grant for a bare ID the index maps to another worker is released on the new worker and answers LEASE_ID_TAKEN, and the first entry stays routed", async () => {
-    const { client, coordinator, leaseIndex } = oneWorker();
-    client.requestLeaseQueue.push({
-      beforeGrant: () => {
-        // While wrk_a's grant is on its way, wrk_b reports a lease with the same ID.
-        leaseIndex.rebuildFromWorker("wrk_b", [
-          {
-            grantedAt: 1,
-            id: "myid",
-            idChosenByRequester: true,
-            ownerId: "agent-9",
-            requesterId: `${GATEWAY_PREFIX}agent-9`,
-          } as WorkerReportedLease,
-        ]);
-      },
-      grant: chosenGrant("myid"),
-      kind: "grant",
+  describe("a grant for a bare ID the index maps to another worker", () => {
+    /** wrk_a's grant of `myid` is on its way when wrk_b reports a lease with the same ID. */
+    function grantRacingAReport(overrides: Parameters<typeof harness>[0] = {}) {
+      const fleet = oneWorker(overrides);
+      fleet.client.requestLeaseQueue.push({
+        beforeGrant: () => {
+          fleet.leaseIndex.rebuildFromWorker("wrk_b", [
+            {
+              grantedAt: 1,
+              id: "myid",
+              idChosenByRequester: true,
+              ownerId: "agent-9",
+              requesterId: `${GATEWAY_PREFIX}agent-9`,
+            } as WorkerReportedLease,
+          ]);
+        },
+        grant: chosenGrant("myid"),
+        kind: "grant",
+      });
+      return fleet;
+    }
+
+    it("is released on the new worker and answers LEASE_ID_TAKEN, and the first entry stays routed", async () => {
+      const { client, coordinator, eventBus, leaseIndex } = grantRacingAReport();
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+        details: { leaseId: "myid" },
+      });
+
+      expect(client.calls).toContain("lease.release:myid");
+      expect(leaseIndex.resolve("myid")).toMatchObject({ workerId: "wrk_b" });
+      expect(rejected).toEqual([
+        expect.objectContaining({ reason: "lease-id-taken", requester: "agent-1" }),
+      ]);
     });
 
-    await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
-      code: "LEASE_ID_TAKEN",
-    });
+    it("logs a release the worker refuses, naming the worker and the lease, and still answers LEASE_ID_TAKEN", async () => {
+      const logger = new RecordingLogger();
+      const { client, coordinator } = grantRacingAReport({ logger });
+      client.releaseLeaseQueue.push({ error: new Error("worker said no"), kind: "error" });
 
-    expect(client.calls).toContain("lease.release:myid");
-    expect(leaseIndex.resolve("myid")).toMatchObject({ workerId: "wrk_b" });
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+      });
+      await tick();
+
+      expect(logger.warnings).toEqual([
+        expect.objectContaining({
+          fields: expect.objectContaining({ workerId: "wrk_a", workerLeaseId: "myid" }),
+          message: "Failed to release a lease the gateway will not route",
+        }),
+      ]);
+    });
   });
 });

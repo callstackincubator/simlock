@@ -3992,7 +3992,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       connectAdmin: async () =>
         fakeClient({
           requestLease: (input) => {
-            requested.push((input as Record<string, unknown>).leaseId);
+            requested.push("leaseId" in input ? input.leaseId : "absent");
             return answer === "grant"
               ? Promise.resolve(detachedGrant)
               : Promise.reject(
@@ -4012,7 +4012,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
 
     // The flag's value goes out as typed and an omitted flag sends none: the contract decides
     // what an ID may look like.
-    expect(requested).toEqual(["ad-7f3a", undefined, "ad-7f3a"]);
+    expect(requested).toEqual(["ad-7f3a", "absent", "ad-7f3a"]);
     expect(exitCode).toBe(13);
     expect(output.stderr).toContain('"code":"LEASE_ID_TAKEN"');
   });

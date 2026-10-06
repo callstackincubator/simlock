@@ -513,6 +513,27 @@ describe("LeaseRequestBook", () => {
     expect(book.holdsLeaseId("waits")).toBe(false);
   });
 
+  it("stores the leaseId a request sent beside it, and no leaseId key for a request that sent none", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+    await book.admit(request, { ownerId: "a", requesterId: "a", leaseId: "myid" }, () =>
+      granted("myid"),
+    );
+    await book.admit(request, { ownerId: "b", requesterId: "b" }, () => granted("lse_2"));
+
+    const [withId, without] = store.leaseRequests();
+    expect(withId).toMatchObject({ leaseId: "myid", request });
+    expect(without).not.toHaveProperty("leaseId");
+  });
+
+  it("names the lease ID in the message of an idempotency conflict over it", async () => {
+    const book = bookOver(memoryStore());
+    await book.admit(request, { ...keyed, leaseId: "myid" }, () => granted("myid"));
+    await settled();
+
+    expect(() => book.replay(request, keyed)).toThrow(/different device request or lease ID/);
+  });
+
   it("keeps a settled record as it is when a second result arrives for it, and settles nothing for an unknown id", async () => {
     const store = memoryStore();
     const created = await store.createLeaseRequest(newRequest("agent"));

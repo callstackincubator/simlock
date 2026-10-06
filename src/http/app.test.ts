@@ -643,6 +643,53 @@ describe("POST /v1/lease-requests", () => {
   });
 });
 
+describe("POST /v1/lease-requests leaseId", () => {
+  it("passes a caller-chosen leaseId onto the dispatch input as sent, and no leaseId key when the body names none", async () => {
+    const { app, dispatcher } = buildHarness();
+    const withId = postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ leaseId: "ad-7f3a" });
+    call.resolve(makeGrant({ lease: { id: "ad-7f3a" } }));
+    await withId;
+
+    const withoutId = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("leaseId");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    await withoutId;
+  });
+
+  it("answers 400 BAD_REQUEST for a leaseId outside the pattern, without dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "w1.myid" });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toEqual([]);
+  });
+
+  it("answers 409 LEASE_ID_TAKEN with the ID in the body when the dispatcher refuses it", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+        leaseId: "ad-7f3a",
+      });
+    };
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "LEASE_ID_TAKEN",
+        leaseId: "ad-7f3a",
+        message: "lease ID ad-7f3a is already in use",
+      },
+    });
+  });
+});
+
 describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
   it("progresses queued -> booting -> granted, observable through GET", async () => {
     const { app, dispatcher } = buildHarness();

@@ -3646,6 +3646,7 @@ describe("createLeasing a lease ID chosen by the requester", () => {
 
     await expect(harness.engine.request(request, asking("agent-2", "myid"))).rejects.toMatchObject({
       leaseId: "myid",
+      message: "lease ID myid is already in use",
       name: "LeaseIdTakenError",
     });
     expect(harness.registry.snapshot.leases.map((lease) => lease.id)).toEqual(["myid"]);
@@ -3689,6 +3690,7 @@ describe("createLeasing a lease ID chosen by the requester", () => {
         requestSpec: request,
       },
     ]);
+    expect(rejected.map((event) => event.module)).toEqual(["lease-acquisition-coordinator"]);
   });
 
   it("lease.requested and lease.rejected requestSpec, and the status waiting spec, carry no leaseId", async () => {

@@ -1663,6 +1663,60 @@ describe("Registry", () => {
     expect(reloaded.leaseRequests()[1]).not.toHaveProperty("leaseId");
   });
 
+  it("keeps idChosenByRequester true on the lease of a stored grant across a reload", async () => {
+    const clock = new FakeClock(1_000);
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "x" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLeaseRequest({
+      id: "req_1",
+      leaseId: "ad-7f3a",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    await registry.createLease({
+      deviceId: device.id,
+      leaseId: "ad-7f3a",
+      ownerId: "agent-1",
+      request: {
+        environment: {},
+        id: "req_1",
+        timing: {
+          estimatedBootMs: 0,
+          estimatedProvisionMs: 0,
+          estimatedReadyMs: 0,
+          estimatedReclaimMs: 0,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    });
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.leaseRequests()[0]?.grant?.lease).toMatchObject({
+      id: "ad-7f3a",
+      idChosenByRequester: true,
+    });
+  });
+
   it("loads the lease of a stored grant written before idChosenByRequester as one simlock named", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();

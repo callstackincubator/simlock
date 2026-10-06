@@ -339,6 +339,18 @@ describe("FleetLeaseIndex", () => {
       ]);
     });
 
+    it("logs a flagged lease with an invalid ID once, not on every snapshot that repeats it", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+
+      expect(logger.warnings).toHaveLength(1);
+      expect(index.all()).toHaveLength(1);
+    });
+
     it("when two workers report the same caller-chosen ID on rebuild, the first stays routed and a warning names both workers", () => {
       const logger = new RecordingLogger();
       const index = new FleetLeaseIndex(PREFIX, logger);
