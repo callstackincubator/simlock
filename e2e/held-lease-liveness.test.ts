@@ -17,7 +17,9 @@ function runningAfterRestart(env: TestEnv, driverDeviceId: string): Promise<void
 /**
  * Lease liveness end to end under ADR 0004: a lease is TTL-bound, a client-initiated
  * `lease.renew` is the only thing that keeps it alive, and nothing about a connection --
- * its close, its daemon's death, or a restart -- ends one.
+ * its close or its daemon's death -- ends one. A restart ends a lease only when its device is
+ * not running (ADR 0019, `startup-reconcile.test.ts`); the tests below restart with the device
+ * running.
  */
 describe("lease liveness & restart", () => {
   it("keeps a lease across an ungraceful daemon restart, with its TTL timer restored", async () => {

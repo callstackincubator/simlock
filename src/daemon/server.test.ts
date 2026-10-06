@@ -908,8 +908,8 @@ describe("DaemonServer", () => {
 
     await expect(client.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
 
-    // ADR 0004 §3: a stop ends connections, not leases -- they persist and the next daemon
-    // restores each one's timer from its deadline.
+    // ADR 0004 §3: a stop ends connections, not leases -- they persist, and the next daemon
+    // judges each by its device (ADR 0019) and restores the timers of those it keeps.
     expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
     await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain(leaseId);
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");

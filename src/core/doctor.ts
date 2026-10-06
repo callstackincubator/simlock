@@ -161,7 +161,10 @@ export interface DoctorReconcileOptions {
   readonly fix?: boolean;
   /**
    * The startup read to reconcile against instead of listing every driver again. A platform it
-   * leaves out is treated as one with no driver: no drift findings for its devices.
+   * leaves out has no reality to compare, so its devices get no missing-device, orphan or other
+   * drift-against-reality finding. A `stalled-transition` finding is the exception: it reads the
+   * registry and the platform's driver, not the listing, so a platform that has a driver but
+   * whose listing failed still gets it.
    */
   readonly read?: StartupRead;
   /**
