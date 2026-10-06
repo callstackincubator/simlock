@@ -66,8 +66,9 @@ const TEST_TIMEOUT = 30 * MINUTE;
 /**
  * Two real boots, a lease and a release of each, and the wait for each to be ready again. The
  * waits alone (a 15 min readiness wait, two 10 min leases, two 3 min releases, two 15 min waits
- * for ready again) add up to 71 min, plus at most 9 one-minute queries and a 5 min nuke: a wait
- * that gives up names itself before this fires.
+ * for ready again) add up to 71 min, plus at most 9 one-minute queries and a 5 min nuke: 85 min,
+ * so each of those waits names itself before this fires. The setup (`warmDaemon`: the stale
+ * device-set sweep and the daemon start and stop calls) has no bound of its own; this timeout ends it.
  */
 const WARM_ROUND_TIMEOUT = 90 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
@@ -79,11 +80,11 @@ const QUERY_TIMEOUT = MINUTE;
  * The pool-off test creates each device from nothing (an Android image's first boot is a cold
  * boot), so it is two cold leases, two boots from shutdown, four releases and two end-state
  * holds. The budgets of its steps (see `step`) sum to 84.5 min. Outside any step it makes at most
- * eight one-minute queries, and on a failure `diagnose` asks for the devices (1 min) and `nuke`
- * runs for up to 5 min: 84.5 + 8 + 1 + 5 = 98.5 min, under this, so each step budget fires,
+ * nine one-minute queries, and on a failure `diagnose` asks for the devices (1 min) and `nuke`
+ * runs for up to 5 min: 84.5 + 9 + 1 + 5 = 99.5 min, under this, so each step budget fires,
  * naming its step, before the test's own timeout, which names nothing.
  */
-const COLD_TEST_TIMEOUT = 100 * MINUTE;
+const COLD_TEST_TIMEOUT = 110 * MINUTE;
 /** The pool-off test's first step, which brings the daemon up and reads its catalog. */
 const DAEMON_START_BUDGET = 5 * MINUTE;
 const READY_TIMEOUT = 15 * MINUTE;
@@ -604,7 +605,8 @@ describe(
         // has no other to boot on the next lease.
         let lane: Lane | undefined;
         try {
-          // Inside the try and a step, so a hung setup names itself and `diagnose` and `nuke` run.
+          // Inside the try and a step, so a hung setup names itself. `lane` is unset then, so
+          // `diagnose` and `nuke` are skipped; they run once `warmDaemon` has returned.
           lane = await step("start the daemon with the pool off", DAEMON_START_BUDGET, () =>
             warmDaemon({ enabled: false }),
           );
