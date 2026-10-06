@@ -81,9 +81,12 @@ request, closed — not from a label. The branch for issue `<n>` is always
    would be expensive to reverse becomes an ADR at _Proposed_, listed under
    Decisions. The session edits the body and leaves a one-line "Spec
    updated" comment. It ends with `check-spec`: a fresh agent reads the
-   body as posted against the rules, the ADRs and the code, and reports
-   contradictions, lines nobody could check, and failure modes no line
-   answers. You and the session fix those in the body.
+   body as posted against the rules, the ADRs and the code. It first plans
+   the change file by file and runs a pre-mortem, then gives every category
+   a status: contradictions, lines nobody could check, behaviour no test
+   pins, failure modes no line answers, existing code on the same state no
+   line names, lists the code contradicts, and undefined terms. You and the
+   session fix those in the body.
 5. Once Open questions is empty, every linked ADR is accepted and the spec
    check has nothing open, the maintainer adds `feature:ready`. The ADRs
    move to _Accepted — not yet implemented_.
@@ -114,8 +117,9 @@ waiting.
 5. Each task is a native sub-issue of the feature, labelled `task:draft`, with
    a body from [templates/task.md](templates/task.md): Scope, Technical spec,
    Done when, Out of scope, Depends on, and an approval checkbox. Once the
-   tasks exist, `check-spec` reads them as posted, and the session fixes what
-   it finds, including tasks that overlap without a Depends on. The feature
+   tasks exist, `check-spec` reads them as posted, one checker per task and
+   one for the feature as a whole, and the session fixes what they find,
+   including tasks that overlap without a Depends on. The feature
    becomes `feature:planned` and keeps only its business spec, Decisions and
    the task list.
 6. The maintainer ticks the approval box on each task, once, at planning
