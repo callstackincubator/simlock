@@ -908,7 +908,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
-      if (destroyed) this.#wakeQueue();
+      this.#wakeQueue();
       return;
     }
     await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
