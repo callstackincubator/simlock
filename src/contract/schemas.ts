@@ -747,6 +747,16 @@ export const configSchema = z.object({
   warmPool: z.object({
     enabled: z.boolean(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),
+    maxConcurrentBoots: z.number(),
+    targets: z.array(
+      z.object({
+        platform: z.enum(["ios", "android"]),
+        model: z.string(),
+        osVersion: z.string().optional(),
+        mode: z.enum(["slim", "full"]).optional(),
+        count: z.number(),
+      }),
+    ),
     quarantine: z.object({
       maxRetries: z.number(),
       retryBackoffMs: z.number(),

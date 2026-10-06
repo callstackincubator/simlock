@@ -22,6 +22,8 @@ export interface CleanupReaperOptions {
   readonly logger?: Logger;
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
+  /** The devices a warm target keeps, read at each run; none when omitted. */
+  readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
   readonly diskPath?: string;
   readonly tickMs?: number;
 }
@@ -190,6 +192,7 @@ export class CleanupReaper {
       diskFreeBytes,
       leases: snapshot.leases,
       now: this.options.clock.now(),
+      targeted: (await this.options.targetedDevices?.()) ?? new Set(),
     };
   }
 

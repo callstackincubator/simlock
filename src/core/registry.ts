@@ -278,7 +278,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
     }
 
-    const updated = transition(device, to, update);
+    const updated = this.#transitioned(device, to, update);
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -301,7 +301,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state !== "reclaiming") {
       throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
     }
-    const updated = transition(device, "shutdown");
+    const updated = this.#transitioned(device, "shutdown");
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -328,7 +328,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       );
     }
     const updated: DeviceRecord = {
-      ...transition(device, "quarantined"),
+      ...this.#transitioned(device, "quarantined"),
       quarantineAttempts: 0,
       quarantineNextRetryAt: nextRetryAt,
       quarantinedAt: this.options.clock.now(),
@@ -361,6 +361,22 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return cloneDevice(updated);
   }
 
+  /**
+   * The one place the registry calls `transition`: every move into `ready` stamps `readyAt`, and
+   * every move into `shutdown` stamps `shutdownAt`, with the moment of it, whichever path made it.
+   * `markDeviceMissing` records a device already gone and sets `deleted` itself.
+   */
+  #transitioned(
+    device: DeviceRecord,
+    to: DeviceState,
+    update?: DeviceTransitionUpdate,
+  ): DeviceRecord {
+    const now = this.options.clock.now();
+    if (to === "ready") return transition(device, to, { ...update, readyAt: now });
+    if (to === "shutdown") return transition(device, to, { ...update, shutdownAt: now });
+    return transition(device, to, update);
+  }
+
   /** Commits a successful quarantine retry; the device rejoins the warm pool. */
   // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async recoverFromQuarantine(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
@@ -373,7 +389,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineNextRetryAt: _quarantineNextRetryAt,
       quarantinedAt: _quarantinedAt,
       ...updated
-    } = transition(device, to);
+    } = this.#transitioned(device, to);
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
@@ -417,7 +433,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineNextRetryAt: _quarantineNextRetryAt,
       quarantinedAt: _quarantinedAt,
       ...updated
-    } = transition(device, "deleted");
+    } = this.#transitioned(device, "deleted");
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
@@ -585,7 +601,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device already has an active lease: ${deviceId}`);
     }
 
-    const leasedDevice = transition(device, "leased");
+    const leasedDevice = this.#transitioned(device, "leased");
     const grantedAt = this.options.clock.now();
     const lease: LeaseRecord = {
       deviceId,
@@ -646,7 +662,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       ...withoutRecoveryMarkers
     } = device;
     const reclaiming = {
-      ...transition(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
+      ...this.#transitioned(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
       lastLeaseEndedAt: this.options.clock.now(),
       // The wipe is not started now; a later start that can read the platform runs it.
       ...(options.deferReclaim === true ? { deferredReclaimLeaseId: leaseId } : {}),
@@ -875,6 +891,8 @@ const deviceRecordKeys = [
   "driverData",
   "createdAt",
   "lastLeaseEndedAt",
+  "readyAt",
+  "shutdownAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
   "recoveringSince",
@@ -1004,6 +1022,8 @@ function eventForTransition(
  */
 const optionalDeviceNumberKeys = [
   "lastLeaseEndedAt",
+  "readyAt",
+  "shutdownAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
   "recoveringSince",

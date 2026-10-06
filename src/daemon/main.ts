@@ -305,6 +305,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger,
     registry,
     diskPath: dataDirectory,
+    targetedDevices: () => core.targetedDevices(),
   });
   const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
@@ -397,6 +398,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
+    // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
+    beginStop: () => core.closeWarmPool(),
     capacity: core.capacityReader,
     catalog: core.catalog,
     deviceModes: leasing,
@@ -449,7 +452,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     settle: async () => {
       stopping = true;
       await leasing.settle();
-      await core.settle();
+      await core.drain();
     },
     // Drivers are disposed after the lease subsystem, and every one of them is tried even
     // when another throws: Android's disposal is the only thing that can stop the adb

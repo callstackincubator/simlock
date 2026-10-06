@@ -105,7 +105,9 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
       reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -285,7 +287,7 @@ async function seedReady(
 }
 
 async function flush(): Promise<void> {
-  for (let count = 0; count < 20; count += 1) await Promise.resolve();
+  for (let count = 0; count < 50; count += 1) await Promise.resolve();
 }
 
 /** Lets fire-and-forget device work that crosses several registry writes run to rest. */
@@ -2858,5 +2860,169 @@ describe("LeaseAcquisitionCoordinator waiting demand", () => {
 
     await harness.coordinator.endMaintenance();
     expect(harness.coordinator.maintenanceActive).toBe(false);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: resolve", () => {
+  const installer = () => {
+    const asked: unknown[] = [];
+    return {
+      asked,
+      components: {
+        install: async (call: unknown) => {
+          asked.push(call);
+          return { outcome: "installed" as const, version: "26.5" };
+        },
+      },
+    };
+  };
+  const iphone17 = { model: "iPhone 17", platform: "ios" } as const;
+  const driverOf = (options: Partial<ConstructorParameters<typeof FakeDriver>[0]> = {}) =>
+    new FakeDriver({
+      availableOsVersions: ["18.0", "18.4", "26.0"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 17"],
+      platform: "ios",
+      ...options,
+    });
+
+  it("resolves a target naming a model and an installed OS to the spec a request for it is granted a device of", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+    const granted = await harness.coordinator.request(
+      { ...iphone17, osVersion: "26.0" },
+      { ownerId: "a", requesterId: "a" },
+    );
+
+    expect(resolved).toEqual({ spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" } });
+    expect(granted.device.spec).toEqual(
+      "spec" in resolved ? resolved.spec : { model: "never matches" },
+    );
+  });
+
+  it("resolves an OS range to the newest installed runtime in it", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: ">=18 <26" });
+
+    expect(resolved).toEqual({ spec: { model: "iPhone 17", osVersion: "18.4", platform: "ios" } });
+  });
+
+  it("queues nothing, reserves nothing and creates nothing", async () => {
+    const driver = driverOf();
+    const harness = await createHarness({ drivers: [driver] });
+
+    await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+
+    expect(harness.queue.depth).toBe(0);
+    expect(harness.registry.snapshot.devices).toEqual([]);
+    const running = harness.capacity.runningCapacity([]);
+    expect([running.global.reserved, running.ios.reserved, running.android.reserved]).toEqual([
+      0, 0, 0,
+    ]);
+    expect(
+      driver.calls.filter((call) => ["provision", "makeReady"].includes(call.operation)),
+    ).toEqual([]);
+  });
+
+  it("answers runtime-missing for an OS that is not installed, and never calls the installer though a request could download it", async () => {
+    const { asked, components } = installer();
+    const driver = driverOf({ availableOsVersions: [] });
+    const harness = await createHarness({ components, drivers: [driver] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "27.0" });
+
+    expect(resolved).toMatchObject({ refusal: "runtime-missing" });
+    expect(resolved).toHaveProperty("message", expect.stringContaining("27.0"));
+    expect(asked).toEqual([]);
+    expect(driver.calls.filter((call) => call.operation === "installComponent")).toEqual([]);
+  });
+
+  it("answers runtime-missing for an OS range no installed runtime is in", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: ">=30" });
+
+    expect(resolved).toMatchObject({ refusal: "runtime-missing" });
+  });
+
+  it("answers unknown-model for a model the catalog does not list, exact or in a range", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const exact = await harness.coordinator.resolve({
+      model: "iPhone 99",
+      osVersion: "26.0",
+      platform: "ios",
+    });
+    const ranged = await harness.coordinator.resolve({
+      model: "iPhone 99",
+      osVersion: ">=18",
+      platform: "ios",
+    });
+
+    expect(exact).toMatchObject({ refusal: "unknown-model" });
+    expect(ranged).toMatchObject({ refusal: "unknown-model" });
+  });
+
+  it("answers no-driver for a platform this machine has no driver for", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ model: "Pixel 9", platform: "android" });
+
+    expect(resolved).toMatchObject({ refusal: "no-driver" });
+    expect(resolved).toHaveProperty("message", expect.stringContaining("android"));
+  });
+
+  it("answers unresolvable with the driver's message when the driver throws any other error", async () => {
+    const driver = driverOf();
+    driver.failOn("resolveSpec", 1, new Error("the simulator service is down"));
+    const harness = await createHarness({ drivers: [driver] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+
+    expect(resolved).toEqual({
+      message: "the simulator service is down",
+      refusal: "unresolvable",
+    });
+  });
+
+  it("gives a slim target on a runtime the driver can slim a slim spec, and one it cannot a full spec", async () => {
+    const driver = driverOf({
+      availableOsVersions: ["17.5", "26.5"],
+      slimmableOsVersions: ["26.5"],
+    });
+    const harness = await createHarness({ drivers: [driver] });
+
+    const slimmable = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "slim",
+      osVersion: "26.5",
+    });
+    const below = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "slim",
+      osVersion: "17.5",
+    });
+
+    expect(slimmable).toEqual({
+      spec: { mode: "slim", model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+    });
+    expect(below).toEqual({ spec: { model: "iPhone 17", osVersion: "17.5", platform: "ios" } });
+  });
+
+  it("gives a target naming no mode the worker's default mode, and a full one a full spec", async () => {
+    const driver = driverOf({ availableOsVersions: ["26.5"], slimmableOsVersions: ["26.5"] });
+    const harness = await createHarness({ defaultModes: { ios: "slim" }, drivers: [driver] });
+
+    const defaulted = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.5" });
+    const full = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "full",
+      osVersion: "26.5",
+    });
+
+    expect(defaulted).toMatchObject({ spec: { mode: "slim" } });
+    expect(full).toEqual({ spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" } });
   });
 });

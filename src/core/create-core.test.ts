@@ -116,7 +116,11 @@ function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
       },
     },
     notifyAvailability: () => void order.push("notifyAvailability"),
-    warmPoolDemand: { maintenanceActive: false, waitingDemand: () => [] },
+    warmPoolDemand: {
+      maintenanceActive: false,
+      resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
+      waitingDemand: () => [],
+    },
   };
 }
 
@@ -312,6 +316,7 @@ describe("createCore", () => {
         get maintenanceActive() {
           return paused.active;
         },
+        resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
         waitingDemand: () => [],
       },
     });

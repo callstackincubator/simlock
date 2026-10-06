@@ -1003,6 +1003,44 @@ describe("startDaemon HTTP gateway startup readiness", () => {
   });
 });
 
+describe("startDaemon stop with a warm target", () => {
+  it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.hangMakeReady();
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: {
+        capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        warmPool: {
+          targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+        },
+      },
+      dataDirectory: directory,
+      drivers: [driver],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    await expect
+      .poll(() => driver.calls.filter((call) => call.operation === "makeReady").length)
+      .toBe(1);
+
+    // The creation ends while the HTTP gateway is still being stopped: a pool not closed by then
+    // would start the second one, and the drain would wait for its whole boot.
+    const stopping = daemon.stop("test-stop-target");
+    driver.releaseMakeReady();
+    await stopping;
+
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+  });
+});
+
 describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
   // Before this fix, `stopAuxiliary` (this file's `stopAuxiliary` closure passed to
   // `DaemonServer`) returned immediately whenever the concurrently-started HTTP gateway

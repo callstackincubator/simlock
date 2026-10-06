@@ -66,8 +66,9 @@ never enforce them only inside an individual rule or driver.
    `"always"` consents for every lease request too; `"never"` refuses every
    download, the explicit install included -- no role and no operation
    overrides it. Warm-pool provisioning and startup convergence never
-   trigger a download under any policy: they only ever reuse specs already
-   committed to the registry, never resolve a new one.
+   trigger a download under any policy: re-readiness and startup reuse specs
+   already committed to the registry, and a warm target resolves its spec with
+   downloads off, so a runtime that is missing leaves it short.
 5. **Destructive CLI commands confirm or require `--yes`**
    (`release --all`, `nuke`). `cleanup` must always support `--dry-run`.
 6. **Every destructive action is attributable.** Log/emit which rule or

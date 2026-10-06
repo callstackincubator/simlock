@@ -1141,14 +1141,49 @@ every slot a leased, reclaiming, quarantined or reserved device holds, per
 platform and globally. `WarmPool` subscribes to the bus (`daemon.started`,
 `device.reclaimed`, `lease.granted`, `capacity.changed` and the other
 facts that change the budget) and to a 30 s tick, runs one pass at a time, and
-acts by direct calls: the pure `policy.ts` returns shutdown and boot proposals,
-and each is revalidated (no lease, no operation claim) before
-`ManagedDeviceLifecycle` runs it. A boot holds a boot reservation, which counts
+acts by direct calls: the pure `policy.ts` returns shutdown, boot and creation
+proposals, and each is revalidated (no lease, no operation claim) before
+`ManagedDeviceLifecycle` (or, for a creation, `DeviceProvisioner`) runs it. A boot holds a boot reservation, which counts
 as one running slot, until its `ready` commit. A pass proposes no budget
 shutdown while a booted device is on its way to a lease, because that device
 counts as running and as reserved until the grant, holds back the free slots a
 waiting request no idle device serves is about to take, and does nothing while
 an operator reset (`nuke`) holds acquisition closed, after which a device the reset left shut down is not booted back as recently released.
+
+**Warm targets** (`warmPool.targets`, ADR 0017) are what the pool keeps ready
+ahead of demand. Each pass the converger resolves every target through
+`LeaseAcquisitionCoordinator#resolve`, the one place a request becomes a spec,
+with downloads off, so a target and a request cannot disagree and a missing
+runtime or unlisted model is a reported shortfall, never an install. Targets
+that resolve to one spec merge into one with the summed count. For each, the
+policy counts the ready, unleased devices of that kind (`sameSpec`, not a spent
+`fresh` device) and the boots and creations of the kind already running, and
+proposes a boot of a shut-down device of the kind, else a creation, until the
+count is met: never while a request is queued on its platform, never past the
+running slots (with `reserveRunning`), the device limit or RAM, never past
+`maxConcurrentBoots` pool boots at once, and never by shutting a device down.
+A boot or creation for a target runs beside the pass and asks for the next one
+when it ends; a creation takes a provisioning reservation and an ownerless
+`boot` claim, which it gives up once the device is ready, so a request that
+serves it may wait for it. `retry.ts` is the one place a target's failed boot or
+creation is remembered, by resolved spec: one minute, doubling, at most ten (a
+keep boot or a shutdown that failed gets a 30 s pause of its own per device in
+the converger; a target's boot does not).
+A graceful stop drains the pool (`WarmPool#drain`): it finishes the pass and the boots
+and creations already running and starts nothing new, so a stop never creates the
+missing devices of a target. The reaper's first run after a start asks the pool
+for the targeted set, which resolves the targets itself when no pass has yet.
+A target whose resolution fails as `unresolvable` keeps the spec it last resolved
+to, so one failed read does not make its devices unwanted. With the pool off no
+target is resolved, reported or spared.
+The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
+`no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
+`device-limit`, `ram-budget`) in its log and through `WarmPool#targets`.
+A device that never served a lease has no `lastLeaseEndedAt`, which the
+reaper's idle-shutdown rule times from (idle-destroy times it from `shutdownAt`), so the policy itself shuts down a ready,
+unleased, never-leased device that no target keeps once it has been ready
+(`DeviceRecord.readyAt`, `createdAt` for an older record) longer than
+`idle.shutdownAfterMs`, with initiator `warm-pool`.
 
 At startup, leasing's reconciler first ends every lease whose device the startup
 read says is not running (ADR 0019), `LeaseStartup` restores the persisted TTL timer
@@ -1564,8 +1599,10 @@ shared managed-device lifecycle.
 
 v1 rules — the tiered cleanup:
 
-1. idle > T1 → `shutdown` (reclaim RAM)
-2. idle > T2 → `destroy` (reclaim disk); under disk pressure (free space
+1. idle > T1 → `shutdown` (reclaim RAM); a device a warm target keeps (the
+   view's `targeted` set, read from the pool at each run) is never proposed
+2. idle > T2 → `destroy` (reclaim disk), idle counted from the last lease's end,
+   or from `shutdownAt` for a device that never served one; under disk pressure (free space
    below `diskPressure.freeBytesThreshold`) `idle-destroy` uses T1 instead of
    T2, so a full disk shortens the wait to reclaim it — the rule reads
    `diskFreeBytes` off the view itself rather than depending on the
@@ -1674,7 +1711,8 @@ lease-progress stage, sent through the wait queue like every other stage:
 `waiting` becomes `waiting: true`, the install's own reports `waiting: false`
 with the percentage rounded down, and a report equal to the last one sent is
 skipped. Without `allowDownload` the first error stands. Warm-pool
-re-readiness and startup convergence never reach the installer (safety rule 4).
+re-readiness, a warm target's resolution (`resolve` runs the same steps with
+downloads off) and startup convergence never reach the installer (safety rule 4).
 
 The operator path is `component.install` (ADR 0010 §6), an admin operation
 with input `{ platform, version }`; `version` is bounded by the contract
@@ -2098,6 +2136,7 @@ the request's own flag, which is today's behavior byte-for-byte. Only an
 explicit lease request (`createLeasing`'s `request`) carries download permission,
 and the acquisition coordinator, not a driver, acts on it by calling the
 component installer (see "Components: one installer in the core"); no
-`resolveSpec` downloads anything. Warm-pool provisioning and startup
-convergence reuse specs already committed to the registry and never reach
-the installer, so neither can trigger a download regardless of policy.
+`resolveSpec` downloads anything. Warm-pool re-readiness and startup
+convergence reuse specs already committed to the registry, and a warm target
+creates a device only from a spec resolved with downloads off, so none of them
+reaches the installer or can trigger a download regardless of policy.
