@@ -242,11 +242,10 @@ export class LeaseReleaseCoordinator
       })
       .finally(() => {
         claim?.release();
-        // `ReclaimCoordinator#reclaim` fires its own availability notification while
-        // this claim is still held, and a claimed device is invisible to
-        // `AcquisitionPlanner` -- so a waiter queued for exactly this device would
-        // sleep through it and sit there until some unrelated event kicked the queue.
-        // Notifying again here, after the claim is gone, is what closes that window.
+        // `ReclaimCoordinator` already wakes the queue on every path that frees a
+        // device, and it does so before this claim is released, so the wake-up here is a
+        // safety net, not the one that serves a waiter: it runs after the claim is gone,
+        // so matching sees the device even if an earlier wake-up raced the release.
         this.options.notifyAvailability();
       });
     this.#backgroundReclaims.add(reclaim);

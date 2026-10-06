@@ -1007,6 +1007,31 @@ describe("createLeasing", () => {
     ).resolves.toMatchObject({ lease: { ownerId: "queued", requesterId: "queued" } });
   });
 
+  it("stamps queue.changed with the wait-queue module when a request queues and when it leaves", async () => {
+    const harness = await createHarness();
+    const modules: { depth: number; module: string }[] = [];
+    harness.bus.subscribe("queue.changed", (envelope) =>
+      modules.push({ depth: envelope.payload.depth, module: envelope.module }),
+    );
+    const holder = await harness.engine.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    const queued = harness.engine.request(request, {
+      ownerId: "queued",
+      requesterId: "queued",
+    });
+    await flush();
+    expect(modules).toEqual([{ depth: 1, module: "wait-queue" }]);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await queued;
+    expect(modules).toEqual([
+      { depth: 1, module: "wait-queue" },
+      { depth: 0, module: "wait-queue" },
+    ]);
+  });
+
   it("queues at capacity in FIFO order across three waiters", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
