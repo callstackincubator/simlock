@@ -173,7 +173,9 @@ interface OpenRequest<Grant> {
  *   to the wait that is still open, and never starts a second one (`replay`);
  * - the same key naming a different device is `IdempotencyConflictError`, and a repeat from
  *   another principal is `LeaseRequestForbiddenError`;
- * - a request's result is written once, when its own promise settles, and never re-evaluated.
+ * - a request's result is written once and never re-evaluated: when its own promise settles, or,
+ *   for a daemon's grant, already in the commit that added the lease (`Registry.createLease`),
+ *   in which case the settle that follows finds it granted and writes nothing.
  *
  * A caller that stops waiting -- a disconnect, an abort, its own timeout -- only stops listening:
  * nothing here writes a result for it. `cancelled` is written only when the request itself is
@@ -343,7 +345,8 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   }
 
   /**
-   * Writes the result, then forgets the live wait. A write that fails keeps the entry, so a
+   * Writes the result, then forgets the live wait. A request already granted by the same commit
+   * as its lease is settled: the store leaves it alone, and this counts as success. A write that fails keeps the entry, so a
    * replay in this process still attaches to the settled promise and gets the real answer; the
    * record on disk stays open and startup recovery settles it.
    */

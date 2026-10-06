@@ -706,19 +706,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * through it, so there is no second construction site to keep in step.
    */
   async #grant(waiter: AcquisitionWaiter, deviceId: string, kind: GrantingPlanKind): Promise<void> {
-    const { device, lease } = await this.options.leases.grant({
+    const device = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === deviceId,
+    );
+    if (device === undefined)
+      throw new Error(`Granted device disappeared from registry: ${deviceId}`);
+    // Built before the write: the grant a repeat of this request answers is stored with the lease.
+    const granted = await this.options.leases.grant({
       deviceId,
+      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
       ownerId: waiter.options.ownerId,
       requestId: waiter.id,
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
+      timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
     this.options.queue.resolve(waiter, {
-      device,
-      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
-      lease,
-      timing: waiter.timing,
+      device: granted.device,
+      environment: granted.environment,
+      lease: granted.lease,
+      timing: granted.timing,
     });
   }
 
