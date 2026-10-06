@@ -1,11 +1,12 @@
 pre-commit:
   parallel: true
   commands:
+    # Formats what is staged and stages the result, so nobody runs a formatter by hand.
     format:
       glob: "*.{ts,tsx,js,mjs,json,md,yml,yaml}"
       exclude: "docs/**"
-      run: pnpm exec oxfmt --check {staged_files}
-      fail_text: "Run 'pnpm format' to fix formatting."
+      run: pnpm exec oxfmt {staged_files}
+      stage_fixed: true
     lint:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}

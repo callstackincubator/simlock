@@ -225,7 +225,9 @@ run, then the code review and the lane run again. A PR whose hardware check
 could not run gets `needs-hardware` and waits for you. Everything else that
 passes is merged by the agent through `.agents/scripts/merge-pr.sh`, which
 refuses a draft, a `needs-hardware` label, a missing Review section, a
-"spec needs" line, red CI, or a conflict. The same reviews run on a
+"spec needs" line, red CI, or a conflict. Red CI gets one automatic re-run
+first when no failure is the PR's own: a job GitHub cancelled because no
+runner came, or a failing test an open `flaky-test` issue names. The same reviews run on a
 person's PR when the maintainer asks; there the agent posts the findings as
 a comment and pushes nothing.
 

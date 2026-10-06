@@ -67,7 +67,8 @@ if [ -n "$previous" ]; then
   fi
 fi
 "$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
-[ -s "$out/stale-refs.txt" ] || rm -f "$out/stale-refs.txt"
+# Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
+[ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 
 for f in $(git ls-tree --name-only "$base" docs/internal/agent-rules/); do
   git show "$base:$f" >"$out/rules/$(basename "$f")"
