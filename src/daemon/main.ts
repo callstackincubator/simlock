@@ -504,9 +504,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
-      // Dialled here, once the socket is claimed and `#readyPromise` is set, so the gateway's
-      // first `status.get` parks on startup readiness like any other request instead of
-      // reading health `starting` during convergence and keeping it. A daemon that fails its
+      // Dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
+      // `status.get` never parks (it still answers `starting` during convergence), but its
+      // `events.subscribe` does park on startup readiness, so the refresh that follows the
+      // subscribe reads `running` instead of keeping `starting`. A daemon that fails its
       // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
       // uplink: a worker whose gateway is down must still come up and serve its local agents
       // (`GatewayUplink` retries on its own backoff).
