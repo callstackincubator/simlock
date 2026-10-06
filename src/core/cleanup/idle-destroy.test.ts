@@ -36,7 +36,9 @@ const config: Config = {
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    maxConcurrentBoots: 1,
     reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -91,6 +93,7 @@ function view(
     diskFreeBytes: overrides.diskFreeBytes ?? 100,
     leases: overrides.leases ?? [],
     now,
+    targeted: new Set(),
   };
 }
 

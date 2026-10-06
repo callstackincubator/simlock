@@ -1,19 +1,70 @@
-import type { RunningCapacity } from "../capacity/index.js";
+import type { CapacityRefusalReason, RunningCapacity } from "../capacity/index.js";
 import {
   type DeviceRecord,
+  type DeviceSpec,
   fits,
   type LeaseRecord,
   mayBeGranted,
   specMode,
+  type TargetRefusal,
   type WaitingDemand,
 } from "../domain.js";
 import { compareLeastRecentlyUsed } from "../idle-order.js";
 
-/** What one pass acts on: shut a running device down, or boot a shut-down one back. */
-export interface WarmProposal {
-  readonly action: "shutdown" | "boot";
-  readonly deviceId: string;
-  readonly reason: "over-budget" | "disabled" | "waiting-request" | "recently-released";
+/**
+ * What one pass acts on: shut a running device down, boot a shut-down one back, or create a new
+ * one. A boot or creation for a target carries the target's spec, which the converger keys its
+ * failure schedule and its boot cap by.
+ */
+export type WarmProposal =
+  | {
+      readonly action: "shutdown" | "boot";
+      readonly deviceId: string;
+      readonly reason:
+        | "over-budget"
+        | "disabled"
+        | "waiting-request"
+        | "recently-released"
+        | "target"
+        | "never-leased-idle";
+      readonly target?: DeviceSpec;
+    }
+  | {
+      readonly action: "provision";
+      readonly spec: DeviceSpec;
+      readonly reason: "target";
+      readonly target: DeviceSpec;
+    };
+
+/** A target that resolved: the spec a request for it resolves to, and how many to keep ready. */
+export interface ResolvedTarget {
+  readonly spec: DeviceSpec;
+  readonly count: number;
+}
+
+/** Why a target has fewer ready devices than its count, when nothing but time will not fix it. */
+export type TargetShort =
+  | TargetRefusal
+  | "boot-failed"
+  | "running-limit"
+  | "device-limit"
+  | "ram-budget"
+  | "reserve";
+
+/** One target as a pass left it: what it asked for, how many are ready, and why not more. */
+export interface TargetReport {
+  readonly target: string;
+  readonly spec?: DeviceSpec;
+  readonly count: number;
+  readonly ready: number;
+  readonly short?: TargetShort;
+  readonly message?: string;
+}
+
+/** What `evaluate` decides: the actions to run in order, and every resolved target's state. */
+export interface WarmPlan {
+  readonly proposals: readonly WarmProposal[];
+  readonly targets: readonly TargetReport[];
 }
 
 export interface WarmPolicyView {
@@ -27,8 +78,20 @@ export interface WarmPolicyView {
     readonly enabled: boolean;
     readonly reserveRunning: { readonly ios: number; readonly android: number };
     readonly shutdownAfterMs: number;
+    readonly maxConcurrentBoots: number;
   };
   readonly now: number;
+  /** The targets that resolved this pass, equal specs already merged into one. */
+  readonly targets: readonly ResolvedTarget[];
+  /** The spec of each target boot or creation still running: they count toward the boot cap. */
+  readonly inFlight: readonly DeviceSpec[];
+  /** The failure schedule: whether a spec may be tried now. */
+  readonly retry: { mayAttempt(spec: DeviceSpec, now: number): boolean };
+  /** What the capacity strategy refuses besides the running slots `capacity` already totals. */
+  readonly admit: {
+    provision(spec: DeviceSpec): CapacityRefusalReason | undefined;
+    boot(device: DeviceRecord): CapacityRefusalReason | undefined;
+  };
   /**
    * A device is on its way to a lease: booted, `ready` and claimed, still counted as running
    * and as reserved until the grant. The budget reads one over for that moment, so no shutdown
@@ -54,7 +117,7 @@ type Slots = { global: number; ios: number; android: number };
  * slot that is free. The operator's `reserveRunning` takes slots off that budget for idle devices
  * only (see `reservedOf`).
  */
-export function evaluate(view: WarmPolicyView): readonly WarmProposal[] {
+export function evaluate(view: WarmPolicyView): WarmPlan {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));
   const idle = (device: DeviceRecord): boolean =>
     !leased.has(device.id) && !view.isClaimed(device.id);
@@ -63,11 +126,14 @@ export function evaluate(view: WarmPolicyView): readonly WarmProposal[] {
     .sort(compareLeastRecentlyUsed);
 
   if (!view.config.enabled) {
-    return running.map((device) => ({
-      action: "shutdown",
-      deviceId: device.id,
-      reason: "disabled",
-    }));
+    return {
+      proposals: running.map((device) => ({
+        action: "shutdown",
+        deviceId: device.id,
+        reason: "disabled",
+      })),
+      targets: [],
+    };
   }
 
   const room = roomOf(view.capacity);
@@ -77,7 +143,10 @@ export function evaluate(view: WarmPolicyView): readonly WarmProposal[] {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
-  return [...shutdowns, ...boots(view, running, bootable, room, held)];
+  return {
+    proposals: [...shutdowns, ...boots(view, running, bootable, room, held)],
+    targets: [],
+  };
 }
 
 /**
@@ -221,4 +290,30 @@ function boots(
     if (hasWarmRoom(room, held, device)) boot(device, "recently-released");
   }
   return proposals;
+}
+
+/**
+ * The devices a target keeps: for each target, its ready unleased devices of that kind, oldest
+ * first, up to its count. The one place the pool and the idle shutdown timer agree on which
+ * devices a target counts.
+ */
+export function targetedDevices(_input: {
+  readonly devices: readonly DeviceRecord[];
+  readonly leases: readonly LeaseRecord[];
+  readonly isClaimed: (deviceId: string) => boolean;
+  readonly targets: readonly ResolvedTarget[];
+}): ReadonlySet<string> {
+  return new Set();
+}
+
+/** A target or a spec as one line: platform, model, OS and mode, the parts it names. */
+export function describeTarget(target: {
+  readonly platform: string;
+  readonly model: string;
+  readonly osVersion?: string | undefined;
+  readonly mode?: string | undefined;
+}): string {
+  return [target.platform, target.model, target.osVersion, target.mode]
+    .filter((part) => part !== undefined)
+    .join(" ");
 }

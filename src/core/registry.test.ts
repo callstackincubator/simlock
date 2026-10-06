@@ -1021,6 +1021,44 @@ describe("Registry", () => {
     expect(reloaded.snapshot.devices[0]).toMatchObject({ mode: "slim" });
   });
 
+  it("persists readyAt across a reload, and loads a record written before it without one", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "test" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(
+      device.id,
+      "ready",
+      { event: "device.ready", payload: { bootDuration: 5, deviceId: device.id } },
+      { readyAt: 4_242 },
+    );
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.snapshot.devices[0]?.readyAt).toBe(4_242);
+    const state = JSON.parse(await filesystem.readFile(statePath)) as {
+      devices: Record<string, unknown>[];
+    };
+    const [written] = state.devices;
+    if (written === undefined) throw new Error("expected a written device");
+    const { readyAt: _dropped, ...older } = written;
+    await filesystem.writeFileAtomic(statePath, JSON.stringify({ ...state, devices: [older] }));
+    const legacy = await Registry.load(options);
+    expect(legacy.snapshot.devices[0]).not.toHaveProperty("readyAt");
+  });
+
   it("registers a new device as full", async () => {
     const clock = new FakeClock(1_000);
     const registry = await Registry.load({

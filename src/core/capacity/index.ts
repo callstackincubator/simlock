@@ -16,4 +16,10 @@ export {
   type CapacityStrategyName,
   type ResourceStrategyOptions,
 } from "./strategies/index.js";
-export type { CapacityDevice, CapacityPlatform, RamBudget, RunningCapacity } from "./strategy.js";
+export type {
+  CapacityDevice,
+  CapacityPlatform,
+  CapacityRefusalReason,
+  RamBudget,
+  RunningCapacity,
+} from "./strategy.js";

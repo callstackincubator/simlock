@@ -48,6 +48,7 @@ import {
   type ReadyDeviceHandoff,
   type SerializedDecision,
   stableError,
+  type TargetResolution,
   type WaitingDemand,
 } from "../core/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
@@ -560,6 +561,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
             },
           ],
     );
+  }
+
+  /**
+   * Resolves a request to the spec it would be granted a device of, with downloads off, or says
+   * why there is none. A read: nothing is queued, reserved or installed. The warm pool resolves
+   * its targets here, so a target and a request become a spec in one place.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
+  async resolve(_request: DeviceRequest): Promise<TargetResolution> {
+    return { message: "not resolved", refusal: "unresolvable" };
   }
 
   /** Whether an administrative reset holds acquisition closed; the warm pool does nothing meanwhile. */

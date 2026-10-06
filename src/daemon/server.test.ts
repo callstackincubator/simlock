@@ -3285,7 +3285,9 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
       reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

@@ -305,6 +305,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger,
     registry,
     diskPath: dataDirectory,
+    targetedDevices: () => core.targetedDevices(),
   });
   const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
