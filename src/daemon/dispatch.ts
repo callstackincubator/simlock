@@ -31,7 +31,7 @@ import {
 
 /**
  * Request-scoped progress, as the contract declares it. Structurally identical to `core`'s own
- * `LeaseProgress` (src/core/wait-queue.ts) -- the worker's dispatcher passes one straight
+ * `LeaseProgress` (src/core/domain.ts) -- the worker's dispatcher passes one straight
  * through to the other -- but named from the contract here so this module stays core-free.
  */
 export type DispatchProgress = z.infer<typeof leaseProgressSchema>;

@@ -4,9 +4,8 @@ import {
   plannedCapacityDevice,
   type CapacityCoordinator,
   type CapacityReservation,
-} from "./capacity/index.js";
-import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
-import {
+  type DeviceOperationClaim,
+  type DeviceOperationClaims,
   type DeviceClass,
   type DeviceRecord,
   type DeviceRequirement,
@@ -17,12 +16,10 @@ import {
   mayBeGranted,
   type Platform,
   specMode,
-} from "./domain.js";
-import {
-  selectManagedVictim,
   selectIdleRunningVictim,
+  selectManagedVictim,
   type IdleVictimScope,
-} from "./idle-order.js";
+} from "../core/index.js";
 
 export interface AcquisitionPlannerSnapshot {
   readonly devices: readonly DeviceRecord[];

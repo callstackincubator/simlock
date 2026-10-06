@@ -11,24 +11,31 @@ import {
 } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
-import type { Config } from "./config.js";
-import { DeviceOperationClaims } from "./device-operation-claims.js";
-import { DeviceProvisioner } from "./device-provisioner.js";
-import { ComponentInstaller } from "./component-installer.js";
-import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import {
+  CapacityCoordinator,
+  type Config,
+  DeviceOperationClaims,
+  DeviceProvisioner,
+  ComponentInstaller,
+  DriverCatalog,
+  type ModelPreferences,
   DiskSpaceGuard,
   type Driver,
   DriverCrashError,
-  readyTransitionUpdate,
   RuntimeMissingError,
   UnsupportedRequestOptionError,
-} from "./driver.js";
-import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
-import { FakeDriver } from "./fake-driver.js";
+  type DeviceMode,
+  type DeviceSpec,
+  type Platform,
+  specMode,
+  type CatalogReader,
+  ManagedDeviceLifecycle,
+  Registry,
+  SerializedDecision,
+} from "../core/index.js";
+import { createCapacityStrategy, readyTransitionUpdate } from "../core/testing.js";
+import { FakeDriver } from "../core/testing.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
-import type { CatalogReader } from "./lease-ports.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import {
   IdempotencyConflictError,
@@ -36,9 +43,6 @@ import {
   LeaseRequestForbiddenError,
 } from "./lease-request-book.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
-import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { Registry } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
 import { type LeaseRequestOptions, RequesterAlreadyLeasedError, WaitQueue } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
@@ -727,7 +731,7 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("rejects a second request from a requester whose first is still pending, with lease.rejected already-leased", async () => {
     // The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a
-    // lease is lease-engine's "enforces one active request or lease per requester" case.
+    // lease is createLeasing's "enforces one active request or lease per requester" case.
     const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
     await harness.coordinator.request(request, { ownerId: "holder", requesterId: "holder" });
     const pending = harness.coordinator.request(request, {

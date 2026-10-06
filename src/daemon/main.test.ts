@@ -6,10 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   type Config,
+  DriverCrashError,
   type DriverToolVersion,
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
   REDACTED_VALUE,
+  Registry,
 } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
@@ -493,6 +495,262 @@ describe("startDaemon", () => {
     const modules = new Set(sink.records.map((record) => record.module));
     expect(modules).toContain("daemon.server");
     expect(modules).toContain("daemon.connection-host");
+  });
+});
+
+describe("startDaemon wires core and leasing together", () => {
+  const agent = {
+    manageEventSubscription: () => undefined,
+    principal: "agent",
+    role: "agent",
+  } as const;
+  const admin = {
+    manageEventSubscription: () => undefined,
+    principal: "operator",
+    role: "admin",
+  } as const;
+  const ios = {
+    model: "iPhone 16",
+    osVersion: "26.5",
+    platform: "ios",
+    requesterId: "agent-1",
+  } as const;
+  type Grant = {
+    readonly lease: { readonly id: string };
+    readonly device: { readonly id: string };
+  };
+
+  /** Lets real I/O that a mutated daemon would still be doing finish, so "nothing happened" is
+   * a statement about the daemon and not about how early the test looked. */
+  const settleRealTime = async () => new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+  async function leasedIos(options: ConstructorParameters<typeof FakeDriver>[0]) {
+    const clock = options.clock as FakeClock;
+    const driver = new FakeDriver(options);
+    const filesystem = new MemoryFilesystem();
+    const started = await start({ clock, drivers: [driver], filesystem });
+    const grant = (await started.daemon.dispatch("lease.request", ios, agent)) as Grant;
+    return { ...started, clock, driver, filesystem, grant };
+  }
+
+  it("runs the operator reset through core's nuke, which releases the lease through leasing", async () => {
+    const clock = new FakeClock(1_000);
+    const { daemon, grant } = await leasedIos({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+    });
+
+    const report = await daemon.dispatch("nuke.run", { deleteDevices: true }, admin);
+
+    expect(report).toEqual({
+      deletedDevices: [grant.device.id],
+      releasedLeaseIds: [grant.lease.id],
+    });
+  });
+
+  it("announces the capacity figures and then the queue depth once startup is done", async () => {
+    const { directory } = await start();
+
+    const events = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { readonly event: string; readonly module: string });
+    const names = events.map((event) => event.event);
+
+    expect(names.indexOf("capacity.changed")).toBeGreaterThan(-1);
+    expect(names.indexOf("queue.changed")).toBeGreaterThan(names.indexOf("capacity.changed"));
+    expect(events.find((event) => event.event === "queue.changed")?.module).toBe("wait-queue");
+  });
+
+  it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    // The previous process's registry: one request still open when it stopped.
+    const previous = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "1" },
+      statePath,
+    });
+    await previous.createLeaseRequest({
+      ownerId: "agent-1",
+      request: ios,
+      requesterId: "agent-1",
+    });
+
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      filesystem,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath,
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+
+    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+    expect(names.indexOf("lease.rejected")).toBeGreaterThan(-1);
+    expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
+  });
+
+  it("finishes leasing's startup before core's convergence re-arms a quarantined device's retry", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    let holdWrites = false;
+    let releaseWrite: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    class HoldingFilesystem extends MemoryFilesystem {
+      async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (holdWrites && arguments_[0] === statePath) await writeHeld;
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const filesystem = new HoldingFilesystem();
+    const options = (driver: FakeDriver) =>
+      ({
+        clock,
+        dataDirectory: directory,
+        drivers: [driver],
+        filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const failing = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    failing.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    // The previous process: a device left quarantined, and one request still open.
+    const first = await startDaemon(options(failing));
+    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    await first.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    await first.stop("test");
+    const previous = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "open-request" },
+      statePath,
+    });
+    await previous.createLeaseRequest({
+      ownerId: "agent-1",
+      request: ios,
+      requesterId: "agent-1",
+    });
+    // Leasing's startup settles the open request by writing the registry; hold that write.
+    holdWrites = true;
+
+    const starting = startDaemon(
+      options(new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })),
+    );
+    await settleRealTime();
+    const timersWhileLeasingStartupPending = clock.pendingTimerCount;
+    releaseWrite();
+    runningDaemons.push(await starting);
+    const timersAfterStartup = clock.pendingTimerCount;
+
+    // One timer is startup's own (nothing to do with devices). The quarantined device's retry
+    // timer is armed by core's convergence, which must not have begun.
+    expect(timersWhileLeasingStartupPending).toBe(1);
+    expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
+  });
+
+  it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
+    const clock = new FakeClock(1_000);
+    const { daemon, driver, grant } = await leasedIos({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 600_000 },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+
+    // Well past the stalled-transition threshold, but the erase holds its claim on the device.
+    clock.advance(300_000);
+    const devices = (await daemon.dispatch("list.get", { kind: "devices" }, admin)) as readonly {
+      readonly id: string;
+      readonly state: string;
+      readonly stalled?: true;
+    }[];
+    expect(devices.map(({ id, state, stalled }) => ({ id, state, stalled }))).toEqual([
+      { id: grant.device.id, state: "reclaiming", stalled: undefined },
+    ]);
+
+    let stopped = false;
+    const stopping = daemon.stop("test").then(() => {
+      stopped = true;
+    });
+    await settleRealTime();
+    expect(stopped).toBe(false);
+    clock.advance(300_000);
+    await stopping;
+    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+  });
+
+  it("cancels the expiry timer of an outstanding lease on shutdown, so nothing expires after it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const filesystem = new MemoryFilesystem();
+    const { daemon, directory } = await start({ clock, drivers: [driver], filesystem });
+    const statePath = join(directory, "state.json");
+    await daemon.dispatch("lease.request", { ...ios, ttlMs: 10_000 }, agent);
+    const leaseIds = async () =>
+      (
+        JSON.parse(await filesystem.readFile(statePath)) as {
+          readonly leases: readonly { readonly id: string }[];
+        }
+      ).leases.map((lease) => lease.id);
+    const before = await leaseIds();
+    expect(before).toHaveLength(1);
+
+    await daemon.stop("test");
+    clock.advance(10_000);
+    await settleRealTime();
+
+    expect(await leaseIds()).toEqual(before);
+  });
+
+  it("cancels the quarantine retry timer on shutdown, so no retry runs after it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    const started = await start({ clock, drivers: [driver] });
+    const grant = (await started.daemon.dispatch("lease.request", ios, agent)) as Grant;
+    await started.daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+
+    // Shutdown waits for the failed purge to settle into quarantine, which arms the retry.
+    await started.daemon.stop("test");
+    clock.advance(30_000);
+    await settleRealTime();
+
+    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+  });
+
+  it("probes a leased device again as time passes once startup is done", async () => {
+    const clock = new FakeClock(1_000);
+    const { driver } = await leasedIos({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const probesBefore = driver.calls.filter((call) => call.operation === "listManaged").length;
+
+    clock.advance(30_000);
+    await settleRealTime();
+
+    expect(driver.calls.filter((call) => call.operation === "listManaged").length).toBeGreaterThan(
+      probesBefore,
+    );
   });
 });
 

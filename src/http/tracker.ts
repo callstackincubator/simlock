@@ -155,7 +155,7 @@ export type CancelOutcome =
   | { readonly kind: "not-cancellable"; readonly leaseId?: string };
 
 /**
- * The daemon's stored lease requests, as this resource reads them: a worker's `LeaseEngine`
+ * The daemon's stored lease requests, as this resource reads them: a worker's leasing
  * request book, or a gateway's fleet coordinator's. `record` is read through the contract's
  * `leaseRequestRecordSchema` rather than trusted, because the two backends store different grant
  * types and this module names neither.
@@ -373,7 +373,7 @@ interface DownloadingProgress {
   readonly percent?: number | undefined;
 }
 
-/** Structural subset of `LeaseProgress` (`src/core/wait-queue.ts`) -- this module only ever
+/** Structural subset of `LeaseProgress` (`src/core/domain.ts`) -- this module only ever
  * receives it through a dispatched `lease.request`'s session `onProgress` override, never
  * imports the core type directly. */
 type HttpLeaseProgress =

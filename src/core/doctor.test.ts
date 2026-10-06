@@ -9,11 +9,11 @@ import { Doctor, type DoctorFinding, type DoctorReport, isStalledTransition } fr
 import { DriverCatalog } from "./driver-catalog.js";
 import type { DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
-import { LeaseEngine } from "./lease-engine.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { testComponentWiring } from "./testing.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {
@@ -380,7 +380,7 @@ describe("Doctor", () => {
     expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
   });
 
-  it("expires an overdue live lease through the lease engine when fixing", async () => {
+  it("expires an overdue live lease through leasing when fixing", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
     const registry = await Registry.load({
@@ -419,7 +419,7 @@ describe("Doctor", () => {
       ],
       processes: [],
     });
-    const leaseEngine = new LeaseEngine({
+    const leaseEngine = createTestEngine({
       ...testComponentWiring({
         clock: clock,
         drivers: [driver],

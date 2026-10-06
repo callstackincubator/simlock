@@ -34,7 +34,7 @@ import {
   retainedLeaseRequests,
   withNewLeaseRequest,
   withSettledLeaseRequest,
-} from "./lease-request-book.js";
+} from "./lease-request-store.js";
 
 const DEFAULT_REGISTRY_PATH = "~/.simlock/state.json";
 
@@ -643,7 +643,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * opens: nothing in a new process drives a wait the old one started, so an open record from
    * before the restart would otherwise stay open with nothing to settle it.
    */
-  // fallow-ignore-next-line unused-class-member -- called through StartupConverger's registry port.
+  // fallow-ignore-next-line unused-class-member -- called through LeaseStartup's registry port (LeaseStartupRegistry).
   async failOpenLeaseRequests(
     failure: LeaseRequestFailure,
   ): Promise<readonly LeaseRequestRecord[]> {
@@ -705,7 +705,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */
-  // fallow-ignore-next-line unused-class-member -- called by LeaseEngine, which holds the registry as a `Registry`; the audit does not follow it.
+  // fallow-ignore-next-line unused-class-member -- called by createCore, which holds the registry as a `Registry`; the audit does not follow it.
   onCommit(listener: () => void): void {
     this.#commitListeners.push(listener);
   }

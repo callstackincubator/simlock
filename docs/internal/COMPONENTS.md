@@ -43,42 +43,62 @@ rule 14); a single-file component's surface is what the file exports.
 | `GatewayUplink` | `src/daemon/gateway-uplink.ts` | When a worker dials its gateway: one outbound connection, redialled with backoff, handed to `DaemonServer`. | What travels over the link. |
 | `OwnerRoutedFactBus` | `src/daemon/owner-routed-facts.ts` | Re-emitting lease-scoped facts with the lease's owner attached, for pushes and HTTP notices. | Emit a business fact of its own. |
 
-## Core: the lease engine
+## Core: device management
 
-`LeaseEngine` (`src/core/lease-engine.ts`) is the composition root and facade
-for everything in this table. It wires one `SerializedDecision`, one
-`DeviceOperationClaims`, one `DriverCatalog`, the registry and the capacity
-coordinator into the components below.
+`createCore` (`src/core/create-core.ts`) is the composition root for everything in
+this table. It wires one `SerializedDecision`, one `DeviceOperationClaims`, one
+`DriverCatalog`, the registry and the capacity coordinator into the components
+below, and returns them with a `connect` step. Core never imports leasing
+(ADR 0018 §2): where it needs something from leasing it declares a port, and
+the daemon fills it by calling `connect` with what `createLeasing` built. A core
+service called before `connect` fails with an error naming the missing port.
+The ports are nuke's release-all during maintenance, the lease expiry doctor
+uses on a lapsed lease, the kick the reclaim coordinator and cleanup give
+acquisition once a device is back, and the demand and maintenance flag the warm
+pool reads from acquisition.
 
 | Component | Where | Owns | Does not |
 |---|---|---|---|
 | `Registry` | `src/core/registry.ts` | Devices, leases, lease requests and component records, written through one commit to `state.json`; the device transition function's only caller; emits the post-commit device and lease facts. | Decide a transition: callers do, inside a decision section. |
 | `SerializedDecision` | `src/core/serialized-decision.ts` | Serialising short read-decide-commit sections. | Hold driver work or other long I/O. |
 | `DeviceOperationClaims` | `src/core/device-operation-claims.ts` | Exclusive per-device operation claims: boot, eviction, cleanup, nuke, reclaim. | Any lifecycle, cleanup or leasing policy. |
-| `LeaseRequestBook` | `src/core/lease-request-book.ts` | The lease-request rules: store before queueing, answer a repeat under the same idempotency key, write a result once. Shared with the gateway over an in-memory store. | Queue or serve the request. |
-| `WaitQueue` | `src/core/wait-queue.ts` | FIFO membership, timeouts, cancellation, progress, and settlement of pending requests. | Decide whether capacity exists or perform lease work. |
-| `LeaseAcquisitionCoordinator` | `src/core/lease-acquisition-coordinator.ts` | Admission, resolving a request into a requirement and a create spec (class, OS range, default mode, image tag), driving plans to a grant, eviction by demand, maintenance fencing for nuke. Exposes the queue head's spec, the waiting requests and the demand the warm pool reads (`waitingDemand`), read only. | Choose which device: the planner does. Reclaim: the release side does. |
-| `AcquisitionPlanner` | `src/core/acquisition-planner.ts` | The read-only plan for one request: grant a fitting ready device, boot a fitting shut-down one, evict an idle running device, provision, wait, or refuse. Takes capacity reservations and claims and hands them to the caller. | Perform any side effect. |
 | `DeviceProvisioner` | `src/core/device-provisioner.ts` | Creating a device: the component-removal gate, the registry record, the driver's `provision`, readiness for the lease handoff. | Decide whether to provision. |
 | `ManagedDeviceLifecycle` | `src/core/managed-device-lifecycle.ts` | Registry-owned device operations with a claim and a revalidation each: boot for a lease, boot back to warm, shutdown, destroy, dispose, recover a leased device. Every driver verb on an existing device goes through here. | Decide when to run them. |
-| `LeaseLifecycle` | `src/core/lease-lifecycle.ts` | Grant, renew, the registry half of a release, expiry scheduling through `LeaseExpiryScheduler`. | Reclaim; wake the queue. |
-| `LeaseExpiryScheduler` | `src/core/lease-expiry-scheduler.ts` | TTL timers, delivered to the release coordinator. | Decide what expiry means. |
-| `LeaseReleaseCoordinator` | `src/core/lease-release-coordinator.ts` | Release, release-all, expiry and device-lost as lease commands: the serialized commit, the backgrounded reclaim with its claim, the drain for nuke and daemon stop, maintenance admission. | Purge or decide warmth: it hands the released device to `ReclaimCoordinator`. |
 | `ReclaimCoordinator` | `src/core/reclaim-coordinator.ts` | After a release: the driver's reclaim, committing the state it returns (`shutdown` on iOS, `ready` on Android) and waking the queue, handing a failed purge to quarantine, deleting a spent `fresh` device, recovering an interrupted reclaim at startup. | Decide whether a device stays warm, boot anything, or read capacity or the queue. The warm pool (`src/core/warm-pool/`, ADR 0017) does. |
 | `WarmPool`, `policy.ts` | `src/core/warm-pool/` | What stays warm: one pass at a time after the bus facts that change the budget and a 30 s tick; the pure policy proposes shutdowns over the budget (LRU, never a device that serves a waiting request) and boots for a waiting request or a recently released device with room; `warmPool.enabled` and its config. | Reclaim; grant; decide the running limit (`capacity/`); act on a device without revalidating it (it goes through `ManagedDeviceLifecycle`). |
 | Idle order | `src/core/idle-order.ts` | LRU order and victim selection over idle devices, used by the planner's eviction and the warm pool. | Act. |
 | `QuarantineCoordinator` | `src/core/quarantine-coordinator.ts` | The quarantine lifecycle: entry from a failed purge, a failed spent delete or a stalled transition; retry on backoff; give up by destroying. | Pick which devices are grantable: every grant path selects by exact state. |
 | `CapacityCoordinator`, strategies, `CapacityObserver` | `src/core/capacity/` | Limits and the RAM budget behind a pluggable `CapacityStrategy` (`resource`, `fixed`); provisioning, running and boot reservations; the figures status and `capacity.changed` report. | Know about queueing, device selection, the registry or drivers. |
-| `StartupConverger` | `src/core/startup-converger.ts` | The startup sequence, in order: settle open lease requests, restore TTL timers, recover interrupted reclaims, delete spent devices, re-arm quarantine. | Emit events: recovery and cleanup own their facts. Call a driver refused at discovery. |
+| `StartupConverger` | `src/core/startup-converger.ts` | The device steps of startup, in order: re-arm quarantine, recover interrupted reclaims, delete spent devices. Leasing's steps run before it. | Emit events: recovery and cleanup own their facts. Call a driver refused at discovery. |
 | `CleanupReaper`, rules, `CleanupExecutor` | `src/core/reaper.ts`, `src/core/cleanup/`, `src/core/cleanup-executor.ts` | Pure idle rules (shutdown after T1, delete after T2, sooner under disk pressure) evaluated on a tick and on `lease.released`; the executor revalidates ownership, lease and state, then acts through the lifecycle. | Touch a leased or claimed device; know why a device is idle. |
 | `NukeService`, `Nuke` | `src/core/nuke-service.ts`, `src/core/nuke.ts` | The operator reset: maintenance fencing, release-all, cancelling pending requests, registry-scoped shutdown or delete. | Address a driver device directly. |
-| `LeaseHealthMonitor` | `src/core/lease-health-monitor.ts` | Observing leased devices on a tick, rebooting a crashed one under its lease, giving the lease up as `device-lost` when recovery is exhausted. | Touch an unleased device. |
 | `Doctor` | `src/core/doctor.ts` | Findings: registry versus driver reality, provenance marks, stalled transitions, prerequisites, the slim advisory, remediation proposals. | Fix anything on its own except entering quarantine for a stalled transition. |
 | `ComponentInstaller`, `DiskSpaceGuard` | `src/core/component-installer.ts`, `src/core/driver.ts` | The only caller of a driver's `installComponent` and `removeComponent` (ADR 0010): one queue per platform, the download policy, the timeout budget, the disk-space preflight shared across platforms, the removal gate device creation checks. | Decide a lease needs a download: the acquisition coordinator asks. |
 | `DriverCatalog` | `src/core/driver-catalog.ts` | Platform-to-driver lookup, model preferences per class, catalog reads, passthrough resolution. | Platform behaviour. |
 | `HostFactsReader` | `src/core/host-facts.ts` | The host facts status reports: OS from the port, tool versions from each driver, served from memory and re-read in the background. | Name a tool. |
 | Catalog match | `src/core/catalog-match.ts` | Whether a catalog can serve a request: model or class, runtime, image tag. Shared with the gateway. | Pick a device. |
 | Device roots, instance identity, config, domain | `src/core/device-root.ts`, `src/core/instance-identity.ts`, `src/core/config.ts`, `src/core/domain.ts` | Owned-root validation (ADR 0001); the daemon's instance id; config loading, defaults, validation and redaction; the device state machine, specs, requirements, `fits`, `sameSpec`, `mayBeGranted`. | Anything platform-specific. |
+
+## Leasing
+
+`src/leasing/` holds every lease rule and is entered only through
+`src/leasing/index.ts` (ADR 0018). `createLeasing({ core, ... })` builds it on top
+of `createCore`'s services. A gateway imports from its index the request book,
+the in-memory store, the wait queue, their errors and their types, and nothing
+else. Leasing's `testing.ts` holds the wiring other modules' tests build both
+modules with.
+
+| Component | Where | Owns | Does not |
+|---|---|---|---|
+| `createLeasing`, `LeaseStartup` | `src/leasing/create-leasing.ts`, `src/leasing/lease-startup.ts` | The composition root for leasing, built on `createCore`'s services: it wires the health monitor or leaves it out, and builds the ports core needs as `corePorts`, which the daemon hands to `core.connect`. The lease half of startup, run before core's: settle every request the previous process left open as failed, then restore every lease's TTL timer. | Run a device operation: it calls core's services. |
+| `LeaseRequestBook` | `src/leasing/lease-request-book.ts` | The lease-request rules: store before queueing, answer a repeat under the same idempotency key, write a result once. Shared with the gateway over an in-memory store. | Queue or serve the request. |
+| `WaitQueue` | `src/leasing/wait-queue.ts` | FIFO membership, timeouts, cancellation, progress, and settlement of pending requests. | Decide whether capacity exists or perform lease work. |
+| `LeaseAcquisitionCoordinator` | `src/leasing/lease-acquisition-coordinator.ts` | Admission, resolving a request into a requirement and a create spec (class, OS range, default mode, image tag), driving plans to a grant, eviction by demand, maintenance fencing for nuke. Exposes the queue head's spec, the waiting requests and the demand the warm pool reads (`waitingDemand`), read only. | Choose which device: the planner does. Reclaim: the release side does. |
+| `AcquisitionPlanner` | `src/leasing/acquisition-planner.ts` | The read-only plan for one request: grant a fitting ready device, boot a fitting shut-down one, evict an idle running device, provision, wait, or refuse. Takes capacity reservations and claims and hands them to the caller. | Perform any side effect. |
+| `LeaseLifecycle` | `src/leasing/lease-lifecycle.ts` | Grant, renew, the registry half of a release, expiry scheduling through `LeaseExpiryScheduler`. | Reclaim; wake the queue. |
+| `LeaseExpiryScheduler` | `src/leasing/lease-expiry-scheduler.ts` | TTL timers, delivered to the release coordinator. | Decide what expiry means. |
+| `LeaseReleaseCoordinator` | `src/leasing/lease-release-coordinator.ts` | Release, release-all, expiry and device-lost as lease commands: the serialized commit, the backgrounded reclaim with its claim, the drain for nuke and daemon stop, maintenance admission. | Purge or decide warmth: it hands the released device to `ReclaimCoordinator`. |
+| `LeaseHealthMonitor` | `src/leasing/lease-health-monitor.ts` | Observing leased devices on a tick, rebooting a crashed one under its lease, giving the lease up as `device-lost` when recovery is exhausted. | Touch an unleased device. |
 
 ## Drivers
 
@@ -99,9 +119,10 @@ coordinator into the components below.
 
 ## Gateway
 
-A gateway runs `src/gateway/` in place of the lease engine. It imports no
-driver and, from `src/core/`, only the queue, the request book, catalog
-matching and the bus (ARCHITECTURE.md, "Boundaries").
+A gateway runs `src/gateway/` in place of core and leasing. It imports no
+driver; from `src/leasing/` only the request book, the in-memory store, the wait
+queue, their errors and their types; and from `src/core/` only the shapes those are
+typed against and catalog matching (ARCHITECTURE.md, "Boundaries").
 
 | Component | Where | Owns | Does not |
 |---|---|---|---|

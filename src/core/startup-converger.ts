@@ -1,12 +1,4 @@
-import type { EventBus } from "../bus/index.js";
-import {
-  type DeviceRecord,
-  type LeaseRecord,
-  type LeaseRequestFailure,
-  type LeaseRequestRecord,
-  mayBeGranted,
-  type Platform,
-} from "./domain.js";
+import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 
 export interface StartupRegistry {
@@ -14,22 +6,6 @@ export interface StartupRegistry {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
   };
-  failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
-}
-
-/**
- * What a request still open at a restart is settled with. `INTERNAL` rather than a transport
- * code: the request is finished, and a client that retried a transport error under the same key
- * would only ever get this answer back.
- */
-const DAEMON_RESTARTED: LeaseRequestFailure = {
-  code: "INTERNAL",
-  message: "The daemon restarted before this lease request settled; send it again with a new key",
-};
-
-/** Restores every persisted lease's TTL timer before any startup device work begins. */
-export interface LeaseTimerRestorer {
-  restoreExpiryTimers(): Promise<void>;
 }
 
 /** Safely completes a reclaim operation interrupted by daemon shutdown. */
@@ -61,12 +37,10 @@ export interface StartupConvergerOptions {
   readonly claims: DeviceClaimReader;
   readonly decisions: SerializedDecision;
   readonly drivers: StartupDriverAvailability;
-  readonly eventBus: Pick<EventBus, "emit">;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
   readonly spentDeviceDeletion: SpentDeviceDeletion;
-  readonly timers: LeaseTimerRestorer;
 }
 
 /**
@@ -80,54 +54,20 @@ export interface StartupConvergerOptions {
  * promises. `simlock doctor` reports the rejection; the inventory waits for the driver to
  * come back.
  *
- * Two limits on that, both deliberate and neither silent. `#releaseOrphanedHeldLeases` runs
- * first and unguarded: a held lease cannot have a live holder across a restart, so it is
- * released whatever its platform, which moves the device to `reclaiming` and leaves the
- * background reclaim to fail into its own catch. The device is then stuck in `reclaiming`
- * until its driver returns -- worse than untouched, better than a phantom lease pinning a
- * device nobody holds. And a dark platform's devices still count toward capacity (see
- * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
- * over budget.
+ * Only the device steps live here. Settling the requests a restart left open and restoring
+ * every lease's expiry timer are leasing's, and the daemon runs them first (ADR 0018 §1).
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
   async converge(): Promise<void> {
-    // First, and before admission opens (the dispatcher parks every request until this
-    // resolves): no wait from the previous process survived it, so every request it left open
-    // is settled now rather than left open with nothing to drive it.
-    await this.#settleOpenLeaseRequests();
-    // ADR 0004: every lease's timer is restored from its own persisted deadline, and nothing
-    // is swept -- a restart does not prove a holder is dead, so no lease is released on the
-    // strength of one. A lease whose deadline already passed while no daemon was running
-    // expires here, through the ordinary expiry path `restore` drives.
-    await this.options.timers.restoreExpiryTimers();
-    // Independent of lease/reclaim recovery above: a `quarantined` device already
-    // finished its release-time reclaim, so re-arming its retry timer never races
-    // either step.
+    // A `quarantined` device already finished its release-time reclaim, so re-arming its retry
+    // timer never races the reclaim recovery below.
     this.options.quarantineRestore.restore();
     await this.#recoverInterruptedReclaims();
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.
     await this.#deleteSpentDevices();
-  }
-
-  async #settleOpenLeaseRequests(): Promise<void> {
-    const settled = await this.options.decisions.run(() =>
-      this.options.registry.failOpenLeaseRequests(DAEMON_RESTARTED),
-    );
-    for (const record of settled) {
-      this.options.eventBus.emit(
-        "lease.rejected",
-        {
-          requestId: record.id,
-          requester: record.requesterId,
-          requestSpec: record.request,
-          reason: "daemon-restarted",
-        },
-        "startup-converger",
-      );
-    }
   }
 
   async #recoverInterruptedReclaims(): Promise<void> {

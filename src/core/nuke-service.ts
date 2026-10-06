@@ -1,5 +1,5 @@
 import type { DeviceRecord, LeaseRecord } from "./domain.js";
-import type { NukeExecutor } from "./lease-ports.js";
+import type { NukeExecutor } from "./core-ports.js";
 
 /** Release maintenance boundary required by an operator reset. */
 export interface LeaseMaintenance {

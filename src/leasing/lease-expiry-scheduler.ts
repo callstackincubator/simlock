@@ -1,6 +1,5 @@
 import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
-import type { LeaseRecord } from "./domain.js";
-import { stableError } from "./stable-error.js";
+import { type LeaseRecord, stableError } from "../core/index.js";
 
 export type LeaseExpiryHandler = (
   leaseId: string,

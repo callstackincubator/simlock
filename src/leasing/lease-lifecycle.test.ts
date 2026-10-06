@@ -4,7 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem, type Filesystem } from "../ports/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
-import { Registry } from "./registry.js";
+import { Registry } from "../core/index.js";
 
 const statePath = "/home/agent/.simlock/state.json";
 

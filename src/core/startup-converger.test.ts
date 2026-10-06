@@ -29,13 +29,6 @@ function createHarness(
 ) {
   const order: string[] = [];
   const claimed = new Set<string>();
-  let leaseIdsAtTimerRestore: string[] | undefined;
-  const timers = {
-    restoreExpiryTimers: vi.fn(async () => {
-      order.push("timers");
-      leaseIdsAtTimerRestore = leases.map((lease) => lease.id);
-    }),
-  };
   const recovery = {
     recoverInterruptedReclaim: vi.fn(async (target: DeviceRecord) => {
       order.push(`recover:${target.id}`);
@@ -53,17 +46,14 @@ function createHarness(
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     decisions: new SerializedDecision(),
     drivers: { has: (platform) => !darkPlatforms.has(platform) },
-    eventBus: { emit: vi.fn() as never },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {
-      failOpenLeaseRequests: async () => [],
       get snapshot() {
         return { devices, leases };
       },
     },
     spentDeviceDeletion,
-    timers,
   });
 
   function updateState(deviceId: string, state: DeviceState): void {
@@ -76,20 +66,16 @@ function createHarness(
     claimed,
     converger,
     devices,
-    get leaseIdsAtTimerRestore() {
-      return leaseIdsAtTimerRestore;
-    },
     leases,
     order,
     quarantineRestore,
     recovery,
     spentDeviceDeletion,
-    timers,
   };
 }
 
 describe("StartupConverger", () => {
-  it("restores timers before recovering interrupted reclaims", async () => {
+  it("restores quarantine timers before recovering interrupted reclaims", async () => {
     const harness = createHarness(
       [device("reclaiming", "ios", "reclaiming", 1), device("ready", "ios", "ready", 2)],
       [],
@@ -97,8 +83,7 @@ describe("StartupConverger", () => {
 
     await harness.converger.converge();
 
-    expect(harness.order).toEqual(["timers", "quarantine-restore", "recover:reclaiming"]);
-    expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledOnce();
+    expect(harness.order).toEqual(["quarantine-restore", "recover:reclaiming"]);
     expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
   });
@@ -184,14 +169,14 @@ describe("StartupConverger", () => {
     await harness.converger.converge();
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
-    expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledTimes(2);
+    expect(harness.quarantineRestore.restore).toHaveBeenCalledTimes(2);
   });
 
-  it("restores the timer of every lease it finds, sweeping none (ADR 0004)", async () => {
-    // Pre-ADR-0004 this device's lease would have been released as orphaned before timers
-    // were restored, on the theory that a restart proves its holder is dead. It proves
-    // nothing of the sort: the lease is TTL-bound, its holder may reconnect and renew it,
-    // and if nobody does it expires on its own deadline through the restored timer.
+  it("sweeps no lease: a leased device keeps its lease across startup (ADR 0004)", async () => {
+    // Pre-ADR-0004 this device's lease would have been released as orphaned, on the theory that a
+    // restart proves its holder is dead. It proves nothing of the sort: the lease is TTL-bound,
+    // its holder may reconnect and renew it, and if nobody does it expires on its own deadline
+    // through the timer leasing restores.
     const leasedDevice = device("leased-device", "ios", "leased", 1);
     const leases = [
       {
@@ -209,7 +194,6 @@ describe("StartupConverger", () => {
 
     await harness.converger.converge();
 
-    expect(harness.leaseIdsAtTimerRestore).toEqual(["lease-1"]);
     expect(harness.leases).toHaveLength(1);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
   });
@@ -232,7 +216,6 @@ describe("StartupConverger", () => {
     await harness.converger.converge();
 
     expect(harness.order).toEqual([
-      "timers",
       "quarantine-restore",
       "recover:spent-reclaiming",
       "delete-spent:spent-reclaiming",

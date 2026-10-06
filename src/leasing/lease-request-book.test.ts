@@ -6,11 +6,13 @@ import {
   IdempotencyConflictError,
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
+} from "./lease-request-book.js";
+import {
   type LeaseRequestLimits,
   type LeaseRequestStore,
-} from "./lease-request-book.js";
-import { Registry } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
+  Registry,
+  SerializedDecision,
+} from "../core/index.js";
 import { RequestCancelledError } from "./wait-queue.js";
 
 const statePath = "/home/agent/.simlock/state.json";
@@ -64,6 +66,27 @@ describe("Registry lease requests", () => {
     expect(registry.leaseRequests()).toEqual([]);
     const next = await registry.createLeaseRequest(newRequest("second"));
     expect(await storedRequestIds(filesystem)).toEqual([next.id]);
+  });
+
+  it("writes a result onto an open record once, leaving a settled record with the result it has", async () => {
+    const { registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest(newRequest("first"));
+    await registry.settleLeaseRequest(created.id, { failure, state: "failed" });
+
+    const again = await registry.settleLeaseRequest(created.id, { state: "cancelled" });
+
+    expect(again).toBeUndefined();
+    expect(registry.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
+  });
+
+  it("settles nothing for an id no record is stored under", async () => {
+    const { registry } = await loadRegistry();
+    const created = await registry.createLeaseRequest(newRequest("first"));
+
+    const settled = await registry.settleLeaseRequest("req_missing", { state: "cancelled" });
+
+    expect(settled).toBeUndefined();
+    expect(registry.leaseRequests()).toMatchObject([{ id: created.id, state: "open" }]);
   });
 
   it("keeps an open record past the retention window", async () => {
@@ -434,6 +457,18 @@ describe("LeaseRequestBook", () => {
     await settled();
 
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
+  });
+
+  it("keeps a settled record as it is when a second result arrives for it, and settles nothing for an unknown id", async () => {
+    const store = memoryStore();
+    const created = await store.createLeaseRequest(newRequest("agent"));
+    await store.settleLeaseRequest(created.id, { failure, state: "failed" });
+
+    const again = await store.settleLeaseRequest(created.id, { state: "cancelled" });
+    const unknown = await store.settleLeaseRequest("req_missing", { state: "cancelled" });
+
+    expect([again, unknown]).toEqual([undefined, undefined]);
+    expect(store.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
   });
 
   it("stores a request under the id its owner minted before admission, and mints no other", async () => {

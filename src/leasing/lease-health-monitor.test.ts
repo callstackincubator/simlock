@@ -2,15 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
-import { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { ObservedDevice, ObservedMark, ObservedRunState } from "./driver.js";
-import { DriverCatalog } from "./driver-catalog.js";
-import { type Config, Registry } from "./index.js";
-import { FakeDriver } from "./fake-driver.js";
+import {
+  DeviceOperationClaims,
+  type ObservedDevice,
+  type ObservedMark,
+  type ObservedRunState,
+  DriverCatalog,
+  type Config,
+  Registry,
+  ManagedDeviceLifecycle,
+  SerializedDecision,
+} from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
 import type { DeviceLostReleaser } from "./lease-health-monitor.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
-import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";

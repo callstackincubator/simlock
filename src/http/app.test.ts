@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
+import { UnknownLeaseError, Registry, SerializedDecision } from "../core/index.js";
 import {
   NoCapacityError,
   RequesterAlreadyLeasedError,
-  UnknownLeaseError,
   LeaseRequestBook,
-  Registry,
-  SerializedDecision,
   RequestCancelledError,
-} from "../core/index.js";
+} from "../leasing/index.js";
 import { runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";

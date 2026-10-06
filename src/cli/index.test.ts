@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/testing.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
-import { CleanupReaper, type Config, LeaseEngine, Registry } from "../core/index.js";
+import { CleanupReaper, type Config, Registry } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import {
   CryptoTokenSecrets,
@@ -56,6 +56,7 @@ import {
   type CliEnvironment,
   type CliEnvironmentPorts,
 } from "./index.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -4884,7 +4885,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -4914,6 +4915,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
     clock,
@@ -4997,7 +4999,7 @@ async function startInMemoryDaemon(options: {
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -5037,6 +5039,7 @@ async function startInMemoryDaemon(options: {
   const daemon = new DaemonServer({
     adminSecret,
     capacity: engine,
+    deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
     clock,

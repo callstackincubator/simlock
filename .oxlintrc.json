@@ -14,6 +14,10 @@
             "message": "core is entered through its index.js"
           },
           {
+            "regex": "(?:^|/)leasing/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+            "message": "leasing is entered through its index.js"
+          },
+          {
             "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
             "message": "gateway is entered through its index.js"
           },
@@ -48,6 +52,63 @@
               {
                 "regex": "(?:^|/)capacity/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "capacity is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)leasing/",
+                "message": "core never imports leasing: where it needs something from leasing it declares a port, and the composition root connects it"
+              },
+              {
+                "regex": "(?:^|/)drivers/",
+                "message": "platform behaviour reaches this module only through the Driver interface"
+              },
+              {
+                "group": [
+                  "fs",
+                  "fs/**",
+                  "node:fs",
+                  "node:fs/**",
+                  "child_process",
+                  "child_process/**",
+                  "node:child_process",
+                  "node:child_process/**"
+                ],
+                "message": "core and leasing reach the filesystem and processes only through injected ports"
+              },
+              {
+                "regex": "(?:^|/)(?:testing|test-[^/]*)\\.js$",
+                "message": "only a *.test.ts file or a test-*.ts helper imports a testing.js or test-*.js file"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/leasing/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "core is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "gateway is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)capacity/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "capacity is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/ios is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)android/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "drivers/android is entered through its index.js"
               },
               {
                 "regex": "(?:^|/)drivers/",
@@ -87,26 +148,21 @@
                 "message": "core is entered through its index.js"
               },
               {
+                "regex": "(?:^|/)leasing/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "leasing is entered through its index.js"
+              },
+              {
                 "group": ["**/core/index.js"],
                 "allowImportNames": [
                   "DeviceClass",
                   "DeviceRequest",
                   "DeviceRequirement",
                   "DeviceSpec",
-                  "InMemoryLeaseRequestStore",
                   "LeaseProgress",
                   "LeaseRecord",
-                  "LeaseRequestBook",
                   "LeaseRequestFailure",
                   "LeaseRequestLimits",
-                  "LeaseRequestOptions",
-                  "QueuePlace",
-                  "RequestCancelledError",
-                  "RequesterAlreadyLeasedError",
                   "SerializedDecision",
-                  "WaitQueue",
-                  "WaiterState",
-                  "WaitingRequest",
                   "findCatalogModel",
                   "fits",
                   "modelClass",
@@ -114,6 +170,25 @@
                   "pairedRuntimes"
                 ],
                 "message": "the gateway may import only the names its allow-list gives"
+              },
+              {
+                "group": ["**/leasing/index.js"],
+                "allowImportNames": [
+                  "IdempotencyConflictError",
+                  "InMemoryLeaseRequestStore",
+                  "LeaseRequestBook",
+                  "LeaseRequestForbiddenError",
+                  "LeaseRequestOptions",
+                  "QueuePlace",
+                  "QueueTimeoutError",
+                  "ReplayedLeaseRequestError",
+                  "RequestCancelledError",
+                  "RequesterAlreadyLeasedError",
+                  "WaitQueue",
+                  "WaiterState",
+                  "WaitingRequest"
+                ],
+                "message": "the gateway may import only the names its allow-list gives from leasing: the request book, the in-memory store, the wait queue, their errors and their types"
               },
               {
                 "group": ["**/drivers/**", "**/http/**", "**/cli/**", "**/mcp/**"],
@@ -143,6 +218,10 @@
               {
                 "regex": "(?:^|/)core/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
                 "message": "core is entered through its index.js"
+              },
+              {
+                "regex": "(?:^|/)leasing/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
+                "message": "leasing is entered through its index.js"
               },
               {
                 "regex": "(?:^|/)ios/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",
@@ -195,6 +274,10 @@
               {
                 "regex": "(?:^|/)core/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
                 "message": "core is entered through its index.js, or testing.js from a test file"
+              },
+              {
+                "regex": "(?:^|/)leasing/(?:$|[^it]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.)))))))|t(?:$|[^e]|e(?:$|[^s]|s(?:$|[^t]|t(?:$|[^i]|i(?:$|[^n]|n(?:$|[^g]|g(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))))",
+                "message": "leasing is entered through its index.js, or testing.js from a test file"
               },
               {
                 "regex": "(?:^|/)gateway/(?:$|[^i]|i(?:$|[^n]|n(?:$|[^d]|d(?:$|[^e]|e(?:$|[^x]|x(?:$|[^\\.]|\\.(?:$|[^j]|j(?:$|[^s]|s.))))))))",

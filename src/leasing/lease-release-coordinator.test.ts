@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
-import { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import {
+  DeviceOperationClaims,
+  type DeviceRecord,
+  type LeaseRecord,
+  Registry,
+  UnknownLeaseError,
+  type ReleasedLease,
+  SerializedDecision,
+} from "../core/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
-import { Registry, UnknownLeaseError, type ReleasedLease } from "./registry.js";
-import { SerializedDecision } from "./serialized-decision.js";
 
 const statePath = "/home/agent/.simlock/state.json";
 
@@ -390,10 +395,9 @@ describe("LeaseReleaseCoordinator", () => {
       await harness.coordinator.release(granted.lease.id, "explicit");
       await harness.coordinator.settleBackgroundReclaims();
 
-      // ReclaimCoordinator fires its own availability kick while this claim is still
-      // held, and AcquisitionPlanner skips claimed devices -- so without a notice on
-      // this side of the claim release, a waiter queued for exactly this device sleeps
-      // through the only signal it was going to get.
+      // ReclaimCoordinator already wakes the queue itself, so this notice is a safety
+      // net: it runs after the claim is gone, so matching sees the device even if an
+      // earlier wake-up raced the release.
       expect(claimedAtNotice).toContain(false);
     });
 

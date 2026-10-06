@@ -24,23 +24,25 @@ import {
   ComponentInstallerClosedError,
   ComponentInstallTimeoutError,
   ComponentNotOwnedError,
-  IdempotencyConflictError,
   InsufficientDiskSpaceError,
-  LeaseRequestForbiddenError,
   LicenseNotAcceptedError,
-  NoCapacityError,
   NoDriverError,
   PassthroughRefusedError,
-  QueueTimeoutError,
-  RequesterAlreadyLeasedError,
   RuntimeMissingError,
   UnknownLeaseError,
   UnknownModelError,
   UnknownPassthroughToolError,
   UnsupportedRequestOptionError,
-  ReplayedLeaseRequestError,
   type LeaseRequestFailure,
 } from "../core/index.js";
+import {
+  IdempotencyConflictError,
+  LeaseRequestForbiddenError,
+  NoCapacityError,
+  QueueTimeoutError,
+  RequesterAlreadyLeasedError,
+  ReplayedLeaseRequestError,
+} from "../leasing/index.js";
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";

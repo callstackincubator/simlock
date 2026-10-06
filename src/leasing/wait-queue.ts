@@ -1,8 +1,5 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
-import type { LeaseGrant } from "./domain.js";
-import type { DeviceRequest } from "./driver.js";
-
-export type { LeaseGrant, LeaseTiming } from "./domain.js";
+import { type DeviceRequest, type LeaseGrant, type LeaseProgress } from "../core/index.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
@@ -28,24 +25,6 @@ export interface LeaseRequestOptions {
    * repeat finds it (`replayed` true). */
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
 }
-
-/** Request-scoped progress for the lease action currently being performed. */
-export type LeaseProgress =
-  | { readonly stage: "queued"; readonly queuePosition: number }
-  /**
-   * The request waits on a component download (ADR 0010 §3). `component` is the string the
-   * driver named, carried unread. `waiting` is true while another install on the platform runs
-   * ahead of it. `percent`, a whole number from 0 to 100, is there when the installer printed one.
-   */
-  | {
-      readonly stage: "downloading";
-      readonly component: string;
-      readonly waiting: boolean;
-      readonly percent?: number | undefined;
-    }
-  | { readonly stage: "provisioning"; readonly etaMs: number }
-  | { readonly stage: "booting"; readonly etaMs: number }
-  | { readonly stage: "reclaiming"; readonly etaMs: number };
 
 export class QueueTimeoutError extends Error {
   constructor(readonly requestId: string) {
