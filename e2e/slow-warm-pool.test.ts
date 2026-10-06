@@ -406,6 +406,30 @@ async function diagnose(env: TestEnv): Promise<void> {
   }
 }
 
+/** The second lease waited on a boot, was not served warm, and booted the device the first one released. */
+async function expectBootedFromShutdown(
+  env: TestEnv,
+  platform: Platform,
+  second: { readonly grant: Grant; readonly stderr: string },
+  released: Grant,
+): Promise<void> {
+  expect(bootingLines(second.stderr), `${platform}: the lease waited on a boot`).not.toEqual([]);
+  const granted = (await env.events()).find(
+    (entry) =>
+      entry.event === "lease.granted" &&
+      (entry.payload as { leaseId?: string }).leaseId === second.grant.lease.id,
+  );
+  expect(granted, `${platform}: a lease.granted event names the second lease`).toBeDefined();
+  expect(
+    granted?.payload,
+    `${platform}: the grant did not come from a warm device`,
+  ).not.toMatchObject({ source: "warm" });
+  expect(
+    second.grant.device.id,
+    `${platform}: the second lease boots the device the first one released`,
+  ).toBe(released.device.id);
+}
+
 async function nuke(env: TestEnv): Promise<void> {
   await env
     .cli(["nuke", "--delete-devices", "--yes"], { timeout: 5 * MINUTE })
@@ -598,27 +622,7 @@ describe(
             ),
           };
           for (const platform of ["ios", "android"] as const) {
-            expect(
-              bootingLines(second[platform].stderr),
-              `${platform}: the lease waited on a boot`,
-            ).not.toEqual([]);
-            const granted = (await env.events()).find(
-              (entry) =>
-                entry.event === "lease.granted" &&
-                (entry.payload as { leaseId?: string }).leaseId === second[platform].grant.lease.id,
-            );
-            expect(
-              granted,
-              `${platform}: a lease.granted event names the second lease`,
-            ).toBeDefined();
-            expect(
-              granted?.payload,
-              `${platform}: the grant did not come from a warm device`,
-            ).not.toMatchObject({ source: "warm" });
-            expect(
-              second[platform].grant.device.id,
-              `${platform}: the second lease boots the device the first one released`,
-            ).toBe(first[platform].grant.device.id);
+            await expectBootedFromShutdown(env, platform, second[platform], first[platform].grant);
           }
           const rows = await devices(env);
           for (const { grant } of [second.ios, second.android]) {
