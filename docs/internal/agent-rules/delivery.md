@@ -85,8 +85,8 @@ is open, done means closed as completed.
 3. **The body is the spec. Comments are discussion. Assumptions are
    proposals.** Whoever implements an issue reads its body, the documents it
    links, [always-in-scope.md](always-in-scope.md), the latest `## Handoff`
-   comment if there is one, and for a bug the triage report — never the rest
-   of the comment thread.
+   comment if there is one, and for a bug the triage report and any
+   `## Decision` comment — never the rest of the comment thread.
    A comment changes nothing until a spec session folds it into the body. The
    body is cumulative: sections are added and amended in place, never
    restated in comments, and GitHub's edit history is the record of what
@@ -99,7 +99,11 @@ is open, done means closed as completed.
    maintainer may reject, never a change to the spec: the body stays the
    spec. Delivery stops for a person only when building would contradict the
    body, a rule or an accepted ADR, or would change behaviour a user sees in
-   a way nobody decided.
+   a way nobody decided. The agent that asked folds the person's answer in
+   before work resumes, so every later agent reads it as spec: into a task
+   or feature body, as a line in the section it settles and a Tests line
+   that pins it; for a bug, whose body stays the reporter's (rule 5), as
+   one comment headed `## Decision`, read with the triage report.
 
 4. **Every spec session starts by reconciling.** Before writing anything, the
    session fetches every comment created after the body's `lastEditedAt`, on
@@ -257,15 +261,25 @@ is open, done means closed as completed.
     defect, and that no other instance of each fixed class is left. What a
     later round finds outside that is a note; a confirmed defect among those
     notes becomes a `bug:new` issue and does not block the PR. The claims
-    review runs every round.
-    Two rounds, and a third only when every spec or code finding still
-    confirmed after the second is a test that cannot fail for the reason its
-    title gives. A spec or code finding still confirmed after the last round
-    means the agent stops and hands off with the finding under Findings
-    (rule 2), leaving the PR in draft. Claims findings never stop delivery
-    and never count toward the cap: after the last round, a fix run for
-    claims findings alone is checked by the claims review alone, at most
-    twice.
+    review runs every round. A commit pushed after a round that passed (a
+    merge of the base branch, a fix the gate needed) gets the code and
+    claims reviews of that fix alone, outside the count below: a confirmed
+    finding there gets one fix run and one more such review, and one still
+    confirmed after it stops delivery.
+    A confirmed finding whose fix changes only a comment or a doc is a
+    claims finding, whichever review raised it. A test title or a printed
+    message is not: its fix gets the review that raised it.
+    Rounds run while they converge: round 2 runs after any confirmed spec or
+    code finding, and each later round only when the one before confirmed
+    fewer spec and code findings than the round before it, up to five
+    rounds. A spec or code finding still confirmed when the count stops
+    falling, or after round five, means the agent stops and hands off with
+    the finding under Findings (rule 2), leaving the PR in draft. Claims
+    findings never stop delivery and never count: when only claims findings
+    are left, their fix is checked by the claims review alone, once, and
+    what that check still confirms is fixed in one last run that edits
+    comments and docs only, with no review, listed in the PR body's
+    `## Review` section as fixed unreviewed.
     Notes are not verified and never start a round: after the last round
     they go out once, as one comment on the PR, or as a `bug:new` issue when
     one is a separate piece of work. A PR from a person gets the same
@@ -277,9 +291,9 @@ is open, done means closed as completed.
     `needs-hardware` label, a `## Review` section and no "spec needs" line,
     green CI, and no conflict. Before calling it the agent also checks what
     the script cannot read: no blocking finding is open, and every surviving
-    mutant is explained in the PR body. Anything short of
-    that parks the issue with a handoff and leaves the PR for the
-    maintainer.
+    mutant is explained in the PR body. A conflict, or red CI, gets one fix
+    run and the gate again. Anything else short of that parks the issue with
+    a handoff and leaves the PR for the maintainer.
 
 16. **The slow lane runs one at a time, through its script.** The slow
     lane is the set of tests that need real hardware on a shared machine;

@@ -10,14 +10,18 @@ command of their own: they take every command from here.
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
+| Console lane, Chromium only (1)                | `pnpm test:console --project=chromium`       |
+
+(1) Only when the diff touches `ui/`, `e2e/console/`, `src/http/` or
+`src/contract/`.
 
 ## Checks agents never run
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm fallow`,
-`pnpm mutate`, the whole e2e suite, the console lane (`pnpm test:console`),
-`tsc`, `oxlint`, `oxfmt`, `fallow`, `stryker`.
+`pnpm mutate`, the whole e2e suite, the console lane in every browser
+(`pnpm test:console`), `tsc`, `oxlint`, `oxfmt`, `fallow`, `stryker`.
 
 - **Commit hook:** format, lint, typecheck. Errors show in its output.
 - **Push hook:** Fallow, the e2e typecheck, then mutation testing on the

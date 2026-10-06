@@ -123,7 +123,7 @@ Write each body so the spec check finds nothing:
   checked against a search of the code;
 - two tasks that touch the same file, or overlap by a project check in
   `toolchain.md`, run one after the other: the later lists the earlier under
-  Depends on;
+  Depends on. That holds for an open task of another feature too;
 - a Done when line that needs the slow lane says so and names its test, as
   `toolchain.md` asks;
 - nothing `always-in-scope.md` covers.
@@ -223,8 +223,13 @@ in one message:
 
 Fix each finding in the body it names. Then run the check once more for
 every issue whose body you changed (and the feature check, if any task
-changed). There is no third run: what the second run reports is fixed or
-stopped on as below.
+changed). What the second run reports is fixed or stopped on as below; then
+start one `spec-checker` with `#<issue> closure` and the finding lines you
+fixed, for each body you changed after the second run. A finding it reports
+open is not fixed again: attended, ask the maintainer; unattended, stop.
+
+Never fix a finding by deciding something the business sections, the ADRs
+and the code leave open: attended, ask; unattended, stop.
 
 - Attended: walk the findings with the maintainer one at a time, each with
   your recommended fix, and fold in the accepted ones. A finding the

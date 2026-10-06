@@ -19,7 +19,10 @@ though the suite is green — being green is exactly the failure mode.
    timing out pins the schedule rather than the behaviour, and will keep
    passing when the behaviour is wrong but fast. This is the single most
    repeated defect in this repo's review history: assertions that hold
-   equally against the correct and the broken implementation.
+   equally against the correct and the broken implementation. An assertion
+   on an exact count of things the test does not own (pending timers, calls,
+   events) fails the day unrelated code adds one, and fails only under some
+   schedules: assert on what the title names.
 
 3. **Production code that can be deleted with a green suite is untested.**
    For a new code path, try deleting it and run the suite. If nothing goes

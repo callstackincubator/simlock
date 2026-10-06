@@ -17,10 +17,14 @@ The reviewers are the agents `spec-reviewer`, `code-reviewer` and
 
 Arguments: a PR number; for round 2 and later, also `round <n>`, the reviews
 to run (`Rerun:` of the last report), `previous <sha>` (the `Commit:` of the
-last report) and the last report's Fix lines. With a branch instead of a PR,
-find its PR with `gh pr list --head <branch>`. A PR that is not a delivery
-PR (a person's PR the maintainer asked about): post the findings as one
-comment at the end (step 7) and push nothing.
+last report) and the last report's Fix lines. `after-pass` (`after-pass 2`
+the second time) means the change since `previous` came after a round that
+passed: a merge of the base branch, or a fix the merge gate needed; that
+round runs the code and claims reviews on `fix.patch` only (for a merge, its
+conflict resolutions). With a branch instead of a PR, find its PR with
+`gh pr list --head <branch>`. A PR that is not a delivery PR (a person's PR
+the maintainer asked about): post the findings as one comment at the end
+(step 7) and push nothing.
 
 ## 1. Gather the inputs
 
@@ -236,6 +240,10 @@ line, `path:line — true` or `— finding <n>`:
 3. For each function, type, module or behaviour the diff changes: its doc
    comment, and every line in the docs that names it (search for its name
    and for the plain words that describe it).
+4. In each file the diff touches: every comment within 20 lines of a hunk,
+   and the doc comment of every declaration the diff changes.
+
+Find them all now: a false claim this round misses costs a later round.
 
 A claim is false when the code at this commit contradicts it: a name or
 path that no longer exists, a behaviour, order, owner, default or limit that
@@ -267,7 +275,8 @@ file at a time with the commands in `toolchain.md`. Then:
 
 - **Confirmed**: a Fix line, written to make sense without the PR open:
   `<review>: path:line what is wrong. Class: <class>`. `<review>` is
-  `spec`, `code` or `claims`.
+  `spec`, `code` or `claims`. A finding whose fix changes only a comment or
+  a doc is `claims`, whichever review raised it.
 - **Rejected**: `<review>: <claim> — <why it is wrong>`. The weekly delivery
   stats count rejections per review from that tag.
 - **True but not blocking** (breaks no behaviour, leaves no wrong state,
@@ -290,22 +299,29 @@ the other with that reason, and add the missing line under Spec needs.
 finding that cannot be fixed without contradicting the spec, a rule or an
 accepted ADR, or whose fix would decide behaviour a user sees that nobody
 decided. A fix the spec only leaves open is a Fix line ending in
-`(record as Assumption: <the choice>)`. A confirmed finding on an
+`(record as Assumption: <the choice>)`, but only when one choice is plainly
+the conservative one. A fix with two reasonable designs that users would
+tell apart (inline or in the background, which waiter wins) is
+Spec needs: name each option, the other code it touches, and what a user
+would see. A confirmed finding on an
 assumption is a Fix line, or Spec needs when the assumption decided
 user-visible behaviour.
 
 ## 5. Decide what runs again
 
-- A confirmed spec or code finding reruns the review that raised it next
-  round. The claims review runs every round.
-- After round 2, a third round runs only when every confirmed spec or code
-  finding is a test that cannot fail for the reason its title gives.
-- After the last round, a confirmed spec or code finding is open:
-  `Rerun: none`, and the orchestrator parks the issue.
-- Claims findings never park and never count toward the cap. When the only
-  confirmed findings after the last round are claims findings:
-  `Rerun: claims-only`. The orchestrator runs at most two claims-only
-  rounds.
+Count the confirmed spec and code findings of this round (`c`) and of the
+last one (`p`: the `spec:` and `code:` lines in `previous-fixes.md`).
+
+- `c` is 0 and claims findings are confirmed: `Rerun: claims-only`.
+- `c` is above 0, and this is round 1, or `c` is below `p` and this is not
+  round 5: the reviews that raised them run next round, with the claims
+  review.
+- Otherwise, with `c` above 0: `Rerun: none`. The findings are open and the
+  orchestrator parks the issue.
+
+An `after-pass` round keeps the previous round's number and stands outside
+the count: its confirmed findings get `Rerun: code, claims` on `after-pass`,
+and `Rerun: none` on `after-pass 2`.
 
 ## 6. Report
 

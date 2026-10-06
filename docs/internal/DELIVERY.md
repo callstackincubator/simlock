@@ -119,7 +119,9 @@ waiting.
    Done when, Out of scope, Depends on, and an approval checkbox. Once the
    tasks exist, `check-spec` reads them as posted, one checker per task and
    one for the feature as a whole, and the session fixes what they find,
-   including tasks that overlap without a Depends on. The feature
+   including tasks that overlap without a Depends on, in this feature or
+   another. After the second check, a closure check confirms each fix closed
+   its finding; one that did not goes to you. The feature
    becomes `feature:planned` and keeps only its business spec, Decisions and
    the task list.
 6. The maintainer ticks the approval box on each task, once, at planning
@@ -138,7 +140,7 @@ waiting.
 
 ## Review, verification and merge
 
-`deliver` never writes code itself. It hands each stage to a background
+`deliver` never writes code itself. It hands each stage to a new background
 agent in `.claude/agents/` that runs on the model and effort its
 frontmatter pins — `implementer` on Sonnet, `reviewer`, `bug-triager` and
 `spec-checker` on Opus — up to two issues at once, and reasons only over the
@@ -206,10 +208,13 @@ the PR body under `## Review`, one line each, tagged `spec:`, `code:` or
 `claims:`, with the reason. Round 1 reviews the whole diff; later rounds
 review only the fix, so the rounds converge instead of sampling the whole
 diff again. A defect a later round finds outside the fix becomes a `bug:new`
-issue rather than a blocker. A spec or code finding still open after the
-last round is a contested change: the agent hands off with it and leaves
-the PR in draft. Stale claims never park a PR: the claims review alone
-checks their fixes. Notes are not verified and never start a round; they
+issue rather than a blocker. Rounds go on, up to five, while each confirms
+fewer spec and code findings than the one before; a spec or code finding
+still open when they stop converging is a contested change: the agent hands
+off with it and leaves the PR in draft. A finding fixed by editing only a
+comment or a doc is a stale claim, whichever review raised it. Stale claims
+never park a PR: the claims review checks their fix once, and what it still
+finds is fixed, in comments and docs only, without another review. Notes are not verified and never start a round; they
 reach you once, as one "Review notes" comment on the PR. An ADR-only PR
 gets the spec review alone.
 

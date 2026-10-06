@@ -33,7 +33,10 @@ it, including the failure reply. Skip a diagram that would show one box. -->
 
 ### Contract and event changes
 
-<!-- Every new or changed event needs its EVENTS.md entry named here. -->
+<!-- Every contract shape the change adds or changes, or "none" after a search.
+A shape change says "protocol +1 at merge", never a version number: another
+task may take the next one first. Every new or changed event needs its
+EVENTS.md entry named here. -->
 
 ### Other code on the same state
 
