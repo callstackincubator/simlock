@@ -117,8 +117,14 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
       await core.converge();
       leasing.announceQueueDepth();
     },
-    settle: () => leasing.settle(),
-    dispose: () => leasing.dispose(),
+    async settle() {
+      await leasing.settle();
+      await core.settle();
+    },
+    dispose() {
+      core.dispose();
+      leasing.dispose();
+    },
     get queueDepth() {
       return leasing.queueDepth;
     },

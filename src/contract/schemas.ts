@@ -744,6 +744,7 @@ export const configSchema = z.object({
     deleteAfterMs: z.number(),
   }),
   warmPool: z.object({
+    enabled: z.boolean(),
     quarantine: z.object({
       maxRetries: z.number(),
       retryBackoffMs: z.number(),

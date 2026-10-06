@@ -441,7 +441,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     converge: async () => {
       await Promise.all([core.doctor.reconcile(), convergeStartup()]);
     },
-    settle: async () => leasing.settle(),
+    settle: async () => {
+      await leasing.settle();
+      await core.settle();
+    },
     // Drivers are disposed after the lease subsystem, and every one of them is tried even
     // when another throws: Android's disposal is the only thing that can stop the adb
     // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a

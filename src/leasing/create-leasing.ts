@@ -188,7 +188,12 @@ export function createLeasing(options: LeasingOptions): Leasing {
     decisions,
     lifecycle: leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
-    notifyAvailability: () => acquisition.kick(),
+    // Called once a backgrounded reclaim has given up its claim; the warm pool can act on the
+    // device from this moment (see `Core#passWarmPool`).
+    notifyAvailability: () => {
+      acquisition.kick();
+      void core.passWarmPool();
+    },
     registry,
     reclaim: core.reclaim,
   });
@@ -224,6 +229,12 @@ export function createLeasing(options: LeasingOptions): Leasing {
       },
       leaseMaintenance: { acquisition, leases: releaseCoordinator },
       notifyAvailability: () => acquisition.kick(),
+      warmPoolDemand: {
+        get maintenanceActive() {
+          return acquisition.maintenanceActive;
+        },
+        waitingDemand: () => acquisition.waitingDemand(),
+      },
     },
     requests,
     healthMonitor,

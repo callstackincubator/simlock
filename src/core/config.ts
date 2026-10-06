@@ -30,6 +30,11 @@ import {
   type Validator,
   type Warn,
 } from "./validation.js";
+import {
+  defaultWarmPoolConfig,
+  warmPoolConfigValidator,
+  type WarmPoolConfig,
+} from "./warm-pool/index.js";
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
@@ -132,7 +137,7 @@ export interface Config {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
   };
-  readonly warmPool: {
+  readonly warmPool: WarmPoolConfig & {
     readonly quarantine: {
       /** Failed retries allowed after the release-time purge that triggers quarantine. */
       readonly maxRetries: number;
@@ -655,6 +660,7 @@ function defaultConfig(
       deleteAfterMs: 60 * 60_000,
     },
     warmPool: {
+      ...defaultWarmPoolConfig,
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,
@@ -795,6 +801,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
     warmPool: objectValidator({
+      ...warmPoolConfigValidator,
       quarantine: objectValidator({
         maxRetries: positiveInteger,
         retryBackoffMs: nonNegativeNumber,

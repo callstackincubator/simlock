@@ -19,6 +19,7 @@ import type {
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { Doctor } from "./doctor.js";
+import type { WaitingDemand } from "./domain.js";
 import type { Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
@@ -28,6 +29,7 @@ import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { WarmPool } from "./warm-pool/index.js";
 
 interface CoreOptions {
   readonly clock: Clock;
@@ -77,6 +79,14 @@ export interface CorePorts {
   };
   /** Administrative lease expiry, which doctor reconciliation uses on a lease that lapsed. */
   readonly leaseExpirer: LeaseExpirer;
+  /**
+   * What the warm pool reads of acquisition: the requests with no device yet, and whether an
+   * operator reset holds acquisition closed (the pool then leaves every device alone).
+   */
+  readonly warmPoolDemand: {
+    readonly maintenanceActive: boolean;
+    waitingDemand(): readonly WaitingDemand[];
+  };
   /** Tells acquisition a device came back, so a waiting request is tried again. */
   readonly notifyAvailability: () => void;
 }
@@ -116,8 +126,20 @@ export interface Core {
   readonly registry: Registry;
   /** Supplies the ports leasing implements. Call it once, before any request is admitted. */
   connect(ports: CorePorts): void;
-  /** The device steps of startup: quarantine restore, interrupted reclaims, spent devices. */
+  /**
+   * The device steps of startup: quarantine restore, interrupted reclaims, spent devices; then it
+   * starts the capacity observer and the warm pool, so the facts convergence commits trigger no
+   * pass and the first one follows `daemon.started`, where a lowered `maxRunning` is converged.
+   */
   converge(): Promise<void>;
+  /**
+   * Runs a warm pool pass now. Leasing calls it once a backgrounded reclaim has given up its
+   * claim: `device.reclaimed` fires while that claim is still held, so the pass it triggers sees
+   * the device as busy, and this is the first moment the pool can act on it.
+   */
+  passWarmPool(): Promise<void>;
+  /** Awaits the warm pool's running pass, so a graceful shutdown hands back a settled pool. */
+  settle(): Promise<void>;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
 }
@@ -210,8 +232,35 @@ export function createCore(options: CoreOptions): Core {
     notifyAvailability,
     registry,
   });
+  const warmPool = new WarmPool({
+    acquisition: {
+      kick: notifyAvailability,
+      get maintenanceActive() {
+        return port("warmPoolDemand").maintenanceActive;
+      },
+      waitingDemand: () => port("warmPoolDemand").waitingDemand(),
+    },
+    capacity,
+    claims,
+    clock: options.clock,
+    config: options.config.warmPool,
+    decisions,
+    eventBus: options.eventBus,
+    idle: options.config.idle,
+    lifecycle: deviceLifecycle,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    registry,
+  });
   const nuke = new NukeService({
-    acquisition: leaseMaintenance.acquisition,
+    acquisition: {
+      // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
+      // already has in flight is waited for, so the reset sees a settled pool.
+      beginMaintenance: async () => {
+        await leaseMaintenance.acquisition.beginMaintenance();
+        await warmPool.settle();
+      },
+      endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
+    },
     devices: deviceLifecycle,
     leases: leaseMaintenance.leases,
     registry,
@@ -279,10 +328,18 @@ export function createCore(options: CoreOptions): Core {
     },
     async converge() {
       await startup.converge();
+      warmPool.start();
       // Every run begins with a step in the figures: what they are now.
       capacityObserver.start();
     },
+    async passWarmPool() {
+      await warmPool.pass();
+    },
+    async settle() {
+      await warmPool.settle();
+    },
     dispose() {
+      warmPool.dispose();
       quarantine.dispose();
     },
   };

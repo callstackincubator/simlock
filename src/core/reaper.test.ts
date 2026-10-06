@@ -105,6 +105,7 @@ function config(): Config {
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -162,6 +163,9 @@ async function createHarness(
       totalRamBytes: 32 * gibibyte,
     }),
   });
+  // These tests seed released and shut-down devices by hand and drive the reaper over them; the
+  // engine's warm pool would boot a device it just saw released back before the reaper looks.
+  engine.dispose();
   const executor = options.useEngineExecutor
     ? engine.cleanup
     : (() => {

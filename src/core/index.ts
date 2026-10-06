@@ -127,6 +127,7 @@ export {
   sameSpec,
   specMode,
   type LeaseTiming,
+  type WaitingDemand,
 } from "./domain.js";
 export { classCandidates } from "./catalog-match.js";
 export { ComponentBeingRemovedError } from "./component-installer.js";

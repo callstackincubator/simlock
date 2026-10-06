@@ -111,11 +111,10 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
 // 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
 // only shut the emulator down and defer the wipe to the next `makeReady`; what it does not do
-// is end the device's time in `reclaiming`. Until the warm pool module lands, `ReclaimCoordinator`
-// commits what `reclaim` returns, so the window is the driver call alone; the figure below
-// still prices the wipe boot a kept-warm reclaim will land inside it again, and is kept high
-// until then. That window, not the driver call, is
-// what both consumers of this number measure: a waiting requester's ETA, and the state age
+// is end the device's time in `reclaiming`. `ReclaimCoordinator` commits what `reclaim` returns,
+// so the window is the driver call alone; the figure below still prices the wipe boot a
+// kept-warm reclaim used to land inside it, and is kept high. That window, not the driver call,
+// is what both consumers of this number measure: a waiting requester's ETA, and the state age
 // `Doctor` compares against.
 // The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
 // look stalled, while over-quoting only delays a finding.
@@ -721,7 +720,7 @@ export class AndroidDriver implements Driver {
    * An emulator announces itself exactly once, at its own startup, to the server that
    * existed then. A clean `daemon stop` reaps that server, and with `ADB_EMU=0` the next one
    * has no scanner to rediscover anything -- so every emulator that survived the restart
-   * (which is by design: releasing a lease hands a device to the warm pool) would be
+   * (which is by design: a released device may stay running, kept by the warm pool) would be
    * invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
    * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently.
    *
