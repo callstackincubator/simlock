@@ -199,7 +199,11 @@ describe("GatewayService", () => {
     worker.pushEvent({ event: "lease.granted" });
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("running"));
 
+    // The refresh a lease event asks for reads no catalog of its own, but the starting answer
+    // dropped the last one, so this refresh reads it: the worker takes requests again at once.
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      catalog: [],
+      catalogReadAt: harness.clock.now(),
       devices: [{ id: "dev_1" }],
       leases: [{ id: "lease_1" }],
     });

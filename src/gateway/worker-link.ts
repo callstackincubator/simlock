@@ -363,7 +363,10 @@ export class WorkerLink {
       this.#refreshStarting(client, status);
       return;
     }
-    await this.#refreshRunning(client, status, includeCatalog);
+    // A starting answer dropped the view's catalog, and a refresh that does not read one would
+    // leave the worker without it (and so not taking requests) until the next periodic read.
+    const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
+    await this.#refreshRunning(client, status, includeCatalog || !catalogKnown);
   }
 
   /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
