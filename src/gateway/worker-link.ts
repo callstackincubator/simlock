@@ -250,24 +250,35 @@ export class WorkerLink {
     // refresh is in flight then queues another one, instead of falling in a gap between the
     // two calls. It costs one extra `status.get` per connect, which is the cheapest call the
     // worker has.
+    const subscription = client.subscribeEvents((push) => {
+      this.#onWorkerEvent(push.event);
+    });
     try {
-      this.#unsubscribeEvents = await this.#withTimeout(
-        client.subscribeEvents((push) => {
-          this.#onWorkerEvent(push.event);
-        }),
-        "events.subscribe",
-      );
+      this.#unsubscribeEvents = await this.#withTimeout(subscription, "events.subscribe");
     } catch (error: unknown) {
       // H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
       // said no, its answer just did not arrive within `WORKER_CALL_TIMEOUT_MS`. Logging it as
       // "refused" asserts something this code cannot know: the RPC may yet land, or may already
       // have subscribed the worker on its end with no unsubscribe handle this link ever
       // receives -- there is no way to unsubscribe that short of closing the whole link.
-      // Distinguishing the two in the log is this method's job even though neither path can (or
-      // needs to, for `refresh` below) retry the subscription itself; the tick still covers it.
+      // Distinguishing the two in the log is this method's job even though neither path retries
+      // the subscription itself; a refused one is covered by the tick, a late one by below.
       if (error instanceof WorkerCallTimeoutError) {
+        // #414: a worker still `starting` parks `events.subscribe` until its startup ends, and
+        // sends `daemon.started` before that parked call subscribes, so nothing else tells this
+        // link the worker is ready. The late answer is that signal: keep the handle it carries
+        // and read the worker in full, instead of leaving the `starting` view until a lease,
+        // device or install event or the tick. `refresh` drops itself on a closed or replaced
+        // link, so the late answer needs no guard of its own.
+        void subscription.then(
+          (unsubscribe) => {
+            this.#unsubscribeEvents = unsubscribe;
+            void this.refresh({ includeCatalog: true });
+          },
+          () => undefined,
+        );
         this.#logger.warn(
-          "Worker did not answer an event subscription in time; falling back to the tick",
+          "Worker did not answer an event subscription in time; reading it again when it answers",
           { workerId: this.workerId },
         );
       } else {

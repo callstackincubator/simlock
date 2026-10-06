@@ -268,6 +268,39 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("reads nothing more from a worker whose late subscription answer arrives after the service stopped", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    let unsubscribed = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => {
+        unsubscribed = true;
+      };
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(worker.calls).toContain("status.get"));
+    await harness.service.stop();
+    const callsBefore = [...worker.calls];
+
+    endStartup();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(worker.calls).toEqual(callsBefore);
+    expect(unsubscribed).toBe(false);
+  });
+
   it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
     const harness = fleet();
     await harness.service.start();
