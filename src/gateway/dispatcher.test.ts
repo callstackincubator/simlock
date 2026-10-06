@@ -278,6 +278,44 @@ describe("GatewayDispatcher", () => {
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
   });
 
+  it("status.get on a gateway carries a connected worker's warm pool block from its last refresh, none for an incompatible worker, and an empty block of its own", async () => {
+    const { dispatcher, workers } = harness();
+    const block = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios" as const,
+          ready: 0,
+          short: "runtime-missing" as const,
+        },
+      ],
+    };
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", { health: "running", warmPool: block });
+    workers.incompatible(
+      "wrk_2",
+      undefined,
+      { gateway: { min: 20, max: 20 }, worker: { min: 4, max: 4 } },
+      "0.2.0",
+    );
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
+    });
+    expect(status.workers?.find((worker) => worker.id === "wrk_1")?.warmPool).toEqual(block);
+    expect(status.workers?.find((worker) => worker.id === "wrk_2")).not.toHaveProperty("warmPool");
+  });
+
   it("status.get on a gateway whose health is starting returns daemon and host and no other field", async () => {
     const { dispatcher, workers } = harness({ health: "starting" });
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

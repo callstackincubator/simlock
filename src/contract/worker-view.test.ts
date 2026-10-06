@@ -53,6 +53,33 @@ describe("workerViewFields", () => {
     expect(view).toEqual({ health: "starting", host: HOST });
   });
 
+  it("copies a running worker's warm pool block into its view, and leaves it out of a starting worker's", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [],
+    };
+
+    const running = workerViewFields({
+      devices: [],
+      status: {
+        capacity: CAPACITY,
+        daemon: { health: "running", mode: "worker" },
+        devices: [],
+        host: HOST,
+        leases: [],
+        queueDepth: 0,
+        warmPool,
+      },
+    });
+    const starting = workerViewFields({
+      status: { daemon: { health: "starting", mode: "worker" }, host: HOST, warmPool },
+    });
+
+    expect(running.warmPool).toEqual(warmPool);
+    expect(starting).not.toHaveProperty("warmPool");
+  });
+
   it("copies every field a running worker reports, and makes an absent installs or waiting list empty", () => {
     const view = workerViewFields({
       devices: [],

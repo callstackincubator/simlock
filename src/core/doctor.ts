@@ -1,4 +1,5 @@
 import type { EventBus } from "../bus/index.js";
+import { parseOsConstraint } from "../contract/os-range.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
@@ -22,7 +23,8 @@ import type {
   ObservedMark,
   PrerequisiteCheck,
 } from "./driver.js";
-import type { LeaseExpirer } from "./core-ports.js";
+import type { CapacityReader, LeaseExpirer, WarmPoolReader } from "./core-ports.js";
+import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =
@@ -101,6 +103,22 @@ export type DoctorFinding =
       readonly prerequisite: string;
       readonly message: string;
       readonly remedy: string;
+    }
+  | {
+      /**
+       * A warm pool target that cannot be met as configured: its runtime or model is not there, or
+       * the targets of a platform (or all of them) add up to more than the running limit leaves
+       * once the reserve is held back. Configuration information, not drift: `--fix` never acts
+       * on it and `doctor.reconciled` does not carry it.
+       */
+      readonly kind: "warm-pool-target-unreachable";
+      /** Absent for the finding about every platform's targets together. */
+      readonly platform?: Platform;
+      /** The target as `status` prints it, or the platform's or every target's sum. */
+      readonly target: string;
+      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
+      readonly message: string;
+      readonly remedy: string;
     };
 
 /**
@@ -146,6 +164,14 @@ export interface DoctorOptions {
    */
   readonly driverRejections?: readonly DriverRejection[];
   readonly logger?: Logger;
+  /**
+   * The warm pool's last figures and the running limits its targets must fit in. Both are needed
+   * for the `warm-pool-target-unreachable` findings; without them the doctor reports none.
+   */
+  readonly warmPool?: {
+    readonly figures: WarmPoolReader["figures"];
+    readonly runningCapacity: () => CapacityReader["runningCapacity"];
+  };
   /** One per platform this host could run, whether or not its driver started. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   /**
@@ -266,6 +292,7 @@ export class Doctor {
     const remaining = [
       ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
       ...(await this.#collectPrerequisites(prerequisites)),
+      ...this.#warmPoolFindings(),
     ];
 
     const report = { findings: remaining };
@@ -523,6 +550,61 @@ export class Doctor {
       }),
     );
     return perCheck.flat();
+  }
+
+  /**
+   * The warm pool's targets that cannot be met as configured: those the last pass found a runtime
+   * or a model missing for, and the platforms (or the machine) whose targets add up to more than
+   * the running limit leaves once the reserve is held back. Read, never acted on, like
+   * `prerequisite-missing`. A target short for RAM, the device limit or a failed boot is no
+   * finding: those pass with time or with an operator's choice of machine. None with the pool off.
+   */
+  #warmPoolFindings(): DoctorFinding[] {
+    const { warmPool } = this.options;
+    const { enabled, targets } = this.options.config.warmPool;
+    if (warmPool === undefined || !enabled) return [];
+    const limits = warmPool.runningCapacity();
+    const findings = warmPool.figures().targets.flatMap(unreachableTarget);
+    const reserves = reservedRunning(this.options.config.warmPool, limits);
+    let wanted = 0;
+    for (const platform of ["ios", "android"] as const) {
+      const sum = targets
+        .filter((target) => target.platform === platform)
+        .reduce((total, target) => total + target.count, 0);
+      const reserve = reserves[platform];
+      const available = limits[platform].maxRunning - reserve;
+      wanted += sum;
+      if (sum > available) {
+        findings.push(
+          overLimit({
+            limit: limits[platform].maxRunning,
+            platform,
+            reserve,
+            room: available,
+            scope: `${platform} `,
+            sum,
+            target: `${platform} targets`,
+          }),
+        );
+      }
+    }
+    // The machine's reserve cannot hold more slots than the machine has: a figure past the limit
+    // would print a room below zero, and with no target there is nothing to report.
+    const reserved = Math.min(reserves.ios + reserves.android, limits.global.maxRunning);
+    const room = limits.global.maxRunning - reserved;
+    if (wanted > room) {
+      findings.push(
+        overLimit({
+          limit: limits.global.maxRunning,
+          reserve: reserved,
+          room,
+          scope: "",
+          sum: wanted,
+          target: "all targets",
+        }),
+      );
+    }
+    return findings;
   }
 
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
@@ -970,9 +1052,92 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
   }));
 }
 
+const PLATFORM_NAMES: Readonly<Record<Platform, string>> = { android: "Android", ios: "iOS" };
+
+/** Whether an OS constraint is a range rather than one version. */
+function isRange(osVersion: string): boolean {
+  const parsed = parseOsConstraint(osVersion);
+  return parsed.ok && parsed.constraint.kind === "range";
+}
+
+/** A warm target the last pass could find no runtime or no model for, as a finding. */
+function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
+  const { model, osVersion, platform, short } = target;
+  const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
+  const name = PLATFORM_NAMES[platform];
+  if (short === "runtime-missing") {
+    // A range names no version to install: `component install` takes one catalog version.
+    if (osVersion !== undefined && isRange(osVersion)) {
+      return [
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `no installed ${name} runtime satisfies ${osVersion}`,
+          platform,
+          reason: short,
+          remedy: `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version> for one inside ${osVersion}`,
+          target: named,
+        },
+      ];
+    }
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${name} ${osVersion ?? "runtime"} is not installed`,
+        platform,
+        reason: short,
+        remedy:
+          osVersion === undefined
+            ? `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version>`
+            : `run simlock component install ${platform} ${osVersion}`,
+        target: named,
+      },
+    ];
+  }
+  if (short === "unknown-model") {
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${model} is not a known ${name} model`,
+        platform,
+        reason: short,
+        remedy: `run simlock catalog --platform ${platform} to list the models`,
+        target: named,
+      },
+    ];
+  }
+  return [];
+}
+
+/** Targets whose counts add up to more than the running limit leaves for them. */
+function overLimit(input: {
+  readonly target: string;
+  readonly sum: number;
+  readonly limit: number;
+  readonly reserve: number;
+  readonly room: number;
+  /** `ios ` or `android `, or empty for the machine. */
+  readonly scope: string;
+  readonly platform?: Platform;
+}): DoctorFinding {
+  const { limit, platform, reserve, room, scope, sum, target } = input;
+  const held = reserve > 0 ? `, of which warmPool.reserveRunning holds ${reserve}` : "";
+  return {
+    kind: "warm-pool-target-unreachable",
+    message: `the ${scope}targets want ${sum} running devices, and the ${scope}running limit is ${limit}${held}, leaving room for ${room}`,
+    reason: "over-limit",
+    remedy: `lower the counts of the ${scope}warmPool.targets, ${reserve > 0 ? "" : "or "}raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
+    target,
+    ...(platform === undefined ? {} : { platform }),
+  };
+}
+
 /** Whether a finding belongs in `doctor.reconciled`'s `driftFindings` -- see the emit call. */
 function isDrift(finding: DoctorFinding): boolean {
-  return finding.kind !== "driver-advisory" && finding.kind !== "prerequisite-missing";
+  return (
+    finding.kind !== "driver-advisory" &&
+    finding.kind !== "prerequisite-missing" &&
+    finding.kind !== "warm-pool-target-unreachable"
+  );
 }
 
 /** One platform's check result, as findings -- see `Doctor#collectPrerequisites`. */

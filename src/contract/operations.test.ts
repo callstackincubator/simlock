@@ -388,8 +388,155 @@ describe("operation input/output round trips", () => {
         tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" }],
       },
       queueDepth: 0,
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 1 }, targets: [] },
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
+  });
+
+  describe("status.get warmPool", () => {
+    const host = { os: "macOS", osVersion: "15.5", arch: "arm64", tools: [] };
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    };
+    const capacityEntry = {
+      atRamBudget: false,
+      limit: 1,
+      maxRunning: 1,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    };
+    const running = {
+      capacity: {
+        android: capacityEntry,
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: capacityEntry,
+      },
+      daemon: { health: "running", mode: "worker" },
+      devices: [],
+      host,
+      leases: [],
+      queueDepth: 0,
+    };
+
+    it("round-trips the block field for field", () => {
+      expect(OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool).toEqual(
+        warmPool,
+      );
+    });
+
+    it("parses a starting daemon's answer without it, and a running one that carries it", () => {
+      expect(
+        OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool,
+      ).toBeDefined();
+      expect(
+        OPERATIONS["status.get"].output.parse({
+          daemon: { health: "starting", mode: "worker" },
+          host,
+        }),
+      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+    });
+
+    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+      const target = warmPool.targets[0];
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: [{ ...target, short: "tired" }] },
+        }),
+      ).toThrow();
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+        }),
+      ).toThrow();
+    });
+  });
+
+  it.each([
+    "disabled",
+    "no-driver",
+    "runtime-missing",
+    "unknown-model",
+    "unresolvable",
+    "boot-failed",
+    "device-limit",
+    "running-limit",
+    "reserve",
+    "ram-budget",
+  ])("status.get: accepts the warm pool reason %s", (short) => {
+    const target = {
+      booting: 0,
+      count: 1,
+      mode: "full",
+      model: "iPhone 17",
+      platform: "ios",
+      ready: 0,
+      short,
+    };
+    const status = {
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
+    };
+
+    expect(OPERATIONS["status.get"].output.parse(status).warmPool?.targets[0]?.short).toBe(short);
+  });
+
+  it.each(["runtime-missing", "unknown-model", "over-limit"])(
+    "doctor.run: accepts a warm-pool-target-unreachable finding with reason %s",
+    (reason) => {
+      const finding = {
+        kind: "warm-pool-target-unreachable",
+        message: "m",
+        reason,
+        remedy: "r",
+        target: "t",
+      };
+
+      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
+        finding,
+      ]);
+    },
+  );
+
+  it("doctor.run: round-trips a warm-pool-target-unreachable finding field for field", () => {
+    const finding = {
+      kind: "warm-pool-target-unreachable",
+      message: "iOS 27.0 is not installed",
+      platform: "ios",
+      reason: "runtime-missing",
+      remedy: "run simlock component install ios 27.0",
+      target: "iPhone 17 / 27.0 / full",
+    };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+      findings: [finding],
+    });
   });
 
   it("status.get: cuts installs to their first 16 and each component to 64 characters, on the status and on a worker view", () => {

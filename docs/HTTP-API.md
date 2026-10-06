@@ -136,12 +136,22 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
 Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
 managed/running capacity per platform, active leases, managed devices (each
-with its device mode, `mode`: `"slim"` or `"full"`), queue depth.
+with its device mode, `mode`: `"slim"` or `"full"`), queue depth, and the warm
+pool: `warmPool` carries `enabled`, `reserveRunning` (`ios`, `android`) and
+`targets`, each with `platform`, `model`, `osVersion` (the one the target resolved
+to, or the one it names when it did not resolve; absent when it names none and
+did not resolve),
+`mode`, `count`, `ready`, `booting` and, for a target the last pass could do
+nothing for, `short` — one of `disabled`, `no-driver`, `runtime-missing`,
+`unknown-model`, `unresolvable`, `boot-failed`, `device-limit`, `running-limit`,
+`reserve` or `ram-budget`. With the pool off every configured target is
+`short: "disabled"`. A gateway's own `warmPool` is empty and off; each worker's
+is on its entry in `workers`.
 
 While the daemon is starting (`daemon.health` is `starting`), the answer is
 `200` with the `daemon` block and `host` only: it has not yet checked what it
-holds, so `devices`, `leases`, `capacity`, `queueDepth`, `installs`, `waiting`
-and `workers` are absent, not empty. They are all there once `health` is
+holds, so `devices`, `leases`, `capacity`, `queueDepth`, `installs`, `waiting`,
+`warmPool` and `workers` are absent, not empty. They are all there once `health` is
 `running`, and also when it is `failed`.
 
 ```json
@@ -1066,7 +1076,7 @@ host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 - `GET /v1/workers` — every worker view the gateway currently holds, or the
   host's own view on a single host. A worker whose `health` is `starting` has
   not yet checked what it holds, so its view carries `health` and `host` and
-  none of `devices`, `leases`, `capacity`, `queueDepth`, `catalog`, `installs`
+  none of `devices`, `leases`, `capacity`, `warmPool`, `queueDepth`, `catalog`, `installs`
   or `waiting`: they are absent, not empty, until the worker answers `running`.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.

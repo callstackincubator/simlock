@@ -12,6 +12,7 @@ import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
 import type {
   CapacityReader,
+  WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
   PassthroughResolver,
@@ -19,7 +20,7 @@ import type {
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { Doctor } from "./doctor.js";
-import type { TargetResolution, WaitingDemand } from "./domain.js";
+import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
 import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
@@ -87,6 +88,8 @@ export interface CorePorts {
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
+    /** The mode a request naming none plans on a platform: where a target with no mode lands. */
+    defaultMode(platform: Platform): DeviceMode;
     /** A target as a request, resolved with downloads off: the spec, or why there is none. */
     resolve(request: DeviceRequest): Promise<TargetResolution>;
   };
@@ -107,6 +110,8 @@ export interface Core {
   readonly capacity: CapacityCoordinator;
   /** Read-only capacity view for status, and for the daemon's status reporting. */
   readonly capacityReader: CapacityReader;
+  /** The warm pool's figures, for status and doctor. */
+  readonly warmPoolReader: WarmPoolReader;
   /** The device catalog and the passthrough resolver, both answered by the driver catalog. */
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
@@ -267,6 +272,7 @@ export function createCore(options: CoreOptions): Core {
       },
       resolve: (request) => port("warmPoolDemand").resolve(request),
       waitingDemand: () => port("warmPoolDemand").waitingDemand(),
+      defaultMode: (platform) => port("warmPoolDemand").defaultMode(platform),
     },
     capacity,
     claims,
@@ -311,6 +317,10 @@ export function createCore(options: CoreOptions): Core {
     prerequisiteChecks: options.prerequisiteChecks ?? [],
     quarantine,
     registry,
+    warmPool: {
+      figures: () => warmPool.figures(),
+      runningCapacity: () => capacityReader.runningCapacity,
+    },
   });
   const startup = new StartupConverger({
     claims,
@@ -341,6 +351,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    warmPoolReader: warmPool,
     catalog: drivers,
     claims,
     claimReader: claims,

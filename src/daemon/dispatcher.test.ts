@@ -197,6 +197,8 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
     readonly capacity?: Config["capacity"];
+    /** Changes keys of the `warmPool` block, for a test about its targets or its switch. */
+    readonly warmPool?: Partial<Config["warmPool"]>;
     /** Stands in for the component installer: a test that needs to see whether it was reached,
      * or one that reads `status.get`'s installs from an installer of its own. */
     readonly components?: Pick<
@@ -234,7 +236,7 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = withHttp(
+  const baseConfig = withHttp(
     withGatewayLabel(
       testConfig(
         overrides.downloadsPolicy,
@@ -246,6 +248,10 @@ async function buildDispatcher(
     ),
     overrides.http,
   );
+  const config: Config = {
+    ...baseConfig,
+    warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+  };
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
@@ -295,6 +301,7 @@ async function buildDispatcher(
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
@@ -629,8 +636,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(status.leases).toHaveLength(1);
     expect(status.installs).toHaveLength(1);
     expect(status.host.tools).toHaveLength(1);
+    expect(status.warmPool).toBeDefined();
     expect(catalog.platforms[0]?.models).toEqual(["iPhone 17 Pro"]);
     expect(workers[0]).toMatchObject({
+      warmPool: status.warmPool,
       capacity: status.capacity,
       catalog: catalog.platforms,
       devices: statusDeviceSchema.array().parse(devices),
@@ -1189,6 +1198,77 @@ describe("Dispatcher: device mode on every surface", () => {
     const capacity = status.capacity as NonNullable<typeof status.capacity>;
     expect(last?.payload).toEqual(capacityChangedPayload(capacity));
     expect(status.capacity?.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+  });
+
+  it("status.get carries the warm pool's figures: the reserve, and a target the pass could not meet with its reason", async () => {
+    const { dispatcher, engine } = await buildDispatcher({
+      warmPool: {
+        reserveRunning: { android: 0, ios: 1 },
+        targets: [{ count: 1, model: "iPhone 17", osVersion: "27.0", platform: "ios" }],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    await engine.core.passWarmPool();
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    });
+  });
+
+  it("status.get on a daemon whose pool is off carries enabled false, the reserve and every configured target with ready 0, booting 0 and short disabled", async () => {
+    const { dispatcher } = await buildDispatcher({
+      warmPool: {
+        enabled: false,
+        reserveRunning: { android: 1, ios: 0 },
+        targets: [
+          { count: 2, model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+          { count: 1, mode: "slim", model: "Pixel 8", platform: "android" },
+        ],
+      },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 1, ios: 0 },
+      targets: [
+        {
+          booting: 0,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.5",
+          platform: "ios",
+          ready: 0,
+          short: "disabled",
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "slim",
+          model: "Pixel 8",
+          platform: "android",
+          ready: 0,
+          short: "disabled",
+        },
+      ],
+    });
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
@@ -3249,6 +3329,7 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
         "leases",
         "queueDepth",
         "waiting",
+        "warmPool",
       ]);
       expect(status.daemon.health).toBe(health);
       expect(status.devices).toHaveLength(1);

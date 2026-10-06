@@ -57,6 +57,25 @@ describe("aggregateStatus", () => {
     expect(status.workers).toEqual([]);
   });
 
+  it("carries an empty warm pool block of its own, and each worker's block under its worker entry as the view holds it", () => {
+    const block = { enabled: true, reserveRunning: { android: 0, ios: 1 }, targets: [] };
+    const status = aggregateStatus(
+      [
+        view({ id: "wrk_a", warmPool: block }),
+        view({ connection: "disconnected", id: "wrk_b", warmPool: block }),
+        view({ id: "wrk_c" }),
+      ],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
+    });
+    expect(status.workers?.map((worker) => worker.warmPool)).toEqual([block, block, undefined]);
+  });
+
   it("reports the gateway's own host with no tools, not any worker's", () => {
     const status = aggregateStatus(
       [view({ host: hostFixture({ os: "macOS", osVersion: "15.5" }), id: "wrk_a" })],

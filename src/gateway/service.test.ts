@@ -944,6 +944,21 @@ describe("GatewayService", () => {
     });
   });
 
+  it("puts the warm pool block a worker's status read carries on its view", async () => {
+    const warmPool = { enabled: true, reserveRunning: { android: 0, ios: 2 }, targets: [] };
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ warmPool });
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.warmPool).toEqual(warmPool),
+    );
+
+    await harness.service.stop();
+  });
+
   it("marks a worker that speaks only the previous protocol version incompatible with both ranges, and asks it nothing else", async () => {
     // Protocol 5 is the version before ADR 0008 made `modelRuntimes` required.
     const previous = { min: 5, max: 5 };

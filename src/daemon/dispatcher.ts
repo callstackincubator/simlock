@@ -22,6 +22,7 @@ import {
   transitionEnteredAt,
   UnknownLeaseError,
   type CapacityReader,
+  type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
 } from "../core/index.js";
@@ -89,6 +90,8 @@ export class NukeUnavailableError extends Error {
 
 export interface DispatcherOptions {
   readonly capacity: CapacityReader;
+  /** The warm pool as its last pass left it, for `status.get`. */
+  readonly warmPool: WarmPoolReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
@@ -352,6 +355,7 @@ export class Dispatcher {
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
       waiting: [...this.options.queue.waitingRequests()],
+      warmPool: this.options.warmPool.figures(),
     };
   };
 

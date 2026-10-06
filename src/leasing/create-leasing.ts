@@ -241,6 +241,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
         },
         resolve: (request) => acquisition.resolve(request),
         waitingDemand: () => acquisition.waitingDemand(),
+        defaultMode: (platform) => acquisition.defaultMode(platform),
       },
     },
     requests,

@@ -1,4 +1,5 @@
 import { parseOsConstraint } from "../../contract/os-range.js";
+import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/schemas.js";
 import {
   booleanValue,
   invalidValue,
@@ -44,6 +45,15 @@ export const defaultWarmPoolConfig: WarmPoolConfig = {
   targets: [],
 };
 
+/** A non-empty string no longer than the bound the status answer carries. */
+function boundedName(value: unknown, path: string): string {
+  const text = nonEmptyString(value, path);
+  if (text.length > WARM_POOL_NAME_MAX) {
+    throw invalidValue(path, `a string of at most ${WARM_POOL_NAME_MAX} characters`);
+  }
+  return text;
+}
+
 const targetPlatform = stringUnion(["ios", "android"] as const);
 const targetMode = stringUnion(["slim", "full"] as const);
 
@@ -51,9 +61,9 @@ const targetMode = stringUnion(["slim", "full"] as const);
 const TARGET_VALIDATORS: Readonly<Record<keyof WarmTarget, Validator>> = {
   count: positiveInteger,
   mode: targetMode,
-  model: nonEmptyString,
+  model: boundedName,
   osVersion: (value, path) => {
-    const text = nonEmptyString(value, path);
+    const text = boundedName(value, path);
     if (!parseOsConstraint(text).ok) throw invalidValue(path, "an OS version or an OS range");
     return text;
   },
@@ -85,6 +95,9 @@ const targetValidator: Validator = (value, path, warn) => {
 
 const targetsValidator: Validator = (value, path, warn) => {
   if (!Array.isArray(value)) throw invalidValue(path, "an array of targets");
+  if (value.length > WARM_POOL_TARGETS_MAX) {
+    throw invalidValue(path, `an array of at most ${WARM_POOL_TARGETS_MAX} targets`);
+  }
   return value.map((target: unknown, index) => targetValidator(target, `${path}[${index}]`, warn));
 };
 

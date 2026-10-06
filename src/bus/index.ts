@@ -230,6 +230,22 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
+  /**
+   * A warm pool target that was met, or not yet checked, ends a pass short for a reason: the pass
+   * could do nothing for it. Emitted once per kind of device on that edge (targets that resolve to one spec emit one event
+   * between them), not on each short pass after.
+   */
+  "warm-pool.target-missed": {
+    readonly platform: string;
+    readonly model: string;
+    /** Absent for a target that names none and did not resolve. */
+    readonly osVersion?: string;
+    readonly mode: "slim" | "full";
+    readonly count: number;
+    readonly ready: number;
+    /** Why it is short: the first of the reasons that apply (`docs/EVENTS.md`). */
+    readonly reason: string;
+  };
   // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------
   //
   // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own

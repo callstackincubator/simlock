@@ -858,7 +858,15 @@ describe("warm pool policy", () => {
 
       expect(result.proposals).toEqual([]);
       expect(result.targets).toEqual([
-        { count: 1, ready: 0, short: "running-limit", spec: kind, target: "ios iPhone 17 26.0" },
+        {
+          booting: 0,
+          count: 1,
+          kind: { mode: "full", model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+          ready: 0,
+          short: "running-limit",
+          spec: kind,
+          target: "ios iPhone 17 26.0",
+        },
       ]);
     });
 
@@ -896,8 +904,45 @@ describe("warm pool policy", () => {
       const result = plan(view([ready], { targets: [target(1)] }));
 
       expect(result.targets).toStrictEqual([
-        { count: 1, ready: 1, spec: kind, target: "ios iPhone 17 26.0" },
+        {
+          booting: 0,
+          count: 1,
+          kind: { mode: "full", model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+          ready: 1,
+          spec: kind,
+          target: "ios iPhone 17 26.0",
+        },
       ]);
+    });
+
+    it("reports a target of two with one ready and one boot running as booting 1, and not short", () => {
+      const ready = ofKind("ready", "ready");
+
+      const result = plan(view([ready], { inFlight: [kind], targets: [target(2)] }));
+
+      expect(result.targets[0]).toMatchObject({ booting: 1, count: 2, ready: 1 });
+      expect(result.targets[0]).not.toHaveProperty("short");
+    });
+
+    it("counts a creation it proposes in this pass as booting, and leaves another kind's out", () => {
+      const result = plan(view([], { targets: [target(1), target(1, { model: "iPad Pro" })] }));
+
+      expect(result.proposals).toHaveLength(1);
+      expect(result.targets.map((report) => report.booting)).toEqual([1, 0]);
+    });
+
+    it("reports a target held by the boot cap, or behind a queued request, with no reason", () => {
+      const capped = plan(view([], { inFlight: [spec("iPad Pro")], targets: [target(1)] }));
+      expect(capped.targets[0]).toMatchObject({ booting: 0, count: 1, ready: 0 });
+      expect(capped.targets[0]).not.toHaveProperty("short");
+
+      const queued = plan(
+        view([], {
+          targets: [target(1)],
+          waiting: [classDemand()],
+        }),
+      );
+      expect(queued.targets[0]).not.toHaveProperty("short");
     });
 
     it("never shuts a device down to make room for a target", () => {
@@ -996,7 +1041,14 @@ describe("warm pool policy", () => {
       const result = plan(view([ready], { blocked: [kind], targets: [target(1)] }));
 
       expect(result.targets).toStrictEqual([
-        { count: 1, ready: 1, spec: kind, target: "ios iPhone 17 26.0" },
+        {
+          booting: 0,
+          count: 1,
+          kind: { mode: "full", model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+          ready: 1,
+          spec: kind,
+          target: "ios iPhone 17 26.0",
+        },
       ]);
     });
 
@@ -1020,7 +1072,9 @@ describe("warm pool policy", () => {
         { action: "provision", reason: "target", spec: kind, target: kind },
       ]);
       expect(result.targets[0]).toStrictEqual({
+        booting: 1,
         count: 2,
+        kind: { mode: "full", model: "iPhone 17", osVersion: "26.0", platform: "ios" },
         ready: 0,
         spec: kind,
         target: "ios iPhone 17 26.0",

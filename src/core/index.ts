@@ -106,6 +106,7 @@ export {
   type CatalogReader,
   type LeaseExpirer,
   type PassthroughResolver,
+  type WarmPoolReader,
 } from "./core-ports.js";
 export { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
 export { type DeviceRequirement, fits, type LeaseGrant } from "./domain.js";

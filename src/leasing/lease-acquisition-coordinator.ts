@@ -197,11 +197,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * mode (the spec's mode, full when it names none) is the platform's default mode (ADR 0009 §6).
    */
   servesDefaultMode(spec: DeviceSpec): boolean {
-    return specMode(spec) === this.#defaultMode(spec.platform);
+    return specMode(spec) === this.defaultMode(spec.platform);
   }
 
   /** The one place a platform's default mode is read (ADR 0007 §2): full when none is set. */
-  #defaultMode(platform: Platform): DeviceMode {
+  defaultMode(platform: Platform): DeviceMode {
     return this.options.defaultModes[platform] ?? "full";
   }
 
@@ -372,7 +372,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
-    const mode = request.mode ?? this.#defaultMode(request.platform);
+    const mode = request.mode ?? this.defaultMode(request.platform);
     const range = requestedRange(request);
     const target =
       range === undefined

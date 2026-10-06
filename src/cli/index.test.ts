@@ -2923,6 +2923,204 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
+  describe("the warm pool block", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios" as const,
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios" as const,
+          ready: 0,
+          short: "runtime-missing" as const,
+        },
+      ],
+    };
+    const statusWith = (block: StatusGetOutput["warmPool"]) =>
+      fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
+
+    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 1 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+      );
+    });
+
+    it("simlock status leaves the runtime out of a target that names none", async () => {
+      const output = outputCapture();
+      const unversioned = {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [
+          {
+            booting: 0,
+            count: 1,
+            mode: "slim" as const,
+            model: "iPhone 17",
+            platform: "ios" as const,
+            ready: 0,
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(unversioned) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+      );
+    });
+
+    it("simlock status prints a pool that is off as disabled, with every target short disabled", async () => {
+      const output = outputCapture();
+      const off = {
+        enabled: false,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: warmPool.targets.slice(0, 1).map((target) => ({
+          ...target,
+          booting: 0,
+          ready: 0,
+          short: "disabled" as const,
+        })),
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(off) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: disabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for an answer without the block", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(undefined) }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for a gateway, whose own block is empty", async () => {
+      const output = outputCapture();
+      const empty = { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  daemon: { health: "running" as const, mode: "gateway" as const },
+                  warmPool: empty,
+                }),
+            }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (gateway)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it("simlock status --json carries the block as the daemon sent it", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
+    });
+
+    it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
+      const output = outputCapture();
+      const findings = [
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "iOS 27.0 is not installed",
+          platform: "ios" as const,
+          reason: "runtime-missing" as const,
+          remedy: "run simlock component install ios 27.0",
+          target: "iPhone 17 / 27.0 / full",
+        },
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "the targets want 4 running devices, and the running limit leaves room for 3",
+          reason: "over-limit" as const,
+          remedy: "lower the counts of the warmPool.targets, or raise the running limit",
+          target: "all targets",
+        },
+        { deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" },
+      ];
+
+      await expect(
+        runCli(
+          ["doctor"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(
+        output.stderr
+          .split("\n")
+          .filter((line) => line.includes("warm-pool-target-unreachable") || line.includes("d-1")),
+      ).toEqual([
+        "warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0",
+        "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
+      ]);
+      expect(output.stderr).not.toContain("undefined");
+      expect(JSON.parse(output.stdout)).toEqual({ findings });
+    });
+  });
+
   describe("against a starting daemon", () => {
     // A starting daemon answers `status.get` with `daemon` and `host` only.
     const STARTING: StatusGetOutput = {
@@ -4998,6 +5196,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
@@ -5122,6 +5321,7 @@ async function startInMemoryDaemon(options: {
   const daemon = new DaemonServer({
     adminSecret,
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
