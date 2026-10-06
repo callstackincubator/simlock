@@ -1760,27 +1760,39 @@ describe("warm pool targets", () => {
       expect(await modes({ pass: true })).toEqual(["slim"]);
     });
 
-    it("counts the boot still running for the spec a target keeps while its resolution is refused unresolvable", async () => {
+    it("counts only the boots of the spec a target keeps while its resolution is refused unresolvable, and none for one that never resolved", async () => {
       const creation = held();
-      let refuse = false;
+      let refuse17 = false;
       const rig = harness([], {
         limit: 5,
+        maxConcurrentBoots: 2,
         provision: () => creation.gate,
-        resolve: (request) =>
-          refuse
-            ? { message: "why", refusal: "unresolvable" }
-            : {
-                spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
-              },
-        targets: [iphone17],
+        resolve: (request) => {
+          if (request.model === "iPhone 15") return { message: "why", refusal: "no-driver" };
+          if (request.model === "iPhone 17" && refuse17) {
+            return { message: "why", refusal: "unresolvable" };
+          }
+          return {
+            spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
+          };
+        },
+        targets: [
+          iphone17,
+          { ...iphone17, model: "iPhone 16" },
+          { ...iphone17, model: "iPhone 15" },
+        ],
       });
+      const figures = () =>
+        Object.fromEntries(rig.pool.figures().targets.map((target) => [target.model, target]));
       await rig.pool.pass();
-      expect(rig.pool.figures().targets[0]?.booting).toBe(1);
+      expect(figures()["iPhone 17"]?.booting).toBe(1);
 
-      refuse = true;
+      refuse17 = true;
       await rig.pool.pass();
 
-      expect(rig.pool.figures().targets[0]).toMatchObject({ booting: 1, short: "unresolvable" });
+      expect(figures()["iPhone 17"]).toMatchObject({ booting: 1, short: "unresolvable" });
+      expect(figures()["iPhone 16"]).toMatchObject({ booting: 1 });
+      expect(figures()["iPhone 15"]).toMatchObject({ booting: 0, short: "no-driver" });
       creation.finish();
       await rig.pool.settle();
     });
@@ -1983,6 +1995,23 @@ describe("warm pool targets", () => {
       expect(payloads.map((payload) => (payload as { model: string }).model)).toEqual([
         "iPhone 17",
         "iPhone 16",
+      ]);
+    });
+
+    it("keeps each configured target's edge apart: one met and one short, then the met one missed, fires for it too", async () => {
+      const rig = harness([ofKind("ready", "ready")], {
+        limit: 0,
+        targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+      rig.lease("ready");
+      await rig.pool.pass();
+
+      expect(payloads.map((payload) => (payload as { model: string }).model)).toEqual([
+        "iPhone 16",
+        "iPhone 17",
       ]);
     });
 

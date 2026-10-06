@@ -424,9 +424,9 @@ export class WarmPool {
   #coveredBy(report: TargetReport): readonly number[] {
     const own = this.#covers.get(report);
     if (own !== undefined) return own;
-    const { spec } = report;
-    if (spec === undefined) return [];
-    return this.#owners.filter((owner) => sameSpec(owner.spec, spec)).map((owner) => owner.index);
+    return this.#owners
+      .filter((owner) => report.spec !== undefined && sameSpec(owner.spec, report.spec))
+      .map((owner) => owner.index);
   }
 
   /** A configured target's kind as a report names it: the mode it names, else the platform's. */
