@@ -297,6 +297,26 @@ function bootingLines(stderr: string): string[] {
   });
 }
 
+async function expectGrantedWarm(
+  env: TestEnv,
+  granted: readonly Grant[],
+  readyEvents: readonly { timestamp: number }[],
+): Promise<void> {
+  const grantedEvents = (await env.events()).filter((entry) => entry.event === "lease.granted");
+  for (const grant of granted) {
+    const entry = grantedEvents.find(
+      (candidate) => (candidate.payload as { leaseId?: string }).leaseId === grant.lease.id,
+    );
+    expect(
+      entry?.payload,
+      `${grant.device.spec.platform}: lease.granted names the warm pool as its source`,
+    ).toMatchObject({ source: "warm" });
+    expect(entry?.timestamp ?? 0).toBeGreaterThan(
+      Math.max(...readyEvents.map((ready) => ready.timestamp)),
+    );
+  }
+}
+
 async function nuke(env: TestEnv): Promise<void> {
   await env
     .cli(["nuke", "--delete-devices", "--yes"], { timeout: 5 * MINUTE })
@@ -375,21 +395,7 @@ describe(
             granted.push(grant);
           }
 
-          const grantedEvents = (await env.events()).filter(
-            (entry) => entry.event === "lease.granted",
-          );
-          for (const grant of granted) {
-            const entry = grantedEvents.find(
-              (candidate) => (candidate.payload as { leaseId?: string }).leaseId === grant.lease.id,
-            );
-            expect(
-              entry?.payload,
-              `${grant.device.spec.platform}: lease.granted names the warm pool as its source`,
-            ).toMatchObject({ source: "warm" });
-            expect(entry?.timestamp ?? 0).toBeGreaterThan(
-              Math.max(...readyEvents.map((ready) => ready.timestamp)),
-            );
-          }
+          await expectGrantedWarm(env, granted, readyEvents);
 
           for (const grant of granted) await release(env, grant);
           // iOS is shut down, erased and booted again by the pool; Android restores its snapshot.
