@@ -171,6 +171,15 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
     ...(body.class === undefined ? {} : { class: body.class }),
     platform: body.platform,
     ...leaseRequestOptionFields(body),
+    ...leaseRequestNameFields(body),
+  };
+}
+
+/** The body's fields that name who owns the lease and what its ID is, not how to wait. */
+function leaseRequestNameFields(body: z.infer<typeof leaseRequestBodySchema>) {
+  return {
+    ...(body.owner === undefined ? {} : { owner: body.owner }),
+    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
   };
 }
 
@@ -183,8 +192,6 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
-    ...(body.owner === undefined ? {} : { owner: body.owner }),
-    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
   };
 }
 

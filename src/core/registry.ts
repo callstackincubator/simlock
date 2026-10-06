@@ -1254,8 +1254,8 @@ function hasLeaseRequestFields(value: unknown): value is Record<string, unknown>
     typeof value.id === "string" &&
     typeof value.requesterId === "string" &&
     typeof value.ownerId === "string" &&
-    (value.idempotencyKey === undefined || typeof value.idempotencyKey === "string") &&
-    (value.leaseId === undefined || typeof value.leaseId === "string") &&
+    isOptionalString(value.idempotencyKey) &&
+    isOptionalString(value.leaseId) &&
     isDeviceRequest(value.request) &&
     typeof value.createdAt === "number" &&
     isLeaseRequestState(value.state)
