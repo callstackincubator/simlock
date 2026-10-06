@@ -114,7 +114,10 @@ or at once, and which one wins. "None" only after the search. -->
 
 ### Tests
 
-<!-- Each line is a test title: a claim the body must prove. Every behaviour
-the body states, including what stays "as today", has a line here. -->
+<!-- First, one line: the seam the tests drive (the highest existing entry
+point that can see the behaviour; one if possible) and an existing test
+file to model them on. Then one line per test title: a claim the body must
+prove. Every behaviour the body states, including what stays "as today",
+has a line here. -->
 
 - ...

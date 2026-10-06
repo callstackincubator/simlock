@@ -112,6 +112,10 @@ Write each body so the spec check finds nothing:
 - no Done when line its own Tests or Scope make false, none a reviewer
   could not check, no failure mode left unanswered;
 - a Tests line for every behaviour the body states, "as today" included;
+- a seam for the tests: the entry point they drive. Prefer an existing seam
+  to a new one, the highest one that can see the behaviour, and as few as
+  possible, ideally one. Name an existing test file to model them on.
+  Attended, confirm the seams with the maintainer in one question;
 - under "Other code on the same state", every existing component that acts
   on the state the task changes, found by searching, and which one wins
   when both act;

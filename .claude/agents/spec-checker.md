@@ -81,7 +81,10 @@ what goes wrong because of it.
 3. **untested.** A sentence in Scope, In short, the Technical spec or Done
    when that states behaviour, with no Tests line that would fail if the
    behaviour broke. "Unchanged", "as today" and "in today's order" are
-   behaviour: name the test that pins them, or the finding.
+   behaviour: name the test that pins them, or the finding. So is a Tests
+   line whose seam cannot see the claim: an order across two modules tested
+   inside one of them, a user-visible result tested on an internal
+   callback.
 4. **failure-mode.** A way the change can fail that no line answers and no
    rule decides: a remote process that does not answer, a restart midway,
    input out of bounds, an empty list, two callers at once, a wait with no
