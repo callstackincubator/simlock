@@ -180,12 +180,22 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
  * not an idle warm device, so `room` itself does not carry it.
  */
 function reservedOf(view: WarmPolicyView): Slots {
-  const reserve = (platform: "ios" | "android"): number =>
-    Math.min(view.config.reserveRunning[platform], view.capacity[platform].maxRunning);
+  const reserve = reservedRunning(view.config, view.capacity);
+  return { android: reserve.android, global: reserve.ios + reserve.android, ios: reserve.ios };
+}
+
+/**
+ * The running slots the operator's reserve holds back on each platform: `reserveRunning`, never
+ * more than that platform's own running limit. The one place the cap is decided; `doctor` reads it
+ * too, to tell whether the targets fit what the reserve leaves.
+ */
+export function reservedRunning(
+  config: { readonly reserveRunning: { readonly ios: number; readonly android: number } },
+  capacity: Pick<RunningCapacity, "ios" | "android">,
+): { readonly ios: number; readonly android: number } {
   return {
-    android: reserve("android"),
-    global: reserve("ios") + reserve("android"),
-    ios: reserve("ios"),
+    android: Math.min(config.reserveRunning.android, capacity.android.maxRunning),
+    ios: Math.min(config.reserveRunning.ios, capacity.ios.maxRunning),
   };
 }
 

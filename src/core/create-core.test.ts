@@ -223,6 +223,27 @@ describe("createCore", () => {
     ]);
   });
 
+  it("the warm pool takes the mode a target with none of its own has from the connected port", async () => {
+    const { core } = await build({
+      warmTargets: [{ count: 1, model: "iPhone 17", platform: "ios" }],
+    });
+    core.connect({
+      ...ports(),
+      warmPoolDemand: {
+        maintenanceActive: false,
+        resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
+        waitingDemand: () => [],
+        defaultMode: (platform) => (platform === "ios" ? "slim" : "full"),
+      },
+    });
+
+    await core.passWarmPool();
+
+    expect(core.warmPoolReader.figures().targets).toMatchObject([
+      { mode: "slim", model: "iPhone 17" },
+    ]);
+  });
+
   it("doctor reports warm targets that add up to more than core's own running limit", async () => {
     const { core } = await build({
       warmTargets: [{ count: 1_000, model: "iPhone 17", platform: "ios" }],

@@ -112,3 +112,21 @@ export function stateEnteredAt(device: WorkerDevice, worker: WorkerView): number
   if (device.transitionAgeMs === undefined || worker.connection !== "connected") return undefined;
   return worker.lastSeenAt - device.transitionAgeMs;
 }
+
+export type WarmTarget = NonNullable<WorkerView["warmPool"]>["targets"][number];
+export type WarmPoolRow = WarmTarget & { readonly key: string };
+
+/**
+ * A row's identity: its kind, and which of the rows of that same kind it is. The worker sends no
+ * id, and two refused entries of one kind (or the same entry twice, with the pool off) look alike,
+ * so the kind alone would hand them one id and the table would drop or repeat them on a refresh.
+ */
+export function warmPoolRows(targets: readonly WarmTarget[]): WarmPoolRow[] {
+  const seen = new Map<string, number>();
+  return targets.map((target) => {
+    const kind = `${target.platform}-${target.model}-${target.osVersion}-${target.mode}`;
+    const occurrence = seen.get(kind) ?? 0;
+    seen.set(kind, occurrence + 1);
+    return { ...target, key: `${kind}#${occurrence}` };
+  });
+}

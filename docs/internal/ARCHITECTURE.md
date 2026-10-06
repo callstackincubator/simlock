@@ -1180,7 +1180,7 @@ The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
 `no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
 `device-limit`, `ram-budget`) in its log and through `WarmPool#targets`. `WarmPool#figures`
 turns those reports into the one block `status.get` serves (`WarmPoolReader`, beside
-`CapacityReader`): the switch, the reserve, and per target the kind, count, ready,
+`CapacityReader`): the switch, the reserve, and per kind of device (targets that resolve to one spec are one) the kind, count, ready,
 booting and the first reason that applies (`disabled` first, with the pool off and
 every configured target listed). The reason is recorded where the target is seen: in
 `policy.ts` for one that resolved (the capacity reasons and `boot-failed`), in
@@ -1189,8 +1189,10 @@ every configured target listed). The reason is recorded where the target is seen
 a target the pass could do nothing for has one, and a target filling, held by `maxConcurrentBoots`
 or waiting behind a queued request has none. The doctor reads the same figures for
 `warm-pool-target-unreachable`, and the converger emits `warm-pool.target-missed`
-once the pass's actions have run, for each configured target that is short now and
-has not missed since it was last met (its ready devices reaching its count). A gateway keeps each worker's block on its worker view, from
+once the pass's actions have run, for each report that is short now and whose
+configured targets have not missed since they were last met (their ready devices
+reaching their count). Targets that resolve to one spec are one report and emit one
+event between them; each target the resolver refuses is its own report. A gateway keeps each worker's block on its worker view, from
 the same `status.get` read, and has an empty one of its own.
 A device that never served a lease has no `lastLeaseEndedAt`, which the
 reaper's idle-shutdown rule times from (idle-destroy times it from `shutdownAt`), so the policy itself shuts down a ready,

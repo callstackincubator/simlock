@@ -129,7 +129,7 @@ describe("the warm pool section of a worker's page", () => {
     ],
   };
 
-  it("lists each target with its wanted, ready and booting numbers and the reason it is short", () => {
+  it("lists each kind the pool keeps with its wanted, ready and booting numbers and the reason it is short", () => {
     const shown = detail({ ...RUNNING, warmPool: WARM_POOL });
 
     expect(shown).toContain("Warm pool");
@@ -175,6 +175,14 @@ describe("the warm pool section of a worker's page", () => {
     expect(shown).toContain("iPhone 17 — full 1 0 0 runtime-missing");
     expect(shown).toContain("Pool On");
     expect(empty).toContain("No targets.");
+  });
+
+  it("shows two refused targets of one kind as two rows", () => {
+    const refused = WARM_POOL.targets[1]!;
+
+    const shown = detail({ ...RUNNING, warmPool: { ...WARM_POOL, targets: [refused, refused] } });
+
+    expect(shown.split("iPhone 17 27.0 full 1 0 0 runtime-missing")).toHaveLength(3);
   });
 
   it("says the pool is off when the worker reports it so, and shows the reserve", () => {

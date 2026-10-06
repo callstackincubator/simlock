@@ -2462,7 +2462,7 @@ describe("Doctor: warm pool targets", () => {
           "the ios targets want 4 running devices, and the ios running limit is 3, leaving room for 3",
         platform: "ios",
         reason: "over-limit",
-        remedy: "lower the counts of the ios warmPool.targets, raise the ios running limit",
+        remedy: "lower the counts of the ios warmPool.targets, or raise the ios running limit",
         target: "ios targets",
       },
     ]);
@@ -2525,6 +2525,29 @@ describe("Doctor: warm pool targets", () => {
     ]);
   });
 
+  it("reports nothing for reserves that add up past the machine's limit when no target is configured", async () => {
+    const limit = { android: 5, global: 4, ios: 5 };
+    const reserve = { android: 2, ios: 3 };
+
+    expect(await findings({ limit, reserve })).toEqual([]);
+  });
+
+  it("caps the machine's reserve at its running limit, so a target past it leaves room for zero and never below", async () => {
+    const found = await findings({
+      limit: { android: 5, global: 4, ios: 5 },
+      reserve: { android: 2, ios: 3 },
+      targets: [{ count: 1, model: "iPhone 17", platform: "ios" }],
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        message:
+          "the targets want 1 running devices, and the running limit is 4, of which warmPool.reserveRunning holds 4, leaving room for 0",
+        target: "all targets",
+      }),
+    ]);
+  });
+
   it("prints no install command for a target whose OS is a range, which names no version to install", async () => {
     const found = await findings({
       figures: figuresOf([{ model: "iPhone 17", osVersion: ">=27", short: "runtime-missing" }]),
@@ -2567,7 +2590,7 @@ describe("Doctor: warm pool targets", () => {
         message:
           "the targets want 4 running devices, and the running limit is 3, leaving room for 3",
         reason: "over-limit",
-        remedy: "lower the counts of the warmPool.targets, raise the running limit",
+        remedy: "lower the counts of the warmPool.targets, or raise the running limit",
         target: "all targets",
       },
     ]);
@@ -2611,7 +2634,8 @@ describe("Doctor: warm pool targets", () => {
         message: "iOS runtime is not installed",
         platform: "ios",
         reason: "runtime-missing",
-        remedy: "run simlock component install ios <version>",
+        remedy:
+          "run simlock component list --platform ios to see the versions, then simlock component install ios <version>",
         target: "iPhone 17 / full",
       },
       expect.objectContaining({ target: "iPhone 99 / full" }),

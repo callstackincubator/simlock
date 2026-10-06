@@ -232,7 +232,8 @@ export interface EventMap {
   "doctor.reconciled": { readonly driftFindings: unknown };
   /**
    * A warm pool target that was met, or not yet checked, ends a pass short for a reason: the pass
-   * could do nothing for it. Emitted once per target on that edge, not on each short pass after.
+   * could do nothing for it. Emitted once per kind of device on that edge (targets that resolve to one spec emit one event
+   * between them), not on each short pass after.
    */
   "warm-pool.target-missed": {
     readonly platform: string;

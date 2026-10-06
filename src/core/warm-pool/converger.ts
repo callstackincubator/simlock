@@ -211,7 +211,7 @@ export class WarmPool {
     });
   }
 
-  /** Every target as the last pass left it: how many are ready, and why not more. */
+  /** Every report as the last pass left it: how many are ready, and why not more. Targets that resolved to one spec are one report. */
   targets(): readonly TargetReport[] {
     return this.#reports;
   }

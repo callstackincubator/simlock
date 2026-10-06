@@ -22,7 +22,7 @@ import type {
   PrerequisiteCheck,
 } from "./driver.js";
 import type { CapacityReader, LeaseExpirer, WarmPoolReader } from "./core-ports.js";
-import type { WarmTargetFigures } from "./warm-pool/index.js";
+import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =
@@ -533,22 +533,19 @@ export class Doctor {
    */
   #warmPoolFindings(): DoctorFinding[] {
     const { warmPool } = this.options;
-    const { enabled, reserveRunning, targets } = this.options.config.warmPool;
+    const { enabled, targets } = this.options.config.warmPool;
     if (warmPool === undefined || !enabled) return [];
     const limits = warmPool.runningCapacity();
     const findings = warmPool.figures().targets.flatMap(unreachableTarget);
+    const reserves = reservedRunning(this.options.config.warmPool, limits);
     let wanted = 0;
-    let room = limits.global.maxRunning;
-    let reserved = 0;
     for (const platform of ["ios", "android"] as const) {
       const sum = targets
         .filter((target) => target.platform === platform)
         .reduce((total, target) => total + target.count, 0);
-      const reserve = Math.min(reserveRunning[platform], limits[platform].maxRunning);
+      const reserve = reserves[platform];
       const available = limits[platform].maxRunning - reserve;
       wanted += sum;
-      room -= reserve;
-      reserved += reserve;
       if (sum > available) {
         findings.push(
           overLimit({
@@ -563,6 +560,10 @@ export class Doctor {
         );
       }
     }
+    // The machine's reserve cannot hold more slots than the machine has: a figure past the limit
+    // would print a room below zero, and with no target there is nothing to report.
+    const reserved = Math.min(reserves.ios + reserves.android, limits.global.maxRunning);
+    const room = limits.global.maxRunning - reserved;
     if (wanted > room) {
       findings.push(
         overLimit({
@@ -1056,7 +1057,10 @@ function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
         message: `${name} ${osVersion ?? "runtime"} is not installed`,
         platform,
         reason: short,
-        remedy: `run simlock component install ${platform} ${osVersion ?? "<version>"}`,
+        remedy:
+          osVersion === undefined
+            ? `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version>`
+            : `run simlock component install ${platform} ${osVersion}`,
         target: named,
       },
     ];
@@ -1093,7 +1097,7 @@ function overLimit(input: {
     kind: "warm-pool-target-unreachable",
     message: `the ${scope}targets want ${sum} running devices, and the ${scope}running limit is ${limit}${held}, leaving room for ${room}`,
     reason: "over-limit",
-    remedy: `lower the counts of the ${scope}warmPool.targets, raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
+    remedy: `lower the counts of the ${scope}warmPool.targets, ${reserve > 0 ? "" : "or "}raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
     target,
     ...(platform === undefined ? {} : { platform }),
   };

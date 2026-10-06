@@ -1,4 +1,5 @@
 import { parseOsConstraint } from "../../contract/os-range.js";
+import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/schemas.js";
 import {
   booleanValue,
   invalidValue,
@@ -44,19 +45,11 @@ export const defaultWarmPoolConfig: WarmPoolConfig = {
   targets: [],
 };
 
-/**
- * The bounds `status.get` enforces on what it reports of the targets (`WARM_POOL_TARGETS_MAX` and
- * `WARM_POOL_NAME_MAX` in `src/contract/schemas.ts`, declared there independently). A config that
- * passed them would load and then make every status answer fail to parse, so the load refuses it.
- */
-const WARM_TARGETS_MAX = 256;
-const WARM_TARGET_NAME_MAX = 256;
-
 /** A non-empty string no longer than the bound the status answer carries. */
 function boundedName(value: unknown, path: string): string {
   const text = nonEmptyString(value, path);
-  if (text.length > WARM_TARGET_NAME_MAX) {
-    throw invalidValue(path, `a string of at most ${WARM_TARGET_NAME_MAX} characters`);
+  if (text.length > WARM_POOL_NAME_MAX) {
+    throw invalidValue(path, `a string of at most ${WARM_POOL_NAME_MAX} characters`);
   }
   return text;
 }
@@ -102,8 +95,8 @@ const targetValidator: Validator = (value, path, warn) => {
 
 const targetsValidator: Validator = (value, path, warn) => {
   if (!Array.isArray(value)) throw invalidValue(path, "an array of targets");
-  if (value.length > WARM_TARGETS_MAX) {
-    throw invalidValue(path, `an array of at most ${WARM_TARGETS_MAX} targets`);
+  if (value.length > WARM_POOL_TARGETS_MAX) {
+    throw invalidValue(path, `an array of at most ${WARM_POOL_TARGETS_MAX} targets`);
   }
   return value.map((target: unknown, index) => targetValidator(target, `${path}[${index}]`, warn));
 };

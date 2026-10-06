@@ -105,8 +105,8 @@ export const statusGet = defineOperation({
     leases: z.array(statusLeaseSchema).optional(),
     capacity: statusCapacitySchema.optional(),
     /**
-     * The warm pool as its last pass left it: whether it is on, the reserve, and each target
-     * with how many are ready and booting and why it is short. Absent only while `daemon.health`
+     * The warm pool as its last pass left it: whether it is on, the reserve, and each kind of device
+     * the targets name with how many are ready and booting and why it is short. Absent only while `daemon.health`
      * is `starting`, like the fields above: a started worker and a gateway always send it.
      */
     warmPool: statusWarmPoolSchema.optional(),

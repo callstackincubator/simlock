@@ -383,8 +383,9 @@ export const statusCapacitySchema = z.object({
 });
 
 /** Bounds on the warm pool block: a gateway parses it off the wire from every worker. */
-const WARM_POOL_TARGETS_MAX = 256;
-const WARM_POOL_NAME_MAX = 256;
+/** The most targets the block carries, and the longest model or OS version it names. The config load enforces the same. */
+export const WARM_POOL_TARGETS_MAX = 256;
+export const WARM_POOL_NAME_MAX = 256;
 
 /** Why a warm target is short, in the order the first that applies is the one reported. */
 const warmPoolShortSchema = z.enum([

@@ -158,8 +158,9 @@ Select a worker to open its page. It adds:
 - **Catalog**: the models and runtimes the worker can lease. It is read again
   straight after a component is installed, and otherwise every 30 seconds.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it
-  holds back per platform, and each target with the model, runtime and mode it
-  keeps ready, how many it wants, how many are ready and how many are booting.
+  holds back per platform, and a row for each kind of device the targets name
+  (targets that resolve to the same device are one row, their counts added)
+  with the model, runtime and mode it keeps ready, how many it wants, how many are ready and how many are booting.
   A target the worker could do nothing for shows the reason, such as
   `runtime-missing`, in the last column, and `—` when it has none. It says "Not
   reported" for a worker that has not sent it.

@@ -1980,21 +1980,19 @@ describe("warm pool targets", () => {
       ]);
     });
 
-    it("fires for a configured target that is refused though another target already has the same kind short", async () => {
+    it("fires for each of two configured targets of one kind that are both refused, not once for the kind", async () => {
       const rig = harness([], {
-        resolve: (request) =>
-          request.model === "iPhone 17"
-            ? { message: "why", refusal: "runtime-missing" }
-            : { message: "why", refusal: "unknown-model" },
-        targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
+        resolve: () => ({ message: "why", refusal: "runtime-missing" }),
+        targets: [iphone17, { ...iphone17, count: 2 }],
       });
       const payloads = missed(rig);
 
       await rig.pool.pass();
+      await rig.pool.pass();
 
-      expect(payloads.map((payload) => (payload as { model: string }).model)).toEqual([
-        "iPhone 17",
-        "iPhone 16",
+      expect(payloads).toStrictEqual([
+        expect.objectContaining({ count: 1, model: "iPhone 17", reason: "runtime-missing" }),
+        expect.objectContaining({ count: 2, model: "iPhone 17", reason: "runtime-missing" }),
       ]);
     });
 

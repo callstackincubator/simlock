@@ -1177,7 +1177,8 @@ Below the capacity lines, `status` prints the warm pool: whether it is on, the
 running slots it holds back per platform, and a line for each kind of device the
 targets name, with how many devices it wants, how many are ready and how many
 are booting or being created. Entries that resolve to the same device are one
-line, their counts added. A target the last pass could do nothing for ends with the reason:
+line, their counts added. An entry the last pass could not resolve is a line of
+its own, and so is every entry while the pool is off or before its first pass. A target the last pass could do nothing for ends with the reason:
 
 ```
 warm pool: enabled, reserve ios 1 android 0

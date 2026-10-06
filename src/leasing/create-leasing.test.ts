@@ -151,6 +151,7 @@ async function createHarness(
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     readonly capacity?: Config["capacity"];
+    readonly defaultModes?: Parameters<typeof createTestEngine>[0]["defaultModes"];
     readonly limits?: CapacityLimits;
     readonly logger?: Logger;
     readonly modelPreferences?: ModelPreferences;
@@ -203,6 +204,7 @@ async function createHarness(
     clock,
     config: engineConfig,
     drivers,
+    ...(options.defaultModes === undefined ? {} : { defaultModes: options.defaultModes }),
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -3523,5 +3525,15 @@ describe("createLeasing warm targets", () => {
     expect(eventsNamed(harness, "device.shutdown")).toEqual([]);
     // The reaper reads the same set through the core, so it leaves the device alone too.
     expect([...(await harness.engine.core.targetedDevices())]).toEqual([device.id]);
+  });
+});
+
+describe("createLeasing's port for the warm pool", () => {
+  it("answers each platform's configured default mode, and full where none is configured", async () => {
+    const { engine } = await createHarness({ defaultModes: { ios: "slim" } });
+
+    const { defaultMode } = engine.leasing.corePorts.warmPoolDemand;
+
+    expect([defaultMode("ios"), defaultMode("android")]).toEqual(["slim", "full"]);
   });
 });

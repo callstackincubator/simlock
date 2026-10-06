@@ -10,6 +10,8 @@ import {
   stateEnteredAt,
   type WorkerCatalogEntry,
   type WorkerDevice,
+  type WarmPoolRow,
+  warmPoolRows,
   type WorkerView,
   workerName,
 } from "./workers-model";
@@ -231,16 +233,15 @@ function Catalog({ catalog }: { readonly catalog: readonly WorkerCatalogEntry[] 
   );
 }
 
-type WarmTarget = NonNullable<WorkerView["warmPool"]>["targets"][number];
-
 /**
- * The worker's warm pool: whether it is on, the slots it holds back, and each target with the
- * four numbers and the reason it is short, as the worker sent them.
+ * The worker's warm pool: whether it is on, the slots it holds back, and a row for each kind of
+ * device the pool keeps (targets naming one device are one row) with the four numbers and the
+ * reason it is short, as the worker sent them.
  */
 function WarmPool({ worker }: { readonly worker: WorkerView }) {
   const { warmPool } = worker;
   if (warmPool === undefined) return <p className="muted">Not reported.</p>;
-  const columns: Column<WarmTarget>[] = [
+  const columns: Column<WarmPoolRow>[] = [
     { cell: (target) => target.model, header: "Model" },
     { cell: (target) => target.osVersion ?? "—", header: "Runtime", mono: true },
     { cell: (target) => target.mode, header: "Mode" },
@@ -266,9 +267,9 @@ function WarmPool({ worker }: { readonly worker: WorkerView }) {
       <DataTable
         label="Warm pool"
         name="warm-pool"
-        rows={warmPool.targets}
+        rows={warmPoolRows(warmPool.targets)}
         columns={columns}
-        rowId={(target) => `${target.platform}-${target.model}-${target.osVersion}-${target.mode}`}
+        rowId={(row) => row.key}
         empty="No targets."
         wide
       />
