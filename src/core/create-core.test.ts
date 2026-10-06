@@ -229,7 +229,7 @@ describe("createCore", () => {
     const restore = vi.spyOn(core.quarantine, "restore");
     const dispose = vi.spyOn(core.quarantine, "dispose");
 
-    await core.converge();
+    await core.converge(await core.readStartup());
     expect(restore).toHaveBeenCalledOnce();
     expect(dispose).not.toHaveBeenCalled();
 
@@ -247,7 +247,7 @@ describe("createCore", () => {
     await harness.registry.completeReclaimWithoutPurge(released.device.id);
     harness.core.connect(ports());
 
-    await harness.core.converge();
+    await harness.core.converge(await harness.core.readStartup());
 
     expect(
       sink.records.filter((record) => record.message === "startup delete of a spent device failed"),
@@ -287,7 +287,7 @@ describe("createCore", () => {
     await harness.registry.completeReclaimWithoutPurge(released.device.id);
     harness.core.connect(ports());
 
-    await expect(harness.core.converge()).resolves.toBeUndefined();
+    await expect(harness.core.converge(await harness.core.readStartup())).resolves.toBeUndefined();
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
   });

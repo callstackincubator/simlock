@@ -194,8 +194,17 @@ describe("startup ends every lease whose device is not running", () => {
     await prepare(env);
     await restart(env);
 
-    await waitForDeviceState(env, held.driverDeviceId, "ready");
-    expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
+    // Recovery shuts the device down through its driver; it does not wipe it. A device left
+    // `reclaiming` by a start that could not read its platform is no longer waiting.
+    await waitFor(async () => (await deviceState(env, held.deviceId)) !== "reclaiming", {
+      label: "device recovered from reclaiming",
+    });
+    const calls = (await env.driverLog.calls()).filter(
+      (call) =>
+        (call.arguments[0] as { deviceId?: string } | undefined)?.deviceId === held.driverDeviceId,
+    );
+    expect(calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    expect(calls.filter((call) => call.operation === "reclaim")).toEqual([]);
   });
 
   it("a daemon restarted with listManaged scripted to fail on one platform reaches running, ends that platform's leases, and keeps a running lease on the other platform", async () => {
@@ -211,7 +220,8 @@ describe("startup ends every lease whose device is not running", () => {
     await restart(env);
 
     expect(
-      ((await env.cli(["daemon", "status"])).json as { daemon: { health: string } }).daemon.health,
+      ((await env.cli(["daemon", "status", "--json"])).json as { daemon: { health: string } })
+        .daemon.health,
     ).toBe("running");
     expect(await renewError(env, ios.leaseId)).toBe("UNKNOWN_LEASE");
     expect(await renewError(env, android.leaseId)).toBeUndefined();

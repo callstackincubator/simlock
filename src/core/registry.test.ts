@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
-import { type DeviceSpec, Registry, RegistryEventError, UnknownDeviceError } from "./index.js";
+import {
+  type DeviceSpec,
+  Registry,
+  RegistryEventError,
+  UnknownDeviceError,
+  UnknownLeaseError,
+} from "./index.js";
 
 const statePath = "/home/agent/.simlock/state.json";
 const spec: DeviceSpec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" };
@@ -1550,5 +1556,77 @@ describe("Registry", () => {
         statePath,
       }),
     ).rejects.toThrow(/Invalid lease record/);
+  });
+
+  it("removes a lease and marks its device deleted in one write, announcing the lease before device.deleted, both after the commit", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new ObservingFilesystem();
+    const bus = new EventBus(clock);
+    const suffixes = ["device", "lease"];
+    const options = {
+      clock,
+      eventBus: bus,
+      filesystem,
+      idGenerator: { generate: () => suffixes.shift() ?? "unexpected" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      requesterId: "agent-1",
+      ownerId: "agent-1",
+      ttlMs: 60_000,
+      ttlDeadline: 2_000,
+    });
+    await registry.markRecoveryAttempt(device.id, 1_500);
+    bus.subscribe("device.deleted", () => filesystem.operations.push("device.deleted"));
+    filesystem.operations.length = 0;
+
+    const ended = await registry.endLeaseAndMarkDeviceMissing(lease.id, "doctor", () =>
+      filesystem.operations.push("lease announced"),
+    );
+
+    expect(filesystem.operations).toEqual(["save", "lease announced", "device.deleted"]);
+    expect(ended.lease).toEqual(lease);
+    expect(ended.device).toMatchObject({ id: device.id, state: "deleted" });
+    expect(ended.device).not.toHaveProperty("recoveryAttempts");
+    expect(registry.snapshot.leases).toEqual([]);
+    expect(registry.snapshot.devices).toEqual([ended.device]);
+    expect((await Registry.load(options)).snapshot).toEqual(registry.snapshot);
+    expect(bus.replay().filter((entry) => entry.event === "device.deleted")).toMatchObject([
+      { payload: { deviceId: device.id, initiator: "doctor" } },
+    ]);
+  });
+
+  it("refuses to end a lease it does not hold, writing nothing and announcing nothing", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new ObservingFilesystem();
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    let announced = false;
+
+    await expect(
+      registry.endLeaseAndMarkDeviceMissing("lse_nope", "doctor", () => {
+        announced = true;
+      }),
+    ).rejects.toThrow(UnknownLeaseError);
+
+    expect(announced).toBe(false);
+    expect(filesystem.operations).toEqual([]);
   });
 });

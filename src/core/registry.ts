@@ -518,6 +518,42 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return cloneDevice(updated);
   }
 
+  /**
+   * Removes a lease and marks its device missing in one write, for a device a daemon start found
+   * gone from a platform it could read. There is nothing left to wipe, so no `reclaiming` state
+   * stands between: the lease and the device leave `leased` together.
+   *
+   * `announceLeaseEnd` runs once the write has committed and before `device.deleted` is emitted,
+   * so the lease's own fact precedes the device's. The registry never names a lease event itself.
+   */
+  async endLeaseAndMarkDeviceMissing(
+    leaseId: string,
+    initiator: string,
+    announceLeaseEnd: (ended: ReleasedLease) => void,
+  ): Promise<ReleasedLease> {
+    const lease = this.#leases.find((candidate) => candidate.id === leaseId);
+    if (lease === undefined) {
+      throw new UnknownLeaseError(leaseId);
+    }
+    const { device, index } = this.#requireDeviceRecord(lease.deviceId);
+    const {
+      recoveringSince: _recoveringSince,
+      recoveryAttempts: _recoveryAttempts,
+      ...withoutRecoveryMarkers
+    } = device;
+    const deleted = { ...withoutRecoveryMarkers, state: "deleted" as const } as DeviceRecord;
+    const devices = [...this.#devices];
+    devices[index] = deleted;
+    await this.#commit(
+      devices,
+      this.#leases.filter((candidate) => candidate.id !== leaseId),
+    );
+    const ended = { device: cloneDevice(deleted), lease: cloneLease(lease) };
+    announceLeaseEnd(ended);
+    this.options.eventBus.emit("device.deleted", { deviceId: device.id, initiator }, "registry");
+    return ended;
+  }
+
   async createLease({
     deviceId,
     ownerId,

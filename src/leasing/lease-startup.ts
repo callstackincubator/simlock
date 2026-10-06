@@ -1,5 +1,10 @@
 import type { EventBus } from "../bus/index.js";
-import type { LeaseRequestFailure, LeaseRequestRecord, SerializedDecision } from "../core/index.js";
+import type {
+  LeaseRequestFailure,
+  LeaseRequestRecord,
+  SerializedDecision,
+  StartupRead,
+} from "../core/index.js";
 
 export interface LeaseStartupRegistry {
   failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
@@ -10,9 +15,15 @@ export interface LeaseTimerRestorer {
   restoreExpiryTimers(): Promise<void>;
 }
 
+/** Ends every lease whose device the startup read says is not running. */
+export interface LeaseStartupReconciler {
+  run(read: StartupRead): Promise<void>;
+}
+
 export interface LeaseStartupOptions {
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly eventBus: Pick<EventBus, "emit">;
+  readonly reconciler: LeaseStartupReconciler;
   readonly registry: LeaseStartupRegistry;
   readonly timers: LeaseTimerRestorer;
 }
@@ -28,21 +39,26 @@ const DAEMON_RESTARTED: LeaseRequestFailure = {
 };
 
 /**
- * The lease half of startup, run before core's device steps and before admission opens (the
+ * The lease half of startup, run around core's startup read and before admission opens (the
  * dispatcher parks every request until startup resolves).
  *
  * First, no wait from the previous process survived it, so every request it left open is settled
- * now rather than left open with nothing to drive it. Then, under ADR 0004, every lease's timer
- * is restored from its own persisted deadline and nothing is swept: a restart does not prove a
- * holder is dead, so no lease is released on the strength of one. A lease whose deadline already
- * passed while no daemon was running expires here, through the ordinary expiry path `restore`
- * drives.
+ * now rather than left open with nothing to drive it (`settleRequests`). Then, once the daemon has
+ * read each platform, every lease is checked against that read (ADR 0019): one whose device is not
+ * running is ended, and the leases that remain have their timers restored from their own persisted
+ * deadlines (`reconcile`). A restart does not prove a holder is dead, so a lease whose device is
+ * running is kept. One whose deadline already passed while no daemon was running expires here,
+ * through the ordinary expiry path `restore` drives.
  */
 export class LeaseStartup {
   constructor(private readonly options: LeaseStartupOptions) {}
 
-  async run(): Promise<void> {
+  async settleRequests(): Promise<void> {
     await this.#settleOpenLeaseRequests();
+  }
+
+  async reconcile(read: StartupRead): Promise<void> {
+    await this.options.reconciler.run(read);
     await this.options.timers.restoreExpiryTimers();
   }
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeviceRecord, DeviceState, LeaseRecord, Platform } from "./domain.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { StartupRead } from "./startup-read.js";
 
 function device(
   id: string,
@@ -45,7 +46,6 @@ function createHarness(
   const converger = new StartupConverger({
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     decisions: new SerializedDecision(),
-    drivers: { has: (platform) => !darkPlatforms.has(platform) },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {
@@ -62,9 +62,18 @@ function createHarness(
     if (current !== undefined) devices[index] = { ...current, state };
   }
 
+  const read = new StartupRead(
+    new Map(
+      (["ios", "android"] as const)
+        .filter((platform) => !darkPlatforms.has(platform))
+        .map((platform) => [platform, { devices: [], processes: [] }] as const),
+    ),
+  );
+
   return {
     claimed,
     converger,
+    read,
     devices,
     leases,
     order,
@@ -81,7 +90,7 @@ describe("StartupConverger", () => {
       [],
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.order).toEqual(["quarantine-restore", "recover:reclaiming"]);
     expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
@@ -93,7 +102,7 @@ describe("StartupConverger", () => {
     const newer = device("newer", "android", "ready", 2);
     const harness = createHarness([newer, older], []);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
       { id: "newer", state: "ready" },
@@ -130,7 +139,7 @@ describe("StartupConverger", () => {
     ];
     const harness = createHarness([first, second], leases);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
       { id: "first", state: "leased" },
@@ -150,7 +159,7 @@ describe("StartupConverger", () => {
       new Set<Platform>(["ios"]),
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledWith(
@@ -165,8 +174,8 @@ describe("StartupConverger", () => {
     const ready = device("ready", "ios", "ready", 2);
     const harness = createHarness([recovering, ready], []);
 
-    await harness.converger.converge();
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
+    await harness.converger.converge(harness.read);
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
     expect(harness.quarantineRestore.restore).toHaveBeenCalledTimes(2);
@@ -192,7 +201,7 @@ describe("StartupConverger", () => {
     ];
     const harness = createHarness([leasedDevice], leases);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.leases).toHaveLength(1);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
@@ -213,7 +222,7 @@ describe("StartupConverger", () => {
       [],
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.order).toEqual([
       "quarantine-restore",

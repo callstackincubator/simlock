@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { waitForDeviceState, waitForLeaseCount, withDaemon } from "./helpers/index.js";
+import {
+  waitForDeviceState,
+  waitForLeaseCount,
+  withDaemon,
+  type TestEnv,
+} from "./helpers/index.js";
+
+/** What the fake driver lists after a restart: the leased device, still running. */
+function runningAfterRestart(env: TestEnv, driverDeviceId: string): Promise<void> {
+  return env.driverScript.merge({
+    ios: { managedReality: { devices: [{ deviceId: driverDeviceId, runState: "running" }] } },
+  });
+}
 
 /**
  * Lease liveness end to end under ADR 0004: a lease is TTL-bound, a client-initiated
@@ -38,6 +50,9 @@ describe("lease liveness & restart", () => {
     };
     await waitForLeaseCount(env, 1);
 
+    // The restarted daemon keeps a lease only while its device is running. The fake driver forgets
+    // its devices with the process, so it is told this one still is.
+    await runningAfterRestart(env, grant.device.driverDeviceId);
     // Kill the daemon out from under the holder (not a graceful `daemon stop`), leaving the
     // lease persisted with no live connection. Pre-ADR-0004 this is exactly what
     // `StartupConverger`'s orphan sweep released; it no longer exists, because a restart
@@ -109,6 +124,10 @@ describe("lease liveness & restart", () => {
     // check "granted" happened before the restart wipes it.
     await env.expectEvents(["lease.requested", "lease.granted"]);
 
+    await runningAfterRestart(
+      env,
+      (lease.json as { device: { driverDeviceId: string } }).device.driverDeviceId,
+    );
     // ADR 0004 §3: `daemon stop` does not touch leases -- they persist, and the next daemon
     // restores each one's timer from its own deadline.
     await env.restartDaemon();

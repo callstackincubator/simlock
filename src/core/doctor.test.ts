@@ -12,6 +12,7 @@ import { FakeDriver } from "./fake-driver.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
+import { StartupRead } from "./startup-read.js";
 import { testComponentWiring } from "./testing.js";
 import { createTestEngine } from "../leasing/testing.js";
 
@@ -1484,6 +1485,62 @@ describe("Doctor", () => {
     const firstForeignStateSeq = Math.min(...foreignStateEvents.map((event) => event.seq));
     expect(firstForeignStateSeq).toBeGreaterThan(lastCommitSeq);
     expect(events.at(-1)?.event).toBe("doctor.reconciled");
+  });
+
+  describe("a startup read", () => {
+    async function setup() {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const registered = await registry.registerDevice({
+        driverData: { fakeDeviceId: "gone" },
+        driverDeviceId: "gone",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      await registry.transitionDevice(registered.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: registered.id },
+      });
+      const driver = new FakeDriver({ clock, platform: "ios" });
+      const doctor = new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry });
+      return { doctor, driver, registered };
+    }
+
+    it("is reconciled against instead of calling listManaged again", async () => {
+      const { doctor, driver, registered } = await setup();
+      const read = new StartupRead(new Map([["ios", { devices: [], processes: [] }]]));
+
+      const report = await doctor.reconcile({ read });
+
+      expect(driver.calls.map((call) => call.operation)).not.toContain("listManaged");
+      expect(report.findings).toEqual([
+        { deviceId: registered.id, kind: "registry-device-missing", platform: "ios" },
+      ]);
+    });
+
+    it("reports no drift for the devices of a platform it left out, as for one with no driver", async () => {
+      const { doctor, driver } = await setup();
+
+      const report = await doctor.reconcile({ read: new StartupRead() });
+
+      expect(driver.calls.map((call) => call.operation)).not.toContain("listManaged");
+      expect(report.findings).toEqual([]);
+    });
+
+    it("is not required: without one, each driver is listed", async () => {
+      const { doctor, driver } = await setup();
+
+      await doctor.reconcile();
+
+      expect(driver.calls.map((call) => call.operation)).toContain("listManaged");
+    });
   });
 
   it("reports a platform whose driver refused to start, with the reason it refused", async () => {
