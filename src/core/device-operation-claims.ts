@@ -15,8 +15,9 @@ export interface DeviceOperationClaim {
   readonly deviceId: string;
   readonly operation: DeviceOperation;
   /**
-   * The waiter this claim was taken for, absent when the warm pool took it. A request waits only
-   * for a `boot` nobody owns, never for the one another request is making for itself.
+   * The waiter this claim was taken for, absent when none was: the only ownerless `boot` claim is
+   * the warm pool's (a failed boot's destroy takes `cleanup`, a fence takes its waiter's id). A
+   * request waits only for a `boot` nobody owns, never for the one another request is making.
    */
   readonly owner?: string | undefined;
   release(): void;

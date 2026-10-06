@@ -1422,7 +1422,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     ]);
   });
 
-  it("A device fenced after a failed boot and a failed destroy stays under a boot claim its waiter owns.", async () => {
+  it("A device fenced after a failed boot and a failed destroy stays under a boot claim owned by a request, not an ownerless one.", async () => {
     const harness = await createHarness();
     const shutdown = await seedShutdown(harness);
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
@@ -1435,11 +1435,11 @@ describe("LeaseAcquisitionCoordinator", () => {
     // An ownerless boot claim is the warm pool's: a request would wait for it for good.
     expect(harness.claims.claim(shutdown.id)).toEqual({
       kind: "boot",
-      owner: expect.any(String),
+      owner: expect.stringMatching(/^req_/),
     });
   });
 
-  it("grants a request that arrived while a failed boot's device was being destroyed, once that destroy fails, with room to provision.", async () => {
+  it("grants a request that arrives while a failed boot's device is being destroyed a device of its own, without waiting for the destroy.", async () => {
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
     await seedShutdown(harness);
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
@@ -1467,11 +1467,10 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
     await settle();
 
+    expect(secondGranted).toBe(true);
+
     failDestroy(new DriverCrashError("simulator would not die"));
     await booterOutcome;
-    await settle();
-
-    expect(secondGranted).toBe(true);
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {

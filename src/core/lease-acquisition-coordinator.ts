@@ -844,7 +844,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       let destroyed = true;
       try {
         destroyed =
-          (await this.options.lifecycle.destroy(device, "lease-engine", "boot")) !== undefined;
+          (await this.options.lifecycle.destroy(device, "lease-engine", "cleanup")) !== undefined;
       } catch (destroyError: unknown) {
         this.#logFailure(
           "destroying a device that failed to boot failed",
@@ -863,9 +863,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
-      // A failed destroy wakes too: a request that planned `wait` during the destroy, on its
-      // ownerless boot claim, replans now that the device is fenced under this waiter's claim.
-      this.#wakeQueue();
+      if (destroyed) this.#wakeQueue();
       return;
     }
     await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);

@@ -95,7 +95,7 @@ export class AcquisitionPlanner {
     );
     if (ready !== undefined) return { device: ready, kind: "grant-ready" };
 
-    // A device the warm pool is booting, or creating, for nobody in particular will serve this
+    // A device the warm pool is booting for nobody in particular will serve this
     // request when it is ready: waiting for it costs less than starting a second. A device
     // another request is booting or creating is its own, so it is left alone. Under `noWait`
     // the case is ignored and the request plans as it always did.

@@ -2912,6 +2912,8 @@ describe("LeaseEngine warm pool", () => {
       await flush();
       clock.advance(50);
       await flush();
+      // The kick from the failed boot woke the request: it has started booting the device itself.
+      expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(3);
       clock.advance(50);
       const granted = await second;
       await harness.engine.settle();

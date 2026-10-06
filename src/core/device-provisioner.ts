@@ -131,7 +131,7 @@ export class DeviceProvisioner {
         error: stableError(error),
       });
       try {
-        await this.options.lifecycle.destroy(device, "lease-engine", "boot");
+        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         // The registered record remains for reconcile when the driver cannot destroy it.
         this.#logger.warn("destroying a device that failed to boot failed", {
