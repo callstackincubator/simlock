@@ -119,11 +119,13 @@ they name; never build again or restart review at round 1.
      report's Rerun value, `previous <Commit>`, and the Fix lines pasted.
    - `Rerun: claims-only`: the same, with `claims-only` as the Rerun value,
      once per PR. Claims Fix lines it still reports: one more `implementer`
-     fix run, no review; list them in the PR body's `## Review` section as
-     fixed unreviewed.
+     fix run, told to edit comments and docs only, no review; list them in
+     the PR body's `## Review` section as fixed unreviewed.
    - A commit after a round that passed (a merge of the base branch, a fix
      the gate needed): `reviewer` with the same round, `previous <Commit>`
-     and `after-pass`, before the gate.
+     and `after-pass`, then the hardware check again if one ran, before
+     the gate. Its Fix lines get one fix run and an `after-pass 2` review;
+     findings that one confirms park.
    - After every round, add its counts and Rejected lines to the PR body's
      `## Review` section (step 4), and its Notes under `Notes so far:`
      there; step 5 moves them into one comment.

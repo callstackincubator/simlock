@@ -212,9 +212,9 @@ issue rather than a blocker. Rounds go on, up to five, while each confirms
 fewer spec and code findings than the one before; a spec or code finding
 still open when they stop converging is a contested change: the agent hands
 off with it and leaves the PR in draft. A finding fixed by editing only a
-comment, a doc, a test title or a message is a stale claim, whichever review
-raised it. Stale claims never park a PR: the claims review checks their fix
-once, and what it still finds is fixed without another review. Notes are not verified and never start a round; they
+comment or a doc is a stale claim, whichever review raised it. Stale claims
+never park a PR: the claims review checks their fix once, and what it still
+finds is fixed, in comments and docs only, without another review. Notes are not verified and never start a round; they
 reach you once, as one "Review notes" comment on the PR. An ADR-only PR
 gets the spec review alone.
 

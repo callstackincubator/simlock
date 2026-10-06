@@ -36,8 +36,8 @@ cd "$dir"
 
 Read the issue body; for a task, its parent's body and the ADRs under
 Decisions; for a bug, the triage report (its Simplest fix is the agreed
-approach); the latest `## Handoff` comment (its Findings are facts). Never
-the rest of the comment thread. Reread the files under Rules in play before
+approach) and any `## Decision` comment; the latest `## Handoff` comment
+(its Findings are facts). Never the rest of the comment thread. Reread the files under Rules in play before
 touching the code they cover.
 
 Read code narrowly: find what you need with `grep -n`, then read only those
@@ -58,7 +58,8 @@ and add one line to the PR body's `## Assumptions`:
 Stop only when building would contradict the body, a rule or an accepted
 ADR, or would change behaviour a user sees in a way nobody decided.
 Changing a spec test after its red commit, or an existing test, so it
-asserts different behaviour is never an assumption: it is a stop. Push
+asserts behaviour the spec did not decide, is never an assumption: it is a
+stop. Push
 what you have and report `spec needs: <line>` under Open. Do not work
 around it.
 
@@ -91,7 +92,8 @@ states the failing count: `3 failing -> 1 failing`.
   any path. A type or lint error shows in the commit hook's output.
 - Push once per step, not after every commit, in the background, and read
   its output when it ends. The last push before your report runs in the
-  foreground: never end your turn while a push runs. Never pass
+  foreground, with the longest timeout your shell tool allows: never end
+  your turn while a push runs. Never pass
   `--no-verify` or `-n`.
 - Never wait on CI: no polling `gh pr checks`, no `gh run watch`, no
   `sleep` loops. Read `gh pr checks <M>` at most once, before the report.
@@ -171,7 +173,8 @@ rule it breaks.
    at once) and check each.
 2. **Fix every instance:**
    - behaviour: write the failing test first, then the fix;
-   - stale doc or comment: fix it;
+   - stale doc or comment: fix it. Told to edit comments and docs only:
+     a finding that needs any other change goes under Open instead;
    - a line ending in `(record as Assumption: ...)`: also add that
      assumption to the PR body;
    - a slow-lane Evidence line is a failing test: fix the code, not the
@@ -191,7 +194,7 @@ Tests: k of n spec tests green (red commit <short sha>)
 Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
 Variants: <fix mode: per finding, its class, the instances found, the instances fixed; or "n/a">
 Run: tests pass | fail (<what failed>); CI <pass | fail | running | not checked>
-Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
+Mutate: <n> mutants, <a> alive (<file: the code it changes — why> per alive mutant, or "none")
 Hardware: <Done when lines that need the slow lane, or "none">
 Flaky: <test title — #issue per line, or "none">
 Assumptions: <n, as listed in the PR body, or "none">

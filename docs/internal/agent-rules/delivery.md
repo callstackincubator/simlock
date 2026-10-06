@@ -85,8 +85,8 @@ is open, done means closed as completed.
 3. **The body is the spec. Comments are discussion. Assumptions are
    proposals.** Whoever implements an issue reads its body, the documents it
    links, [always-in-scope.md](always-in-scope.md), the latest `## Handoff`
-   comment if there is one, and for a bug the triage report — never the rest
-   of the comment thread.
+   comment if there is one, and for a bug the triage report and any
+   `## Decision` comment — never the rest of the comment thread.
    A comment changes nothing until a spec session folds it into the body. The
    body is cumulative: sections are added and amended in place, never
    restated in comments, and GitHub's edit history is the record of what
@@ -99,9 +99,11 @@ is open, done means closed as completed.
    maintainer may reject, never a change to the spec: the body stays the
    spec. Delivery stops for a person only when building would contradict the
    body, a rule or an accepted ADR, or would change behaviour a user sees in
-   a way nobody decided. The agent that asked writes the person's answer
-   into the body, as a line in the section it settles and a Tests line that
-   pins it, before work resumes, so every later agent reads it as spec.
+   a way nobody decided. The agent that asked folds the person's answer in
+   before work resumes, so every later agent reads it as spec: into a task
+   or feature body, as a line in the section it settles and a Tests line
+   that pins it; for a bug, whose body stays the reporter's (rule 5), as
+   one comment headed `## Decision`, read with the triage report.
 
 4. **Every spec session starts by reconciling.** Before writing anything, the
    session fetches every comment created after the body's `lastEditedAt`, on
@@ -261,9 +263,12 @@ is open, done means closed as completed.
     notes becomes a `bug:new` issue and does not block the PR. The claims
     review runs every round. A commit pushed after a round that passed (a
     merge of the base branch, a fix the gate needed) gets the code and
-    claims reviews of that fix alone, in a round that does not count below.
-    A confirmed finding whose fix changes only a comment, a doc, a test
-    title or a message is a claims finding, whichever review raised it.
+    claims reviews of that fix alone, outside the count below: a confirmed
+    finding there gets one fix run and one more such review, and one still
+    confirmed after it stops delivery.
+    A confirmed finding whose fix changes only a comment or a doc is a
+    claims finding, whichever review raised it. A test title or a printed
+    message is not: its fix gets the review that raised it.
     Rounds run while they converge: round 2 runs after any confirmed spec or
     code finding, and each later round only when the one before confirmed
     fewer spec and code findings than the round before it, up to five
@@ -272,8 +277,9 @@ is open, done means closed as completed.
     the finding under Findings (rule 2), leaving the PR in draft. Claims
     findings never stop delivery and never count: when only claims findings
     are left, their fix is checked by the claims review alone, once, and
-    what that check still confirms is fixed in one last run with no review,
-    listed in the PR body's `## Review` section as fixed unreviewed.
+    what that check still confirms is fixed in one last run that edits
+    comments and docs only, with no review, listed in the PR body's
+    `## Review` section as fixed unreviewed.
     Notes are not verified and never start a round: after the last round
     they go out once, as one comment on the PR, or as a `bug:new` issue when
     one is a separate piece of work. A PR from a person gets the same

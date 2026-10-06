@@ -105,7 +105,7 @@ what goes wrong because of it.
 7. **overlap** (`feature` scope). Two tasks that touch the same file, or
    overlap by a project check in `toolchain.md`, with neither under the
    other's Depends on. Check every open task of other features too
-   (`gh issue list --search 'label:task:draft,task:ready'`). Two agents
+   (`gh issue list --search 'label:task:draft,task:ready' --json number,title,body`). Two agents
    editing the same lines at once is a merge conflict the second one
    resolves blind.
 8. **hardware.** A Done when line that needs the slow lane but does not say
