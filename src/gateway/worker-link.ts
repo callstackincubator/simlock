@@ -363,7 +363,16 @@ export class WorkerLink {
       this.#refreshStarting(client, status);
       return;
     }
+    await this.#refreshRunning(client, status, includeCatalog);
+  }
 
+  /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
+   * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
+  async #refreshRunning(
+    client: SimlockAdminClient,
+    status: StatusGetOutput,
+    includeCatalog: boolean,
+  ): Promise<void> {
     const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
