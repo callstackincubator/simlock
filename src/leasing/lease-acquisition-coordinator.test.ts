@@ -282,7 +282,7 @@ async function seedReady(
     provisioned.id,
     "ready",
     { event: "device.ready", payload: { bootDuration: 0, deviceId: provisioned.id } },
-    readyTransitionUpdate(ready, 0),
+    readyTransitionUpdate(ready),
   );
 }
 
@@ -2917,6 +2917,10 @@ describe("LeaseAcquisitionCoordinator: resolve", () => {
 
     expect(harness.queue.depth).toBe(0);
     expect(harness.registry.snapshot.devices).toEqual([]);
+    const running = harness.capacity.runningCapacity([]);
+    expect([running.global.reserved, running.ios.reserved, running.android.reserved]).toEqual([
+      0, 0, 0,
+    ]);
     expect(
       driver.calls.filter((call) => ["provision", "makeReady"].includes(call.operation)),
     ).toEqual([]);

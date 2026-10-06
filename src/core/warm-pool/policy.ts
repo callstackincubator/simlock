@@ -86,7 +86,7 @@ export interface WarmPolicyView {
     readonly maxConcurrentBoots: number;
   };
   readonly now: number;
-  /** The targets that resolved this pass, equal specs already merged into one. */
+  /** The targets that resolved this pass; the policy merges those of one spec (`mergeTargets`). */
   readonly targets: readonly ResolvedTarget[];
   /** The spec of each target boot or creation still running: they count toward the boot cap. */
   readonly inFlight: readonly DeviceSpec[];
@@ -153,7 +153,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   );
   const keeps = boots(view, running, bootable, room, held);
   const targets = mergeTargets(view.targets);
-  const unneeded = neverLeasedIdle(view, running, targets, shutdowns, idle, room);
+  const unneeded = neverLeasedIdle(view, running, shutdowns, room);
   const wanted = planTargets(view, targets, bootable, keeps, room, held, idle);
   return {
     proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
@@ -369,18 +369,10 @@ export function targetedDevices(input: {
 function neverLeasedIdle(
   view: WarmPolicyView,
   running: readonly DeviceRecord[],
-  targets: readonly ResolvedTarget[],
   proposed: readonly DeviceProposal[],
-  isIdle: (device: DeviceRecord) => boolean,
   room: Slots,
 ): DeviceProposal[] {
-  const kept = new Set(
-    targets.flatMap((target) =>
-      readyOfKind(view.devices, isIdle, target.spec)
-        .slice(0, target.count)
-        .map((device) => device.id),
-    ),
-  );
+  const kept = targetedDevices(view);
   const already = new Set(proposed.map((proposal) => proposal.deviceId));
   const proposals: DeviceProposal[] = [];
   for (const device of running) {
@@ -462,23 +454,35 @@ function planTargets(
   const reports = targets.map(({ count, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
     const report = { count, ready, spec, target: describeTarget(spec) };
-    const missing = count - ready - pending(spec);
-    const short = missing > 0 ? fillTarget(plan, spec, missing) : undefined;
+    const filling = pending(spec);
+    const missing = count - ready - filling;
+    const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
     return short === undefined ? report : { ...report, short };
   });
   return { proposals: plan.proposals, reports };
 }
 
-/** Adds the boots and creations a target is missing; the reason it stopped short, if it did. */
-function fillTarget(plan: TargetPlan, spec: DeviceSpec, missing: number): TargetShort | undefined {
+/**
+ * Adds the boots and creations a target is missing. The reason it is short, when a pass could do
+ * nothing for it: a target with a boot already running or one proposed here is still filling, and
+ * is not short, whatever stopped the rest.
+ */
+function fillTarget(
+  plan: TargetPlan,
+  spec: DeviceSpec,
+  missing: number,
+  filling: boolean,
+): TargetShort | undefined {
   if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return "boot-failed";
   // A request queued on this platform is served first; the target waits, and is not short.
   if (plan.view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
     return undefined;
   }
+  let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
     const refused = addOne(plan, spec);
-    if (refused !== undefined) return refused;
+    if (refused !== undefined) return added > 0 || filling ? undefined : refused;
+    added += 1;
   }
   return undefined;
 }
@@ -491,9 +495,14 @@ function addOne(plan: TargetPlan, spec: DeviceSpec): TargetShort | undefined {
       !plan.view.resetDevices.has(device.id) &&
       sameSpec(device.spec, spec),
   );
+  // The order a user reads: device limit, running limit, reserve, then RAM budget.
+  const capacity = shortOf(
+    shutDown === undefined ? plan.view.admit.create(spec) : plan.view.admit.boot(shutDown),
+  );
   const refused =
-    slotShort(plan.room, plan.held, spec.platform) ??
-    shortOf(shutDown === undefined ? plan.view.admit.create(spec) : plan.view.admit.boot(shutDown));
+    capacity === "device-limit"
+      ? capacity
+      : (slotShort(plan.room, plan.held, spec.platform) ?? capacity);
   if (refused !== undefined) return refused;
   plan.room.global -= 1;
   plan.room[spec.platform] -= 1;

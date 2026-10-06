@@ -73,6 +73,8 @@ function harness(
     refuseProvision?: boolean;
     /** The budget allows a creation when asked, then refuses the reservation: a lost race. */
     refuseReservation?: boolean;
+    /** The budget's reservation call throws, which no refusal does. */
+    reserveThrows?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -143,6 +145,7 @@ function harness(
       canProvision: () =>
         options.refuseProvision === true ? { ok: false, reason: "device-limit" } : { ok: true },
       tryReserveProvisioning: () => {
+        if (options.reserveThrows === true) throw new Error("the budget is unreadable");
         if (options.refuseProvision === true || options.refuseReservation === true)
           return { ok: false, reason: "device-limit" };
         const reservation = { released: 0 };
@@ -1129,12 +1132,21 @@ describe("warm pool targets", () => {
   });
 
   it("creates two devices for two targets resolving to one spec, one after the other, as one target of the summed count", async () => {
+    const first = held();
+    const second = held();
     const rig = harness([], {
+      provision: async (_spec, attempt) => [first, second][attempt - 1]?.gate,
       resolve: () => ({ spec: kind }),
       targets: [iphone17, { ...iphone17, osVersion: ">=26" }],
     });
 
     await rig.pool.pass();
+    await flush();
+    expect(rig.provisionCalls).toHaveLength(1);
+    first.finish();
+    await flush();
+    expect(rig.provisionCalls).toHaveLength(2);
+    second.finish();
     await rig.pool.settle();
 
     expect(rig.provisionCalls).toHaveLength(2);
@@ -1203,11 +1215,94 @@ describe("warm pool targets", () => {
     expect(rig.kick).not.toHaveBeenCalled();
   });
 
-  it("reports and logs nothing, and names no device, before its first pass", () => {
+  it("reports and logs nothing before its first pass", () => {
     const rig = harness([ofKind("ready", "ready")], { targets: [iphone17] });
 
     expect(rig.pool.targets()).toEqual([]);
-    expect([...rig.pool.targeted()]).toEqual([]);
+    expect(rig.sink.records).toEqual([]);
+  });
+
+  it("resolves the targets itself when asked which devices they keep before any pass has run", async () => {
+    const rig = harness([ofKind("ready", "ready")], { targets: [iphone17] });
+
+    expect([...(await rig.pool.targeted())]).toEqual(["ready"]);
+    expect(rig.resolveCalls).toHaveLength(1);
+  });
+
+  it("resolves no target, reports none and names no device with warmPool disabled", async () => {
+    const rig = harness([ofKind("ready", "ready")], {
+      enabled: false,
+      resolve: () => ({ message: "not installed", refusal: "runtime-missing" }),
+      targets: [iphone17],
+    });
+
+    await rig.pool.pass();
+
+    expect(rig.resolveCalls).toEqual([]);
+    expect(rig.pool.targets()).toEqual([]);
+    expect([...(await rig.pool.targeted())]).toEqual([]);
+    expect(
+      rig.sink.records.filter((record) => record.message === "a warm pool target is short"),
+    ).toEqual([]);
+  });
+
+  it("keeps a target's last resolved spec when one pass cannot resolve it, and drops it for a settled refusal", async () => {
+    let answer: TargetResolution = { spec: kind };
+    const stale = { ...ofKind("stale", "ready"), readyAt: now - 11 * minute };
+    const rig = harness([stale], { resolve: () => answer, targets: [iphone17] });
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+
+    answer = { message: "simctl timed out", refusal: "unresolvable" };
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+    expect([...(await rig.pool.targeted())]).toEqual(["stale"]);
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ count: 1, ready: 1 })]);
+    expect(rig.pool.targets()[0]).not.toHaveProperty("short");
+
+    answer = { message: "gone", refusal: "runtime-missing" };
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["stale"]);
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "runtime-missing" })]);
+  });
+
+  it("starts nothing new once draining, though a creation that was running ends", async () => {
+    const gate = held();
+    const rig = harness([], {
+      provision: async () => gate.gate,
+      targets: [{ ...iphone17, count: 3 }],
+    });
+    await rig.pool.pass();
+    await flush();
+    expect(rig.provisionCalls).toHaveLength(1);
+
+    const draining = rig.pool.drain();
+    gate.finish();
+    await draining;
+    const resolved = rig.resolveCalls.length;
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.resolveCalls).toHaveLength(resolved);
+
+    expect(rig.provisionCalls).toHaveLength(1);
+    expect(rig.state.devices).toHaveLength(1);
+    expect(rig.clock.pendingTimerCount).toBe(0);
+  });
+
+  it("logs a boot or creation that throws outside the driver, holds the target back and asks for no immediate retry", async () => {
+    const rig = harness([], { reserveThrows: true, targets: [iphone17] });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    const errors = rig.sink.records.filter((record) => record.level === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      fields: { step: "flight" },
+      message: "a warm pool boot or creation failed",
+    });
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "boot-failed" })]);
+    expect(rig.clock.pendingTimerCount).toBe(1);
   });
 
   it("reports ram-budget and boots nothing when the capacity strategy refuses the shut-down device's boot", async () => {
@@ -1403,11 +1498,9 @@ describe("warm pool targets", () => {
         [ofKind("newer", "ready", 20), ofKind("older", "ready", 10), ofKind("oldest", "ready", 5)],
         { limit: 5, targets: [{ ...iphone17, count: 2 }] },
       );
-      expect([...rig.pool.targeted()]).toEqual([]);
-
       await rig.pool.pass();
 
-      expect([...rig.pool.targeted()].sort()).toEqual(["older", "oldest"]);
+      expect([...(await rig.pool.targeted())].sort()).toEqual(["older", "oldest"]);
     });
 
     it("does not name a device that is leased or claimed", async () => {
@@ -1419,7 +1512,7 @@ describe("warm pool targets", () => {
       rig.lease("leased");
       rig.claims.tryClaim("claimed", "boot");
 
-      expect([...rig.pool.targeted()]).toEqual([]);
+      expect([...(await rig.pool.targeted())]).toEqual([]);
     });
   });
 });

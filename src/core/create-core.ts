@@ -141,9 +141,14 @@ export interface Core {
    */
   passWarmPool(): Promise<void>;
   /** The devices the idle shutdown timer leaves alone: those a warm target keeps. */
-  targetedDevices(): ReadonlySet<string>;
-  /** Awaits the warm pool's running pass, so a graceful shutdown hands back a settled pool. */
+  targetedDevices(): Promise<ReadonlySet<string>>;
+  /** Awaits the warm pool's running pass, so a test or a reset sees a settled pool. */
   settle(): Promise<void>;
+  /**
+   * A graceful stop: the warm pool starts nothing new and finishes what is in flight, so the
+   * daemon exits on a settled pool.
+   */
+  drain(): Promise<void>;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
 }
@@ -342,8 +347,11 @@ export function createCore(options: CoreOptions): Core {
     async passWarmPool() {
       await warmPool.pass();
     },
-    targetedDevices() {
+    async targetedDevices() {
       return warmPool.targeted();
+    },
+    async drain() {
+      await warmPool.drain();
     },
     async settle() {
       await warmPool.settle();

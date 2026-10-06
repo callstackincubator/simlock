@@ -444,7 +444,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     settle: async () => {
       await leasing.settle();
-      await core.settle();
+      await core.drain();
     },
     // Drivers are disposed after the lease subsystem, and every one of them is tried even
     // when another throws: Android's disposal is the only thing that can stop the adb

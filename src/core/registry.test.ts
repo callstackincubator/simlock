@@ -796,6 +796,7 @@ describe("Registry", () => {
       id: device.id,
       lastLeaseEndedAt: 1_000,
       leaseIdentity: "reusable",
+      readyAt: 1_000,
       spec,
       mode: "full",
       state: "ready",
@@ -1038,16 +1039,14 @@ describe("Registry", () => {
       provisionDuration: 0,
       spec,
     });
-    await registry.transitionDevice(
-      device.id,
-      "ready",
-      { event: "device.ready", payload: { bootDuration: 5, deviceId: device.id } },
-      { readyAt: 4_242 },
-    );
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 5, deviceId: device.id },
+    });
 
     const reloaded = await Registry.load(options);
 
-    expect(reloaded.snapshot.devices[0]?.readyAt).toBe(4_242);
+    expect(reloaded.snapshot.devices[0]?.readyAt).toBe(1_000);
     const state = JSON.parse(await filesystem.readFile(statePath)) as {
       devices: Record<string, unknown>[];
     };

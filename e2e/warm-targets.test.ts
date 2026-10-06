@@ -140,6 +140,9 @@ describe("warm pool targets", () => {
       (rows) => rows.filter((row) => row.state === "ready").length === 1,
       "a replacement iPhone 17 is ready",
     );
+    const replacement = (await devices(env)).find(
+      (row) => row.state === "ready" && row.id !== targeted.device.id,
+    );
     expect((await env.cli(["release", targeted.lease.id])).code).toBe(0);
     const other = await lease(env, "other", "iPhone 16");
     expect((await env.cli(["release", other.lease.id])).code).toBe(0);
@@ -165,14 +168,15 @@ describe("warm pool targets", () => {
         }),
       }),
     );
-    // The extra iPhone 17 was never leased and no target counts it: the pool shuts it down.
+    // The extra iPhone 17 was never leased and no target counts it: the pool shuts that one down.
     await waitFor(
       async () =>
         (await named(env, "device.shutdown")).some(
           (entry) =>
-            (entry.payload as { initiator: string; deviceId: string }).initiator === "warm-pool",
+            (entry.payload as { initiator: string; deviceId: string }).initiator === "warm-pool" &&
+            (entry.payload as { deviceId: string }).deviceId === replacement?.id,
         ),
-      { label: "the pool shuts the never-leased device down", timeout: 45_000 },
+      { label: "the pool shuts the never-leased replacement down", timeout: 45_000 },
     );
     expect((await devices(env)).find((row) => row.id === targeted.device.id)?.state).toBe("ready");
   });
@@ -192,7 +196,17 @@ describe("warm pool targets", () => {
 
     const [first, second] = await named(env, "device.provisioned");
     expect((second?.timestamp ?? 0) - (first?.timestamp ?? 0)).toBeGreaterThanOrEqual(60_000);
-    expect(await readFile(env.logPath, "utf8")).toContain("boot-failed");
+    // The log names the target short with boot-failed between the two attempts, not only somewhere.
+    const lines = (await readFile(env.logPath, "utf8"))
+      .split("\n")
+      .filter((line) => line.includes("boot-failed"))
+      .map((line) => JSON.parse(line) as { timestamp: number });
+    expect(
+      lines.some(
+        (line) =>
+          line.timestamp >= (first?.timestamp ?? 0) && line.timestamp <= (second?.timestamp ?? 0),
+      ),
+    ).toBe(true);
   }, 130_000);
 
   it("under lease.identity.ios fresh with a target of one, has one ready device before any lease, and after a lease and release has deleted it and readied a new one", async () => {

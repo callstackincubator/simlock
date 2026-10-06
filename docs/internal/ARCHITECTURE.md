@@ -1165,8 +1165,17 @@ running slots (with `reserveRunning`), the device limit or RAM, never past
 A boot or creation for a target runs beside the pass and asks for the next one
 when it ends; a creation takes a provisioning reservation and an ownerless
 `boot` claim, which it gives up once the device is ready, so a request that
-serves it may wait for it. `retry.ts` is the one place a failed boot or
-creation is remembered, by resolved spec: one minute, doubling, at most ten.
+serves it may wait for it. `retry.ts` is the one place a target's failed boot or
+creation is remembered, by resolved spec: one minute, doubling, at most ten (a
+device whose boot or shutdown failed also gets a 30 s pause of its own in the
+converger, which no target reads).
+A graceful stop drains the pool (`WarmPool#drain`): it finishes the pass and the boots
+and creations already running and starts nothing new, so a stop never creates the
+missing devices of a target. The reaper's first run after a start asks the pool
+for the targeted set, which resolves the targets itself when no pass has yet.
+A target whose resolution fails as `unresolvable` keeps the spec it last resolved
+to, so one failed read does not make its devices unwanted. With the pool off no
+target is resolved, reported or spared.
 The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
 `no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
 `device-limit`, `ram-budget`) in its log and through `WarmPool#targets`.

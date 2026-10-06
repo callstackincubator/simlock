@@ -1151,5 +1151,6 @@ leases larger than `count` still pays the boot for the ones beyond it.
 
 **A failing target boots again and again, slowly.** A target whose devices
 never boot is retried after 1, 2, 4 and so on minutes, at most 10 apart, for
-as long as the daemon runs. There is no attempt limit; each try creates a
-device and deletes it again. `retry.ts` is the one place to add a limit.
+as long as the daemon runs. There is no attempt limit; each try boots the
+target's shut-down device of that kind, or, when it has none, creates a device
+and deletes it again. `retry.ts` is the one place to add a limit.

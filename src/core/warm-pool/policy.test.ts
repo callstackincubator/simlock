@@ -844,8 +844,9 @@ describe("warm pool policy", () => {
     it("never proposes a never-leased shutdown for a leased, claimed or booting device", () => {
       const leased = device("leased", "leased", { readyAt: 1 });
       const claimed = device("claimed", "ready", { readyAt: 1 });
+      const booting = device("booting", "provisioning", { readyAt: 1 });
 
-      expect(evaluate(view([leased, claimed], { claimed: ["claimed"] }))).toEqual([]);
+      expect(evaluate(view([leased, claimed, booting], { claimed: ["claimed"] }))).toEqual([]);
     });
 
     it("proposes nothing for a target when the running limit is full, and reports running-limit", () => {
@@ -985,27 +986,67 @@ describe("warm pool policy", () => {
       ]);
     });
 
-    it("takes a slot for each proposal, so a target of two with room for one proposes one and reports running-limit", () => {
+    it("takes a slot for each proposal, so a target of two with room for one proposes one and is not short while it fills", () => {
       const result = plan(view([], { limit: 1, maxConcurrentBoots: 2, targets: [target(2)] }));
 
       expect(result.proposals).toEqual([
         { action: "provision", reason: "target", spec: kind, target: kind },
       ]);
-      expect(result.targets[0]).toMatchObject({ ready: 0, short: "running-limit" });
+      expect(result.targets[0]).toStrictEqual({
+        count: 2,
+        ready: 0,
+        spec: kind,
+        target: "ios iPhone 17 26.0",
+      });
+    });
+
+    it("is short for a reason only when a pass could do nothing for it: not with a boot already running", () => {
+      const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+      const full = { limit: 1, maxConcurrentBoots: 2, targets: [target(2)] };
+
+      expect(plan(view([busy], full)).targets[0]).toMatchObject({ short: "running-limit" });
+      expect(plan(view([busy], { ...full, inFlight: [kind] })).targets[0]).not.toHaveProperty(
+        "short",
+      );
+    });
+
+    it("reports device-limit before running-limit and reserve, and those before ram-budget", () => {
+      const both = plan(
+        view([], {
+          limit: 1,
+          refuseProvision: "device-limit",
+          targets: [target(1)],
+          reserve: { ios: 1 },
+        }),
+      );
+      expect(both.targets[0]).toMatchObject({ short: "device-limit" });
+      const full = plan(
+        view([], { limit: 0, refuseProvision: "ram-budget", targets: [target(1)] }),
+      );
+      expect(full.targets[0]).toMatchObject({ short: "running-limit" });
+      const reserved = plan(
+        view([], {
+          limits: { ios: 1 },
+          refuseProvision: "ram-budget",
+          reserve: { ios: 1 },
+          targets: [target(1)],
+        }),
+      );
+      expect(reserved.targets[0]).toMatchObject({ short: "reserve" });
     });
 
     it.each([
       ["the machine", { limit: 1, limits: { ios: 5 } }],
       ["the platform", { limit: 5, limits: { ios: 1 } }],
     ])(
-      "stops proposing for a target of two once the slot is taken when %s alone has room for one",
+      "stops proposing for a target of two once the slot is taken when %s alone has room for one, and is not short",
       (_name, limits) => {
         const result = plan(view([], { ...limits, maxConcurrentBoots: 2, targets: [target(2)] }));
 
         expect(result.proposals).toEqual([
           { action: "provision", reason: "target", spec: kind, target: kind },
         ]);
-        expect(result.targets[0]).toMatchObject({ short: "running-limit" });
+        expect(result.targets[0]).not.toHaveProperty("short");
       },
     );
 

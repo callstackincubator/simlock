@@ -186,7 +186,7 @@ export interface DeviceRecord {
   readonly createdAt: number;
   readonly lastLeaseEndedAt?: number;
   /**
-   * When the device last became `ready`, written by every readiness transition. A record written
+   * When the device last became `ready`: the registry stamps it on every move into `ready`. A record written
    * before this field existed loads without it and counts as ready since `createdAt`
    * (`readySince`).
    */
@@ -370,6 +370,7 @@ export class IllegalTransition extends Error {
 /** Fields a driver call resolved alongside a transition -- currently a fresh `makeReady` address. */
 export interface DeviceTransitionUpdate {
   readonly address?: string;
+  /** Stamped by the registry on every move into `ready`; callers do not pass it. */
   readonly readyAt?: number;
   readonly driverData?: unknown;
   readonly mode?: DeviceMode;

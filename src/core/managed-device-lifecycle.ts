@@ -261,7 +261,7 @@ export class ManagedDeviceLifecycle {
           event: "device.ready",
           payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
         },
-        readyTransitionUpdate(ready, this.clock.now()),
+        readyTransitionUpdate(ready),
       );
       if (device === undefined) {
         await this.#release(claimed);

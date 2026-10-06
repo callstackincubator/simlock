@@ -278,7 +278,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
     }
 
-    const updated = transition(device, to, update);
+    const updated = this.#transitioned(device, to, update);
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -361,6 +361,22 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return cloneDevice(updated);
   }
 
+  /**
+   * The one place a device moves between states: `transition`, and every move into `ready` stamps
+   * `readyAt` with the moment of it, whichever path made the device ready.
+   */
+  #transitioned(
+    device: DeviceRecord,
+    to: DeviceState,
+    update?: DeviceTransitionUpdate,
+  ): DeviceRecord {
+    return transition(
+      device,
+      to,
+      to === "ready" ? { ...update, readyAt: this.options.clock.now() } : update,
+    );
+  }
+
   /** Commits a successful quarantine retry; the device rejoins the warm pool. */
   // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async recoverFromQuarantine(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
@@ -373,7 +389,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       quarantineNextRetryAt: _quarantineNextRetryAt,
       quarantinedAt: _quarantinedAt,
       ...updated
-    } = transition(device, to);
+    } = this.#transitioned(device, to);
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);

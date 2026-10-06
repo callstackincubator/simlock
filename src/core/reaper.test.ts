@@ -126,7 +126,7 @@ async function createHarness(
     readonly cleanupConfig?: Config;
     readonly filesystem?: MemoryFilesystem;
     readonly logger?: Logger;
-    readonly targetedDevices?: () => ReadonlySet<string>;
+    readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
     readonly tickMs?: number;
     readonly useEngineExecutor?: boolean;
   } = {},
@@ -340,7 +340,7 @@ describe("CleanupReaper", () => {
     const harness = await createHarness(
       automaticCleanupRules,
       {},
-      { targetedDevices: () => targeted },
+      { targetedDevices: async () => targeted },
     );
     const kept = await seedReleased(harness, "ready");
     harness.clock.advance(11_000);

@@ -78,8 +78,8 @@ interface Flight {
  * device lifecycle and the provisioner, revalidating the device first (safety rule 2). A trigger
  * that arrives during a pass asks for one more, not one each.
  *
- * Every action ends in `kick()`, whether it worked or not, so a request waiting on a boot the
- * pool started plans again either way. A boot or creation for a target runs beside the pass, up
+ * Every action that is attempted ends in `kick()`, whether it worked or not, so a request waiting
+ * on a boot the pool started plans again either way; one declined before it began does not. A boot or creation for a target runs beside the pass, up
  * to `maxConcurrentBoots` at a time, and asks for the next pass when it ends.
  */
 export class WarmPool {
@@ -92,11 +92,15 @@ export class WarmPool {
   readonly #flights = new Set<Flight>();
   #again = false;
   #disposed = false;
+  /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
+  #draining = false;
   #started = false;
   /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
   /** The targets that resolved on the last pass, and every target's state as it left them. */
-  #resolved: readonly ResolvedTarget[] = [];
+  #resolved: readonly ResolvedTarget[] | undefined;
+  /** The spec each target last resolved to, which a transient refusal does not take away. */
+  readonly #lastSpecs = new Map<string, DeviceSpec>();
   #reports: readonly TargetReport[] = [];
   #loggedShort = new Set<string>();
   #retryTimer: TimerHandle | undefined;
@@ -147,16 +151,30 @@ export class WarmPool {
   }
 
   /**
-   * The devices the idle shutdown timer leaves alone: for each target of the last pass, its ready
-   * unleased devices of that kind, oldest first, up to its count.
+   * A graceful stop: starts nothing new, then waits for the pass and the boots and creations
+   * already running (architecture rule 12). Without it each flight that ends would ask for the
+   * next pass, and a stop would create every missing target device before it exited.
    */
-  targeted(): ReadonlySet<string> {
+  async drain(): Promise<void> {
+    this.#draining = true;
+    await this.settle();
+  }
+
+  /**
+   * The devices the idle shutdown timer leaves alone: for each target, its ready unleased devices
+   * of that kind, oldest first, up to its count. Targets not yet resolved by any pass are resolved
+   * first, so the reaper's first run after a start does not read an empty set; none with the
+   * pool off.
+   */
+  async targeted(): Promise<ReadonlySet<string>> {
+    if (!this.options.config.enabled) return new Set();
+    if (this.#resolved === undefined) await this.#resolveTargets();
     const { devices, leases } = this.options.registry.snapshot;
     return targetedDevices({
       devices,
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
-      targets: this.#resolved,
+      targets: this.#resolved ?? [],
     });
   }
 
@@ -166,7 +184,7 @@ export class WarmPool {
   }
 
   #trigger(): void {
-    if (this.#disposed) return;
+    if (this.#disposed || this.#draining) return;
     void this.pass();
   }
 
@@ -181,7 +199,7 @@ export class WarmPool {
   #armRetry(): void {
     if (this.#retryTimer !== undefined) this.options.clock.cancel(this.#retryTimer);
     this.#retryTimer = undefined;
-    if (this.#disposed) return;
+    if (this.#disposed || this.#draining) return;
     const now = this.options.clock.now();
     const at = this.#schedule.nextAttemptAt(now);
     if (at === undefined) return;
@@ -199,6 +217,7 @@ export class WarmPool {
   }
 
   async #once(): Promise<void> {
+    if (this.#draining) return;
     if (this.options.acquisition.maintenanceActive) {
       // Whatever is shut down under a reset, an iOS device its forced release left that way
       // included, is meant to stay down.
@@ -208,10 +227,14 @@ export class WarmPool {
       return;
     }
     try {
-      const refused = await this.#resolveTargets();
+      // A pool that is off keeps no target: nothing is resolved, reported or spared.
+      const refused = this.options.config.enabled ? await this.#resolveTargets() : [];
       const plan = await this.options.decisions.run(() => evaluate(this.#view()));
       this.#note([...refused, ...plan.targets]);
-      for (const proposal of plan.proposals) await this.#act(proposal);
+      for (const proposal of plan.proposals) {
+        if (this.#draining) break;
+        await this.#act(proposal);
+      }
       this.#armRetry();
     } catch (error: unknown) {
       this.#logger.error("a warm pool pass failed", { step: "pass", error: stableError(error) });
@@ -233,17 +256,28 @@ export class WarmPool {
     const resolved: ResolvedTarget[] = [];
     const refused: TargetReport[] = [];
     for (const { resolution, target } of answers) {
-      if ("refusal" in resolution) {
-        refused.push({
-          count: target.count,
-          message: resolution.message,
-          ready: 0,
-          short: resolution.refusal,
-          target: describeTarget(target),
-        });
+      const key = JSON.stringify(target);
+      if ("spec" in resolution) {
+        this.#lastSpecs.set(key, resolution.spec);
+        resolved.push({ count: target.count, spec: resolution.spec });
         continue;
       }
-      resolved.push({ count: target.count, spec: resolution.spec });
+      // A refusal for any reason but a settled fact (no driver, no such runtime or model) may be a
+      // read that failed once: the target keeps the spec it last resolved to, so the pass does not
+      // treat its devices as unwanted.
+      const last = resolution.refusal === "unresolvable" ? this.#lastSpecs.get(key) : undefined;
+      if (last !== undefined) {
+        resolved.push({ count: target.count, spec: last });
+        continue;
+      }
+      this.#lastSpecs.delete(key);
+      refused.push({
+        count: target.count,
+        message: resolution.message,
+        ready: 0,
+        short: resolution.refusal,
+        target: describeTarget(target),
+      });
     }
     this.#resolved = resolved;
     return refused;
@@ -308,7 +342,7 @@ export class WarmPool {
       now: this.options.clock.now(),
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
-      targets: this.#resolved,
+      targets: this.#resolved ?? [],
       waiting: this.options.acquisition.waitingDemand(),
     };
   }
@@ -345,6 +379,8 @@ export class WarmPool {
           step: "flight",
           error: stableError(error),
         });
+        // Held back like any failure, so the pass it asks for does not try again at once.
+        this.#failed(spec);
         return true;
       })
       .then((attempted) => {

@@ -69,13 +69,9 @@ export interface DriverDevice {
  * commits a driver's post-`makeReady` result (`ManagedDeviceLifecycle`)
  * so they can't drift on this.
  */
-export function readyTransitionUpdate(
-  readyDevice: DriverDevice,
-  readyAt: number,
-): DeviceTransitionUpdate {
+export function readyTransitionUpdate(readyDevice: DriverDevice): DeviceTransitionUpdate {
   return {
     address: readyDevice.address,
-    readyAt,
     driverData: readyDevice.driverData,
     mode: readyDevice.mode ?? "full",
   };

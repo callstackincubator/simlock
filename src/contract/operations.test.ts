@@ -846,7 +846,7 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
   });
 
-  it("config.get: keeps every warm target key and rejects a target the config loader would not have written", () => {
+  it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
     const targets = [
       { count: 2, mode: "slim", model: "iPhone 17", osVersion: ">=18", platform: "ios" },
       { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
