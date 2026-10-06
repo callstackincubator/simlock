@@ -620,6 +620,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     let handoff: ReadyDeviceHandoff;
     try {
       handoff = await this.options.provisioner.provision(spec, {
+        claim: { kind: "boot", owner: waiter.id },
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -693,6 +694,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.planner.plan({
       failures: waiter.failures,
       noWait: waiter.options.noWait ?? false,
+      owner: waiter.id,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
       requirement: waiter.requirement,
@@ -836,7 +838,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       let destroyed = true;
       try {
         destroyed =
-          (await this.options.lifecycle.destroy(device, "lease-engine", "boot")) !== undefined;
+          (await this.options.lifecycle.destroy(device, "lease-engine", "cleanup")) !== undefined;
       } catch (destroyError: unknown) {
         this.#logFailure(
           "destroying a device that failed to boot failed",
@@ -850,7 +852,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.options.decisions.run(async () => {
         if (destroyed) capacityReservation.release();
         else if (!this.options.claims.isClaimed(device.id))
-          this.options.claims.tryClaim(device.id, "boot");
+          this.options.claims.tryClaim(device.id, "boot", waiter.id);
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }

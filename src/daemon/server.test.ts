@@ -3285,6 +3285,7 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      reserveRunning: { android: 0, ios: 0 },
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

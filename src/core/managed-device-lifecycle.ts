@@ -92,8 +92,11 @@ export class ManagedDeviceLifecycle {
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
-  async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning");
+  async readyProvisionedForLease(
+    target: DeviceRecord,
+    claim?: DeviceOperationClaim,
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    return this.#makeReadyForLease(target, "provisioning", claim);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by cleanup, acquisition and nuke.

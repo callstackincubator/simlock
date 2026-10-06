@@ -840,8 +840,9 @@ progress notifications precisely so clients can pass
 as in `client.callTool(request, undefined, { resetTimeoutOnProgress: true,
 timeout: 600_000 })`. Nothing hides this: a released iOS simulator is shut
 down after its erase, and the warm pool boots it back only when the running
-limit has room, so a slim lease that arrives before that boot ends, or when
-there is no room, pays the cold boot.
+limit has room, so a slim lease that arrives before that boot starts, or when
+there is no room, pays the cold boot; one that arrives while it runs waits for
+it and pays what is left of it.
 
 **`launchctl disable` accepts labels that do not exist.** Verified on iOS
 26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits

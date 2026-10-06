@@ -122,7 +122,7 @@ function harness(
         options.refuseClaim === true ? undefined : claims.tryClaim(id, operation),
     },
     clock,
-    config: { enabled: options.enabled ?? true },
+    config: { enabled: options.enabled ?? true, reserveRunning: { android: 0, ios: 0 } },
     decisions: new SerializedDecision(),
     eventBus,
     idle: { shutdownAfterMs: 10 * minute },

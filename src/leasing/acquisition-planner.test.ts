@@ -45,6 +45,7 @@ const config: Config = {
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -112,12 +113,14 @@ function plan(
     failures?: number;
     leases?: readonly LeaseRecord[];
     noWait?: boolean;
+    owner?: string;
     spec?: DeviceSpec;
   } = {},
 ) {
   return acquisitionPlanner.plan({
     failures: options.failures ?? 0,
     noWait: options.noWait ?? false,
+    ...(options.owner === undefined ? {} : { owner: options.owner }),
     snapshot: { devices, leases: options.leases ?? [] },
     spec: options.spec ?? spec,
   });
@@ -373,6 +376,132 @@ describe("AcquisitionPlanner", () => {
       // With the slim device gone, 5 GiB is used of 8: the 3.5 GiB full device still does not fit.
       const afterEviction = [android, leasedSlim, { ...idleSlim, state: "deleted" as const }];
       expect(plan(acquisitionPlanner, afterEviction, { leases })).toEqual({ kind: "wait" });
+    });
+  });
+
+  describe("a device on its way", () => {
+    const roomy: Config["capacity"] = {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 2, maxRunning: 2 },
+          ios: { maxDevices: 3, maxRunning: 3 },
+          maxRunning: 3,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
+    };
+
+    it("waits for a serving shut-down device under a boot claim no request owns", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const booting = device("booting", "shutdown");
+      claims.tryClaim(booting.id, "boot");
+
+      expect(plan(acquisitionPlanner, [booting])).toEqual({ kind: "wait" });
+    });
+
+    it("plans as if the device were absent under noWait", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const booting = device("booting", "shutdown");
+      claims.tryClaim(booting.id, "boot");
+
+      const result = plan(acquisitionPlanner, [booting], { noWait: true });
+
+      const absent = plan(acquisitionPlanner, [], { noWait: true });
+
+      expect(result.kind).toBe("provision");
+      expect(absent.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+      if (absent.kind === "provision") absent.reservation.release();
+    });
+
+    it("waits for a serving provisioning device under a boot claim no request owns", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const creating = device("creating", "provisioning");
+      claims.tryClaim(creating.id, "boot");
+
+      expect(plan(acquisitionPlanner, [creating])).toEqual({ kind: "wait" });
+    });
+
+    it("ignores a provisioning device under a boot claim another waiter owns and provisions", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const creating = device("creating", "provisioning");
+      claims.tryClaim(creating.id, "boot", "waiter-2");
+
+      const result = plan(acquisitionPlanner, [creating]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
+    it("ignores a provisioning device with no claim at all and provisions", () => {
+      const { planner: acquisitionPlanner } = planner(roomy);
+
+      const result = plan(acquisitionPlanner, [device("left-behind", "provisioning")]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
+    it("ignores a ready device under a boot claim no request owns, which is a boot already done, and provisions", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const done = device("done", "ready");
+      claims.tryClaim(done.id, "boot");
+
+      const result = plan(acquisitionPlanner, [done]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
+    it("ignores a serving device under an eviction or a cleanup claim and provisions", () => {
+      for (const operation of ["eviction", "cleanup"] as const) {
+        const { claims, planner: acquisitionPlanner } = planner(roomy);
+        const busy = device(`busy-${operation}`, "shutdown");
+        claims.tryClaim(busy.id, operation);
+
+        const result = plan(acquisitionPlanner, [busy]);
+
+        expect(result.kind).toBe("provision");
+        if (result.kind === "provision") result.reservation.release();
+      }
+    });
+
+    it("does not wait for a device on its way in another pool mode", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const slim = device("slim", "shutdown", { ...spec, mode: "slim" });
+      claims.tryClaim(slim.id, "boot");
+
+      const result = plan(acquisitionPlanner, [slim]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
+    it("grants a ready device before it waits for one on its way", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const booting = device("booting", "shutdown");
+      const ready = device("ready", "ready");
+      claims.tryClaim(booting.id, "boot");
+
+      expect(plan(acquisitionPlanner, [booting, ready])).toEqual({
+        device: ready,
+        kind: "grant-ready",
+      });
+    });
+
+    it("puts the requesting waiter's id on the boot claim it takes", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const shutdown = device("shutdown", "shutdown");
+
+      const result = plan(acquisitionPlanner, [shutdown], { owner: "waiter-1" });
+
+      expect(result.kind).toBe("boot-shutdown");
+      expect(claims.claim(shutdown.id)).toEqual({ kind: "boot", owner: "waiter-1" });
+      if (result.kind === "boot-shutdown") {
+        result.capacityReservation.release();
+        result.claim.release();
+      }
     });
   });
 });

@@ -273,8 +273,8 @@ relays that operation to workers, so a worker without it must be
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
 required capacity field, taking it to 11, and ADR 0015 §3 makes
 `modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
-`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15). So the range both
-sides advertise is `{min: 16, max: 16}`, an older client and a current daemon simply
+`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15), and `config.get`'s required `warmPool.reserveRunning` takes it to 17. So the range both
+sides advertise is `{min: 17, max: 17}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -935,7 +935,7 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
   ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
   ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
-  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is; a
+  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is, then to `{min: 17, max: 17}`, because `config.get`'s `warmPool.reserveRunning` is; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
@@ -1203,6 +1203,9 @@ pool's call, made in a pass after the commit: it shuts idle devices down when
 the running count is over its budget, least recently used first and never one
 that serves a waiting request, and boots a shut-down device back when it
 serves a waiting request or was released a moment ago and there is room.
+`warmPool.reserveRunning` takes running slots per platform (and their sum from
+the global count) off that room for idle devices only: a request is never held
+back by it.
 `warmPool.enabled: false` keeps nothing warm. Active demand may still evict
 deterministic LRU warm inventory before starting requested work, without
 bypassing the FIFO head.
@@ -1989,8 +1992,13 @@ lists, classes alike, and pairs with an installed runtime, of the requested
 image tag if one is named) and a `DeviceRequirement` kept on the waiter
 beside its spec. `fits` in `domain.ts` is the one place a requirement meets
 a device (platform, model or class, OS, image tag); the planner adds the
-pool-mode comparison and looks for a `ready` device that fits, then a
-`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+pool-mode comparison and looks for a `ready` device that fits, then, unless the
+request is `noWait`, for a fitting device already on its way (`shutdown` under a
+`boot` claim no request owns: the warm pool's own boot; a `provisioning` device
+under such a claim counts the same, for the creations the pool will make) and
+waits for it, then a `shutdown` one, then provisions the create spec. A claim
+carries its `owner`, the waiter id, only when a request took it, so a device
+another request is booting or creating for itself is never waited for. `sameSpec` is untouched and
 still names pool identity for the warm pool, reclaim and the idempotency
 check. A class is read from the catalog entry (`modelClasses`) at the moment
 a fit is decided; a device record stores none.

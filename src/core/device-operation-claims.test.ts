@@ -45,4 +45,23 @@ describe("DeviceOperationClaims", () => {
     expect(claims.operationFor("device-1")).toBe("recovery");
     expect(claims.tryClaim("device-1", "cleanup")).toBeUndefined();
   });
+
+  it("reports a claim's kind and owner, an unowned claim with no owner, and no claim as undefined", () => {
+    const claims = new DeviceOperationClaims();
+    claims.tryClaim("device-1", "boot", "waiter-1");
+    claims.tryClaim("device-2", "boot");
+
+    expect(claims.claim("device-1")).toStrictEqual({ kind: "boot", owner: "waiter-1" });
+    expect(claims.claim("device-2")).toStrictEqual({ kind: "boot" });
+    expect(claims.claim("device-3")).toBeUndefined();
+  });
+
+  it("forgets the owner when the claim is released", () => {
+    const claims = new DeviceOperationClaims();
+    claims.tryClaim("device-1", "boot", "waiter-1")?.release();
+
+    expect(claims.claim("device-1")).toBeUndefined();
+    expect(claims.tryClaim("device-1", "boot")).toBeDefined();
+    expect(claims.claim("device-1")).toStrictEqual({ kind: "boot" });
+  });
 });

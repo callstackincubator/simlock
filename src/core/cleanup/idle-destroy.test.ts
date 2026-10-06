@@ -36,6 +36,7 @@ const config: Config = {
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
