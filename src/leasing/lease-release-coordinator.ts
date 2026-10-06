@@ -150,15 +150,19 @@ export class LeaseReleaseCoordinator
    */
   async endAtStartup(leaseId: string, ending: StartupEnding): Promise<void> {
     await this.#runNormal(async () => {
-      if (ending.device === "missing") {
-        await this.options.decisions.run(() =>
-          this.options.lifecycle.endForMissingDevice(leaseId, ending.reason),
-        );
-        return;
+      switch (ending.device) {
+        case "missing":
+          await this.options.decisions.run(() =>
+            this.options.lifecycle.endForMissingDevice(leaseId, ending.reason),
+          );
+          return;
+        case "reclaim":
+          await this.#release(leaseId, ending.reason, { reclaim: "background" });
+          return;
+        case "wait":
+          await this.#release(leaseId, ending.reason, { reclaim: "none" });
+          return;
       }
-      await this.#release(leaseId, ending.reason, {
-        reclaim: ending.device === "reclaim" ? "background" : "none",
-      });
     });
   }
 

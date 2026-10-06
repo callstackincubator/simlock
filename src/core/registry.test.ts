@@ -1608,6 +1608,54 @@ describe("Registry", () => {
     ]);
   });
 
+  it("ends only the named lease and marks only its device deleted, leaving every other lease and device as they were, with the event's module registry", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    let next = 0;
+    const registry = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => String(next++) },
+      statePath,
+    });
+    const leases = [];
+    for (const name of ["one", "two"]) {
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: `driver_${name}`,
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      leases.push(
+        await registry.createLease({
+          deviceId: device.id,
+          requesterId: name,
+          ownerId: name,
+          ttlMs: 60_000,
+          ttlDeadline: 2_000,
+        }),
+      );
+    }
+    const [first, second] = leases;
+    if (first === undefined || second === undefined) throw new Error("leases not created");
+
+    await registry.endLeaseAndMarkDeviceMissing(second.id, "doctor", () => undefined);
+
+    expect(registry.snapshot.leases).toEqual([first]);
+    expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toEqual([
+      [first.deviceId, "leased"],
+      [second.deviceId, "deleted"],
+    ]);
+    expect(bus.replay().filter((entry) => entry.event === "device.deleted")).toMatchObject([
+      { module: "registry", payload: { deviceId: second.deviceId, initiator: "doctor" } },
+    ]);
+  });
+
   it("refuses to end a lease it does not hold, writing nothing and announcing nothing", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new ObservingFilesystem();

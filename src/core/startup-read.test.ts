@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import type { Driver, DriverReality, ObservedDevice } from "./driver.js";
 import type { Platform } from "./domain.js";
 import { readStartup, STARTUP_READ_LIMIT_MS } from "./startup-read.js";
@@ -94,5 +94,44 @@ describe("readStartup", () => {
 
     expect(read.reality("ios")).toEqual(reality("a"));
     expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("logs a platform whose listManaged throws, naming the platform and the error", async () => {
+    const sink = new MemoryLogSink();
+    const clock = new FakeClock(0);
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const ios = driver("ios", async () => {
+      throw new Error("simctl broke");
+    });
+
+    await readStartup({ clock, drivers: [ios.driver], logger });
+
+    expect(sink.records).toMatchObject([
+      {
+        fields: { error: "Error: simctl broke", platform: "ios" },
+        level: "warn",
+        message: "startup read failed; the platform is unreadable",
+      },
+    ]);
+  });
+
+  it("logs a platform that passed the 60-second limit, naming the platform and the limit", async () => {
+    const sink = new MemoryLogSink();
+    const clock = new FakeClock(0);
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const ios = driver("ios", () => new Promise<DriverReality>(() => undefined));
+
+    const pending = readStartup({ clock, drivers: [ios.driver], logger });
+    await vi.waitFor(() => expect(ios.list).toHaveBeenCalledTimes(1));
+    clock.advance(STARTUP_READ_LIMIT_MS);
+    await pending;
+
+    expect(sink.records).toMatchObject([
+      {
+        fields: { limitMs: 60_000, platform: "ios" },
+        level: "warn",
+        message: "startup read passed its limit; the platform is unreadable",
+      },
+    ]);
   });
 });

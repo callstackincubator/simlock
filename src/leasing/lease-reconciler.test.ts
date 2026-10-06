@@ -18,16 +18,20 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReconciler } from "./lease-reconciler.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 
-async function createHarness() {
+const STATE_PATH = "/home/agent/.simlock/state.json";
+
+async function createHarness(options: { readonly ids?: readonly string[] } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
+  const ids = [...(options.ids ?? [])];
   let nextId = 0;
+  const filesystem = new MemoryFilesystem();
   const registry = await Registry.load({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
-    idGenerator: { generate: () => `${nextId++}` },
-    statePath: "/home/agent/.simlock/state.json",
+    filesystem,
+    idGenerator: { generate: () => ids.shift() ?? `${nextId++}` },
+    statePath: STATE_PATH,
   });
   const lifecycle = new LeaseLifecycle({
     clock,
@@ -51,7 +55,17 @@ async function createHarness() {
     },
   });
   const reconciler = new LeaseReconciler({ clock, ender: coordinator, registry });
-  return { claims, clock, coordinator, eventBus, lifecycle, reclaims, reconciler, registry };
+  return {
+    claims,
+    clock,
+    coordinator,
+    eventBus,
+    filesystem,
+    lifecycle,
+    reclaims,
+    reconciler,
+    registry,
+  };
 }
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
@@ -259,5 +273,77 @@ describe("LeaseReconciler", () => {
 
     expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual([lease.id]);
     expect(eventNames(harness)).toEqual([]);
+  });
+
+  it("ends the leases in deadline order, then id order, whatever order they were granted in", async () => {
+    // Ids are handed out device, lease, device, lease, ...: "z" is granted first but sorts last.
+    const harness = await createHarness({ ids: ["a", "z", "b", "a", "c", "m"] });
+    const late = await leaseOn(harness, "ios", "d1", 5_000);
+    const middle = await leaseOn(harness, "ios", "d2", 3_000);
+    const early = await leaseOn(harness, "ios", "d3", 2_000);
+    expect([late.id, middle.id, early.id]).toEqual(["lse_z", "lse_a", "lse_m"]);
+
+    await harness.reconciler.run(
+      read({ ios: reality(["d1", "stopped"], ["d2", "stopped"], ["d3", "stopped"]) }),
+    );
+
+    expect(
+      harness.eventBus
+        .replay()
+        .filter((entry) => entry.event === "lease.released")
+        .map((entry) => (entry.payload as { leaseId: string }).leaseId),
+    ).toEqual(["lse_m", "lse_a", "lse_z"]);
+  });
+
+  it("breaks a deadline tie by lease id", async () => {
+    const harness = await createHarness({ ids: ["a", "z", "b", "a"] });
+    await leaseOn(harness, "ios", "d1", 5_000);
+    await leaseOn(harness, "ios", "d2", 5_000);
+
+    await harness.reconciler.run(read({ ios: reality(["d1", "stopped"], ["d2", "stopped"]) }));
+
+    expect(
+      harness.eventBus
+        .replay()
+        .filter((entry) => entry.event === "lease.released")
+        .map((entry) => (entry.payload as { leaseId: string }).leaseId),
+    ).toEqual(["lse_a", "lse_z"]);
+  });
+
+  it("leaves a lease whose device record is gone for the expiry timers, and still ends the others", async () => {
+    const harness = await createHarness();
+    const orphan = await leaseOn(harness, "ios", "d1", 5_000);
+    const ended = await leaseOn(harness, "ios", "d2", 6_000);
+    const state = JSON.parse(await harness.filesystem.readFile(STATE_PATH)) as {
+      devices: { id: string }[];
+    };
+    await harness.filesystem.writeFileAtomic(
+      STATE_PATH,
+      JSON.stringify({ ...state, devices: state.devices.filter((d) => d.id !== orphan.deviceId) }),
+    );
+    const reloaded = await Registry.load({
+      clock: harness.clock,
+      eventBus: harness.eventBus,
+      filesystem: harness.filesystem,
+      idGenerator: { generate: () => "unused" },
+      statePath: STATE_PATH,
+    });
+    const reconciler = new LeaseReconciler({
+      clock: harness.clock,
+      ender: harness.coordinator,
+      registry: reloaded,
+    });
+
+    await reconciler.run(read({ ios: reality(["d2", "stopped"]) }));
+
+    // The reconciler read the reloaded snapshot, where the orphan has no device; the ender acts on
+    // the harness's own registry, where it was never touched.
+    expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual([orphan.id]);
+    expect(
+      harness.eventBus
+        .replay()
+        .filter((entry) => entry.event === "lease.released")
+        .map((entry) => (entry.payload as { leaseId: string }).leaseId),
+    ).toEqual([ended.id]);
   });
 });
