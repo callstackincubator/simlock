@@ -4,18 +4,19 @@ import { NoopLogger } from "../ports/index.js";
 
 /**
  * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
- * §27a, §30). Nothing here is persisted -- like every worker view, it is rebuilt from what a
- * worker reports (`rebuildFromWorker`) whenever the gateway can see it, which is what makes a
- * gateway restart lose nothing a worker restart would not also lose (Decision 5).
+ * §27a, §30; ADR 0020). Nothing here is persisted -- like every worker view, it is rebuilt from
+ * what a worker reports (`rebuildFromWorker`) whenever the gateway can see it. A gateway restart
+ * loses nothing a worker restart would not also lose (Decision 5) for a generated id, which names
+ * its worker; a caller-chosen id (ADR 0020) is bare and routed by this index alone, so for the
+ * moment before its worker has reported, the gateway does not know it.
  *
- * A gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) -- or, for
- * a lease whose requester chose its id (ADR 0020), as that id bare, routed by this index alone --
- * and never re-derived by splitting the string back apart -- every lookup in this class goes through the
- * map this index keeps, keyed by the id it minted or by the `(workerId, workerLeaseId)` pair a
- * relayed worker event carries. The "split on the first `.`" the ADR describes is what makes the
- * id *routable in principle* (a worker id is a UUID, so it can never itself contain the
- * separator); nothing in this codebase needs to actually perform that split, because this index
- * always has the structured pair already.
+ * A generated gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) --
+ * a caller-chosen one is that id as sent, bare -- and never re-derived by splitting the string back
+ * apart: every lookup in this class goes through the map this index keeps, keyed by the id it
+ * minted or by the `(workerId, workerLeaseId)` pair a relayed worker event carries. The "split on
+ * the first `.`" the ADR describes is what makes a generated id *routable in principle* (a worker
+ * id is a UUID, so it can never itself contain the separator); nothing in this codebase needs to
+ * actually perform that split, because this index always has the structured pair already.
  */
 
 /** One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*

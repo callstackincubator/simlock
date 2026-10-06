@@ -758,14 +758,27 @@ state at all. `lease.renew`, `lease.release`, and single-lease reads are
 worker's own. There is nothing to emulate and no timer to run: a client that
 stops renewing loses its lease on the worker's clock, gateway or no gateway.
 
-- **The lease id names its worker.** A gateway lease id is the owning
-  worker's id, then a `.`, then the worker's own lease id — so renew,
-  release, and reads route by splitting on the **first** `.` rather than by
-  consulting state a restart could lose. A worker id is its instance
-  identity, a UUID, so a real one reads
-  `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in these
-  docs abbreviates it to its first segment for legibility. Clients treat the
-  whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A generated lease id names its worker.** A gateway lease id for a lease
+  simlock generated is the owning worker's id, then a `.`, then the worker's
+  own lease id. A worker id is its instance identity, a UUID, so a real one
+  reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in
+  these docs abbreviates it to its first segment for legibility. Clients treat
+  the whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A caller-chosen lease id crosses the gateway bare** (ADR 0020). A
+  requester that sent `leaseId` gets a lease with exactly that id, with no
+  worker prefix, because an id the caller made up cannot carry one. The
+  gateway routes renew, release and reads for it from its lease index, an
+  in-memory map it rebuilds from what workers report (a lease flagged
+  `idChosenByRequester` whose id matches the `leaseId` pattern is named
+  bare), so a gateway restart loses bare routes until each worker has
+  reported; a renew in that window is `UNKNOWN_LEASE`, and the gateway never
+  asks a worker on a miss. The gateway takes the id from what it forwarded,
+  never from the worker's echo; a grant that differs is released on the worker
+  and the request waits again. It refuses an id its own leases or its own
+  waiting requests hold, and passes a worker's `LEASE_ID_TAKEN` on without
+  trying another worker. If two workers ever report the same bare id, the
+  first stays routed and the other lease expires at its TTL (reviewed in
+  #412).
 - **The lease object gains `worker: { id, label }`** (additive) so a client
   and the console can say *where* the device lives. A worker's network
   address is never on it: clients reach devices through the gateway.

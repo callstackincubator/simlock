@@ -129,6 +129,25 @@ installer printed one. A request that joins a download already running hears
 that download's latest progress at once. A request that needs no download
 never hears this stage.
 
+**Choosing the lease ID.** Pass `leaseId` when you already have your own ID
+for the lease and want Simlock to use it, so there is nothing to map:
+
+```ts
+const grant = await client.requestLease({ platform: "ios", leaseId: "ad-7f3a" });
+grant.lease.id; // "ad-7f3a"
+grant.lease.idChosenByRequester; // true
+```
+
+The ID is 1 to 64 ASCII letters, digits, `-` and `_`, starts with a letter or
+digit, and is case-sensitive; anything else is a `BAD_REQUEST`. `renewLease`,
+`releaseLease` and the lease lists then name the lease by that ID, against a
+gateway too, where it comes back with no worker in front of it. You keep the
+ID unique for all time: it names one lease, and you do not send it again once
+that lease has ended. Simlock refuses one an active lease or a waiting request
+holds with `LEASE_ID_TAKEN` (`details.leaseId`), after the
+`REQUESTER_ALREADY_LEASED` check, and keeps no record of IDs already used.
+Without `leaseId` a request gets an ID from Simlock, as before.
+
 **Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
@@ -160,7 +179,8 @@ the request is still waiting you join that wait, and once it has a result
 you get that result. Either way it never grants you a second lease. A result
 is never worked out again: a request that failed stays failed under its key,
 so use a new key to try again. Keys last for `lease.requestRetentionMs` after
-the request finishes. The same key with a different device is
+the request finishes. The same key with a different device, or a different
+`leaseId` (sent on one call and not the other counts as different), is
 `IDEMPOTENCY_CONFLICT`. Keys belong to a requester id, and a repeat must come
 from the same connection principal that sent the request: the same key and
 requester id from a different principal is `FORBIDDEN`. A request still waiting when the daemon restarts
@@ -737,7 +757,7 @@ difference, and neither does code written against it.
 mode (`"slim" | "full"`). Everything else you might reach for is a leaky
 inference rather than an answer: a lease from a gateway carries an additive
 `worker: { id, label }` block, but so might a future single-machine daemon's;
-a lease id from a gateway names its worker, but ids are opaque and parsing
+a lease id from a gateway can name its worker, but ids are opaque and parsing
 one is a bug waiting to happen.
 
 Two behaviours worth knowing when the daemon on the other end is a gateway,

@@ -84,6 +84,7 @@ command starts it again) to bring the platform up.
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
 | 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
+| 13 | `LEASE_ID_TAKEN` | `lease --lease-id` named an ID an active lease or a waiting request already holds |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 | 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
 
@@ -176,7 +177,7 @@ a timer and releasing it when it exits.
 ```
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
-              [--timeout <duration>]
+              [--timeout <duration>] [--lease-id <id>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
 ```
@@ -209,6 +210,15 @@ granted.
   [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
   agent tool's session id, then a pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
+- `--lease-id <id>` — the ID the granted lease gets, in place of one Simlock
+  generates, for a caller that already has its own ID for the lease. 1 to 64
+  ASCII letters, digits, `-` and `_`, starting with a letter or digit, and
+  case-sensitive; anything else is a `BAD_REQUEST` (exit 2). The ID is yours
+  to keep unique for all time: use it for one lease and do not send it again
+  once that lease has ended. An ID an active lease or a waiting request
+  already holds is `LEASE_ID_TAKEN` (exit 13); a requester that already holds
+  a lease gets `REQUESTER_ALREADY_LEASED` first. `renew`, `release` and
+  `list` then name the lease by this ID, through a gateway too.
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
@@ -789,9 +799,13 @@ The grant carries one additional block so you can see where it landed:
 {"lease":{"id":"3f81a2c4.lse_9f2c","worker":{"id":"3f81a2c4","label":"mac-studio-2"}}}
 ```
 
-The lease id names its worker (that is how renew, release, and reads route
-with no gateway-side state to lose), but it is **opaque** — do not parse it.
-`worker.label` is display-only.
+A lease Simlock named has an id that names its worker (that is how renew,
+release, and reads route), but it is **opaque** — do not parse it. A lease
+you named with `--lease-id` keeps exactly that ID through a gateway, with no
+worker in front of it; the gateway finds the worker from a table it keeps in
+memory and rebuilds from its workers after a restart, so a renew or release
+in the moment after a restart can answer `UNKNOWN_LEASE` until the worker has
+reported. `worker.label` is display-only.
 
 **`lease renew`, `release`, and lease reads are forwarded** to the worker
 that owns the lease, and the `ttlDeadline` you see is that worker's own.
