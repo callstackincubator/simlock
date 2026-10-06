@@ -244,7 +244,18 @@ async function createHarness(
       store: registry,
     }),
   });
-  return { bus, clock, components, coordinator, driver, filesystem, queue, registry, requestIds };
+  return {
+    bus,
+    claims,
+    clock,
+    components,
+    coordinator,
+    driver,
+    filesystem,
+    queue,
+    registry,
+    requestIds,
+  };
 }
 
 async function seedReady(
@@ -1411,6 +1422,34 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
+  });
+
+  it("A shut-down device that fails to boot for a waiter and then fails to be destroyed is quarantined, unclaimed, and counts once against running capacity.", async () => {
+    // Two running slots: the failed device's and the one a second request needs.
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const shutdown = await seedShutdown(harness);
+    // Call 1 is seedReady's own boot; call 2 is the waiter's.
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+    await settle();
+
+    // A named state something retries, not a `shutdown` record every planner skips.
+    expect({
+      claimed: harness.claims.isClaimed(shutdown.id),
+      state: harness.registry.snapshot.devices.find((device) => device.id === shutdown.id)?.state,
+    }).toEqual({ claimed: false, state: "quarantined" });
+    // `quarantined` already counts as running: a reservation still held would count it twice
+    // and refuse the second slot.
+    await expect(
+      harness.coordinator.request(
+        { ...request, model: "iPhone SE" },
+        { noWait: true, ownerId: "second", requesterId: "second" },
+      ),
+    ).resolves.toMatchObject({ device: { spec: { model: "iPhone SE" }, state: "leased" } });
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
