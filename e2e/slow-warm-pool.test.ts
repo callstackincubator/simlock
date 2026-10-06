@@ -64,25 +64,41 @@ const MINUTE = 60 * SECOND;
 const TEST_TIMEOUT = 30 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
 const READY_TIMEOUT = 15 * MINUTE;
+/** How long a shut-down device is watched: several pool ticks, so a pool still on would have booted it. */
+const HOLD = 45 * SECOND;
 
+/** The installed iOS runtimes; empty when `xcrun simctl` is missing or unusable, so the lane skips. */
 async function installedIosRuntimes(): Promise<string[]> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
-  const parsed = JSON.parse(stdout) as {
-    runtimes: { version: string; isAvailable: boolean; platform?: string }[];
-  };
-  return parsed.runtimes
-    .filter((runtime) => runtime.isAvailable && (runtime.platform ?? "iOS") === "iOS")
-    .map((runtime) => runtime.version);
+  try {
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
+    const parsed = JSON.parse(stdout) as {
+      runtimes: { version: string; isAvailable: boolean; platform?: string }[];
+    };
+    return parsed.runtimes
+      .filter((runtime) => runtime.isAvailable && (runtime.platform ?? "iOS") === "iOS")
+      .map((runtime) => runtime.version);
+  } catch {
+    return [];
+  }
 }
 
+/** Whether an emulator, adb and a system image of the host's ABI (`system-images/<api>/<tag>/<abi>`) exist. */
 function installedAndroidImages(): boolean {
   const root = join(ANDROID_HOME, "system-images");
-  return (
-    existsSync(join(ANDROID_HOME, "emulator", "emulator")) &&
-    existsSync(join(ANDROID_HOME, "platform-tools", "adb")) &&
-    existsSync(root) &&
-    readdirSync(root).length > 0
-  );
+  if (
+    !existsSync(join(ANDROID_HOME, "emulator", "emulator")) ||
+    !existsSync(join(ANDROID_HOME, "platform-tools", "adb")) ||
+    !existsSync(root)
+  ) {
+    return false;
+  }
+  try {
+    return readdirSync(root).some((api) =>
+      readdirSync(join(root, api)).some((tag) => existsSync(join(root, api, tag, HOST_ABI))),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The reason this machine cannot run the lane, naming the missing platform; undefined when it can. */
@@ -91,7 +107,7 @@ async function missingPlatform(): Promise<string | undefined> {
     return "iOS is missing: no macOS host with an installed iOS runtime";
   }
   if (!installedAndroidImages()) {
-    return "Android is missing: no emulator, adb and installed system image";
+    return `Android is missing: no emulator, adb and installed ${HOST_ABI} system image`;
   }
   return undefined;
 }
@@ -114,27 +130,24 @@ function newest(versions: readonly string[]): string | undefined {
   return [...versions].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0];
 }
 
-/** The newest installed runtime that some model pairs with, and a phone model that pairs with it. */
+/** The newest installed runtime the phone-class default model pairs with, and that model. */
 function targetFor(catalog: CatalogPlatform, platform: Platform): Target {
   const runnable =
     platform === "android"
       ? (catalog.images ?? []).filter((image) => image.abi === HOST_ABI).map((i) => i.runtime)
       : catalog.runtimes;
-  const pairing = runnable.filter((runtime) =>
-    catalog.models.some((model) => catalog.modelRuntimes[model]?.includes(runtime)),
+  const phone = catalog.classDefaults["phone"];
+  const osVersion = newest(
+    runnable.filter(
+      (runtime) => phone !== undefined && catalog.modelRuntimes[phone]?.includes(runtime),
+    ),
   );
-  const osVersion = newest(pairing);
-  if (osVersion === undefined) {
+  if (phone === undefined || osVersion === undefined) {
     throw new Error(
-      `no installed ${platform} runtime pairs with a model: ${JSON.stringify(catalog)}`,
+      `no installed ${platform} runtime pairs with the phone-class model: ${JSON.stringify(catalog)}`,
     );
   }
-  const phone = catalog.classDefaults["phone"];
-  const model =
-    phone !== undefined && catalog.modelRuntimes[phone]?.includes(osVersion)
-      ? phone
-      : (catalog.models.find((name) => catalog.modelRuntimes[name]?.includes(osVersion)) as string);
-  return { count: 1, model, osVersion, platform };
+  return { count: 1, model: phone, osVersion, platform };
 }
 
 async function writeWarmPool(env: TestEnv, warmPool: Record<string, unknown>): Promise<void> {
@@ -203,6 +216,24 @@ async function untilState(
         `${driverDeviceId} is ${state}; last saw ${JSON.stringify(last.map((r) => [r.driverDeviceId, r.state]))}`,
       timeout,
     },
+  );
+}
+
+/** Fails if the device leaves `state` at any poll within `duration`: an end state must hold, not be seen once. */
+async function holdsState(
+  env: TestEnv,
+  driverDeviceId: string,
+  state: string,
+  duration: number,
+): Promise<void> {
+  const until = Date.now() + duration;
+  await waitFor(
+    async () => {
+      const row = (await devices(env)).find((entry) => entry.driverDeviceId === driverDeviceId);
+      expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
+      return Date.now() >= until;
+    },
+    { interval: 2000, label: `${driverDeviceId} stays ${state}`, timeout: duration + MINUTE },
   );
 }
 
@@ -328,6 +359,11 @@ describe(
           expect(readyEvents.length, "device.ready events before the first lease").toBeGreaterThan(
             1,
           );
+          for (const entry of readyEvents) {
+            console.info(
+              `device.ready ${JSON.stringify(entry.payload)} at ${new Date(entry.timestamp).toISOString()}`,
+            );
+          }
 
           const granted: Grant[] = [];
           for (const platform of ["ios", "android"] as const) {
@@ -356,7 +392,7 @@ describe(
           }
 
           for (const grant of granted) await release(env, grant);
-          // iOS is erased, shut down and booted again by the pool; Android restores its snapshot.
+          // iOS is shut down, erased and booted again by the pool; Android restores its snapshot.
           for (const grant of granted) {
             await untilState(env, grant.device.driverDeviceId, "ready");
           }
@@ -399,11 +435,36 @@ describe(
             timeout: MINUTE,
           });
 
-          // The next boot is clean: each lease is granted and its device really is running.
+          // Shut down is an end state: the pool, were it still on, would boot both again within this window.
+          const androidId = first.android.grant.device.driverDeviceId;
+          await holdsState(env, iosUdid, "shutdown", HOLD);
+          await holdsState(env, androidId, "shutdown", HOLD);
+          expect(
+            (await setDevices(deviceSet)).find((device) => device.udid === iosUdid)?.state,
+            "the simulator is still Shutdown in simctl",
+          ).toBe("Shutdown");
+          expect(await onlineEmulators(adbServerPort), "no emulator came back online").toEqual([]);
+
+          // The next boot is clean: each lease waits on a boot, is granted, and its device really is running.
           const second = {
             android: await lease(env, targets.android, "again-android"),
             ios: await lease(env, targets.ios, "again-ios"),
           };
+          for (const platform of ["ios", "android"] as const) {
+            expect(
+              bootingLines(second[platform].stderr),
+              `${platform}: the lease waited on a boot`,
+            ).not.toEqual([]);
+            const granted = (await env.events()).find(
+              (entry) =>
+                entry.event === "lease.granted" &&
+                (entry.payload as { leaseId?: string }).leaseId === second[platform].grant.lease.id,
+            );
+            expect(
+              granted?.payload,
+              `${platform}: the grant did not come from a warm device`,
+            ).not.toMatchObject({ source: "warm" });
+          }
           const rows = await devices(env);
           for (const { grant } of [second.ios, second.android]) {
             expect(
