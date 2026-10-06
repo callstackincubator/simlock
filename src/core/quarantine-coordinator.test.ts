@@ -537,6 +537,57 @@ describe("QuarantineCoordinator", () => {
     expect(registry.snapshot.devices[0]?.state).toBe("ready");
     expect(notifyAvailability).toHaveBeenCalledOnce();
   });
+
+  it("arms no retry for a quarantined device the include filter leaves out, even one already due", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driverDevice = await driver.provision(spec);
+    const registry = new FakeRegistry([
+      {
+        ...device("dev_left_out", driverDevice.deviceId),
+        quarantineAttempts: 1,
+        quarantineNextRetryAt: 500,
+      },
+    ]);
+    const coordinator = new QuarantineCoordinator({
+      clock,
+      config: retryConfig,
+      decisions: new SerializedDecision(),
+      drivers: new DriverCatalog([driver]),
+      eventBus: new EventBus(clock),
+      notifyAvailability: vi.fn(),
+      registry,
+    });
+
+    coordinator.restore(() => false);
+    clock.advance(10_000);
+    await flush();
+
+    expect(driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+    expect(registry.snapshot.devices[0]?.state).toBe("quarantined");
+  });
+
+  it("arms no retry timer for a device that is not quarantined", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driverDevice = await driver.provision(spec);
+    const registry = new FakeRegistry([
+      { ...device("dev_ready", driverDevice.deviceId), state: "ready", quarantineNextRetryAt: 500 },
+    ]);
+    const coordinator = new QuarantineCoordinator({
+      clock,
+      config: retryConfig,
+      decisions: new SerializedDecision(),
+      drivers: new DriverCatalog([driver]),
+      eventBus: new EventBus(clock),
+      notifyAvailability: vi.fn(),
+      registry,
+    });
+
+    coordinator.restore();
+
+    expect(clock.pendingTimerCount).toBe(0);
+  });
 });
 
 /** Lets the microtask queue (the fire-and-forget retry chain) settle after a timer fires. */

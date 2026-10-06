@@ -26,8 +26,18 @@ export interface LeaseLifecycleRegistry {
     };
   }): Promise<LeaseRecord>;
   renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord>;
-  beginRelease(leaseId: string): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
+  endLeaseAndMarkDeviceMissing(
+    leaseId: string,
+    initiator: string,
+    announceLeaseEnd: (ended: ReleasedLease) => void,
+  ): Promise<ReleasedLease>;
 }
+
+type LeaseEndReason = "explicit" | "killed" | "expired" | "device-lost";
 
 export interface LeaseLifecycleOptions {
   readonly clock: Clock;
@@ -132,10 +142,32 @@ export class LeaseLifecycle {
    */
   async beginRelease(
     leaseId: string,
-    reason: "explicit" | "killed" | "expired" | "device-lost",
+    reason: LeaseEndReason,
+    options: { readonly deferReclaim?: boolean } = {},
   ): Promise<ReleasedLease> {
-    const released = await this.options.registry.beginRelease(leaseId);
-    this.options.expiryScheduler.cancel(leaseId);
+    const released = await this.options.registry.beginRelease(leaseId, options);
+    this.#announceEnd(released, reason);
+    return released;
+  }
+
+  /**
+   * Ends a lease whose device a daemon start found gone, and marks the device missing in the same
+   * write (`device.deleted`, initiator `doctor`). The lease's fact, `lease.expired` for one whose
+   * deadline had passed and `lease.released` otherwise, is emitted after the commit and before the
+   * device's. Nothing is left `reclaiming`: there is nothing to wipe.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
+  async endForMissingDevice(
+    leaseId: string,
+    reason: "expired" | "device-lost",
+  ): Promise<ReleasedLease> {
+    return this.options.registry.endLeaseAndMarkDeviceMissing(leaseId, "doctor", (ended) =>
+      this.#announceEnd(ended, reason),
+    );
+  }
+
+  #announceEnd(released: ReleasedLease, reason: LeaseEndReason): void {
+    this.options.expiryScheduler.cancel(released.lease.id);
     if (reason === "expired") {
       this.options.eventBus.emit(
         "lease.expired",
@@ -158,12 +190,12 @@ export class LeaseLifecycle {
         "lease-lifecycle",
       );
     }
-    return released;
   }
 
-  /** Re-arms every persisted lease's TTL timer from its own deadline (ADR 0004: startup
-   * restores all of them, and sweeps none -- nothing about a restart proves a holder is
-   * dead). */
+  /** Re-arms every remaining lease's TTL timer from its own deadline. Startup runs it after the
+   * reconciler has ended the leases whose device is not running (ADR 0019): a restart does not
+   * prove a holder is dead, so a lease whose device is running is kept, and one whose deadline
+   * passed while no daemon ran expires here. */
   restoreExpiryTimers(): Promise<void> {
     return this.options.expiryScheduler.restore(this.options.registry.snapshot.leases);
   }

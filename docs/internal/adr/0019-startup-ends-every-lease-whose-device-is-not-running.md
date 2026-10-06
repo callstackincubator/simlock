@@ -67,7 +67,10 @@ Startup runs in this order, all while health is `starting`:
 5. Core's device convergence runs as ADR 0017 leaves it: quarantine
    timers, interrupted reclaims, spent devices. It skips every device on
    an unreadable platform, as it already skips a platform with no driver,
-   so a reclaim §2 leaves waiting is not started here either.
+   so a reclaim §2 leaves waiting is not started here either. For a
+   platform it can read, the wipe §2 left waiting is not a step startup
+   waits for: it starts here in the background under a device claim, as
+   every release's reclaim does (#43), and health does not wait for it.
 6. Health becomes `running`; parked requests proceed and the health
    monitor starts.
 
@@ -128,9 +131,34 @@ starts for it, whether the platform has no driver or its listing failed.
 A driver that just failed or hung on a listing would likely hang the
 reclaim too, and a hung reclaim holds its device's claim with no end. The
 device waits, unclaimed, until a start whose read of that platform
-succeeds recovers it as an interrupted reclaim. Meanwhile `status` reports
-it stalled once it passes the stalled-transition threshold, and
-`simlock doctor --fix` quarantines it, as for any stalled reclaim.
+succeeds runs its full reclaim, in the background (§1 step 5): the wipe
+the ended lease never got, then the return to the pool (`ready`, or `shutdown` where the driver returns
+that). It is not recovered as an interrupted reclaim, which only shuts a
+device down: a reusable device never returns to the pool with its last
+holder's data. A device waiting for that wipe carries the id of the lease
+it was ended from, in its record, so recovery can tell it from a reclaim
+a crash interrupted; any transition out of `reclaiming` drops the mark.
+A spent fresh device is never wiped and is shut down and deleted as
+before. Meanwhile `status` reports it stalled once it passes the
+stalled-transition threshold, and `simlock doctor --fix` quarantines it,
+as for any stalled reclaim.
+
+> **Amendment, 2026-10-06 (maintainer decision, review round 1 of
+> [#366](https://github.com/callstackincubator/simlock/issues/366)).**
+> This section used to say the waiting device is recovered "as an
+> interrupted reclaim". That path shuts the device down without a purge,
+> so a reusable device would have returned to the pool with the previous
+> holder's data. The maintainer decided it is wiped by a full reclaim
+> when a later start can read its platform. The status of this ADR is
+> unchanged.
+
+> **Amendment, 2026-10-06 (maintainer decision, review round 2 of
+> [#366](https://github.com/callstackincubator/simlock/issues/366)).**
+> The full reclaim was awaited inside startup, one device after another,
+> so health stayed `starting` for N serial erases, or forever if a reclaim
+> hung. It now starts in the background under a claim, like any release's
+> reclaim; a failed wipe goes to quarantine under the lease it was
+> deferred for. The status of this ADR is unchanged.
 
 ```mermaid
 stateDiagram-v2
@@ -138,6 +166,7 @@ stateDiagram-v2
   leased --> leased: device running
   leased --> reclaiming: stopped, transitioning, unreadable
   reclaiming --> reclaiming: unreadable, waits for a good read
+  reclaiming --> ready: a later start reads the platform, full reclaim
   leased --> deleted: absent (marked missing)
   reclaiming --> ready: reclaim succeeds
   reclaiming --> quarantined: reclaim fails
@@ -192,7 +221,10 @@ as for any `device-lost`.
   instead, and a hung `adb devices` kept the daemon starting forever.
 - Startup is slower by the slowest platform listing before convergence,
   up to the 60-second limit, and by running doctor and device convergence
-  one after the other.
+  one after the other. It does not wait for a deferred wipe: that runs in
+  the background after the device convergence step starts it, so a device
+  waiting for one stays `reclaiming` (and claimed) past the moment health
+  becomes `running`.
 - The health monitor's runtime behaviour is unchanged: a device that stops
   after startup is still rebooted, and a missing one is still debounced.
 - Startup waits up to 60 seconds per platform for its read, read side by

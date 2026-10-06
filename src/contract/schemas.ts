@@ -76,7 +76,8 @@ const deviceSpecSchema = z.object({
   imageTag: imageTagSchema.optional(),
 });
 
-/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
+/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, except `deferredReclaimLeaseId`,
+ * which is internal bookkeeping a response never carries, plus the `status`/`list`
  * decoration's derived `transitionAgeMs` (see `DaemonServer#decorateDevice`). */
 export const deviceRecordSchema = z.object({
   id: z.string(),

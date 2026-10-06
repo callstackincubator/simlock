@@ -82,6 +82,12 @@ const COLD_BOOT_ESTIMATE_MS = 70_000;
 const PORT_MAX = 5682;
 const PORT_MIN = 5586;
 const PORT_POLL_INTERVAL_MS = 2_000;
+/**
+ * The command timeout on the `adb devices` that `listManaged` runs. It sits below the 60-second
+ * limit the daemon's startup read puts on a whole platform, so a hung adb server ends this call
+ * first and the read reports the platform's failure rather than its own timeout.
+ */
+const ADB_DEVICES_TIMEOUT_MS = 30_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
@@ -1062,7 +1068,9 @@ export class AndroidDriver implements Driver {
     readonly settledSerials: readonly string[];
     readonly unattributableTransitionalSerial: boolean;
   }> {
-    const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"]);
+    const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"], {
+      timeoutMs: ADB_DEVICES_TIMEOUT_MS,
+    });
     const settledSerials: string[] = [];
     let unattributableTransitionalSerial = false;
     for (const match of attached.stdout.matchAll(/^((?:emulator)-\d+)\s+(\S+)$/gm)) {

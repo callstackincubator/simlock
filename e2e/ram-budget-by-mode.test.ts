@@ -12,7 +12,11 @@ interface RamBudget {
 
 interface Grant {
   readonly lease: { readonly id: string };
-  readonly device: { readonly id: string; readonly mode: "slim" | "full" };
+  readonly device: {
+    readonly id: string;
+    readonly driverDeviceId: string;
+    readonly mode: "slim" | "full";
+  };
 }
 
 const SLIMMABLE = "26.0";
@@ -138,7 +142,18 @@ describe("RAM budget by device mode", () => {
         );
 
         // Restarted with slim devices sized as full ones, the same three devices use 3/2 of
-        // the limit.
+        // the limit. A restart keeps a lease only while its device is running, and the fake
+        // driver forgets its devices with the process, so it is told they still are.
+        await env.driverScript.merge({
+          ios: {
+            managedReality: {
+              devices: [...slimGrantsBefore, failed].map((grant) => ({
+                deviceId: grant.device.driverDeviceId,
+                runState: "running" as const,
+              })),
+            },
+          },
+        });
         await env.withConfig({ ramBudget: { iosSlimBytesPerDevice: full } }, async () => {
           expect(await ramBudget(env)).toEqual({
             limitBytes,

@@ -374,11 +374,27 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         rejectGatewayStarted = reject;
       })
     : Promise.resolve();
-  // Startup in this order: leasing's steps (settle open requests, restore expiry timers), then
-  // core's device steps, then the queue's first depth, which every run begins with.
+  // ADR 0019 §1, in this order: settle the open requests, read each platform once, doctor's
+  // startup pass on that read, end every lease whose device is not running and restore the
+  // timers of the rest, then core's device convergence, then the queue's first depth, which every
+  // run begins with. One after another: the reconciler needs the read, and convergence must not
+  // pick a device the reconciler is about to release.
+  // Set once a stop begins. A `daemon.stop` is accepted while startup runs, and the read takes up
+  // to a minute: every step after it would arm timers (expiry, quarantine retry, warm pool tick)
+  // on a daemon whose disposal has already run, and nothing would cancel them.
+  let stopping = false;
   const convergeStartup = async (): Promise<void> => {
-    await leasing.startup();
-    await core.converge();
+    await leasing.settleRequests();
+    const read = await core.readStartup();
+    const steps = [
+      () => core.doctor.reconcile({ read }),
+      () => leasing.reconcile(read),
+      () => core.converge(read),
+    ];
+    for (const step of steps) {
+      if (stopping) return;
+      await step();
+    }
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
@@ -431,20 +447,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     version: options.version ?? "1.0.0",
     // Runs after the socket is claimed (see DaemonServer#start): reachability no
     // longer depends on doctor reconciliation or running-capacity convergence.
-    // Requests other than hello/status.get park until this resolves, so the two are
-    // run concurrently rather than doctor-then-capacity: doctor.reconcile() is pure
-    // reconnaissance (it shells out per driver/device, then at most flags drift --
-    // see doctor.ts) that already runs interleaved with live lease/reclaim activity
-    // whenever a client issues `doctor.run` mid-session, so running it alongside
-    // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeStartup() releases no leases at all any more (ADR 0004 removed the
-    // orphan sweep), so the only device work left on this path is interrupted-reclaim
-    // recovery -- and a reclaim a previous daemon left in flight is finished off in the
-    // background, off this critical path (#43).
-    converge: async () => {
-      await Promise.all([core.doctor.reconcile(), convergeStartup()]);
-    },
+    // Requests other than hello/status.get park until this resolves.
+    converge: convergeStartup,
     settle: async () => {
+      stopping = true;
       await leasing.settle();
       await core.drain();
     },

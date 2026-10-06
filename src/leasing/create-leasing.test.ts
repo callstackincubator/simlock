@@ -221,6 +221,9 @@ async function seedReady(
   spec: DeviceSpec = request,
 ) {
   const driverDevice = await harness.driver.provision(spec);
+  // Running on the machine as well as ready in the registry, which is what a daemon start reads
+  // of a leased device to keep its lease.
+  await harness.driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
   const device = await harness.registry.registerDevice({
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
@@ -689,7 +692,9 @@ describe("createLeasing", () => {
     expect(harness.registry.snapshot.devices.find((item) => item.id === shutdown.id)?.state).toBe(
       "shutdown",
     );
-    expect(harness.driver.calls).toHaveLength(callsBefore);
+    expect(harness.driver.calls.slice(callsBefore).map((call) => call.operation)).toEqual([
+      "listManaged",
+    ]);
   });
 
   it("shuts an orphaned reclaiming or migrated legacy device down through its driver", async () => {
@@ -787,6 +792,7 @@ describe("createLeasing", () => {
         payload: { deviceId: device.id, initiator: "test" },
       });
     }
+    const seededBoots = driver.calls.filter((call) => call.operation === "makeReady").length;
     driver.hangMakeReady();
 
     void harness.engine.request(request, {
@@ -799,7 +805,9 @@ describe("createLeasing", () => {
     });
     await flush();
 
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+      seededBoots + 1,
+    );
     expect(harness.engine.queueDepth).toBe(1);
     driver.releaseMakeReady();
   });
@@ -2041,7 +2049,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
     expect(restarted.registry.snapshot.devices).toMatchObject([
       { id: restarted.device.id, state: "deleted" },
     ]);
-    expect(restarted.operationsSinceStart()).toEqual(["shutdown", "destroy"]);
+    expect(restarted.operationsSinceStart()).toEqual(["listManaged", "shutdown", "destroy"]);
   });
 
   it("deletes a fresh device on the next start when the daemon crashed after its shutdown commit and before its delete", async () => {
@@ -2053,7 +2061,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
     expect(restarted.registry.snapshot.devices).toMatchObject([
       { id: restarted.device.id, state: "deleted" },
     ]);
-    expect(restarted.operationsSinceStart()).toEqual(["destroy"]);
+    expect(restarted.operationsSinceStart()).toEqual(["listManaged", "destroy"]);
   });
 });
 
@@ -2304,7 +2312,7 @@ describe("createLeasing a grant and its request's result", () => {
     const grant = await before.engine.request(request, asker);
     await flush();
 
-    const after = await createHarness({ filesystem: before.filesystem });
+    const after = await createHarness({ driver: before.driver, filesystem: before.filesystem });
     await after.engine.convergeRunningCapacity();
     const repeat = await after.engine.request(request, asker);
 

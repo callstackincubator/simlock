@@ -13,6 +13,7 @@ import {
   type LeaseRequestFailure,
   type ModelPreferences,
   type Platform,
+  type StartupRead,
 } from "../core/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { LeaseAcquisitionCoordinator } from "./lease-acquisition-coordinator.js";
@@ -27,6 +28,7 @@ import type {
 } from "./lease-ports.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { LeaseRequestBook, type WaitingRequest } from "./lease-request-book.js";
+import { LeaseReconciler } from "./lease-reconciler.js";
 import { LeaseStartup } from "./lease-startup.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
@@ -89,11 +91,14 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
   readonly healthMonitor: LeaseHealthMonitor | undefined;
   /** Administrative lease expiry used by doctor reconciliation. */
   expire(leaseId: string): Promise<void>;
+  /** The first step of startup: settles the requests a restart left open. */
+  settleRequests(): Promise<void>;
   /**
-   * The lease half of startup, before core's `converge`: settles the requests a restart left
-   * open and restores every lease's expiry timer.
+   * Checks every lease against the startup read and ends those whose device is not running (ADR
+   * 0019 §2), then restores the expiry timers of the leases that remain. Runs before core's
+   * `converge`, so no device convergence picks a device this is about to release.
    */
-  startup(): Promise<void>;
+  reconcile(read: StartupRead): Promise<void>;
   /** The queue's depth as a fact on the bus, once startup is done: every run begins with one. */
   announceQueueDepth(): void;
   /**
@@ -110,9 +115,9 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
    *
    * Cancelling expires nothing early and loses nothing, and under ADR 0004 releases nothing
    * either: `ttlDeadline` is persisted with the lease, and `LeaseExpiryScheduler.restore`
-   * re-arms it on the next start. That is exactly what makes a lease survive a daemon restart
-   * intact, and a lease whose deadline passed while no daemon was running expire as soon as
-   * one is there to expire it.
+   * re-arms it on the next start. That is exactly what makes a lease whose device is running
+   * survive a daemon restart intact, and a lease whose deadline passed while no daemon was
+   * running expire as soon as one is there to expire it.
    */
   dispose(): void;
   /** Every request waiting for a device on this host, for `list.get` and `status.get`. */
@@ -200,6 +205,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
   const startup = new LeaseStartup({
     decisions,
     eventBus: options.eventBus,
+    reconciler: new LeaseReconciler({ clock: options.clock, ender: releaseCoordinator, registry }),
     registry,
     timers: leases,
   });
@@ -252,7 +258,8 @@ export function createLeasing(options: LeasingOptions): Leasing {
     expire: async (leaseId: string) => {
       await releaseCoordinator.expire(leaseId);
     },
-    startup: async () => startup.run(),
+    settleRequests: async () => startup.settleRequests(),
+    reconcile: async (read: StartupRead) => startup.reconcile(read),
     announceQueueDepth: () => {
       options.eventBus.emit("queue.changed", { depth: queue.depth }, "wait-queue");
     },

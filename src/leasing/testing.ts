@@ -64,7 +64,7 @@ export interface TestEngine
   readonly cleanup: Core["cleanup"];
   readonly healthMonitor: LeaseHealthMonitor;
   readonly requests: Leasing["requests"];
-  /** The daemon's startup order: leasing's steps, core's device steps, then the first queue depth. */
+  /** The daemon's startup order: settle requests, read, reconcile leases (timers for the rest), converge devices, then the first queue depth. */
   convergeRunningCapacity(): Promise<void>;
   settle(): Promise<void>;
   /** Cancels leasing's timers: the lease expiry timers a test leaves armed. */
@@ -113,8 +113,10 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     expire: (leaseId) => leasing.expire(leaseId),
     nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),
     async convergeRunningCapacity() {
-      await leasing.startup();
-      await core.converge();
+      await leasing.settleRequests();
+      const read = await core.readStartup();
+      await leasing.reconcile(read);
+      await core.converge(read);
       leasing.announceQueueDepth();
     },
     async settle() {

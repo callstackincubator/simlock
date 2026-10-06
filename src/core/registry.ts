@@ -519,19 +519,65 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
 
   /** Records externally verified disappearance; no driver verb is invoked. */
   async markDeviceMissing(deviceId: string, initiator: string): Promise<DeviceRecord> {
-    const { device, index } = this.#requireDeviceRecord(deviceId);
+    const { device } = this.#requireDeviceRecord(deviceId);
     if (this.#leases.some((lease) => lease.deviceId === deviceId)) {
       throw new RegistryEventError(`Cannot mark leased device missing: ${deviceId}`);
     }
     if (device.state === "deleted") {
       return cloneDevice(device);
     }
-    const updated = { ...device, state: "deleted" as const };
-    const devices = [...this.#devices];
-    devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    const deleted = await this.#commitMissing(device, this.#leases);
     this.options.eventBus.emit("device.deleted", { deviceId, initiator }, "registry");
-    return cloneDevice(updated);
+    return cloneDevice(deleted);
+  }
+
+  /**
+   * Removes a lease and marks its device missing in one write, for a device a daemon start found
+   * gone from a platform it could read. There is nothing left to wipe, so no `reclaiming` state
+   * stands between: the lease and the device leave `leased` together. The device record is
+   * written exactly as `markDeviceMissing` writes it.
+   *
+   * `announceLeaseEnd` runs once the write has committed and before `device.deleted` is emitted,
+   * so the lease's own fact precedes the device's. The registry never names a lease event itself.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through LeaseLifecycle's registry port.
+  async endLeaseAndMarkDeviceMissing(
+    leaseId: string,
+    initiator: string,
+    announceLeaseEnd: (ended: ReleasedLease) => void,
+  ): Promise<ReleasedLease> {
+    const lease = this.#leases.find((candidate) => candidate.id === leaseId);
+    if (lease === undefined) {
+      throw new UnknownLeaseError(leaseId);
+    }
+    const { device } = this.#requireDeviceRecord(lease.deviceId);
+    const deleted = await this.#commitMissing(
+      device,
+      this.#leases.filter((candidate) => candidate.id !== leaseId),
+    );
+    const ended = { device: cloneDevice(deleted), lease: cloneLease(lease) };
+    announceLeaseEnd(ended);
+    this.options.eventBus.emit("device.deleted", { deviceId: device.id, initiator }, "registry");
+    return ended;
+  }
+
+  /**
+   * The one place a device is written as missing. Recovery markers go with it: a deleted device
+   * has no recovery to track, and a stale count would only mislead a reader of the record.
+   */
+  async #commitMissing(device: DeviceRecord, leases: LeaseRecord[]): Promise<DeviceRecord> {
+    const {
+      recoveringSince: _recoveringSince,
+      recoveryAttempts: _recoveryAttempts,
+      deferredReclaimLeaseId: _deferred,
+      ...rest
+    } = device;
+    const deleted = { ...rest, state: "deleted" as const } as DeviceRecord;
+    const devices = this.#devices.map((candidate) =>
+      candidate.id === device.id ? deleted : candidate,
+    );
+    await this.#commit(devices, leases);
+    return deleted;
   }
 
   async createLease({
@@ -595,7 +641,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return cloneLease(lease);
   }
 
-  async beginRelease(leaseId: string): Promise<ReleasedLease> {
+  async beginRelease(
+    leaseId: string,
+    options: { readonly deferReclaim?: boolean } = {},
+  ): Promise<ReleasedLease> {
     const leaseIndex = this.#leases.findIndex((lease) => lease.id === leaseId);
     const lease = this.#leases[leaseIndex];
     if (leaseIndex === -1 || lease === undefined) {
@@ -615,6 +664,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const reclaiming = {
       ...this.#transitioned(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
       lastLeaseEndedAt: this.options.clock.now(),
+      // The wipe is not started now; a later start that can read the platform runs it.
+      ...(options.deferReclaim === true ? { deferredReclaimLeaseId: leaseId } : {}),
     };
     const devices = [...this.#devices];
     devices[deviceIndex] = reclaiming;
@@ -846,6 +897,7 @@ const deviceRecordKeys = [
   "foreignProvenanceDetectedAt",
   "recoveringSince",
   "recoveryAttempts",
+  "deferredReclaimLeaseId",
   "quarantinedAt",
   "quarantineAttempts",
   "quarantineNextRetryAt",
@@ -1001,7 +1053,16 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
+  const {
+    address,
+    createdAt,
+    deferredReclaimLeaseId,
+    driverData,
+    driverDeviceId,
+    id,
+    spec,
+    state,
+  } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -1010,9 +1071,12 @@ function parseDevice(value: unknown): DeviceRecord {
     !isObject(spec) ||
     !("driverData" in value) ||
     // Every other optional field is a number and is swept by
-    // `parseOptionalDeviceNumbers`; `address` is the lone string. Missing is expected of a
-    // record written by a pre-address daemon; present-but-wrong-typed is corrupt.
-    (address !== undefined && typeof address !== "string")
+    // `parseOptionalDeviceNumbers`, except `leaseIdentity`, which `parseLeaseIdentity` checks;
+    // `address` and `deferredReclaimLeaseId` are the strings checked here.
+    // Missing is expected of a record written by a daemon that predates the field;
+    // present-but-wrong-typed is corrupt.
+    (address !== undefined && typeof address !== "string") ||
+    (deferredReclaimLeaseId !== undefined && typeof deferredReclaimLeaseId !== "string")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
@@ -1020,6 +1084,7 @@ function parseDevice(value: unknown): DeviceRecord {
   return {
     ...parseOptionalDeviceNumbers(value),
     ...(address === undefined ? {} : { address }),
+    ...(deferredReclaimLeaseId === undefined ? {} : { deferredReclaimLeaseId }),
     createdAt,
     driverData,
     driverDeviceId,

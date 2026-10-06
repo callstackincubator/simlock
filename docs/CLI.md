@@ -355,7 +355,10 @@ admin credential (see [Admin credential
 resolution](#admin-credential-resolution)), since the lease's owner is the
 session that was granted it. This is not exit `14`: `14` means the
 daemon ended the lease while the connection was alive, which is a different
-thing to have to handle.
+thing to have to handle. The lease stands only while its device does: a lease
+whose device is not running when a daemon starts again is ended at that start,
+with the reason `device-lost`, and a `renew` of it then fails with
+`UNKNOWN_LEASE`.
 
 `device` is a **projection** of the registry's device record — `id`,
 `driverDeviceId`, `spec`, `address?`, `mode` — not the full
@@ -439,7 +442,10 @@ a signal, and it does not try to release a lease the daemon has already taken
 back. `lease-lost` is a push from a live daemon connection — a connection
 that simply died is exit `1` and a `DAEMON_CONNECTION_LOST` line instead, and
 leaves the lease standing. The `reason` is whatever ended it — `device-lost`
-here, but equally `expired` or `killed`. A reboot cannot bring back
+here, but equally `expired` or `killed`. (A lease whose device was not running
+at a daemon start is ended with `device-lost` too, but no push reaches its
+holder: a connection to that daemon did not survive the stop. It finds the lease
+gone the next time it renews.) A reboot cannot bring back
 anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
@@ -1875,7 +1881,16 @@ exists for operators and debugging. `start` starts whichever mode
 as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
 print the web console's address on a `Console:` line (see
 [CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
-and the next daemon restores each one's TTL timer from its deadline. What a
+and the next daemon restores each one's TTL timer from its deadline, for every
+lease whose device is still running. A lease whose device is not running at a
+daemon start — shut down, still booting, gone, or on a platform the daemon
+could not list — is ended before the daemon serves a request, with the reason
+`device-lost`; its holder finds the lease gone when it renews, as for any
+`device-lost`. The device of an ended lease is wiped and returned to the pool
+(a `fresh` device is shut down and deleted instead), or marked missing if it is
+gone; on a platform the daemon could not list it waits, and the first start that
+can list the platform wipes it and returns it to the pool, in the background (a `fresh` one is shut
+down and deleted instead). What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is

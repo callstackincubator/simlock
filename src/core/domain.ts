@@ -200,6 +200,14 @@ export interface DeviceRecord {
   readonly foreignProvenanceDetectedAt?: number;
   readonly recoveringSince?: number;
   readonly recoveryAttempts?: number;
+  /**
+   * Set while a device sits `reclaiming` with its wipe not yet started, because the daemon start
+   * that ended its lease could not read its platform (ADR 0019 §2). It names that lease. A later
+   * start that can read the platform runs the full reclaim, purge included, for a device that
+   * carries it, instead of the shutdown-only recovery of a reclaim a crash interrupted. Any
+   * transition drops it.
+   */
+  readonly deferredReclaimLeaseId?: string;
   /** Set on entry to `quarantined`; the wall-clock moment the first purge failed. */
   readonly quarantinedAt?: number;
   /** Failed retry count since entering quarantine (the triggering failure itself is not a retry). */
@@ -384,13 +392,16 @@ export interface DeviceTransitionUpdate {
 }
 
 export function transition(
-  record: DeviceRecord,
+  current: DeviceRecord,
   to: DeviceState,
   update?: DeviceTransitionUpdate,
 ): DeviceRecord {
-  if (!legalTransitions[record.state].includes(to)) {
-    throw new IllegalTransition(record.state, to);
+  if (!legalTransitions[current.state].includes(to)) {
+    throw new IllegalTransition(current.state, to);
   }
+
+  // A deferred reclaim (ADR 0019 §2) ends with any transition out of `reclaiming`.
+  const { deferredReclaimLeaseId: _deferred, ...record } = current;
 
   if (to === "shutdown") {
     // Nothing is listening at the old address once the device stops, and the next

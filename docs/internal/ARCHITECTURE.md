@@ -1185,8 +1185,9 @@ unleased, never-leased device that no target keeps once it has been ready
 (`DeviceRecord.readyAt`, `createdAt` for an older record) longer than
 `idle.shutdownAfterMs`, with initiator `warm-pool`.
 
-At startup, leasing's `LeaseStartup` restores the persisted TTL timer of **every**
-lease it finds, and core's `StartupConverger` re-arms retry timers for devices
+At startup, leasing's reconciler first ends every lease whose device the startup
+read says is not running (ADR 0019), `LeaseStartup` restores the persisted TTL timer
+of each lease that is left, and core's `StartupConverger` re-arms retry timers for devices
 still `quarantined` (see below) from their persisted next-retry deadline. A lease survives a daemon
 restart because a lease's liveness was never the daemon connection to begin
 with (ADR 0004). The *holder* does not survive it in the same way: the typed
@@ -1194,11 +1195,12 @@ client never reconnects (ADR 0003 §10), so a running `simlock lease` exits `1`
 when the old daemon goes away and something has to renew the lease from a new
 invocation before its deadline. What the restart no longer does is decide the
 question for you by releasing the lease outright. There is no orphan sweep at
-startup — nothing about a restart proves a holder is dead, so nothing is
-released on the strength of it. A lease whose deadline already passed while no
+startup — nothing about a restart proves a holder is dead, so a lease is not
+released on the strength of it, only because its device is not running. A lease whose deadline already passed while no
 daemon was running expires as soon as one is, through the ordinary expiry path.
 `StartupConverger` then recovers unleased interrupted reclaims through the
-reclaim coordinator's recovery port — a backgrounded reclaim marks its device with a
+reclaim coordinator's recovery port (the full reclaim, started in the background
+under a claim, for a device whose wipe a start put off; a shutdown for any other) — a backgrounded reclaim marks its device with a
 `reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and
@@ -1348,9 +1350,11 @@ There is **one kind of lease**, on every transport ([ADR
   declare, and no second deadline behind the first.
 - **Connection close means nothing to a lease.** The daemon keeps no
   per-connection lease state and releases nothing when a connection closes, on
-  any transport. Nothing is swept at daemon startup either — a restart does not
-  prove a holder is dead. So a gateway hop, a suspended laptop, or a daemon
-  upgrade costs a client its stream and not its device. It can still cost the
+  any transport. Startup does not sweep leases by their holders either — a
+  restart does not prove a holder is dead. It ends only a lease whose device is
+  not running (ADR 0019), because that device is what the restart says
+  something about. So a gateway hop, a suspended laptop, or a daemon upgrade
+  costs a client its stream and, while the device keeps running, not its device. It can still cost the
   client: the typed client does not reconnect (ADR 0003 §10), so a `simlock
   lease` holder exits `1` on a dead connection and something has to renew that
   still-standing lease from a new connection before its deadline. The lease
@@ -1411,10 +1415,12 @@ Three things still wait for the purge, deliberately:
 - **An operator reset.** `NukeService` only acts on `ready`/`shutdown`
   records, so a device left mid-reclaim would be skipped by the very reset
   meant to take it down. `beginMaintenance` drains in-flight background
-  reclaims, and the maintenance-authorized release awaits its own inline.
+  reclaims and the deferred wipes a start left running, and the
+  maintenance-authorized release awaits its own inline.
 - **A graceful `simlock daemon stop`.** It drains the in-flight reclaims
-  (before disposing timers, so a purge that settles into quarantine still gets
-  its retry cancelled), leaving the pool in the same settled shape an inline
+  and deferred startup wipes, wipes first because their commit can start a pool
+  pass (before disposing timers, so a purge that settles into quarantine still
+  gets its retry cancelled), leaving the pool in the same settled shape an inline
   reclaim used to.
 - **The next start, if the daemon died instead.** Interrupted reclaims are
   recovered from the registry as before.
@@ -1465,11 +1471,14 @@ are:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- Startup runs in two parts, leasing's then core's. Leasing settles every lease
-  request the previous process left open as failed, then restores every lease's
-  TTL timer. `StartupConverger` in core then re-arms quarantine retries,
-  recovers interrupted reclaims, deletes spent devices, and converges running
-  capacity. `NukeService` coordinates lease release, pending-request
+- Startup runs one step after another (ADR 0019 §1). Leasing settles every
+  lease request the previous process left open as failed. Core reads each
+  platform once (`StartupRead`) and doctor's startup pass uses that read.
+  Leasing's reconciler then ends every lease whose device the read says is not
+  running, and restores the expiry timers of the leases left. `StartupConverger`
+  in core then re-arms quarantine retries, recovers interrupted reclaims,
+  and deletes spent devices, all on the platforms
+  the read could list. `NukeService` coordinates lease release, pending-request
   cancellation, and registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
@@ -1548,7 +1557,9 @@ reboot attempts have already failed. All three emit `device.recovery-failed`
 (with the reason) and then route through the same `DeviceLostReleaser`, so
 the lease-release path — and its `lease.released { reason: "device-lost" }`
 fact — stays the single place a lease ends, regardless of who decided it
-should.
+should. A daemon start is the other place a lease ends as `device-lost`, decided
+at once from one read instead of over several rounds: "Startup ends every lease
+whose device is not running" below.
 
 None of this is silent. A reboot resumes the lease, but it cannot resume
 whatever the agent had running *inside* the device when it died — a launched
@@ -1909,18 +1920,24 @@ policies replaceable without introducing an ambient dependency container.
 
 Reachability does not depend on startup recovery work. `DaemonServer#start`
 claims the socket (`DaemonEndpointHost#start`) before running `startDaemon`'s
-`converge` callback, which runs `doctor.reconcile()` and
-`convergeStartup()` (leasing's startup, then core's `converge()`) concurrently rather than one
-after the other: `doctor.reconcile()` is pure reconnaissance that already runs
-interleaved with live lease/reclaim activity whenever a client issues
-`doctor.run` mid-session (it shells out per driver/device, then at most flags
-drift for a later `--fix`), so overlapping it with startup's own registry
-work introduces nothing this codebase doesn't already do elsewhere. Neither
-call awaits a device reclaim inline any more (#43) — a release's reclaim runs
-in the background once the release commits — so what's left on this path is
-comparatively fast: per-driver/device reconnaissance plus whatever unleased
-interrupted-reclaim recovery and capacity-sweep shutdowns
-convergence itself still performs inline. Two consequences follow from
+`converge` callback, which runs ADR 0019 §1's steps one after another while
+health is `starting`: leasing settles the lease requests the last process left
+open; core reads each platform once (`readStartup`: one `listManaged` per
+driver, all platforms side by side, each bounded by a fixed 60-second limit on
+the daemon's clock, so a driver that throws or hangs makes its platform
+*unreadable* instead of failing startup, as does a platform with no driver);
+doctor's startup pass reconciles against that read instead of listing again;
+leasing's reconciler checks every lease against the same read; the leases that
+remain get their expiry timers back; and core's device convergence runs last,
+skipping every device on an unreadable platform. They no longer overlap: the
+reconciler needs the read, and convergence must not pick a device the
+reconciler is about to release. Neither leasing nor convergence awaits a device
+reclaim inline (#43) — a release's reclaim runs in the background once the
+release commits, and so does the wipe convergence starts for a device a
+previous start put off (ADR 0019 §2), under a device claim — so what is left
+on this path is the read, the registry writes, and the spent-device
+deletes convergence itself still performs inline. The reconciler's rules are
+the next section's. Two consequences follow from
 claiming first:
 
 - A second daemon racing to start now discovers `DaemonAlreadyRunningError`
@@ -1939,18 +1956,49 @@ claiming first:
 If convergence itself throws, `start()` stops the daemon (closing the
 listener and any connections that raced in during convergence) rather than
 leaving it accepting connections it can never serve; parked requests reject
-with `DAEMON_STARTUP_FAILED` instead of hanging. Because the two converge
-calls run concurrently, one throwing does not cancel the other — `Promise.all`
-still attaches a handler to both, so neither can produce an unhandled
-rejection, but a straggling `convergeStartup()` step can keep running
-briefly after `stop()` has begun. Nothing it can still do (registry-only
-destruction, never touching a leased device) is unsafe to have in flight
-during shutdown; it just means "stopped" is not instantaneous relative to the
-failure being reported. `health` itself does not grow a third state for this:
+with `DAEMON_STARTUP_FAILED` instead of hanging. A background reclaim the
+reconciler started can keep running briefly after `stop()` has begun; nothing
+it can still do (registry-only destruction, never touching a leased device) is
+unsafe to have in flight during shutdown, it just means "stopped" is not
+instantaneous relative to the failure being reported. `health` itself does not grow a third state for this:
 `running` means convergence finished, not that every backgrounded reclaim it
 kicked off has settled — `simlock status` already reports each device's own
 state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
+
+### Startup ends every lease whose device is not running
+
+A restart says something about a leased device that nothing used to read: after a
+reboot a leased simulator is shut down, still booting, or gone, and the
+health monitor above would only get to it after startup, rebooting a stopped one
+and giving up on a missing one after `health.stableObservations` rounds while its
+slot sat taken. So startup judges every lease on disk, expired ones included,
+against the one read it took (`LeaseReconciler`, `src/leasing/lease-reconciler.ts`),
+by the device's registry `driverDeviceId` on its own platform:
+
+| Device in the read | Lease | Device |
+|---|---|---|
+| `running` | kept, and its timer restored; one whose deadline passed expires through the ordinary expiry path | unchanged, or reclaimed after an expiry |
+| `stopped`, or `transitioning` (booting, shutting down, or an Android emulator `adb` cannot attribute this read) | ended | wiped by the ordinary background reclaim and returned to the pool |
+| absent from a readable platform | ended | marked missing in the same write (`device.deleted`, initiator `doctor`); no reclaim, nothing to wipe |
+| on an unreadable platform | ended | `reclaiming`, with no reclaim started and no claim taken |
+
+A lease ends as the ordinary release with reason `device-lost`
+(`lease.released`, after its commit), or as `lease.expired` when its deadline
+passed while no daemon ran; no reason and no event is new. "I could not look" is
+not "the device is gone", so an unreadable platform ends leases but never marks a
+device missing, and starts no reclaim: a driver that just failed or hung on its
+listing would likely hang the reclaim too, and a hung reclaim holds its device's
+claim with no end. The device waits in `reclaiming`, carrying the id of the lease
+it was ended from (`deferredReclaimLeaseId`), until a start whose read of that
+platform succeeds runs its full reclaim in the background, purge included, so a reusable device
+never returns to the pool with its last holder's data (a reclaim a crash
+interrupted is only shut down, as before). Meanwhile `status` and
+`simlock doctor --fix` treat it as any stalled reclaim. Android's
+`adb devices` has a 30-second command timeout of its own, below the startup limit.
+The maintainer accepted one cost: Android reports `transitioning` also for an
+emulator it cannot tell apart from another serial, so a restart during an adb
+hiccup can end a lease on an emulator that is in use.
 
 Operational logging is a separate concern from the event bus (ADR 0006): two
 records, and no fact is copied from one into the other. `simlock events`

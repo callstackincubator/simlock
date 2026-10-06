@@ -18,19 +18,29 @@ import {
   type PrerequisiteCheck,
   Registry,
 } from "./index.js";
+import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import { FakeDriver, testComponentWiring } from "./testing.js";
+import { WarmPool } from "./warm-pool/index.js";
 
 async function build(
   options: {
     readonly logger?: Logger;
     readonly fresh?: boolean;
+    readonly reclaimLatencyMs?: number;
     readonly driverRejections?: readonly DriverRejection[];
     readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
+  const driver = new FakeDriver({
+    availableOsVersions: ["1"],
+    clock,
+    ...(options.reclaimLatencyMs === undefined
+      ? {}
+      : { latencyMs: { reclaim: options.reclaimLatencyMs } }),
+    platform: "ios",
+  });
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
@@ -56,11 +66,14 @@ async function build(
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });
-  return { core, driver, registry };
+  return { clock, core, driver, registry };
 }
 
 /** A lease the registry has just begun releasing: the device is `reclaiming`, the reclaim not yet run. */
-async function releasedLease({ driver, registry }: Awaited<ReturnType<typeof build>>) {
+async function releasedLease(
+  { driver, registry }: Awaited<ReturnType<typeof build>>,
+  options: { readonly deferReclaim?: boolean } = {},
+) {
   const spec = { model: "Phone", osVersion: "1", platform: "ios" } as const;
   const provisioned = await driver.provision(spec);
   const device = await registry.registerDevice({
@@ -80,7 +93,7 @@ async function releasedLease({ driver, registry }: Awaited<ReturnType<typeof bui
     ttlDeadline: 61_000,
     ttlMs: 60_000,
   });
-  return { device, released: await registry.beginRelease(lease.id) };
+  return { device, released: await registry.beginRelease(lease.id, options) };
 }
 
 function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
@@ -233,12 +246,145 @@ describe("createCore", () => {
     const restore = vi.spyOn(core.quarantine, "restore");
     const dispose = vi.spyOn(core.quarantine, "dispose");
 
-    await core.converge();
+    await core.converge(await core.readStartup());
     expect(restore).toHaveBeenCalledOnce();
     expect(dispose).not.toHaveBeenCalled();
 
     core.dispose();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("converge leaves a deferred wipe running in the background under a claim, and settle awaits it", async () => {
+    const harness = await build({ reclaimLatencyMs: 30_000 });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    harness.core.connect(ports());
+
+    const startup = await harness.core.readStartup();
+    const outcome = await Promise.race([
+      harness.core.converge(startup).then(() => "returned" as const),
+      new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
+    ]);
+
+    expect(outcome).toBe("returned");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(true);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const settled = harness.core.settle();
+    harness.clock.advance(30_000);
+    await settled;
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
+  });
+
+  it("settle awaits the deferred wipes before the warm pool, because a wipe's commit can start a pass", async () => {
+    const harness = await build();
+    harness.core.connect(ports());
+    const order: string[] = [];
+    vi.spyOn(ReclaimCoordinator.prototype, "settle").mockImplementation(async () => {
+      order.push("reclaim");
+    });
+    vi.spyOn(WarmPool.prototype, "settle").mockImplementation(async () => {
+      order.push("warm pool");
+    });
+
+    try {
+      await harness.core.settle();
+      expect(order).toEqual(["reclaim", "warm pool"]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("nuke with deleteDevices waits for a deferred startup wipe, then deletes the device it left ready", async () => {
+    const harness = await build({ reclaimLatencyMs: 30_000 });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    // Leasing's real acquisition pauses the warm pool while maintenance is open.
+    const base = ports();
+    const paused = { active: false };
+    harness.core.connect({
+      ...base,
+      leaseMaintenance: {
+        ...base.leaseMaintenance,
+        acquisition: {
+          ...base.leaseMaintenance.acquisition,
+          beginMaintenance: async () => void (paused.active = true),
+        },
+      },
+      warmPoolDemand: {
+        get maintenanceActive() {
+          return paused.active;
+        },
+        resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
+        waitingDemand: () => [],
+      },
+    });
+    await harness.core.converge(await harness.core.readStartup());
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const nuked = harness.core.nuke.nuke(true);
+    // Long enough for a reset that does not wait to pass the device by.
+    await new Promise((resolve) => setImmediate(resolve));
+    harness.clock.advance(30_000);
+    await nuked;
+
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
+    ).toBe("deleted");
+  });
+
+  it("logs a deferred wipe whose commit fails, releases its claim, and tells acquisition", async () => {
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink });
+    const harness = await build({ logger });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    const order: string[] = [];
+    harness.core.connect(ports(order));
+    vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
+
+    await harness.core.converge(await harness.core.readStartup());
+    await harness.core.settle();
+
+    expect(
+      sink.records.filter((record) => record.message === "deferred wipe failed"),
+    ).toMatchObject([
+      { level: "error", fields: { deviceId: released.device.id, error: "write failed" } },
+    ]);
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
+    expect(order).toContain("notifyAvailability");
+  });
+
+  describe("startup's quarantine restore", () => {
+    async function quarantinedDevice(options: { readonly platformReadable: boolean }) {
+      const harness = await build();
+      if (!options.platformReadable) {
+        harness.driver.failOn("listManaged", 1, new DriverCrashError("cannot list"));
+      }
+      // A device whose release-time purge failed in a previous process, its retry already due.
+      const { released } = await releasedLease(harness);
+      await harness.registry.enterQuarantine(released.device.id, 0);
+      harness.core.connect(ports());
+      await harness.core.converge(await harness.core.readStartup());
+      // Lets a retry timer that converge armed fire.
+      harness.clock.advance(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      const reclaims = harness.driver.calls.filter((call) => call.operation === "reclaim");
+      return { ...harness, reclaims };
+    }
+
+    it("re-arms the retry of a quarantined device on a platform the read could list", async () => {
+      const { reclaims } = await quarantinedDevice({ platformReadable: true });
+
+      expect(reclaims).toHaveLength(1);
+    });
+
+    it("leaves a quarantined device on a platform the read could not list alone: no retry runs", async () => {
+      const { reclaims } = await quarantinedDevice({ platformReadable: false });
+
+      expect(reclaims).toHaveLength(0);
+    });
   });
 
   it("logs a spent device it cannot delete at startup and keeps going, leaving the device shut down", async () => {
@@ -251,7 +397,7 @@ describe("createCore", () => {
     await harness.registry.completeReclaimWithoutPurge(released.device.id);
     harness.core.connect(ports());
 
-    await harness.core.converge();
+    await harness.core.converge(await harness.core.readStartup());
 
     expect(
       sink.records.filter((record) => record.message === "startup delete of a spent device failed"),
@@ -291,7 +437,7 @@ describe("createCore", () => {
     await harness.registry.completeReclaimWithoutPurge(released.device.id);
     harness.core.connect(ports());
 
-    await expect(harness.core.converge()).resolves.toBeUndefined();
+    await expect(harness.core.converge(await harness.core.readStartup())).resolves.toBeUndefined();
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "shutdown" }]);
   });
