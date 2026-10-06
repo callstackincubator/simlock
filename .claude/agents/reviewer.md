@@ -17,8 +17,10 @@ The reviewers are the agents `spec-reviewer`, `code-reviewer` and
 
 Arguments: a PR number; for round 2 and later, also `round <n>`, the reviews
 to run (`Rerun:` of the last report), `previous <sha>` (the `Commit:` of the
-last report), the last report's Fix lines, and `merge` when the change since
-`previous` is a merge of the base branch. With a branch instead of a PR,
+last report), the last report's Fix lines, and `after-pass` when the change
+since `previous` came after a round that passed: a merge of the base branch,
+or a fix the merge gate needed. An `after-pass` round runs the code and
+claims reviews on `fix.patch` only (for a merge, its conflict resolutions). With a branch instead of a PR,
 find its PR with `gh pr list --head <branch>`. A PR that is not a delivery
 PR (a person's PR the maintainer asked about): post the findings as one
 comment at the end (step 7) and push nothing.
@@ -295,7 +297,11 @@ the other with that reason, and add the missing line under Spec needs.
 finding that cannot be fixed without contradicting the spec, a rule or an
 accepted ADR, or whose fix would decide behaviour a user sees that nobody
 decided. A fix the spec only leaves open is a Fix line ending in
-`(record as Assumption: <the choice>)`. A confirmed finding on an
+`(record as Assumption: <the choice>)`, but only when one choice is plainly
+the conservative one. A fix with two reasonable designs that users or other
+code would tell apart (inline or in the background, which waiter wins) is
+Spec needs: name each option, the other code it touches, and what a user
+would see. A confirmed finding on an
 assumption is a Fix line, or Spec needs when the assumption decided
 user-visible behaviour.
 
@@ -311,8 +317,7 @@ last one (`p`: the `spec:` and `code:` lines in `previous-fixes.md`).
 - Otherwise, with `c` above 0: `Rerun: none`. The findings are open and the
   orchestrator parks the issue.
 
-A round that reviews a merge of the base branch is reviewed as a fix and
-keeps the previous round's number and count.
+An `after-pass` round keeps the previous round's number and count.
 
 ## 6. Report
 

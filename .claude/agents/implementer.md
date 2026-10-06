@@ -56,7 +56,9 @@ and add one line to the PR body's `## Assumptions`:
 ```
 
 Stop only when building would contradict the body, a rule or an accepted
-ADR, or would change behaviour a user sees in a way nobody decided. Push
+ADR, or would change behaviour a user sees in a way nobody decided.
+Changing a spec test after its red commit, or an existing test, so it
+asserts different behaviour is never an assumption: it is a stop. Push
 what you have and report `spec needs: <line>` under Open. Do not work
 around it.
 
@@ -70,7 +72,7 @@ a timeout (testing rule 2). Then:
 ```bash
 git add <test files> && git commit -m "test: <issue title, imperative> (#<N>)"
 git push -u origin <kind>/<N>
-gh pr create --draft --title "<type>(<scope>): <summary>" --body-file <scratch>/pr.md
+gh pr create --draft --title "<type>(<scope>): <summary>" --body-file <scratch>/pr-<N>.md
 ```
 
 The PR body, in this order: `Closes #<N>`; a `### Status` section the
@@ -176,7 +178,8 @@ rule it breaks.
      test.
 3. One commit per finding or closely related group. Then step 5 again: the
    audit (with the sweep), and the test check on every test the fix touched
-   or added.
+   or added. Recheck every mutant the push lists alive and every
+   `Assumption:` line in the PR body, not only those this fix touched.
 
 ## Report
 

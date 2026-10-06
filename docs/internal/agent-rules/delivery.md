@@ -100,8 +100,8 @@ is open, done means closed as completed.
    spec. Delivery stops for a person only when building would contradict the
    body, a rule or an accepted ADR, or would change behaviour a user sees in
    a way nobody decided. The agent that asked writes the person's answer
-   into the body, as a line in the section it settles, before work resumes,
-   so every later agent reads it as spec.
+   into the body, as a line in the section it settles and a Tests line that
+   pins it, before work resumes, so every later agent reads it as spec.
 
 4. **Every spec session starts by reconciling.** Before writing anything, the
    session fetches every comment created after the body's `lastEditedAt`, on
@@ -259,8 +259,9 @@ is open, done means closed as completed.
     defect, and that no other instance of each fixed class is left. What a
     later round finds outside that is a note; a confirmed defect among those
     notes becomes a `bug:new` issue and does not block the PR. The claims
-    review runs every round. A merge of the base branch that resolves a
-    conflict is reviewed as a fix, in a round that does not count below.
+    review runs every round. A commit pushed after a round that passed (a
+    merge of the base branch, a fix the gate needed) gets the code and
+    claims reviews of that fix alone, in a round that does not count below.
     A confirmed finding whose fix changes only a comment, a doc, a test
     title or a message is a claims finding, whichever review raised it.
     Rounds run while they converge: round 2 runs after any confirmed spec or

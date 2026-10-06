@@ -61,11 +61,13 @@ Asked how it is going: answer from the PR status lines (step 3) and the
 status lines so far. To look inside a running agent, ask it with
 SendMessage.
 
-**Ask once, then run.** With a person in the session, ask one question up
-front: may the slow lane run for every PR of this run (rule 16). Then never
-stop to ask: post PR bodies and comments directly, merge every PR the gate
-accepts, and apply rule 14's round cap. Ask a person only about what parks
-an issue. Unattended, ask nothing: the slow lane runs when its lock is free.
+**Ask once, then run.** With a person in the session, ask one question, the
+first time a report lists Hardware lines: may the slow lane run for every PR
+of this run (rule 16). Record the answer in that PR's `### Status`. Then
+never stop to ask: post PR bodies and comments directly, merge every PR the
+gate accepts, and apply rule 14's round cap. Ask a person only about what
+parks an issue. Unattended, ask nothing: the slow lane runs when its lock is
+free.
 
 **Park only for a person's decision.** A small spec gap is an `Assumption:`
 line, not a stop (rule 3). Park only for:
@@ -107,7 +109,10 @@ they name; never build again or restart review at round 1.
 
 1. **Implement**: `implementer` with the issue, the branch and
    `mode build`. `spec needs` under Open: park (step 6).
-2. **Review**: `reviewer` with the PR number.
+2. **Review**: `reviewer` with the PR number. Before every review round,
+   read `gh pr checks <M>` and `gh pr view <M> --json mergeable` once. A
+   failed check no open `flaky-test` issue names, or a conflict, goes into
+   one `implementer` fix run first.
 3. **Decide** on the review report:
    - Fix lines: one `implementer` run in mode `fix` with the Fix lines
      pasted, then the next round: `reviewer` with `round <n+1>`, the
@@ -116,14 +121,18 @@ they name; never build again or restart review at round 1.
      once per PR. Claims Fix lines it still reports: one more `implementer`
      fix run, no review; list them in the PR body's `## Review` section as
      fixed unreviewed.
-   - The gate refuses a conflict: an `implementer` fix run that merges the
-     base branch, then `reviewer` with the same round, `previous <Commit>`
-     and `merge`.
+   - A commit after a round that passed (a merge of the base branch, a fix
+     the gate needed): `reviewer` with the same round, `previous <Commit>`
+     and `after-pass`, before the gate.
+   - After every round, add its counts and Rejected lines to the PR body's
+     `## Review` section (step 4), and its Notes under `Notes so far:`
+     there; step 5 moves them into one comment.
    - Out of scope lines: open one `bug:new` issue each, naming the PR. They
      do not block it.
    - Spec needs, or a blocking finding reported open with `Rerun: none`:
      park. When a person answers a Spec needs, write the answer into the
-     issue body (delivery rule 3) before the fix run.
+     issue body, with a Tests line that pins it (delivery rule 3), before
+     the fix run.
    - No Fix lines, and implement reported Hardware lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`: one `implementer` fix
@@ -160,7 +169,7 @@ they name; never build again or restart review at round 1.
    `*Written by an agent.*`.
 
 5. **Notes: one comment.** If the reports carried Notes lines, post them
-   once, after the last round:
+   once, after the last round, and remove `Notes so far:` from the PR body:
 
    ```markdown
    ## Review notes
@@ -183,9 +192,10 @@ they name; never build again or restart review at round 1.
    .agents/scripts/merge-pr.sh <M>
    ```
 
-   Exit 0: merged. A conflict: the merge fix in step 3. Red CI: one
-   `implementer` fix run with the failing test titles and the run id, then
-   the gate again. Any other exit, or red CI a second time: park with the
+   Exit 0: merged. A conflict: an `implementer` fix run that merges the
+   base branch. Red CI: one `implementer` fix run with the failing test
+   titles and the run id. Either way, the `after-pass` review in step 3,
+   then the gate again. Any other exit, or red CI a second time: park with the
    line it printed. A surviving mutant implement could not explain also
    parks: the gate does not read the report.
 
