@@ -1399,10 +1399,12 @@ are:
 - `LeaseRequestBook` stores every lease request in the registry before the
   queue sees it, answers a repeat under the same `(requesterId,
   idempotencyKey)` with the stored result or the wait still open, and writes
-  the result once that wait settles, except for a grant: `Registry.createLease` writes
-  the granted result in the lease's own commit, and the book's later settle writes nothing. The HTTP request resource reads requests
-  through it; a gateway's `FleetLeaseCoordinator` runs the same book over an
-  in-memory store.
+  the result once that wait settles. On the daemon a grant is the exception:
+  `Registry.createLease` writes the granted result in the lease's own commit, and the
+  book's later settle writes nothing. A gateway's `FleetLeaseCoordinator` runs the same
+  book over an in-memory store, where no `createLease` runs, so the book's settle writes
+  the grant through `InMemoryLeaseRequestStore.settleLeaseRequest`. The HTTP request
+  resource reads requests through it.
 - `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
   `AcquisitionPlanner` makes read-only grant/provision/boot/eviction plans;
   `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver

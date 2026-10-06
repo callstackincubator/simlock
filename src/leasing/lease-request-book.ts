@@ -306,8 +306,10 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
 
   /**
    * Every stored request that a live wait in `places` is driving, oldest first. A wait leaves
-   * `places` when the queue resolves it, and a grant's commit comes first, so a granted request
-   * is listed for that short window with its result already stored. An open record no wait
+   * `places` when the queue resolves it. On the daemon a grant's commit comes first, so a granted
+   * request is listed for that short window with its result already stored; on the gateway the
+   * queue resolves first and the book's settle writes the grant after, so a granted request is
+   * never listed. An open record no wait
    * drives, such as one a restarted daemon has not settled yet, is not listed.
    */
   waiting(places: readonly QueuePlace[]): WaitingRequest[] {

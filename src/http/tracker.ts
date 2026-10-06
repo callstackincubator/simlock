@@ -264,8 +264,9 @@ export class LeaseRequestTracker {
       this.options
         .dispatch("lease.request", leaseRequestDispatchInput(body, idempotencyKey), session)
         .then(
-          // The grant answers before its record is written (the daemon stores the result
-          // once the wait settles), so the `201` is built from the grant itself.
+          // The `201` is built from the grant itself, so it does not wait on the request
+          // record: the daemon writes the granted result in the lease's own commit, and a
+          // gateway's book writes it when its settle runs.
           (grant) =>
             settleGranted({
               lease: buildLeasePayload(
