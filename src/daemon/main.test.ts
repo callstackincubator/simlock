@@ -1256,7 +1256,14 @@ describe("startDaemon with HTTP off", () => {
   it("starts no HTTP gateway when http.enabled is false", async () => {
     const { sink } = await start({ configOverrides: { http: { enabled: false } } });
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(sink.records.some((record) => record.message === "HTTP gateway listening")).toBe(false);
+    // Either outcome of a started frontend counts: bound ("listening") or refused ("failed").
+    expect(
+      sink.records
+        .map((record) => record.message)
+        .filter(
+          (message) => message.startsWith("HTTP gateway") || message.startsWith("HTTP frontend"),
+        ),
+    ).toEqual([]);
   });
 });
 
