@@ -12,12 +12,18 @@ import { SerializedDecision } from "./serialized-decision.js";
  * also uses belongs on `index.ts`.
  */
 export { capacityChangedPayload } from "./capacity/index.js";
+export {
+  type CapacityLimits,
+  createCapacityStrategy,
+  type ResourceStrategyOptions,
+} from "./capacity/index.js";
+export { readyTransitionUpdate } from "./driver.js";
 export { FakeDriver } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 
 /**
- * Test-only: the decision gate and the component installer a `LeaseEngine` is built with, wired
- * the way the daemon wires them -- one gate shared by the engine and the installer, so the
+ * Test-only: the decision gate and the component installer `createCore` and `createLeasing` are
+ * built with, wired the way the daemon wires them -- one gate shared by both and the installer, so the
  * installer's registry writes are serialized with every other one. Unlimited free disk. A test
  * that passes its own `components` gets the gate alone.
  */

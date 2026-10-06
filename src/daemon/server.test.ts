@@ -10,7 +10,6 @@ import {
   CleanupReaper,
   type Config,
   type DriverRejection,
-  LeaseEngine,
   PassthroughRefusedError,
   Registry,
   RuntimeMissingError,
@@ -42,6 +41,7 @@ import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 import { AdminSecretManager } from "./admin-secret.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -2903,7 +2903,7 @@ async function createHarness(
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -2928,6 +2928,7 @@ async function createHarness(
   const daemon = new DaemonServer({
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
+    deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
     clock,

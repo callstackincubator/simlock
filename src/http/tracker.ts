@@ -155,7 +155,7 @@ export type CancelOutcome =
   | { readonly kind: "not-cancellable"; readonly leaseId?: string };
 
 /**
- * The daemon's stored lease requests, as this resource reads them: a worker's `LeaseEngine`
+ * The daemon's stored lease requests, as this resource reads them: a worker's leasing
  * request book, or a gateway's fleet coordinator's. `record` is read through the contract's
  * `leaseRequestRecordSchema` rather than trusted, because the two backends store different grant
  * types and this module names neither.
@@ -264,8 +264,9 @@ export class LeaseRequestTracker {
       this.options
         .dispatch("lease.request", leaseRequestDispatchInput(body, idempotencyKey), session)
         .then(
-          // The grant answers before its record is written (the daemon stores the result
-          // once the wait settles), so the `201` is built from the grant itself.
+          // The `201` is built from the grant itself, so it does not wait on the request
+          // record: the daemon writes the granted result in the lease's own commit, and a
+          // gateway's book writes it when its settle runs.
           (grant) =>
             settleGranted({
               lease: buildLeasePayload(
@@ -373,7 +374,7 @@ interface DownloadingProgress {
   readonly percent?: number | undefined;
 }
 
-/** Structural subset of `LeaseProgress` (`src/core/wait-queue.ts`) -- this module only ever
+/** Structural subset of `LeaseProgress` (`src/core/domain.ts`) -- this module only ever
  * receives it through a dispatched `lease.request`'s session `onProgress` override, never
  * imports the core type directly. */
 type HttpLeaseProgress =

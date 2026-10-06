@@ -7,39 +7,34 @@ effort: medium
 
 # Spec session
 
-You are writing the body of a `feature:*` or `task:*` issue on behalf of the
-maintainer. The rules in `docs/internal/agent-rules/delivery.md` are binding; the ones
-that matter most here are 3 (the body is the spec), 4 (reconcile first), 5
-(never rewrite a reporter's issue), 6 (outcomes, not implementation) and 7
-(a task carries both halves, and is checked before it is ready).
+You write the body of a `feature:*` or `task:*` issue for the maintainer.
+Rules: `docs/internal/agent-rules/delivery.md`, above all 3 (the body is the
+spec), 4 (reconcile first), 5 (never rewrite a reporter's issue), 6
+(outcomes, not implementation) and 7 (a task carries both halves and is
+checked before it is ready).
 
-Argument: an issue number, optionally followed by a mode: `business`,
-`technical`, `split`, or `revise`, and optionally `unattended`. Without a
-mode, infer it from the state of the body and confirm with the user before
-writing.
+Argument: an issue number, optionally a mode (`business`, `technical`,
+`split`, `revise`), optionally `unattended`. No mode: infer it from the body
+and confirm with the user before writing.
 
 **Unattended** is only for `split` on a `feature:ready` feature, run by the
-`deliver` skill. The maintainer's `feature:ready` already accepted the
-business sections and every linked ADR (delivery rule 1), so nobody is
-asked anything. Where an attended session would ask, decide from the
-business sections, the ADRs and the codebase. Stop instead, and report why,
-when:
+`deliver` skill. `feature:ready` already accepted the business sections and
+every linked ADR (rule 1), so ask nobody: where an attended session would
+ask, decide from the business sections, the ADRs and the codebase. Stop and
+report why when:
 
-- reconciling finds a comment that would change the spec: the maintainer
-  must accept it first;
-- a decision needs a new ADR (constrains more than one task, or is
-  expensive to reverse): the maintainer must accept it first;
-- a question only the maintainer can answer remains, including a spec
-  check finding (step 5) the accepted business sections do not settle.
+- reconciling finds a comment that would change the spec;
+- a decision needs a new ADR (it constrains more than one task, or is
+  expensive to reverse);
+- a question only the maintainer can answer remains, including a spec-check
+  finding (step 5) the accepted business sections do not settle.
 
 ## 1. Load the issue
 
-Once the issue and mode are known, rename the session to
-`[Spec #N, <mode>] <issue title>` with
+Rename the session to `[Spec #N, <mode>] <issue title>` with
 `mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it
-with ToolSearch first). Skip it when the arguments say `unattended` (a delivery
-run owns the title then), and when the tool is missing or the rename is declined: the title
-is never a reason to stop or ask.
+with ToolSearch first). Skip it when unattended (the delivery run owns the
+title), or when the tool is missing or declined.
 
 ```bash
 read -r OWNER REPO < <(gh repo view --json owner,name -q '"\(.owner.login) \(.name)"')
@@ -54,35 +49,33 @@ gh api graphql -F owner="$OWNER" -F repo="$REPO" -F number=<N> -f query='
     }}}'
 ```
 
-Refuse to continue if the issue's label is `bug:*` or if it is `request:new`
-and the mode is anything other than creating a feature from it: those bodies
-belong to the reporter.
+Refuse a `bug:*` issue, and a `request:new` issue in any mode other than
+creating a feature from it: those bodies belong to the reporter.
 
-If the body has a `Request: #M` line, load issue M the same way; its comments
+A `Request: #M` line in the body: load issue M the same way; its comments
 are part of the discussion.
 
 ## 2. Reconcile
 
 The cut-off is `lastEditedAt`, or `createdAt` if the body was never edited.
-Take every comment on the issue and on its linked request created after the
-cut-off. For each one decide whether it changes the spec. Present the result
-as a list, one item per proposed change, each naming the comment's author and
-URL and the section it touches. Comments that change nothing are not listed.
+For every comment on the issue and its linked request created after the
+cut-off, decide whether it changes the spec. List one item per proposed
+change: the comment's author and URL, and the section it touches. Leave out
+comments that change nothing.
 
-Ask the maintainer to accept or reject each item, one question at a time.
-Unattended, any item stops the session (see above).
-Accepted items are folded into the relevant section when you write the body
-in step 4. Do not proceed to step 3 until every item has an answer.
+Ask the maintainer to accept or reject each item, one at a time.
+Unattended, any item stops the session. Fold accepted items into the body
+in step 4. Do not start step 3 until every item has an answer.
 
 ## 3. Do the session
 
-Every mode is an interview, one question at a time, with your recommended
-answer attached to each question. Explore the codebase instead of asking
-whenever the codebase can answer. The `interview-me` and `grill-me` skills
-describe the technique; use it.
+Every mode is an interview: one question at a time, each with your
+recommended answer. Explore the codebase instead of asking whenever it can
+answer. Use the technique of the `interview-me` and `grill-me` skills.
 
 **Creating a feature from a request** (`request:new` issue given):
-interview for the business sections of `docs/internal/templates/feature.md`, then
+interview for the business sections of `docs/internal/templates/feature.md`,
+then:
 
 ```bash
 gh issue create --title "<title>" --label feature:spec --body-file <file>
@@ -95,32 +88,45 @@ The new body's first line is `Request: #<request>`.
 
 **`business`**: write or amend the sections Problem through Open questions.
 Push back on anything that names a mechanism rather than an outcome, unless
-the mechanism is itself a requirement. Leave Open questions non-empty if
-questions remain; the feature does not leave `feature:spec` until it is empty.
+the mechanism is itself a requirement. Leave Open questions non-empty while
+questions remain: the feature does not leave `feature:spec` until it is
+empty.
 
-**`technical`** (feature delivered as one PR): fill the Technical spec
-section. Before writing it, ask whether any decision here constrains more
-than one future change or would be expensive to reverse. Each such decision
-becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch,
-with the diagrams `docs/internal/adr/README.md` asks for, and
-add its line to Decisions. Tell the maintainer the feature cannot leave
-`feature:spec` until that ADR is accepted. Write only what
-`docs/internal/agent-rules/always-in-scope.md` does not already cover. The
-session ends with the spec check (step 5) on the posted body.
+**`technical`** (a feature delivered as one PR): fill the Technical spec
+section. First ask whether any decision here constrains more than one future
+change or would be expensive to reverse. Each such decision becomes an ADR:
+draft it in `docs/internal/adr/` at status _Proposed_ on a branch, with the
+diagrams `docs/internal/adr/README.md` asks for, and add its line to
+Decisions. Tell the maintainer the feature cannot leave `feature:spec` until
+that ADR is accepted. Write only what
+`docs/internal/agent-rules/always-in-scope.md` does not cover. End with the
+spec check (step 5) on the posted body.
 
-**`split`**: interview for the task list — vertical slices, each one a PR a
-single agent can land, ordered so every task depends only on earlier ones.
-For each task, write a body from `docs/internal/templates/task.md` with Scope,
+**`split`**: interview for the task list: vertical slices, each a PR one
+agent can land, ordered so every task depends only on earlier ones. For each
+task, write a body from `docs/internal/templates/task.md` with Scope,
 Technical spec, Done when, Out of scope and Depends on filled in.
 
-Write each body so the spec check finds nothing: no Done when line its own
-Tests or Scope make false, none a reviewer could not check, no failure mode
-left unanswered; two tasks that touch the same file or both change a
-contract shape run one after the other, the later one listing the earlier
-under Depends on; a Done when line that needs a real simulator or emulator
-says so in its own words ("on a Mac with an iOS runtime: ...") and names
-the slow-lane test that proves it. Do not repeat what `always-in-scope.md`
-covers.
+Write each body so the spec check finds nothing:
+
+- no Done when line its own Tests or Scope make false, none a reviewer
+  could not check, no failure mode left unanswered;
+- a Tests line for every behaviour the body states, "as today" included;
+- a seam for the tests: the entry point they drive. Prefer an existing seam
+  to a new one, the highest one that can see the behaviour, and as few as
+  possible, ideally one. Name an existing test file to model them on.
+  Attended, confirm the seams with the maintainer in one question;
+- under "Other code on the same state", every existing component that acts
+  on the state the task changes, found by searching, and which one wins
+  when both act;
+- every list given as complete (ports, callers, files, steps, triggers)
+  checked against a search of the code;
+- two tasks that touch the same file, or overlap by a project check in
+  `toolchain.md`, run one after the other: the later lists the earlier under
+  Depends on;
+- a Done when line that needs the slow lane says so and names its test, as
+  `toolchain.md` asks;
+- nothing `always-in-scope.md` covers.
 
 Then create each task:
 
@@ -132,7 +138,7 @@ gh api graphql -F parent="<feature node id>" -F child="<task node id>" -f query=
 ```
 
 Get a node id with `gh issue view <n> --json id -q .id`. Run the spec check
-(step 5) on the feature, which reads every task you created. Then remove the
+(step 5) on the feature: it reads every task you created. Then remove the
 Technical spec section from the feature body, add the Tasks section the
 feature template describes (the order as a diagram, then one entry per task
 with what it changes for the user and its risk), and change the label:
@@ -141,61 +147,57 @@ with what it changes for the user and its risk), and change the label:
 gh issue edit <feature> --add-label feature:planned --remove-label feature:spec
 ```
 
-Unattended, the feature comes from `feature:ready`; remove that label
-instead of `feature:spec`.
+Unattended, remove `feature:ready` instead of `feature:spec`.
 
-Attended, do not tick any task's approval box: that is the maintainer's
-click, after the spec check. Unattended, the feature's `feature:ready` is
-the approval, so tick each box yourself once the spec check is done, in a
-second body edit after the task exists: the issue-state workflow promotes a
-task on body edits only, so a box ticked at creation would leave the task
-in `task:draft`.
+Approval boxes:
 
-**`revise`**: only the reconcile step plus whatever amendments it produced.
+- Attended: tick none. That is the maintainer's click, after the spec check.
+- Unattended: `feature:ready` is the approval. Tick each box yourself once
+  the spec check is done, in a second body edit after the task exists: the
+  issue-state workflow promotes a task on body edits only, so a box ticked
+  at creation leaves the task in `task:draft`.
 
-**Make it easy to follow.** The maintainer approves what they understand,
-so explain before you ask, and show before you explain:
+**`revise`**: the reconcile step, plus the amendments it produced.
 
-- Open every question with the picture it is about: a Mermaid flowchart or
-  sequence diagram of the flow today and the flow proposed, or a before and
-  after example of the command and its output. Then ask, with your
-  recommended answer and one line on what each option costs.
-- Use the words a user of the tool would use. The first time a term from
-  the code, an ADR or a rule appears, say what it means in plain words with
-  an example, and add it to the body's Words used section. Never cite a
-  rule or ADR number as the reason for something; say the reason.
-- Keep each question to one decision and about five lines plus its
-  picture. If it does not fit, split it. Context the maintainer may not
-  have gets three lines or fewer.
-- When a rule accepts, rejects or matches input, show a table of example
-  inputs with today's result and the proposed one, odd cases included, and
-  check today's column by running the tool on `main`.
-- Before writing the body, play the result back: the user flow diagram,
-  the example, and a list of what will and will not change. Write only
-  after the maintainer says it matches what they meant.
-- In a Technical spec, draw what the change touches: a Mermaid dependency
-  flowchart of the modules involved (changed ones marked), and a Mermaid
-  sequence diagram for any request that crosses a process or a network
-  hop, failure reply included. Use the same diagrams when you ask a
-  technical question.
-- In the body, fill "How it works for the user", "Examples", "What could
-  go wrong" and "Words used" (feature) or "In short" (task) as the template
-  says. A diagram has at most about
-  ten boxes; split a bigger flow.
+**Make it easy to follow.** The maintainer approves what they understand:
+show, then explain, then ask.
 
-Write the spec the way rule 12 asks for everything else: short sentences,
-common words, one idea per sentence. A spec is read by an agent that will
-build exactly what it says, so every sentence that does not constrain the
-build is a sentence to cut.
+- Open every question with its picture: a Mermaid flowchart or sequence
+  diagram of today's flow and the proposed one, or a before-and-after
+  example of the command and its output. Then ask, with your recommended
+  answer and one line on what each option costs.
+- Use a user's words. The first time a term from the code, an ADR or a rule
+  appears, say what it means in plain words with an example, and add it to
+  the body's Words used section. Never give a rule or ADR number as the
+  reason for something; say the reason.
+- One decision per question, about five lines plus its picture; split
+  anything longer. Context the maintainer may lack: three lines at most.
+- A rule that accepts, rejects or matches input: show a table of example
+  inputs, odd cases included, with today's result and the proposed one.
+  Fill today's column by running the tool on `main`.
+- Before writing the body, play the result back: the user flow diagram, the
+  example, and what will and will not change. Write only after the
+  maintainer says it matches what they meant.
+- In a Technical spec, draw a Mermaid dependency flowchart of the modules
+  involved (changed ones marked), and a Mermaid sequence diagram for any
+  request that crosses a process or network hop, failure reply included.
+  Use the same diagrams for technical questions.
+- Fill "How it works for the user", "Examples", "What could go wrong" and
+  "Words used" (feature) or "In short" (task) as the template says. A
+  diagram has at most about ten boxes; split a bigger flow.
+
+Write the spec as rule 12 asks: short sentences, common words, one idea per
+sentence. An agent builds exactly what the spec says, so cut every sentence
+that does not constrain the build.
 
 ## 4. Write back and leave a marker
 
-If a person is present in this session, show the new body first and wait for a
-yes before posting. Running unattended, post directly, and end with one line
-for the caller: the tasks created with their Depends on and the spec check's
-verdict, or why you stopped.
+A person is present: show the new body and wait for a yes before posting.
+Unattended: post directly, and end with one line for the caller: the tasks
+created with their Depends on and the spec check's verdict, or why you
+stopped.
 
-Edit the body in place, keeping every section that already existed:
+Edit the body in place, keeping every existing section:
 
 ```bash
 gh issue edit <N> --body-file <file>
@@ -204,27 +206,31 @@ gh issue comment <N> --body "Spec updated: <which sections were added or changed
 *Written by an agent.*"
 ```
 
-Issue bodies you create end with `*Written by an agent.*` too; the spec
-sections above it are what the maintainer approved, the line just says who
-typed them. Never set `feature:ready`. Never post the spec, or a summary of it, as a
-comment. Never edit a `request:new` or `bug:*` body.
+Issue bodies you create end with `*Written by an agent.*`. Never set
+`feature:ready`. Never post the spec, or a summary of it, as a comment.
+Never edit a `request:new` or `bug:*` body.
 
 ## 5. Check the spec (`technical` and `split`)
 
-The spec check reads the body as posted, so it runs after the body is on
-GitHub: at the end of `technical`, and in `split` once every task exists.
-Start the `spec-checker` agent with the Agent tool, `run_in_background:
-false`, and the issue number (the feature, for a split) as its prompt. It
-reads with a fresh context and hands back only its report block.
+The check reads the body as posted, so it runs once the body is on GitHub:
+at the end of `technical`, and in `split` once every task exists. Start
+`spec-checker` agents with the Agent tool, `run_in_background: false`, all
+in one message:
 
-Fix each finding in the body it names, then run the check once more if you
-changed anything. There is no third run: what the second one reports is
-fixed or stopped on as below. Attended, walk the findings with the maintainer one at a
-time, each with your recommended fix, and fold in the accepted ones. A
-finding the maintainer decides to accept stays as it is. Tell the
-maintainer to tick an approval box or add `feature:ready` only once the
-check says `Verdict: ready`, or every open finding is one they accepted.
+- `technical`: one, with `#<N> task`.
+- `split`: one per task, with `#<task> task`, and one with
+  `#<feature> feature`.
 
-Unattended, fix every finding the accepted business sections and ADRs
-settle, in the task body. A finding that needs a new decision stops the
-session (see the top): report it, and tick no box.
+Fix each finding in the body it names. Then run the check once more for
+every issue whose body you changed (and the feature check, if any task
+changed). There is no third run: what the second run reports is fixed or
+stopped on as below.
+
+- Attended: walk the findings with the maintainer one at a time, each with
+  your recommended fix, and fold in the accepted ones. A finding the
+  maintainer accepts stays. Tell them to tick an approval box or add
+  `feature:ready` only once the check says `Verdict: ready`, or every open
+  finding is one they accepted.
+- Unattended: fix every finding the accepted business sections and ADRs
+  settle, in the task body. A finding that needs a new decision stops the
+  session: report it, and tick no box.

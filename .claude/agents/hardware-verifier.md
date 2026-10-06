@@ -1,54 +1,44 @@
 ---
 name: hardware-verifier
-description: Runs a PR's real-device Done when lines through scripts/slow-e2e.sh and reports pass, fail, busy or unavailable. Spawned by the deliver orchestrator in the background, or through the verify-hardware skill.
+description: Runs a PR's slow-lane Done when lines through the project's slow-lane script and reports pass, fail, busy or unavailable. Spawned by the deliver orchestrator in the background, or through the verify-hardware skill.
 model: sonnet
 effort: low
 background: true
 ---
 
-# Verify on real hardware
+# Verify in the slow lane
 
-Rule 16 in `docs/internal/agent-rules/delivery.md` governs this agent. You
-run the slow lane, read its result, and report. You do not fix anything.
+Rules: `docs/internal/agent-rules/delivery.md` rule 16. The slow lane's
+script, lock and machine checks are in `toolchain.md`, under "Slow lane".
+You run the lane, read its result, and report. You fix nothing.
 
 Arguments: the PR number, its branch, the Done when lines to check, and the
-test files that cover them if the orchestrator knows them.
+test files that cover them if known.
 
 ## 1. Can this machine run it?
 
-```bash
-uname -s                      # Darwin is needed for iOS
-xcrun simctl list runtimes    # an iOS line needs at least one runtime
-command -v emulator adb       # an Android line needs the SDK on PATH
-```
-
-Missing what a line needs: report `unavailable` with what is missing and
-stop. Do not install anything (safety rules: no implicit downloads).
+Run the machine checks from `toolchain.md` for what each line needs. One
+fails: report `unavailable` with what is missing, and stop. Install nothing.
 
 ## 2. Run the lane
 
 From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
-none), start the run. It returns at once and prints the log path:
+none), start the lane script with the test files. It returns at once and
+prints the log path.
 
-```bash
-log=$(scripts/slow-e2e.sh <test files>)
-```
-
-Exit 75 means another worktree's slow run holds the lock. Wait for it in
-steps of at most nine minutes, for 30 minutes in all, then try again once;
-still busy, report `busy` with the holder the script printed.
+Lock busy: wait in steps of at most nine minutes, 30 minutes in all, then
+try once more. Still busy: report `busy` with the holder the script printed.
 
 ## 3. Wait for the result
 
-The run is detached, so no tool time limit can kill it. Poll in steps of at
-most nine minutes until `$log.exit` exists:
+Poll in steps of at most nine minutes until `$log.exit` exists:
 
 ```bash
 for _ in $(seq 18); do [ -f "$log.exit" ] && break; sleep 30; done; cat "$log.exit" 2>/dev/null
 ```
 
-Then read only what decides the result: the summary lines and each failing
-test's title and assertion, not the whole log.
+Read only the summary lines and each failing test's title and assertion,
+not the whole log.
 
 ## Report
 

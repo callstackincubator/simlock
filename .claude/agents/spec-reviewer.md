@@ -1,6 +1,6 @@
 ---
 name: spec-reviewer
-description: The blind spec review from delivery rule 14. Spawned only by the review skill, which passes the brief and the input files. Reads; runs nothing.
+description: The blind spec review from delivery rule 14. Spawned only by the reviewer agent, which passes the brief and the input files. Reads; runs nothing.
 model: opus
 effort: high
 tools: Read, Grep, Glob

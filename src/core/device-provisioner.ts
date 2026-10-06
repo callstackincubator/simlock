@@ -3,12 +3,11 @@ import { stableError } from "./stable-error.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
-import type { DeviceRecord, DeviceSpec } from "./domain.js";
+import type { DeviceRecord, DeviceSpec, LeaseProgress } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import type { LeaseProgress } from "./wait-queue.js";
 
 export type ProvisionProgress = Extract<
   LeaseProgress,

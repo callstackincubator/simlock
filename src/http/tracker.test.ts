@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { type DeviceRecord } from "../core/index.js";
 import {
-  type DeviceRecord,
   NoCapacityError,
   RequesterAlreadyLeasedError,
   RequestCancelledError,
-} from "../core/index.js";
+} from "../leasing/index.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeDispatcher, makeGrant, waitForDispatch } from "./test-fakes.js";
 import { isTerminalStage, LeaseRequestTracker, type TrackedRequestView } from "./tracker.js";

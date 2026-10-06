@@ -7,34 +7,32 @@ import {
   satisfies,
 } from "../contract/os-range.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
-import type { CapacityReservation } from "./capacity/index.js";
-import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
+  type CapacityReservation,
   type DeviceOperationClaim,
   type DeviceOperationClaims,
-} from "./device-operation-claims.js";
-import { type DeviceProvisioner } from "./device-provisioner.js";
-import { type LeaseRequestBook, newLeaseRequestId } from "./lease-request-book.js";
-import { classCandidates, findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
-import {
+  type DeviceProvisioner,
+  classCandidates,
+  findCatalogModel,
+  modelClass,
+  pairedRuntimes,
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
   type DeviceRequirement,
   type DeviceSpec,
   exactRequirement,
+  type LeaseGrant,
+  type LeaseProgress,
   type LeaseRecord,
+  type LeaseTiming,
+  newLeaseRequestId,
   type Platform,
   sameSpec,
   specMode,
-  type WaitingDemand,
-} from "./domain.js";
-import {
   ComponentBeingRemovedError,
   type ComponentInstaller,
   type ComponentInstallerProgress,
-} from "./component-installer.js";
-import {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -42,35 +40,28 @@ import {
   type ExactDeviceRequest,
   RuntimeMissingError,
   UnknownModelError,
-} from "./driver.js";
-import { type DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
-import { type CatalogReader } from "./lease-ports.js";
-import { type LeaseLifecycle } from "./lease-lifecycle.js";
-import type { AcquisitionMaintenance } from "./nuke-service.js";
-import {
+  type DriverCatalog,
+  type ModelPreferences,
+  type CatalogReader,
+  type AcquisitionMaintenance,
   type ManagedDeviceLifecycle,
   type ReadyDeviceHandoff,
-} from "./managed-device-lifecycle.js";
-import { type SerializedDecision } from "./serialized-decision.js";
-import { stableError } from "./stable-error.js";
+  type SerializedDecision,
+  stableError,
+  type WaitingDemand,
+} from "../core/index.js";
+import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
+import { type LeaseRequestBook } from "./lease-request-book.js";
+import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import {
-  type LeaseGrant,
-  type LeaseProgress,
   type LeaseRequestOptions,
-  type LeaseTiming,
   RequestCancelledError,
   RequesterAlreadyLeasedError,
   type Waiter,
   type WaitQueue,
 } from "./wait-queue.js";
 
-export type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
-export {
-  QueueTimeoutError,
-  RequestCancelledError,
-  RequesterAlreadyLeasedError,
-} from "./wait-queue.js";
-export { NoDriverError } from "./driver-catalog.js";
+export type { LeaseRequestOptions } from "./wait-queue.js";
 
 export class NoCapacityError extends Error {
   constructor() {
@@ -552,7 +543,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * The requests that have no device yet, oldest first, whose spec has resolved: those in state
    * `new` or `queued` are waiting; one in `processing` has device work in flight, a provision, boot
    * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
-   * `LeaseEngine#waitingRequests` is a different view and does not change.
+   * `Leasing#waitingRequests` is a different view and does not change.
    */
   // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   waitingDemand(): readonly WaitingDemand[] {
@@ -681,7 +672,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.options.drivers.get(plan.device.spec.platform),
         plan.device.spec,
       );
-      await this.#grant(waiter, plan.device.id, plan.kind);
+      await this.#grant(waiter, plan.device, plan.kind);
       return undefined;
     }
     const operation = operationPlan(plan);
@@ -712,25 +703,28 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * The one place a `LeaseGrant` is built, which is why the lease environment is read
-   * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
-   * through it, so there is no second construction site to keep in step.
+   * Hands the waiter the grant `LeaseLifecycle.grant` returns, which is why the lease
+   * environment is read here: every acquisition path -- ready device, fresh provision, boot,
+   * eviction -- funnels through it. The grant is built in `LeaseLifecycle.grant` from the same
+   * fields `Registry.createLease` stores for a repeat of the request, so the two must stay equal.
    */
-  async #grant(waiter: AcquisitionWaiter, deviceId: string, kind: GrantingPlanKind): Promise<void> {
-    const { device, lease } = await this.options.leases.grant({
-      deviceId,
+  async #grant(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    kind: GrantingPlanKind,
+  ): Promise<void> {
+    // Built before the write: the grant a repeat of this request answers is stored with the lease.
+    const granted = await this.options.leases.grant({
+      deviceId: device.id,
+      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
       ownerId: waiter.options.ownerId,
       requestId: waiter.id,
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
+      timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
-    this.options.queue.resolve(waiter, {
-      device,
-      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
-      lease,
-      timing: waiter.timing,
-    });
+    this.options.queue.resolve(waiter, granted);
   }
 
   async #evictRunning(
@@ -916,7 +910,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
-        await this.#grant(waiter, handoff.device.id, kind);
+        await this.#grant(waiter, handoff.device, kind);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();

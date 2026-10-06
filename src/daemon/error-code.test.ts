@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  ComponentInstallerClosedError,
-  NoCapacityError,
-  ReplayedLeaseRequestError,
-  UnsupportedRequestOptionError,
-} from "../core/index.js";
+import { ComponentInstallerClosedError, UnsupportedRequestOptionError } from "../core/index.js";
+import { NoCapacityError, ReplayedLeaseRequestError } from "../leasing/index.js";
 import { classifyError, describeLeaseRequestFailure } from "./error-code.js";
 
 describe("describeLeaseRequestFailure", () => {

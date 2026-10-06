@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { capacityChangedPayload, testComponentWiring } from "./testing.js";
+import {
+  buildCapacityFigures,
+  type ModelPreferences,
+  BootTimeoutError,
+  type ComponentInstaller,
+  type Config,
+  DriverCrashError,
+  type DeviceSpec,
+  type LeaseProgress,
+  Registry,
+  UnknownLeaseError,
+} from "../core/index.js";
+import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
+import { capacityChangedPayload, testComponentWiring, FakeDriver } from "../core/testing.js";
 
 import { EventBus, type EventMap } from "../bus/index.js";
 import {
@@ -10,25 +23,11 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import {
-  buildCapacityFigures,
-  type CapacityLimits,
-  type ResourceStrategyOptions,
-} from "./capacity/index.js";
-import type { ModelPreferences } from "./driver-catalog.js";
-import { FakeDriver } from "./fake-driver.js";
-import {
-  BootTimeoutError,
-  type ComponentInstaller,
-  type Config,
-  DriverCrashError,
-  LeaseEngine,
-  type LeaseProgress,
-  NoCapacityError,
-  QueueTimeoutError,
-  Registry,
-  RequestCancelledError,
-} from "./index.js";
+import { createLeasing } from "./create-leasing.js";
+import { NoCapacityError } from "./lease-acquisition-coordinator.js";
+import { LeaseHealthMonitor } from "./lease-health-monitor.js";
+import { createTestEngine } from "./testing.js";
+import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
@@ -186,7 +185,7 @@ async function createHarness(
   };
   const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const drivers = options.drivers ?? [driver];
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...testComponentWiring({
       clock,
       components: options.components,
@@ -212,7 +211,7 @@ async function createHarness(
 
 async function seedReady(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  spec: import("./index.js").DeviceSpec = request,
+  spec: DeviceSpec = request,
 ) {
   const driverDevice = await harness.driver.provision(spec);
   const device = await harness.registry.registerDevice({
@@ -241,7 +240,7 @@ async function settledOrPending(promise: Promise<unknown>): Promise<unknown> {
   ]);
 }
 
-describe("LeaseEngine", () => {
+describe("createLeasing", () => {
   it("hands the caller back before the purge, keeps the device reclaiming, then re-leases it without another boot", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -1007,6 +1006,31 @@ describe("LeaseEngine", () => {
     ).resolves.toMatchObject({ lease: { ownerId: "queued", requesterId: "queued" } });
   });
 
+  it("stamps queue.changed with the wait-queue module when a request queues and when it leaves", async () => {
+    const harness = await createHarness();
+    const modules: { depth: number; module: string }[] = [];
+    harness.bus.subscribe("queue.changed", (envelope) =>
+      modules.push({ depth: envelope.payload.depth, module: envelope.module }),
+    );
+    const holder = await harness.engine.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    const queued = harness.engine.request(request, {
+      ownerId: "queued",
+      requesterId: "queued",
+    });
+    await flush();
+    expect(modules).toEqual([{ depth: 1, module: "wait-queue" }]);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await queued;
+    expect(modules).toEqual([
+      { depth: 1, module: "wait-queue" },
+      { depth: 0, module: "wait-queue" },
+    ]);
+  });
+
   it("queues at capacity in FIFO order across three waiters", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
@@ -1263,7 +1287,7 @@ describe("LeaseEngine", () => {
   });
 });
 
-describe("LeaseEngine RAM budget by mode", () => {
+describe("createLeasing RAM budget by mode", () => {
   const slimRequest = { ...request, mode: "slim" } as const;
   const roomy: CapacityLimits = {
     android: { maxDevices: 4, maxRunning: 4 },
@@ -1473,7 +1497,7 @@ describe("LeaseEngine RAM budget by mode", () => {
 // serial erases before any other request could be served. These cover the shape
 // that replaced it: the lease is released registry-only on the convergence path,
 // and its reclaim proceeds in the background.
-describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
+describe("createLeasing startup reclaim backgrounding (#43)", () => {
   it("converges without waiting for an in-flight reclaim, and a fresh request is served immediately after", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -1600,7 +1624,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       idGenerator,
       statePath: restartStatePath,
     });
-    const engine1 = new LeaseEngine({
+    const engine1 = createTestEngine({
       ...testComponentWiring({
         clock: clock1,
         drivers: [driver],
@@ -1643,7 +1667,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       idGenerator,
       statePath: restartStatePath,
     });
-    const engine2 = new LeaseEngine({
+    const engine2 = createTestEngine({
       ...testComponentWiring({
         clock: clock2,
         drivers: [driver],
@@ -1691,7 +1715,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
   });
 });
 
-describe("LeaseEngine fresh lease identity (#75)", () => {
+describe("createLeasing fresh lease identity (#75)", () => {
   const freshIos = { android: "reusable", ios: "fresh" } as const;
 
   function driverDeviceIdOf(
@@ -1848,7 +1872,7 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       leaseIdentity: freshIos,
       statePath,
     });
-    const before = new LeaseEngine({
+    const before = createTestEngine({
       clock,
       ...testComponentWiring({ clock, drivers: [driver], eventBus: bus, registry: beforeRegistry }),
       config: config({ identity: freshIos }),
@@ -1871,7 +1895,7 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       leaseIdentity: reusable,
       statePath,
     });
-    const after = new LeaseEngine({
+    const after = createTestEngine({
       ...testComponentWiring({
         clock: clock,
         drivers: [driver],
@@ -1972,7 +1996,7 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       leaseIdentity: freshIos,
       statePath,
     });
-    const engine = new LeaseEngine({
+    const engine = createTestEngine({
       ...testComponentWiring({
         clock: clock,
         drivers: [driver],
@@ -2026,13 +2050,13 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
   });
 });
 
-describe("LeaseEngine logger wiring", () => {
+describe("createLeasing logger wiring", () => {
   function debugLogger(): { readonly logger: Logger; readonly sink: MemoryLogSink } {
     const sink = new MemoryLogSink();
     return { logger: new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink }), sink };
   }
 
-  it("LeaseEngine hands its logger to the quarantine coordinator: a failed retry is logged", async () => {
+  it("createCore hands its logger to the quarantine coordinator: a failed retry is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
@@ -2066,7 +2090,7 @@ describe("LeaseEngine logger wiring", () => {
     ]);
   });
 
-  it("LeaseEngine hands its logger to the driver catalog: a platform left out of the catalog is logged", async () => {
+  it("createCore hands its logger to the driver catalog: a platform left out of the catalog is logged", async () => {
     const clock = new FakeClock(1_000);
     const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
@@ -2087,7 +2111,7 @@ describe("LeaseEngine logger wiring", () => {
     ]);
   });
 
-  it("LeaseEngine hands its logger to the device provisioner: a new device that fails to boot is logged", async () => {
+  it("createCore hands its logger to the device provisioner: a new device that fails to boot is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("makeReady", 1, new DriverCrashError("first boot exploded"));
@@ -2109,7 +2133,7 @@ describe("LeaseEngine logger wiring", () => {
     ]);
   });
 
-  it("LeaseEngine hands its logger to the lease expiry scheduler: an expiry that fails is logged", async () => {
+  it("createLeasing hands its logger to the lease expiry scheduler: an expiry that fails is logged", async () => {
     const { logger, sink } = debugLogger();
     const harness = await createHarness({ lease: { defaultTtlMs: 10 }, logger });
     const granted = await harness.engine.request(request, {
@@ -2134,7 +2158,7 @@ describe("LeaseEngine logger wiring", () => {
     );
   });
 
-  it("LeaseEngine hands its logger to the acquisition coordinator: a failed eviction is logged", async () => {
+  it("createLeasing hands its logger to the acquisition coordinator: a failed eviction is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("shutdown", 1, new DriverCrashError("cannot stop victim"));
@@ -2167,9 +2191,42 @@ describe("LeaseEngine logger wiring", () => {
       },
     ]);
   });
+
+  it("createLeasing hands its logger to the lease release coordinator: a background reclaim that cannot commit is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 20 },
+      platform: "ios",
+    });
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver, logger });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+    await harness.engine.release(first.lease.id, "explicit");
+    // The release has committed and the erase is still running. A disk that refuses the write
+    // makes the reclaim's own commit throw, with no caller left to reject to.
+    harness.filesystem.defineFailure(statePath, "EIO");
+
+    clock.advance(20);
+    await harness.engine.settle();
+
+    expect(
+      sink.records.filter((record) => record.message === "background reclaim failed"),
+    ).toMatchObject([
+      {
+        level: "error",
+        module: "daemon.lease-release-coordinator",
+        fields: { deviceId: first.device.id, leaseId: first.lease.id },
+      },
+    ]);
+  });
 });
 
-describe("LeaseEngine restart recovery of stored lease requests", () => {
+describe("createLeasing restart recovery of stored lease requests", () => {
   /** Leaves `agent`'s request queued behind the one device, then restarts on the same state. */
   async function restartWithAgentQueued(idempotencyKey?: string) {
     const before = await createHarness();
@@ -2230,7 +2287,57 @@ describe("LeaseEngine restart recovery of stored lease requests", () => {
   });
 });
 
-describe("LeaseEngine class requests", () => {
+describe("createLeasing a grant and its request's result", () => {
+  const asker = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" };
+
+  it("answers a repeat under the same key with the lease after the daemon stopped between the grant and the request book's settle write", async () => {
+    const before = await createHarness();
+    await seedReady(before);
+    vi.spyOn(before.registry, "settleLeaseRequest").mockRejectedValue(new Error("disk gone"));
+    const grant = await before.engine.request(request, asker);
+    await flush();
+
+    const after = await createHarness({ filesystem: before.filesystem });
+    await after.engine.convergeRunningCapacity();
+    const repeat = await after.engine.request(request, asker);
+
+    expect(repeat).toEqual(grant);
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(after.registry.leaseRequests()).toMatchObject([{ state: "granted" }]);
+    expect(after.registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("answers a repeat under the same key in the same process with the lease after the request book's settle finds the request already granted", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    const settle = vi.spyOn(harness.registry, "settleLeaseRequest");
+    const grant = await harness.engine.request(request, asker);
+    await flush();
+
+    expect(settle).toHaveBeenCalledTimes(1);
+    await expect(settle.mock.results[0]?.value).resolves.toBeUndefined();
+    const repeat = await harness.engine.request(request, asker);
+    expect(repeat).toEqual(grant);
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(harness.registry.leaseRequests()).toMatchObject([{ grant, state: "granted" }]);
+  });
+
+  it("answers a repeat of a granted request whose lease was released since with the grant as recorded, and a renew of that lease with UnknownLeaseError", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    const grant = await harness.engine.request(request, asker);
+    await flush();
+    await harness.engine.release(grant.lease.id, "explicit");
+
+    const repeat = await harness.engine.request(request, asker);
+
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(repeat).toEqual(grant);
+    await expect(harness.engine.renew(grant.lease.id)).rejects.toBeInstanceOf(UnknownLeaseError);
+  });
+});
+
+describe("createLeasing class requests", () => {
   it("creates the first model on the class's preference list the catalog lists, for a request naming a class", async () => {
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -2304,7 +2411,7 @@ describe("LeaseEngine class requests", () => {
     expect(asked).toEqual([]);
   });
 });
-describe("LeaseEngine: capacity.changed and queue.changed", () => {
+describe("createLeasing: capacity.changed and queue.changed", () => {
   type CapacityEvent = EventMap["capacity.changed"];
 
   function capacityEvents(harness: Awaited<ReturnType<typeof createHarness>>): CapacityEvent[] {
@@ -2457,7 +2564,7 @@ describe("LeaseEngine: capacity.changed and queue.changed", () => {
   });
 });
 
-describe("LeaseEngine: lease.rejected names its request", () => {
+describe("createLeasing: lease.rejected names its request", () => {
   type Reason = EventMap["lease.rejected"]["reason"];
   type Rejection = EventMap["lease.rejected"];
   type Harness = Awaited<ReturnType<typeof createHarness>>;
@@ -2589,7 +2696,112 @@ describe("LeaseEngine: lease.rejected names its request", () => {
   );
 });
 
-describe("LeaseEngine warm pool", () => {
+describe("createLeasing queue timeout and failure storage", () => {
+  const android = { model: "Pixel 9", osVersion: "35", platform: "android" } as const;
+
+  it("emits lease.rejected for a timed-out waiter under the wait queue's module, then lets the request behind it through", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const droid = new FakeDriver({ availableOsVersions: ["35"], clock, platform: "android" });
+    const harness = await createHarness({ driver: ios, drivers: [ios, droid] });
+    await harness.engine.request(request, { ownerId: "holder", requesterId: "holder" });
+    const blocking = harness.engine.request(request, {
+      ownerId: "head",
+      requesterId: "head",
+      timeoutMs: 10,
+    });
+    const behind = harness.engine.request(android, { ownerId: "behind", requesterId: "behind" });
+    await flush();
+    // The android request could be served now, but it waits behind the iOS one at the head.
+    expect(await settledOrPending(behind)).toBe("still pending");
+
+    harness.clock.advance(10);
+
+    expect(await settledOrPending(blocking)).toBeInstanceOf(QueueTimeoutError);
+    expect(await settledOrPending(behind)).toMatchObject({ lease: { requesterId: "behind" } });
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => ({
+          module: event.module,
+          reason: (event.payload as { reason: string }).reason,
+        })),
+    ).toEqual([{ module: "wait-queue", reason: "timeout" }]);
+  });
+
+  it("stores a failed request as INTERNAL with the error's own message when no classifier was given", async () => {
+    const harness = await createHarness();
+
+    await expect(
+      harness.engine.request(android, { ownerId: "agent", requesterId: "agent" }),
+    ).rejects.toThrow("No driver registered for platform: android");
+
+    expect(harness.registry.leaseRequests()).toMatchObject([
+      {
+        failure: { code: "INTERNAL", message: "No driver registered for platform: android" },
+        state: "failed",
+      },
+    ]);
+  });
+});
+
+describe("createLeasing wiring", () => {
+  const components = {
+    claimProvision: () => () => undefined,
+    install: async () => ({ outcome: "installed" as const, version: "26.5" }),
+  };
+
+  it("wires the leased-device health monitor, and leaves it out when told to", async () => {
+    const harness = await createHarness();
+    const without = createLeasing({
+      clock: harness.clock,
+      components,
+      config: config(),
+      core: harness.engine.core,
+      eventBus: harness.bus,
+      healthMonitor: false,
+      idGenerator: { generate: () => "1" },
+    });
+
+    expect(harness.engine.leasing.healthMonitor).toBeInstanceOf(LeaseHealthMonitor);
+    expect(without.healthMonitor).toBeUndefined();
+  });
+
+  it("hands core a leaseExpirer that expires through leasing: doctor --fix ends a lease past its deadline", async () => {
+    const harness = await createHarness();
+    const grant = await harness.engine.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    // No timer may expire it first: only doctor's finding does.
+    harness.engine.dispose();
+    harness.clock.advance(10 * 60_000 * 60);
+
+    await harness.engine.core.doctor.reconcile({ fix: true });
+
+    expect(harness.registry.snapshot.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    expect(harness.bus.replay().map((event) => event.event)).toContain("lease.expired");
+  });
+
+  it("does not connect core itself: building a second leasing leaves the first one's ports in place", async () => {
+    const harness = await createHarness();
+    const connect = vi.spyOn(harness.engine.core, "connect");
+
+    createLeasing({
+      clock: harness.clock,
+      components,
+      config: config(),
+      core: harness.engine.core,
+      eventBus: harness.bus,
+      idGenerator: { generate: () => "1" },
+    });
+
+    expect(connect).not.toHaveBeenCalled();
+  });
+});
+
+describe("createLeasing warm pool", () => {
   const androidSpec = { model: "Pixel 9", osVersion: "36", platform: "android" } as const;
 
   it("shuts down one of three ready devices with initiator warm-pool after daemon.started when maxRunning is 2", async () => {

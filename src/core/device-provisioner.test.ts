@@ -471,7 +471,7 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // The driver call itself.
       [join("core", "device-provisioner.ts")]: 1,
       // `provisioner.provision(...)`: the lease path asking this module, not a driver.
-      [join("core", "lease-acquisition-coordinator.ts")]: 1,
+      [join("leasing", "lease-acquisition-coordinator.ts")]: 1,
     });
   });
 

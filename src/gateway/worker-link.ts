@@ -459,7 +459,7 @@ export class WorkerLink {
    * `workerId` added, so they land in its ring buffer and `simlock events --follow` against a
    * gateway shows the fleet. The name, the emitting module, the `id` and the `timestamp` travel
    * unchanged (ADR 0014 §2: one fact, one id, and the time it happened) -- the fact came
-   * from that worker's reaper or lease engine, and rewriting either would make the audit trail
+   * from that worker's reaper or its leasing module, and rewriting either would make the audit trail
    * lie about where it happened; `workerId` is what says which machine.
    *
    * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends

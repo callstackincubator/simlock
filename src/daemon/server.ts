@@ -10,18 +10,20 @@ import {
   type Doctor,
   type DriverRejection,
   type HostFacts,
-  type LeaseHealthMonitor,
   NoDriverError,
   type Nuke,
   redactConfig,
   UnknownPassthroughToolError,
   type CapacityReader,
-  type DeviceModeReader,
   type CatalogReader,
-  type LeaseCommands,
   type PassthroughResolver,
-  type QueueControl,
 } from "../core/index.js";
+import {
+  type LeaseHealthMonitor,
+  type DeviceModeReader,
+  type LeaseCommands,
+  type QueueControl,
+} from "../leasing/index.js";
 import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
@@ -137,11 +139,12 @@ interface Connection {
  * surprise.
  */
 export interface DaemonServerEngineOptions {
-  readonly capacity: CapacityReader & DeviceModeReader;
+  readonly capacity: CapacityReader;
+  readonly deviceModes: DeviceModeReader;
   readonly catalog: CatalogReader;
   /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
    * `component.install`, `component.list`, `component.remove` and `status.get`'s installs; the same
-   * instance the lease engine downloads through. */
+   * instance leasing downloads through. */
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
@@ -153,7 +156,7 @@ export interface DaemonServerEngineOptions {
   readonly instanceId: string;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
-  readonly healthMonitor?: LeaseHealthMonitor;
+  readonly healthMonitor?: LeaseHealthMonitor | undefined;
   readonly nuke?: Nuke;
   /** Builds the scoped command behind `simlock simctl` / `simlock adb`; absent in tests that never use them. */
   readonly passthrough?: PassthroughResolver;
@@ -292,6 +295,7 @@ function buildDispatcher(
     awaitReady: hooks.awaitReady,
     capacity: options.capacity,
     catalog: options.catalog,
+    deviceModes: options.deviceModes,
     clock: options.clock,
     components: options.components,
     config: options.config,
@@ -523,7 +527,7 @@ export class DaemonServer {
     // convergence should re-check this invariant rather than assume it still holds.
     //
     // `device.crash-detected` / `device.recovered` re-checked: the health monitor
-    // that emits them is only started after convergence too (see `LeaseEngine` /
+    // that emits them is only started after convergence too (see `createLeasing` /
     // `DaemonServer` startup wiring), so neither can fire during this window either
     // -- the same "nothing emitted during convergence needs a push" argument holds.
     this.#unsubscribeLeaseLost.push(
@@ -621,7 +625,7 @@ export class DaemonServer {
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
     // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the
-    // next daemon restores its timer from that deadline (`StartupConverger`); one whose
+    // next daemon restores its timer from that deadline (leasing's `LeaseStartup`); one whose
     // deadline passed in between expires as soon as a daemon is there to expire it. What is
     // drained here is only work already in flight -- a release someone else asked for commits
     // the registry half and hands its purge off, so draining keeps `daemon stop` finishing on

@@ -30,13 +30,17 @@ changes in this repo:
   `*:ready` and `bug:triage`, the body is the spec and comments are
   discussion, reporters' issues are never rewritten, branches are
   `<kind>/<n>`, handoffs are one `## Handoff` comment per stop, every PR
-  gets a spec review and a code review before it leaves draft, agents merge
-  only through `.agents/scripts/merge-pr.sh`, and real devices run only
-  through `scripts/slow-e2e.sh`.
+  gets a spec, a code and a claims review before it leaves draft, agents merge
+  only through `.agents/scripts/merge-pr.sh`, and the slow lane runs one
+  at a time through its script.
+- [toolchain.md](docs/internal/agent-rules/toolchain.md) — the commands
+  agents run and the checks they leave to hooks and CI; the slow lane
+  (real devices); project-only checks. Agents and skills take every command
+  from here.
 - [always-in-scope.md](docs/internal/agent-rules/always-in-scope.md) — what
   every change includes without its spec asking (docs and strings it makes
   false, both `EVENTS.md` files, a test for every new path, Fallow entries),
-  each item cited from the rules above; CI proves `pnpm check`.
+  each item cited from the rules above; CI proves the suite.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ is binding as a target while the code has not

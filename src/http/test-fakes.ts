@@ -2,12 +2,14 @@ import {
   type Config,
   type DeviceRecord,
   type LeaseRecord,
-  InMemoryLeaseRequestStore,
-  LeaseRequestBook,
   SerializedDecision,
   type LeaseGrant,
-  type LeaseRequestOptions,
 } from "../core/index.js";
+import {
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  type LeaseRequestOptions,
+} from "../leasing/index.js";
 import {
   describeSchemaIssues,
   OPERATIONS,
@@ -170,7 +172,7 @@ export interface FakeDispatchCall {
  * parking -- those are covered against the real thing in `daemon/dispatcher.test.ts` and
  * `daemon/server.test.ts`. This fake exists to let HTTP's own routing/serialization tests
  * (`app.test.ts`, `tracker.test.ts`) script an operation's answer without standing up a full
- * `LeaseEngine`/`Registry`/`CleanupReaper`.
+ * `createLeasing`/`Registry`/`CleanupReaper`.
  *
  * Two ways to script an answer: register a synchronous `handlers[operation]` for the common
  * "this call always answers the same way" case, or -- for `lease.request`'s progress-then-grant

@@ -2,7 +2,7 @@
  * The gateway's implementation of the daemon contract (ADR 0005 §32): "a second implementation
  * of the daemon contract's handlers, not a second contract". Same `runDispatch` pipeline, same
  * operation declarations, same role checks -- only the handlers differ, reading worker views
- * instead of a registry and a lease engine.
+ * instead of a registry and leasing.
  *
  * Three populations of operations live in the table below:
  *

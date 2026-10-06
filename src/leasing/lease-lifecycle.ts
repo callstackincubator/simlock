@@ -1,8 +1,12 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import {
+  type DeviceRecord,
+  type LeaseGrant,
+  type LeaseRecord,
+  type ReleasedLease,
+} from "../core/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
-import type { ReleasedLease } from "./registry.js";
 
 export interface LeaseLifecycleRegistry {
   readonly snapshot: {
@@ -15,6 +19,11 @@ export interface LeaseLifecycleRegistry {
     readonly ownerId: string;
     readonly ttlMs: number;
     readonly ttlDeadline: number;
+    readonly request?: {
+      readonly id: string;
+      readonly environment: LeaseGrant["environment"];
+      readonly timing: LeaseGrant["timing"];
+    };
   }): Promise<LeaseRecord>;
   renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord>;
   beginRelease(leaseId: string): Promise<ReleasedLease>;
@@ -33,11 +42,6 @@ export interface LeaseLifecycleOptions {
   readonly ttl: { readonly defaultMs: number };
 }
 
-export interface LeaseLifecycleGrant {
-  readonly device: DeviceRecord;
-  readonly lease: LeaseRecord;
-}
-
 /** Registry-backed lease state changes, deliberately excluding reclaiming and queue wakeups. */
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
@@ -49,17 +53,24 @@ export class LeaseLifecycle {
     readonly requesterId: string;
     /** The stored request this grant serves, carried on `lease.granted`. */
     readonly requestId: string;
+    /**
+     * What a repeat of the request answers besides the device and lease: stored with the lease in
+     * the one write, so a crash after it cannot leave the request open.
+     */
+    readonly environment: LeaseGrant["environment"];
+    readonly timing: LeaseGrant["timing"];
     /** How the device came to be ready, carried on `lease.granted`. */
     readonly source: EventMap["lease.granted"]["source"];
     /** ADR 0004 §4: this lease's initial width; `lease.defaultTtlMs` when the request named
      * none. Whatever it resolves to is stored on the record, because that is what a later
      * body-less renew re-applies. */
     readonly ttlMs?: number;
-  }): Promise<LeaseLifecycleGrant> {
-    const { ttlMs, requestId, source, ...createInput } = input;
+  }): Promise<LeaseGrant> {
+    const { ttlMs, requestId, environment, timing, source, ...createInput } = input;
     const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;
     const lease = await this.options.registry.createLease({
       ...createInput,
+      request: { environment, id: requestId, timing },
       ttlMs: effectiveTtlMs,
       ttlDeadline: this.options.clock.now() + effectiveTtlMs,
     });
@@ -84,7 +95,7 @@ export class LeaseLifecycle {
       "lease-lifecycle",
     );
     this.options.expiryScheduler.arm(lease);
-    return { device, lease };
+    return { device, environment, lease, timing };
   }
 
   /**

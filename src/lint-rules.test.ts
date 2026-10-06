@@ -143,7 +143,7 @@ describe("import rules enforced by pnpm lint", () => {
   });
 
   it("passes a gateway file importing a name it is allowed from core's index", () => {
-    expectLintPass("src/gateway/x.ts", `import { WaitQueue } from "../core/index.js";\n`);
+    expectLintPass("src/gateway/x.ts", `import { LeaseRecord } from "../core/index.js";\n`);
   });
 
   it("fails a gateway file importing from drivers, http, cli or mcp", () => {
@@ -222,5 +222,60 @@ describe("import rules enforced by pnpm lint", () => {
   it("passes a test file importing its own module's testing.js or test-*.js file", () => {
     expectLintPass("src/core/x.test.ts", `import { x } from "./testing.js";\n`);
     expectLintPass("src/http/x.test.ts", `import { x } from "./test-fakes.js";\n`);
+  });
+  it("fails a core file importing leasing's index, and passes leasing's testing file in a core test", () => {
+    expectLintError("src/core/x.ts", `import { x } from "../leasing/index.js";\n`);
+    expectLintPass("src/core/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("fails a core test importing a private leasing file", () => {
+    expectLintError("src/core/x.test.ts", `import { x } from "../leasing/wait-queue.js";\n`);
+  });
+
+  it("fails a daemon file importing a private leasing file, and passes leasing's index", () => {
+    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/wait-queue.js";\n`);
+    expectLintPass("src/daemon/x.ts", `import { x } from "../leasing/index.js";\n`);
+  });
+
+  it("fails a leasing file importing node:fs, child_process or a driver", () => {
+    expectLintError("src/leasing/x.ts", `import { x } from "node:fs";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "child_process";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "../drivers/ios/index.js";\n`);
+  });
+
+  it("passes leasing's testing file in a daemon test file, and fails the same import in a daemon file", () => {
+    expectLintPass("src/daemon/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
+    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("fails a gateway file importing createLeasing from leasing's index, and passes LeaseRequestBook", () => {
+    expectLintError("src/gateway/x.ts", `import { createLeasing } from "../leasing/index.js";\n`);
+    expectLintPass("src/gateway/x.ts", `import { LeaseRequestBook } from "../leasing/index.js";\n`);
+  });
+  it("fails a gateway file importing a leasing name from core's index, and a leasing name outside its allow-list", () => {
+    expectLintError("src/gateway/x.ts", `import { WaitQueue } from "../core/index.js";\n`);
+    expectLintError(
+      "src/gateway/x.ts",
+      `import { LeaseHealthMonitor } from "../leasing/index.js";\n`,
+    );
+    expectLintPass("src/gateway/x.ts", `import { WaitQueue } from "../leasing/index.js";\n`);
+  });
+
+  it("fails a leasing file importing a private core file, and passes core's index; a leasing test may import core's testing file", () => {
+    expectLintError("src/leasing/x.ts", `import { x } from "../core/registry.js";\n`);
+    expectLintError("src/leasing/x.ts", `import { x } from "../core/testing.js";\n`);
+    expectLintPass("src/leasing/x.ts", `import { x } from "../core/index.js";\n`);
+    expectLintPass("src/leasing/x.test.ts", `import { x } from "../core/testing.js";\n`);
+    expectLintError("src/leasing/x.test.ts", `import { x } from "../core/registry.js";\n`);
+  });
+
+  it("fails leasing's testing file breaking leasing's direction rule, and core's testing file importing leasing", () => {
+    expectLintError("src/leasing/testing.ts", `import { x } from "node:fs";\n`);
+    expectLintError("src/core/testing.ts", `import { x } from "../leasing/testing.js";\n`);
+  });
+
+  it("passes the composition root importing leasing's index", () => {
+    expectLintPass("src/daemon/main.ts", `import { x } from "../leasing/index.js";\n`);
+    expectLintError("src/daemon/main.ts", `import { x } from "../leasing/wait-queue.js";\n`);
   });
 });

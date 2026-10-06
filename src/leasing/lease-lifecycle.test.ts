@@ -4,7 +4,14 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem, type Filesystem } from "../ports/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
-import { Registry } from "./registry.js";
+import { Registry } from "../core/index.js";
+
+const noTiming = {
+  estimatedBootMs: 0,
+  estimatedProvisionMs: 0,
+  estimatedReadyMs: 0,
+  estimatedReclaimMs: 0,
+};
 
 const statePath = "/home/agent/.simlock/state.json";
 
@@ -48,6 +55,8 @@ describe("LeaseLifecycle", () => {
   it("grants a lease at lease.defaultTtlMs, storing that width and lastRenewedAt", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: harness.device.id,
@@ -70,6 +79,8 @@ describe("LeaseLifecycle", () => {
     const harness = await createHarness();
 
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       deviceId: harness.device.id,
       ownerId: "agent",
       requestId: "req_served",
@@ -91,6 +102,8 @@ describe("LeaseLifecycle", () => {
   it("grants a lease at the width the request asked for, and stores that instead", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: harness.device.id,
@@ -104,6 +117,8 @@ describe("LeaseLifecycle", () => {
   it("renews with an explicit ttlMs, re-arming the timer and storing the new width", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: harness.device.id,
@@ -138,6 +153,8 @@ describe("LeaseLifecycle", () => {
     // Granted wider than the 20ms default, exactly the case ADR 0004 §4 exists for: a lease
     // asked for a long TTL and must not shrink to the default the first time it is renewed.
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: harness.device.id,
@@ -154,6 +171,8 @@ describe("LeaseLifecycle", () => {
   it("keeps re-applying a width a previous renew set, not the grant-time one", async () => {
     const harness = await createHarness();
     const grant = await harness.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: harness.device.id,
@@ -172,6 +191,8 @@ describe("LeaseLifecycle", () => {
   it("emits release and expiry facts only after a registry release commit", async () => {
     const released = await createHarness();
     const grant = await released.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: released.device.id,
@@ -194,6 +215,8 @@ describe("LeaseLifecycle", () => {
 
     const expired = await createHarness();
     await expired.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: expired.device.id,
@@ -216,6 +239,8 @@ describe("LeaseLifecycle", () => {
     const filesystem = new MemoryFilesystem();
     const before = await createHarness({ filesystem });
     const grant = await before.lifecycle.grant({
+      environment: {},
+      timing: noTiming,
       requestId: "req_1",
       source: "warm",
       deviceId: before.device.id,

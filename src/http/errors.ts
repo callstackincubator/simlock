@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 
-import { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import {
@@ -126,7 +126,7 @@ export function mapError(error: unknown): MappedError {
       ...(error.extra === undefined ? {} : { extra: error.extra }),
     };
   }
-  // Never sent over the wire (see `wait-queue.ts`) and has no `ERROR_TABLE` row of its own --
+  // Never sent over the wire (see `src/leasing/wait-queue.ts`) and has no `ERROR_TABLE` row of its own --
   // the tracker consumes it internally and turns it into a terminal request state, so this is
   // purely defensive: map it rather than falling through to a generic `INTERNAL` if that
   // invariant is ever wrong.
