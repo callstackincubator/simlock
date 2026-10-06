@@ -2899,10 +2899,10 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
   describe("against a starting daemon", () => {
     // A starting daemon answers `status.get` with `daemon` and `host` only.
-    const STARTING = {
+    const STARTING: StatusGetOutput = {
       daemon: { health: "starting", mode: "worker" },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
-    } as unknown as StatusGetOutput;
+    };
 
     it("simlock status prints the starting line and no device, lease or capacity line", async () => {
       const output = outputCapture();
@@ -3113,7 +3113,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
   });
 
   it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
-    const statusWith = (ramBudget?: NonNullable<StatusGetOutput["capacity"]["ramBudget"]>) => {
+    type RamBudget = NonNullable<NonNullable<StatusGetOutput["capacity"]>["ramBudget"]>;
+    const statusWith = (ramBudget?: RamBudget) => {
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
         capacity: { ...EMPTY_STATUS.capacity, ...(ramBudget === undefined ? {} : { ramBudget }) },
@@ -4504,7 +4505,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
       statusOut.environmentWith({ connectAdmin: environment.connectAdmin }),
     );
     const status = JSON.parse(statusOut.stdout) as StatusGetOutput;
-    expect(status.leases.map((lease) => lease.id)).toContain(grant.lease.id);
+    expect(status.leases?.map((lease) => lease.id)).toContain(grant.lease.id);
 
     const releaseOut = outputCapture();
     const releaseExit = await runCli(
@@ -4708,7 +4709,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
 
 /** Hoisted out of `fakeClient` so a test can hand back the same status with a different
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
-const EMPTY_STATUS: StatusGetOutput = {
+const EMPTY_STATUS = {
   devices: [],
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
@@ -4737,7 +4738,7 @@ const EMPTY_STATUS: StatusGetOutput = {
   },
   daemon: { health: "running", mode: "worker" },
   queueDepth: 0,
-};
+} satisfies StatusGetOutput;
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };

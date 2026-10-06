@@ -138,6 +138,17 @@ Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
 managed/running capacity per platform, active leases, managed devices (each
 with its device mode, `mode`: `"slim"` or `"full"`), queue depth.
 
+While the daemon is starting (`daemon.health` is `starting`), the answer is
+`200` with the `daemon` block and `host` only: it has not yet checked what it
+holds, so `devices`, `leases`, `capacity`, `queueDepth`, `installs`, `waiting`
+and `workers` are absent, not empty. They are all there once `health` is
+`running`, and also when it is `failed`.
+
+```json
+{ "daemon": { "health": "starting", "mode": "worker" },
+  "host": { "os": "macOS", "osVersion": "15.5", "arch": "arm64", "tools": [] } }
+```
+
 The daemon block carries `health` (`starting`/`running`) and **`mode`**
 (`"worker" | "gateway"`), the one field that tells a client which kind of
 daemon answered:
@@ -1050,7 +1061,10 @@ host. A single host answers as a fleet of one: `GET /v1/workers` lists the
 host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 
 - `GET /v1/workers` — every worker view the gateway currently holds, or the
-  host's own view on a single host.
+  host's own view on a single host. A worker whose `health` is `starting` has
+  not yet checked what it holds, so its view carries `health` and `host` and
+  none of `devices`, `leases`, `capacity`, `queueDepth`, `catalog`, `installs`
+  or `waiting`: they are absent, not empty, until the worker answers `running`.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.

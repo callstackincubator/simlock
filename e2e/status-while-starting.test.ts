@@ -32,7 +32,7 @@ describe("status while the daemon is starting", () => {
     expect(human.code, human.stderr).toBe(0);
     expect(human.stdout).toContain("Daemon: starting (worker)");
     expect(human.stdout).toContain("Devices, leases and capacity appear once startup finishes.");
-    expect(human.stdout).not.toMatch(/^(Device|Lease|Capacity|Queue depth|Running global)/m);
+    expect(human.stdout).not.toMatch(/^(Device |Lease |Capacity |Queue depth|Running global)/m);
 
     const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
       headers: { authorization: `Bearer ${secret}` },

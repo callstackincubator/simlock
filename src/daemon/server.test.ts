@@ -1160,10 +1160,12 @@ describe("DaemonServer startup readiness", () => {
 
     const client = await createClientRetrying(harness.socketPath);
     await hello(client);
-    await expect(client.request("status.get", {})).resolves.toMatchObject({
+    const during = await client.request("status.get", {});
+    expect(during).toMatchObject({
       ok: true,
       payload: { daemon: { health: "starting", mode: "worker" } },
     });
+    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual(["daemon", "host"]);
 
     converge.resolve();
     await startPromise;

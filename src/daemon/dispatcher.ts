@@ -329,20 +329,25 @@ export class Dispatcher {
   });
 
   #statusGet: Handler<"status.get"> = () => {
+    // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
+    // config rather than being assumed, because it is what tells a client whether the device
+    // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
+    // #117 is what makes `gateway` mean something beyond this field.
+    const daemon = {
+      health: this.options.health(),
+      mode: this.options.config.mode,
+      ...consoleUrlField(this.options.config.http),
+    };
+    const host = this.options.hostFacts();
+    // While starting, the registry has not been checked against the machine: what it holds is
+    // a claim nobody has looked at, so the answer is the daemon and its host and nothing else.
+    if (daemon.health === "starting") return { daemon, host };
     const snapshot = this.options.registry.snapshot;
     return {
       capacity: buildCapacityFigures(snapshot.devices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
-      // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
-      // config rather than being assumed, because it is what tells a client whether the device
-      // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
-      // #117 is what makes `gateway` mean something beyond this field.
-      daemon: {
-        health: this.options.health(),
-        mode: this.options.config.mode,
-        ...consoleUrlField(this.options.config.http),
-      },
-      host: this.options.hostFacts(),
+      daemon,
+      host,
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,

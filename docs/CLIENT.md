@@ -488,6 +488,25 @@ const { host } = await client.getStatus();
   drivers. Each worker's `host` is on its entry in `workers`, and on
   `listWorkers()` from the admin client.
 
+## A daemon that is still starting: `getStatus()`
+
+While a daemon is starting (`daemon.health` is `"starting"`), `getStatus()`
+returns `daemon` and `host` and nothing else. `devices`, `leases`, `capacity`,
+`queueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
+because the daemon has not yet checked what it holds. The same is true of a
+worker's entry in `workers` and in `listWorkers()`: a worker that is starting has
+`health` and `host` and none of `devices`, `leases`, `capacity`, `queueDepth`,
+`catalog`, `installs` or `waiting`. Check `daemon.health` before reading them:
+
+```ts
+const status = await client.getStatus();
+if (status.daemon.health === "starting") {
+  // Only `status.daemon` and `status.host` are there yet.
+} else {
+  console.log(status.devices?.length);
+}
+```
+
 ## What is installing: `getStatus().installs`
 
 `getStatus()` lists the component installs waiting or running on the

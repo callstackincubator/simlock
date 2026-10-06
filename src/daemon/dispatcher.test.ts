@@ -557,7 +557,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
   it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const runtimes = async () =>
-      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog?.flatMap(
         (entry) => entry.runtimes,
       );
     expect(await runtimes()).toEqual(["26.5"]);
@@ -596,7 +596,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
 
     expect(calls).toBe(2);
-    expect(workers[0]?.catalog.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+    expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
@@ -643,7 +643,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       queueDepth: status.queueDepth,
     });
     expect(workers[0]?.devices).toHaveLength(1);
-    expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
+    expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
   it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
@@ -1186,8 +1186,9 @@ describe("Dispatcher: device mode on every surface", () => {
       .replay()
       .filter((event) => event.event === "capacity.changed")
       .at(-1);
-    expect(last?.payload).toEqual(capacityChangedPayload(status.capacity));
-    expect(status.capacity.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+    const capacity = status.capacity as NonNullable<typeof status.capacity>;
+    expect(last?.payload).toEqual(capacityChangedPayload(capacity));
+    expect(status.capacity?.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
@@ -1211,7 +1212,7 @@ describe("Dispatcher: device mode on every surface", () => {
       { id: granted.device.id, mode: "slim" },
       { id: provisioning.id, mode: "full" },
     ];
-    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
       expected,
     );
@@ -1254,7 +1255,7 @@ describe("Dispatcher: device mode on every surface", () => {
       ];
       const project = (devices: readonly { id: string; servesDefaultMode?: boolean }[]) =>
         devices.map(({ id, servesDefaultMode }) => ({ id, servesDefaultMode }));
-      expect(project(status.devices)).toEqual(expected);
+      expect(project(status.devices ?? [])).toEqual(expected);
       expect(project(list as { id: string; servesDefaultMode?: boolean }[])).toEqual(expected);
     },
   );
@@ -1288,7 +1289,7 @@ describe("Dispatcher: device mode on every surface", () => {
     );
 
     for (const devices of [status.devices, list, workers[0]?.devices ?? []]) {
-      const byId = new Map(devices.map((device) => [device.id, device]));
+      const byId = new Map(devices?.map((device) => [device.id, device]));
       expect(byId.get(stuck.id)?.stalled).toBe(true);
       expect(byId.get(fresh.id)).toBeDefined();
       expect(byId.get(fresh.id)).not.toHaveProperty("stalled");
@@ -1311,7 +1312,7 @@ describe("Dispatcher: device mode on every surface", () => {
     });
     clock.advance(60_001);
     const stalled = async () =>
-      (await dispatcher.dispatch("status.get", {}, session())).devices.find(
+      (await dispatcher.dispatch("status.get", {}, session())).devices?.find(
         (entry) => entry.id === device.id,
       )?.stalled;
 
@@ -1339,7 +1340,7 @@ describe("Dispatcher: device mode on every surface", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(status.devices.find((entry) => entry.id === device.id)?.stalled).toBe(true);
+    expect(status.devices?.find((entry) => entry.id === device.id)?.stalled).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
@@ -2313,19 +2314,19 @@ describe("Dispatcher: status.get RAM budget", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    const listed = status.devices
+    const listed = (status.devices ?? [])
       .filter((device) => device.state !== "deleted")
       .map((device) =>
         device.mode === "slim" ? sizes.iosSlimBytesPerDevice : sizes.iosBytesPerDevice,
       );
     // The provisioning device is listed `full` until its slim pass, and counts at that size.
-    expect(status.devices.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
-    expect(status.capacity.ramBudget).toEqual({
+    expect(status.devices?.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
+    expect(status.capacity?.ramBudget).toEqual({
       limitBytes: 28 * gibibyte,
       overLimit: false,
       usedBytes: listed.reduce((total, bytes) => total + bytes, 0),
     });
-    expect(status.capacity.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
+    expect(status.capacity?.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
   });
 
   describe("atRamBudget", () => {
@@ -2360,8 +2361,8 @@ describe("Dispatcher: status.get RAM budget", () => {
       // 13 devices use 26 of 28 GiB: one more iOS device fits, an Android one does not.
       const roomy = await withIosDevices(13);
       const roomyStatus = await roomy.dispatcher.dispatch("status.get", {}, session());
-      expect(roomyStatus.capacity.ios.atRamBudget).toBe(false);
-      expect(roomyStatus.capacity.android.atRamBudget).toBe(true);
+      expect(roomyStatus.capacity?.ios.atRamBudget).toBe(false);
+      expect(roomyStatus.capacity?.android.atRamBudget).toBe(true);
       await expect(
         roomy.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).resolves.toBeDefined();
@@ -2369,7 +2370,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       // 14 devices use all 28 GiB: not even one more iOS device fits.
       const full = await withIosDevices(14);
       const fullStatus = await full.dispatcher.dispatch("status.get", {}, session());
-      expect(fullStatus.capacity.ios.atRamBudget).toBe(true);
+      expect(fullStatus.capacity?.ios.atRamBudget).toBe(true);
       await expect(
         full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).rejects.toBeInstanceOf(NoCapacityError);
@@ -2382,8 +2383,8 @@ describe("Dispatcher: status.get RAM budget", () => {
 
       const status = await dispatcher.dispatch("status.get", {}, session());
 
-      expect(status.capacity.ios.atRamBudget).toBe(false);
-      expect(status.capacity.android.atRamBudget).toBe(false);
+      expect(status.capacity?.ios.atRamBudget).toBe(false);
+      expect(status.capacity?.android.atRamBudget).toBe(false);
     });
   });
 

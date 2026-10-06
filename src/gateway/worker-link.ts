@@ -356,6 +356,17 @@ export class WorkerLink {
   async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
     this.#consecutiveRefreshTimeouts = 0;
+    // A starting worker answers `status.get` with its health and host only, and everything else
+    // it would say is unchecked. Nothing more is asked of it, and its view is built from those
+    // two facts; the next refresh reads it in full once it answers `running`.
+    if (status.daemon.health === "starting") {
+      if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+      this.options.registry.refresh(this.workerId, {
+        ...workerViewFields({ status }),
+        version: client.daemonVersion,
+      });
+      return;
+    }
 
     const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([

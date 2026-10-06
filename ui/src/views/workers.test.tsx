@@ -38,7 +38,7 @@ describe("the workers views", () => {
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       // A state a newer daemon may send, which this console has never heard of.
       state: "hibernating",
-    } as unknown as WorkerView["devices"][number];
+    } as unknown as NonNullable<WorkerView["devices"]>[number];
 
     const html = renderToStaticMarkup(
       <DeviceTable worker={worker({ devices: [device] })} now={NOW} />,
@@ -170,14 +170,14 @@ describe("the busiest workers", () => {
 
   describe("a worker that reports starting", () => {
     // A gateway's view of a starting worker: its health and host, and nothing else it reports.
-    const starting = {
+    const starting: WorkerView = {
       connection: "connected",
       drained: false,
       health: "starting",
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
       id: "wrk_1",
       lastSeenAt: NOW,
-    } as unknown as WorkerView;
+    };
 
     it("the worker's page shows it as starting, and no device, lease or capacity view", () => {
       const shown = text(

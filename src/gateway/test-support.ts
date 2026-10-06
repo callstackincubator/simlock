@@ -59,7 +59,14 @@ export function hostFixture(
   };
 }
 
-export function statusFixture(overrides: Partial<StatusGetOutput> = {}): StatusGetOutput {
+/** What a running daemon answers `status.get` with: every field a starting daemon leaves out is
+ * present, so a test reads `statusFixture().capacity` without checking for it. */
+type RunningFields = "capacity" | "devices" | "leases" | "queueDepth";
+export type RunningStatus = StatusGetOutput & {
+  [Field in RunningFields]-?: NonNullable<StatusGetOutput[Field]>;
+};
+
+export function statusFixture(overrides: Partial<RunningStatus> = {}): RunningStatus {
   return {
     capacity: {
       android: { ...emptyPlatformCapacity },

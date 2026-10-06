@@ -115,7 +115,7 @@ describe("aggregateStatus", () => {
     expect(status.leases).toEqual([
       expect.objectContaining({ id: "lease_1", requesterId: "agent-1", workerId: "wrk_a" }),
     ]);
-    expect(status.leases[0]).not.toHaveProperty("worker");
+    expect(status.leases?.[0]).not.toHaveProperty("worker");
   });
 
   it("sums capacity across connected workers", () => {
@@ -127,8 +127,8 @@ describe("aggregateStatus", () => {
       { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
-    expect(status.capacity.ios).toMatchObject({ limit: 6, running: 3, used: 3, warm: 2 });
-    expect(status.capacity.global).toMatchObject({ maxRunning: 12, running: 3, warm: 2 });
+    expect(status.capacity?.ios).toMatchObject({ limit: 6, running: 3, used: 3, warm: 2 });
+    expect(status.capacity?.global).toMatchObject({ maxRunning: 12, running: 3, warm: 2 });
   });
 
   it("leaves a disconnected worker's capacity out of the sum", () => {
@@ -142,7 +142,7 @@ describe("aggregateStatus", () => {
       { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
-    expect(status.capacity.ios).toMatchObject({ limit: 2, running: 1 });
+    expect(status.capacity?.ios).toMatchObject({ limit: 2, running: 1 });
   });
 
   it("counts a worker over its own limit as the fleet being over one", () => {
@@ -158,7 +158,7 @@ describe("aggregateStatus", () => {
       { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
-    expect(status.capacity.ios.overLimit).toBe(true);
+    expect(status.capacity?.ios.overLimit).toBe(true);
   });
 
   it("sums the RAM budget over connected workers that report one, over when any worker is", () => {
@@ -183,7 +183,7 @@ describe("aggregateStatus", () => {
     );
 
     // 8 GiB used of a 12 GiB fleet limit, yet over: wrk_b is past its own 4 GiB.
-    expect(status.capacity.ramBudget).toEqual({
+    expect(status.capacity?.ramBudget).toEqual({
       limitBytes: 12 * 1024 ** 3,
       overLimit: true,
       usedBytes: 8 * 1024 ** 3,
@@ -205,7 +205,7 @@ describe("aggregateStatus", () => {
       { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
-    expect(status.capacity.ramBudget?.overLimit).toBe(false);
+    expect(status.capacity?.ramBudget?.overLimit).toBe(false);
   });
 
   it("omits the RAM budget when no connected worker reports one", () => {
@@ -893,8 +893,8 @@ describe("aggregateStatus at-RAM-budget flag", () => {
       options,
     );
 
-    expect(status.capacity.ios.atRamBudget).toBe(true);
-    expect(status.capacity.android.atRamBudget).toBe(false);
+    expect(status.capacity?.ios.atRamBudget).toBe(true);
+    expect(status.capacity?.android.atRamBudget).toBe(false);
   });
 
   it("reports false when the first worker has room and a later one is at its budget", () => {
@@ -906,8 +906,8 @@ describe("aggregateStatus at-RAM-budget flag", () => {
       options,
     );
 
-    expect(status.capacity.ios.atRamBudget).toBe(false);
-    expect(status.capacity.android.atRamBudget).toBe(false);
+    expect(status.capacity?.ios.atRamBudget).toBe(false);
+    expect(status.capacity?.android.atRamBudget).toBe(false);
   });
 
   it("leaves a disconnected worker out of the flag, and reports false for a fleet with no connected worker", () => {
@@ -920,7 +920,7 @@ describe("aggregateStatus at-RAM-budget flag", () => {
     );
     const empty = aggregateStatus([], options);
 
-    expect(status.capacity.ios.atRamBudget).toBe(true);
-    expect(empty.capacity.ios.atRamBudget).toBe(false);
+    expect(status.capacity?.ios.atRamBudget).toBe(true);
+    expect(empty.capacity?.ios.atRamBudget).toBe(false);
   });
 });

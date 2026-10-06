@@ -75,20 +75,17 @@ function names(events: readonly EventEnvelope[]): string[] {
 }
 
 describe("WorkerRegistry", () => {
-  it("builds a view on connect and emits the fact", () => {
+  it("builds a view on connect, with nothing a worker reports until it reports it, and emits the fact", () => {
     const { events, workers } = registry();
 
     const view = workers.connected("wrk_1", "mac-mini-1", "0.3.0");
 
-    expect(view).toMatchObject({
-      catalog: [],
+    expect(view).toEqual({
       connection: "connected",
-      devices: [],
       drained: false,
       id: "wrk_1",
       label: "mac-mini-1",
       lastSeenAt: 1_000,
-      leases: [],
       version: "0.3.0",
     });
     expect(events).toHaveLength(1);

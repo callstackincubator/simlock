@@ -363,9 +363,9 @@ describe("GatewayDispatcher", () => {
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
     ];
-    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
-    expect(status.workers?.[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
-    expect(list.workers[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.workers?.[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(list.workers[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
   });
 
   it("answers catalog.get as the union of the fleet's catalogs", async () => {

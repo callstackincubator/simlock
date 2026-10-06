@@ -156,7 +156,7 @@ export class FleetLeaseCoordinator {
    * `disconnected` never touch it) -- so this reference is exactly "a new snapshot for this
    * worker arrived" and nothing else, with no need to widen `FleetViews` to carry worker
    * identity on the notification itself. */
-  readonly #lastReconciledLeases = new Map<string, WorkerView["leases"]>();
+  readonly #lastReconciledLeases = new Map<string, NonNullable<WorkerView["leases"]>>();
   readonly #unsubscribeViews: () => void;
   /** C2 (round 2 review): when each waiter was created (`#queue.create`, in `request` below),
    * for `request.dispatched`'s `queuedMs` field -- a `WeakMap` rather than a `Map<string, number>`
@@ -1228,6 +1228,9 @@ export class FleetLeaseCoordinator {
     const views = this.options.views.views();
     const currentIds = new Set(views.map((view) => view.id));
     for (const view of views) {
+      // A starting worker's view has no `leases`: nothing was read, so the index keeps what it
+      // holds for that worker until the worker answers `running`.
+      if (view.leases === undefined) continue;
       if (this.#lastReconciledLeases.get(view.id) === view.leases) continue;
       this.options.leaseIndex.rebuildFromWorker(view.id, view.leases);
       this.#lastReconciledLeases.set(view.id, view.leases);

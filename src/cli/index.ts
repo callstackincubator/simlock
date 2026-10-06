@@ -2141,7 +2141,11 @@ function formatWorkers(
               .map((install) => `\n  ${formatInstall(install, installsAt)}`)
               .join("");
       const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
-      const state = worker.drained ? `${worker.connection}, drained` : worker.connection;
+      const state = [
+        worker.connection,
+        ...(worker.health === "starting" ? ["starting"] : []),
+        ...(worker.drained ? ["drained"] : []),
+      ].join(", ");
       const capacity =
         worker.capacity === undefined
           ? "capacity unknown"
@@ -2153,7 +2157,7 @@ function formatWorkers(
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
       const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
-      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}${host}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${worker.leases === undefined ? "leases unknown" : `${String(worker.leases.length)} lease(s)`}${skew}${host}${installs}`;
     })
     .join("\n");
 }
@@ -2306,6 +2310,22 @@ function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
+  // A starting daemon answers with `daemon` and `host` only: the registry has not been checked,
+  // so there is nothing to show about devices, leases or capacity, and saying nothing about them
+  // would read as an empty fleet.
+  if (
+    capacity === undefined ||
+    devices === undefined ||
+    leases === undefined ||
+    queueDepth === undefined
+  ) {
+    return [
+      `Daemon: ${daemon.health} (${daemon.mode})`,
+      ...consoleLines(daemon),
+      `Host: ${formatHost(host)}`,
+      "Devices, leases and capacity appear once startup finishes.",
+    ].join("\n");
+  }
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -2359,7 +2379,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
 }
 
 /** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */
-function quarantineMarker(device: StatusGetOutput["devices"][number]): string {
+function quarantineMarker(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   const attempts = device.quarantineAttempts ?? 0;
   const nextRetryAt =
     device.quarantineNextRetryAt === undefined

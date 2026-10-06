@@ -173,7 +173,7 @@ describe("GatewayService", () => {
     worker.status = {
       daemon: { health: "starting", mode: "worker" },
       host: hostFixture({ arch: "x64" }),
-    } as unknown as typeof worker.status;
+    };
     worker.devices = [deviceFixture("dev_1", "leased")];
 
     await harness.join("wrk_1", worker, "mac-mini-1");
@@ -261,7 +261,7 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "starting", mode: "worker" },
+      daemon: { health: "failed", mode: "worker" },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -290,7 +290,7 @@ describe("GatewayService", () => {
       devices: [deviceFixture("dev_1", "leased")],
       downloads: { policy: "always", timeoutMs: 45 * 60_000 },
       drained: false,
-      health: "starting",
+      health: "failed",
       host: hostFixture({ arch: "x64" }),
       id: "wrk_1",
       installs: [install],
@@ -322,7 +322,7 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(1));
 
-    const device = harness.service.workers.view("wrk_1")?.devices[0];
+    const device = harness.service.workers.view("wrk_1")?.devices?.[0];
     expect(device).toMatchObject({ id: "dev_1", state: "ready" });
     expect(device).not.toHaveProperty("driverData");
     expect(device).not.toHaveProperty("driverDeviceId");
@@ -376,7 +376,7 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
 
     expect(
-      harness.service.workers.view("wrk_1")?.devices.map(({ id, mode }) => ({ id, mode })),
+      harness.service.workers.view("wrk_1")?.devices?.map(({ id, mode }) => ({ id, mode })),
     ).toEqual([
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
@@ -601,7 +601,7 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.models).toEqual([
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.models).toEqual([
         "iPhone 17",
         "iPad Pro",
       ]),
@@ -624,7 +624,7 @@ describe("GatewayService", () => {
     ]);
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["26.0"],
       }),
     );
@@ -641,7 +641,7 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["25.4", "26.0"],
       }),
     );
@@ -784,7 +784,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "component.installed" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),
@@ -809,7 +809,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "lease.released" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),

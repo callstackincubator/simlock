@@ -2721,7 +2721,7 @@ describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR
   }
 
   it.each([
-    ["is not healthy", { health: "starting" as const }, { health: "running" as const }],
+    ["is not healthy", { health: "failed" as const }, { health: "running" as const }],
     ["has its own waiters queued", { queueDepth: 2 }, { queueDepth: 0 }],
   ])(
     "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
@@ -3474,5 +3474,37 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
 
     workers.refresh("wrk_a", running([gatewayLease]));
     expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("sends a request to the worker that answered running, never to one that answered starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    const ready = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    directory.add("wrk_b", ready);
+    ready.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).resolves.toMatchObject({
+      lease: { worker: { id: "wrk_b" } },
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+
+  it("fails a request at once with NO_CAPACITY when the only worker has answered starting, as it does for a worker not yet read", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
+      code: "NO_CAPACITY",
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
   });
 });

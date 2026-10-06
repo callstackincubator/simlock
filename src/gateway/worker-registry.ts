@@ -85,6 +85,27 @@ export interface WorkerRegistryOptions {
   readonly logger?: Logger;
 }
 
+/**
+ * A view without what a `status.get` read of a running worker fills in. A worker that answers
+ * `starting` has had none of it checked, so what an earlier session saw is dropped rather than
+ * shown as current: absent says "not known", where a stale or empty value would say "nothing
+ * is leased".
+ */
+function withoutReadFields(view: WorkerView): WorkerView {
+  const {
+    capacity: _capacity,
+    catalog: _catalog,
+    catalogReadAt: _catalogReadAt,
+    devices: _devices,
+    installs: _installs,
+    leases: _leases,
+    queueDepth: _queueDepth,
+    waiting: _waiting,
+    ...rest
+  } = view;
+  return rest;
+}
+
 export class WorkerRegistry {
   readonly #workers = new Map<string, WorkerView>();
   /** Each worker's devices in the grant shape (see `WorkerGrantedDevice`). Set by `refresh`,
@@ -179,11 +200,7 @@ export class WorkerRegistry {
   connected(workerId: string, label: string | undefined, version: string | undefined): WorkerView {
     // The catalog the last session read stays, so a reconnecting worker is still known from it
     // (ADR 0009 §4); only when it was read is cleared, since nothing has been read this session.
-    const { catalogReadAt: _stale, ...existing } = this.#workers.get(workerId) ?? {
-      catalog: [],
-      devices: [],
-      leases: [],
-    };
+    const { catalogReadAt: _stale, ...existing } = this.#workers.get(workerId) ?? {};
     const view: WorkerView = {
       ...existing,
       connection: "connected",
@@ -231,7 +248,7 @@ export class WorkerRegistry {
   ): WorkerView {
     const existing = this.#workers.get(workerId);
     const view: WorkerView = {
-      ...(existing ?? { catalog: [], devices: [], leases: [] }),
+      ...existing,
       connection: "incompatible",
       drained: this.#drained.has(workerId),
       id: workerId,
@@ -298,7 +315,7 @@ export class WorkerRegistry {
     const { grantedDevices, ...snapshot } = refresh;
     const now = this.options.clock.now();
     const next: WorkerView = {
-      ...existing,
+      ...(snapshot.health === "starting" ? withoutReadFields(existing) : existing),
       ...snapshot,
       lastSeenAt: now,
       // ADR 0009 §4: a refresh that carries a catalog is a read of it.
@@ -366,7 +383,7 @@ export class WorkerRegistry {
     this.options.eventBus.emit(
       "worker.disconnected",
       {
-        leaseCount: existing.leases.length,
+        leaseCount: existing.leases?.length ?? 0,
         workerId,
         ...(existing.label === undefined ? {} : { label: existing.label }),
       },
@@ -473,7 +490,9 @@ export class WorkerRegistry {
       (view) =>
         view.connection === "disconnected" &&
         view.lastSeenAt <= cutoff &&
-        !view.leases.some(
+        // A view with no `leases` field (a worker never read, or one that went away while
+        // starting) holds nothing the registry knows of.
+        !(view.leases ?? []).some(
           (lease) =>
             lease.ttlDeadline > now &&
             (prefix === undefined || lease.requesterId.startsWith(prefix)),

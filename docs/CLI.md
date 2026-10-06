@@ -1190,6 +1190,21 @@ and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
 
+While the daemon is starting, `simlock status` prints the daemon and host
+lines and one more line in place of everything else, because the daemon has not
+yet checked what it holds:
+
+```
+Daemon: starting (worker)
+Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Devices, leases and capacity appear once startup finishes.
+```
+
+`--json` prints the answer as the daemon sent it, with `devices`, `leases`,
+`capacity` and `queueDepth` absent. On a gateway, a worker that is still starting
+shows `starting` after its connection state and `leases unknown` in place of a
+lease count, in the same way.
+
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
 [CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on

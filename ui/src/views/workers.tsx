@@ -114,7 +114,7 @@ const BUSIEST_COLUMNS: readonly Column<WorkerView>[] = [
     cell: (worker) => (worker.label === undefined ? <Id>{worker.id}</Id> : worker.label),
     header: "Worker",
   },
-  { cell: (worker) => worker.leases.length, header: "Leases", numeric: true },
+  { cell: (worker) => worker.leases?.length ?? "—", header: "Leases", numeric: true },
 ];
 
 /**

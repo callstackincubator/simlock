@@ -21,7 +21,7 @@ export const warmHit: RankStage = {
   score(worker, request) {
     const fitsRequest = deviceFit(worker, request);
     if (fitsRequest === undefined) return 0;
-    const warm = worker.devices.some(
+    const warm = (worker.devices ?? []).some(
       (device) =>
         device.state === "ready" &&
         fitsRequest(deviceSpec(device.spec)) &&
@@ -33,7 +33,7 @@ export const warmHit: RankStage = {
 };
 
 /** The view's device spec in the core's shape, which leaves an absent image tag out. */
-function deviceSpec(spec: WorkerView["devices"][number]["spec"]): DeviceSpec {
+function deviceSpec(spec: NonNullable<WorkerView["devices"]>[number]["spec"]): DeviceSpec {
   const { imageTag, ...rest } = spec;
   return imageTag === undefined ? rest : { ...rest, imageTag };
 }

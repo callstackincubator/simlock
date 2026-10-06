@@ -939,6 +939,10 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
  * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
  * different facts, and a console that dims one must not read the other as a full machine.
+ * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
+ * and `host` only, so its view has `health` and `host` and none of `capacity`, `catalog`,
+ * `devices`, `installs`, `leases`, `queueDepth` or `waiting` -- never empty ones, which would
+ * read as "nothing is leased" about a registry nobody has checked yet.
  *
  * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
@@ -995,13 +999,13 @@ export const workerViewSchema = z.object({
   /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
    * is reported separately by `status.get` and arrives with #118. */
   queueDepth: z.number().optional(),
-  leases: z.array(leaseRecordSchema),
-  devices: z.array(statusDeviceSchema),
-  catalog: z.array(platformCatalogSchema),
+  leases: z.array(leaseRecordSchema).optional(),
+  devices: z.array(statusDeviceSchema).optional(),
+  catalog: z.array(platformCatalogSchema).optional(),
   /**
    * ADR 0009 §4: when the gateway last read `catalog` from this worker in its current session.
    * Cleared when the worker connects and set again by the first refresh that reads a catalog, so
-   * a worker that has just connected has none: its `catalog` is the last session's, or empty.
+   * a worker that has just connected has none: its `catalog` is the last session's, or absent.
    * It is what tells a catalog read and found empty from one that has not arrived. Absent on a
    * view no gateway built.
    */

@@ -4,6 +4,8 @@ import { catalogFixture, deviceFixture, statusFixture } from "../../test-support
 import type { WorkerView } from "../../worker-registry.js";
 import { warmHit } from "./warm-hit.js";
 
+type ViewDeviceSpec = NonNullable<WorkerView["devices"]>[number]["spec"];
+
 describe("warm-hit", () => {
   it("does not count a leased device as warm, only a ready one", () => {
     const view = (state: "ready" | "leased"): WorkerView => ({
@@ -29,7 +31,7 @@ describe("warm-hit", () => {
 
   it("counts a ready device as warm only on the request's platform and the runtime it names", () => {
     const ready = deviceFixture("dev_1", "ready");
-    const view = (spec: Partial<WorkerView["devices"][number]["spec"]>): WorkerView => ({
+    const view = (spec: Partial<ViewDeviceSpec>): WorkerView => ({
       capacity: statusFixture().capacity,
       catalog: catalogFixture([
         {
@@ -238,7 +240,7 @@ describe("warm-hit", () => {
       runtimes: ["18.0", "26.0"],
     };
     const view = (
-      spec: Partial<WorkerView["devices"][number]["spec"]>,
+      spec: Partial<ViewDeviceSpec>,
       device: Partial<ReturnType<typeof deviceFixture>> = {},
     ): WorkerView => {
       const ready = deviceFixture("d", "ready");
