@@ -1886,10 +1886,10 @@ lease whose device is still running. A lease whose device is not running at a
 daemon start — shut down, still booting, gone, or on a platform the daemon
 could not list — is ended before the daemon serves a request, with the reason
 `device-lost`; its holder finds the lease gone when it renews, as for any
-`device-lost`. The device of an ended lease is wiped and returned to the pool,
-or marked missing if it is gone; on a platform the daemon could not list it
-waits, and the first start that can list the platform wipes it and returns it to
-the pool. What a
+`device-lost`. The device of an ended lease is wiped and returned to the pool
+(a `fresh` device is shut down and deleted instead), or marked missing if it is
+gone; on a platform the daemon could not list it waits, and the first start that
+can list the platform wipes it and returns it to the pool, in the background. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is

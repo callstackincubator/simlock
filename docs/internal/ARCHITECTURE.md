@@ -1164,8 +1164,8 @@ startup — nothing about a restart proves a holder is dead, so a lease is not
 released on the strength of it, only because its device is not running. A lease whose deadline already passed while no
 daemon was running expires as soon as one is, through the ordinary expiry path.
 `StartupConverger` then recovers unleased interrupted reclaims through the
-reclaim coordinator's recovery port (the full reclaim for a device whose wipe a
-start put off, a shutdown for any other) — a backgrounded reclaim marks its device with a
+reclaim coordinator's recovery port (the full reclaim, started in the background
+under a claim, for a device whose wipe a start put off; a shutdown for any other) — a backgrounded reclaim marks its device with a
 `reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and
@@ -1893,9 +1893,11 @@ skipping every device on an unreadable platform. They no longer overlap: the
 reconciler needs the read, and convergence must not pick a device the
 reconciler is about to release. Neither leasing nor convergence awaits a device
 reclaim inline (#43) — a release's reclaim runs in the background once the
-release commits — so what is left on this path is the read, the registry
-writes, and whatever unleased interrupted-reclaim recovery and capacity-sweep
-shutdowns convergence itself still performs inline. The reconciler's rules are
+release commits, and so does the wipe convergence starts for a device a
+previous start put off (ADR 0019 §2), under a device claim — so what is left
+on this path is the read, the registry writes, and whatever unleased
+interrupted-reclaim recovery (shutdowns) and capacity-sweep shutdowns
+convergence itself still performs inline. The reconciler's rules are
 the next section's. Two consequences follow from
 claiming first:
 
@@ -1950,7 +1952,7 @@ device missing, and starts no reclaim: a driver that just failed or hung on its
 listing would likely hang the reclaim too, and a hung reclaim holds its device's
 claim with no end. The device waits in `reclaiming`, carrying the id of the lease
 it was ended from (`deferredReclaimLeaseId`), until a start whose read of that
-platform succeeds runs its full reclaim, purge included, so a reusable device
+platform succeeds runs its full reclaim in the background, purge included, so a reusable device
 never returns to the pool with its last holder's data (a reclaim a crash
 interrupted is only shut down, as before). Meanwhile `status` and
 `simlock doctor --fix` treat it as any stalled reclaim. Android's

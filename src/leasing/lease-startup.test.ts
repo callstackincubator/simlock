@@ -48,6 +48,9 @@ function harness(
         order.push("reconcile");
         reads.push(read);
         // The ending the real reconciler performs: a lease whose device is not running is gone.
+        // It takes a real turn to finish, as an ending that drives a driver does, so timers
+        // restored alongside it, not after it, would still see the lease.
+        await new Promise((resolve) => setImmediate(resolve));
         leases.ids.splice(
           0,
           leases.ids.length,

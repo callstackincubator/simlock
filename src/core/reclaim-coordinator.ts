@@ -1,5 +1,6 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
+import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
@@ -42,10 +43,13 @@ export interface ReclaimQuarantine {
 }
 
 export interface ReclaimCoordinatorOptions {
+  /** Marks a background wipe as a live in-process operation, as every release's reclaim is. */
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: ReclaimDriverCatalog;
   readonly eventBus: Pick<EventBus, "emit">;
+  readonly logger?: Logger | undefined;
   readonly notifyAvailability: () => void;
   readonly quarantine: ReclaimQuarantine;
   readonly registry: ReclaimRegistry;
@@ -56,7 +60,17 @@ export interface ReclaimCoordinatorOptions {
  * work remains outside the serialized registry decision sections.
  */
 export class ReclaimCoordinator {
+  /** The deferred wipes `recoverInterrupted` started and has not seen settle. */
+  readonly #backgroundWipes = new Set<Promise<void>>();
+
   constructor(private readonly options: ReclaimCoordinatorOptions) {}
+
+  /** Awaits every deferred wipe running in the background, for a graceful shutdown. */
+  async settle(): Promise<void> {
+    while (this.#backgroundWipes.size > 0) {
+      await Promise.allSettled(this.#backgroundWipes);
+    }
+  }
 
   // Not `async`: returning the inner promise adds no microtask hop to a reclaim's start, and
   // the tests that step a fake clock count those hops.
@@ -95,7 +109,9 @@ export class ReclaimCoordinator {
    *
    * A reusable device whose wipe a daemon start put off (`deferredReclaimLeaseId`, ADR 0019 §2)
    * gets the full reclaim instead, purge included: it still holds its last holder's data, and a
-   * reusable device never returns to the pool with it. A spent fresh device, which is never
+   * reusable device never returns to the pool with it. That wipe starts in the background under
+   * a claim, as every release's reclaim does (#43), and this returns once it has started: an
+   * erase runs tens of seconds, and startup waits for none. A spent fresh device, which is never
    * purged, takes the shutdown path either way.
    */
   async recoverInterrupted(deviceId: string): Promise<boolean> {
@@ -111,8 +127,7 @@ export class ReclaimCoordinator {
     if (device === undefined) return false;
 
     if (device.deferredReclaimLeaseId !== undefined && mayBeGranted(device)) {
-      await this.#purge(device, device.deferredReclaimLeaseId);
-      return true;
+      return this.#wipeInBackground(device, device.deferredReclaimLeaseId);
     }
 
     await this.options.drivers.get(device.spec.platform).shutdown(toDriverDevice(device));
@@ -134,6 +149,32 @@ export class ReclaimCoordinator {
     });
     if (recovered) this.options.notifyAvailability();
     return recovered;
+  }
+
+  /**
+   * Starts the wipe under a claim and leaves it running. A claim already held means another
+   * operation has the device, so there is nothing to recover. The claim is released, and a
+   * failure logged rather than thrown, once the wipe settles: no caller awaits it. A driver
+   * failure never gets that far, since `#purge` hands it to quarantine.
+   */
+  #wipeInBackground(device: DeviceRecord, leaseId: string): boolean {
+    const claim = this.options.claims.tryClaim(device.id, "reclaim");
+    if (claim === undefined) return false;
+    const wipe = this.#purge(device, leaseId)
+      .catch((error: unknown) => {
+        this.options.logger?.error("deferred wipe failed", {
+          deviceId: device.id,
+          error: error instanceof Error ? error.message : String(error),
+          leaseId,
+        });
+      })
+      .finally(() => {
+        claim.release();
+        this.options.notifyAvailability();
+      });
+    this.#backgroundWipes.add(wipe);
+    void wipe.finally(() => this.#backgroundWipes.delete(wipe));
+    return true;
   }
 
   /**

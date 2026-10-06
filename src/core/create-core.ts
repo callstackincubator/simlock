@@ -226,10 +226,12 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const reclaim = new ReclaimCoordinator({
+    claims,
     clock: options.clock,
     decisions,
     drivers,
     eventBus: options.eventBus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
     quarantine,
     registry,
@@ -346,6 +348,7 @@ export function createCore(options: CoreOptions): Core {
     },
     async settle() {
       await warmPool.settle();
+      await reclaim.settle();
     },
     dispose() {
       warmPool.dispose();

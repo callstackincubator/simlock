@@ -52,8 +52,9 @@ export interface StartupConvergerOptions {
  * a driver the read just found failing or hung.
  *
  * A device a daemon start left `reclaiming` with its wipe put off, because it could not read the
- * device's platform (ADR 0019 §2), is recovered here by the full reclaim once a start reads that
- * platform. Any other interrupted reclaim is only shut down.
+ * device's platform (ADR 0019 §2), has its full reclaim started here once a start reads that
+ * platform, in the background under a claim: startup does not wait for the erase. Any other
+ * interrupted reclaim is only shut down.
  *
  * Only the device steps live here. Settling the requests a restart left open, ending the leases
  * whose device is not running and restoring the expiry timers of the leases left are leasing's,

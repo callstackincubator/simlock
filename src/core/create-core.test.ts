@@ -24,13 +24,21 @@ async function build(
   options: {
     readonly logger?: Logger;
     readonly fresh?: boolean;
+    readonly reclaimLatencyMs?: number;
     readonly driverRejections?: readonly DriverRejection[];
     readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
+  const driver = new FakeDriver({
+    availableOsVersions: ["1"],
+    clock,
+    ...(options.reclaimLatencyMs === undefined
+      ? {}
+      : { latencyMs: { reclaim: options.reclaimLatencyMs } }),
+    platform: "ios",
+  });
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
@@ -56,11 +64,14 @@ async function build(
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });
-  return { core, driver, registry };
+  return { clock, core, driver, registry };
 }
 
 /** A lease the registry has just begun releasing: the device is `reclaiming`, the reclaim not yet run. */
-async function releasedLease({ driver, registry }: Awaited<ReturnType<typeof build>>) {
+async function releasedLease(
+  { driver, registry }: Awaited<ReturnType<typeof build>>,
+  options: { readonly deferReclaim?: boolean } = {},
+) {
   const spec = { model: "Phone", osVersion: "1", platform: "ios" } as const;
   const provisioned = await driver.provision(spec);
   const device = await registry.registerDevice({
@@ -80,7 +91,7 @@ async function releasedLease({ driver, registry }: Awaited<ReturnType<typeof bui
     ttlDeadline: 61_000,
     ttlMs: 60_000,
   });
-  return { device, released: await registry.beginRelease(lease.id) };
+  return { device, released: await registry.beginRelease(lease.id, options) };
 }
 
 function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
@@ -235,6 +246,56 @@ describe("createCore", () => {
 
     core.dispose();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("converge leaves a deferred wipe running in the background under a claim, and settle awaits it", async () => {
+    const harness = await build({ reclaimLatencyMs: 30_000 });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    harness.core.connect(ports());
+
+    await harness.core.converge(await harness.core.readStartup());
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(true);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const settled = harness.core.settle();
+    harness.clock.advance(30_000);
+    await settled;
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
+  });
+
+  describe("startup's quarantine restore", () => {
+    async function quarantinedDevice(options: { readonly platformReadable: boolean }) {
+      const harness = await build();
+      if (!options.platformReadable) {
+        harness.driver.failOn("listManaged", 1, new DriverCrashError("cannot list"));
+      }
+      // A device whose release-time purge failed in a previous process, its retry already due.
+      const { released } = await releasedLease(harness);
+      await harness.registry.enterQuarantine(released.device.id, 0);
+      harness.core.connect(ports());
+      await harness.core.converge(await harness.core.readStartup());
+      // Lets a retry timer that converge armed fire.
+      harness.clock.advance(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      const reclaims = harness.driver.calls.filter((call) => call.operation === "reclaim");
+      return { ...harness, reclaims };
+    }
+
+    it("re-arms the retry of a quarantined device on a platform the read could list", async () => {
+      const { reclaims } = await quarantinedDevice({ platformReadable: true });
+
+      expect(reclaims).toHaveLength(1);
+    });
+
+    it("leaves a quarantined device on a platform the read could not list alone: no retry runs", async () => {
+      const { reclaims } = await quarantinedDevice({ platformReadable: false });
+
+      expect(reclaims).toHaveLength(0);
+    });
   });
 
   it("logs a spent device it cannot delete at startup and keeps going, leaving the device shut down", async () => {

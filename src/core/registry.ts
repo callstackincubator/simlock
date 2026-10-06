@@ -1051,8 +1051,9 @@ function parseDevice(value: unknown): DeviceRecord {
     !isObject(spec) ||
     !("driverData" in value) ||
     // Every other optional field is a number and is swept by
-    // `parseOptionalDeviceNumbers`; `address` is the lone string. Missing is expected of a
-    // record written by a pre-address daemon; present-but-wrong-typed is corrupt.
+    // `parseOptionalDeviceNumbers`; `address` and `deferredReclaimLeaseId` are the strings.
+    // Missing is expected of a record written by a daemon that predates the field;
+    // present-but-wrong-typed is corrupt.
     (address !== undefined && typeof address !== "string") ||
     (deferredReclaimLeaseId !== undefined && typeof deferredReclaimLeaseId !== "string")
   ) {
