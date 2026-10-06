@@ -502,27 +502,25 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // rather than acted on immediately here -- see the bottom of this function for why: calling
     // `daemon.stop()` right away, while `daemon.start()` may still be awaiting convergence, is
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
-    ...(config.http.enabled
-      ? {
-          onSocketClaimed: () => {
-            socketClaimed = true;
-            void startHttpGateway().then(
-              () => resolveGatewayStarted?.(),
-              (error: unknown) => {
-                logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
-                rejectGatewayStarted?.(error);
-              },
-            );
-          },
-        }
-      : {}),
+    onSocketClaimed: () => {
+      socketClaimed = true;
+      // Dialled here, once the socket is claimed and `#readyPromise` is set, so the gateway's
+      // first `status.get` parks on startup readiness like any other request instead of
+      // reading health `starting` during convergence and keeping it. A daemon that fails its
+      // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
+      // uplink: a worker whose gateway is down must still come up and serve its local agents
+      // (`GatewayUplink` retries on its own backoff).
+      gatewayUplink?.start();
+      if (!config.http.enabled) return;
+      void startHttpGateway().then(
+        () => resolveGatewayStarted?.(),
+        (error: unknown) => {
+          logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
+          rejectGatewayStarted?.(error);
+        },
+      );
+    },
   });
-
-  // Dialled once the socket is claimed and the dispatcher can answer -- the gateway's first
-  // `status.get` then parks on startup readiness exactly like any other request, instead of
-  // racing convergence. Nothing awaits it: a worker whose gateway is down must still come up
-  // and serve its local agents (`GatewayUplink` retries on its own backoff).
-  gatewayUplink?.start();
 
   async function startHttpGateway(): Promise<void> {
     const httpLogger = logger.child("http");
