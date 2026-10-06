@@ -111,6 +111,12 @@ Write each body so the spec check finds nothing:
 
 - no Done when line its own Tests or Scope make false, none a reviewer
   could not check, no failure mode left unanswered;
+- a Tests line for every behaviour the body states, "as today" included;
+- under "Other code on the same state", every existing component that acts
+  on the state the task changes, found by searching, and which one wins
+  when both act;
+- every list given as complete (ports, callers, files, steps, triggers)
+  checked against a search of the code;
 - two tasks that touch the same file, or overlap by a project check in
   `toolchain.md`, run one after the other: the later lists the earlier under
   Depends on;
@@ -203,13 +209,18 @@ Never edit a `request:new` or `bug:*` body.
 ## 5. Check the spec (`technical` and `split`)
 
 The check reads the body as posted, so it runs once the body is on GitHub:
-at the end of `technical`, and in `split` once every task exists. Start the
-`spec-checker` agent with the Agent tool, `run_in_background: false`, with
-the issue number (the feature, for a split) as its prompt.
+at the end of `technical`, and in `split` once every task exists. Start
+`spec-checker` agents with the Agent tool, `run_in_background: false`, all
+in one message:
 
-Fix each finding in the body it names. If you changed anything, run the
-check once more. There is no third run: what the second run reports is
-fixed or stopped on as below.
+- `technical`: one, with `#<N> task`.
+- `split`: one per task, with `#<task> task`, and one with
+  `#<feature> feature`.
+
+Fix each finding in the body it names. Then run the check once more for
+every issue whose body you changed (and the feature check, if any task
+changed). There is no third run: what the second run reports is fixed or
+stopped on as below.
 
 - Attended: walk the findings with the maintainer one at a time, each with
   your recommended fix, and fold in the accepted ones. A finding the
