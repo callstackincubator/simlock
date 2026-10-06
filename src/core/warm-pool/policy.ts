@@ -412,6 +412,18 @@ function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | unde
   return refusal === "device-limit" || refusal === "ram-budget" ? refusal : "running-limit";
 }
 
+/** What `planTargets` shares across targets: the room left, the devices taken, the boots begun. */
+interface TargetPlan {
+  readonly view: WarmPolicyView;
+  readonly bootable: readonly DeviceRecord[];
+  readonly room: Slots;
+  readonly held: Slots;
+  readonly taken: Set<string>;
+  readonly proposals: WarmProposal[];
+  /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
+  started: number;
+}
+
 /**
  * What each target still needs, and the boots and creations that fill it: a shut-down device of
  * its kind is booted before a new one is created, never while a request is queued on its
@@ -428,70 +440,69 @@ function planTargets(
   held: Slots,
   isIdle: (device: DeviceRecord) => boolean,
 ): { proposals: WarmProposal[]; reports: TargetReport[] } {
-  const proposals: WarmProposal[] = [];
-  const reports: TargetReport[] = [];
-  const taken = new Set(
-    keeps.flatMap((proposal) =>
-      proposal.action === "boot" && "deviceId" in proposal ? [proposal.deviceId] : [],
-    ),
+  const keepBoots = keeps.flatMap((proposal) =>
+    proposal.action === "boot" && "deviceId" in proposal ? [proposal.deviceId] : [],
   );
-  const booting = (spec: DeviceSpec): number =>
+  const plan: TargetPlan = {
+    bootable,
+    held,
+    proposals: [],
+    room,
+    started: view.inFlight.length + keepBoots.length,
+    taken: new Set(keepBoots),
+    view,
+  };
+  const pending = (spec: DeviceSpec): number =>
     view.inFlight.filter((flying) => sameSpec(flying, spec)).length +
-    keeps.filter(
-      (proposal) =>
-        proposal.action === "boot" &&
-        "deviceId" in proposal &&
-        view.devices.some(
-          (device) => device.id === proposal.deviceId && sameSpec(device.spec, spec),
-        ),
+    keepBoots.filter((id) =>
+      view.devices.some((device) => device.id === id && sameSpec(device.spec, spec)),
     ).length;
-  let started =
-    view.inFlight.length + keeps.filter((proposal) => proposal.action === "boot").length;
-
-  for (const { count, spec } of targets) {
+  const reports = targets.map(({ count, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
     const report = { count, ready, spec, target: describeTarget(spec) };
-    let missing = count - ready - booting(spec);
-    let short: TargetShort | undefined;
-    if (missing > 0 && !view.retry.mayAttempt(spec, view.now)) {
-      short = "boot-failed";
-      missing = 0;
-    }
-    // A request queued on this platform is served first; the target waits, and is not short.
-    if (view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
-      missing = 0;
-    }
-    while (missing > 0 && started < view.config.maxConcurrentBoots) {
-      const shutDown = bootable.find(
-        (device) =>
-          !taken.has(device.id) && !view.resetDevices.has(device.id) && sameSpec(device.spec, spec),
-      );
-      const refused =
-        slotShort(room, held, spec.platform) ??
-        shortOf(shutDown === undefined ? view.admit.create(spec) : view.admit.boot(shutDown));
-      if (refused !== undefined) {
-        short = refused;
-        break;
-      }
-      room.global -= 1;
-      room[spec.platform] -= 1;
-      if (shutDown === undefined) {
-        proposals.push({ action: "provision", reason: "target", spec, target: spec });
-      } else {
-        taken.add(shutDown.id);
-        proposals.push({
-          action: "boot",
-          deviceId: shutDown.id,
-          reason: "target",
-          target: spec,
-        });
-      }
-      started += 1;
-      missing -= 1;
-    }
-    reports.push(short === undefined ? report : { ...report, short });
+    const missing = count - ready - pending(spec);
+    const short = missing > 0 ? fillTarget(plan, spec, missing) : undefined;
+    return short === undefined ? report : { ...report, short };
+  });
+  return { proposals: plan.proposals, reports };
+}
+
+/** Adds the boots and creations a target is missing; the reason it stopped short, if it did. */
+function fillTarget(plan: TargetPlan, spec: DeviceSpec, missing: number): TargetShort | undefined {
+  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return "boot-failed";
+  // A request queued on this platform is served first; the target waits, and is not short.
+  if (plan.view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
+    return undefined;
   }
-  return { proposals, reports };
+  for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
+    const refused = addOne(plan, spec);
+    if (refused !== undefined) return refused;
+  }
+  return undefined;
+}
+
+/** Proposes one boot of a shut-down device of the kind, else one creation; or why it cannot. */
+function addOne(plan: TargetPlan, spec: DeviceSpec): TargetShort | undefined {
+  const shutDown = plan.bootable.find(
+    (device) =>
+      !plan.taken.has(device.id) &&
+      !plan.view.resetDevices.has(device.id) &&
+      sameSpec(device.spec, spec),
+  );
+  const refused =
+    slotShort(plan.room, plan.held, spec.platform) ??
+    shortOf(shutDown === undefined ? plan.view.admit.create(spec) : plan.view.admit.boot(shutDown));
+  if (refused !== undefined) return refused;
+  plan.room.global -= 1;
+  plan.room[spec.platform] -= 1;
+  plan.started += 1;
+  if (shutDown === undefined) {
+    plan.proposals.push({ action: "provision", reason: "target", spec, target: spec });
+    return undefined;
+  }
+  plan.taken.add(shutDown.id);
+  plan.proposals.push({ action: "boot", deviceId: shutDown.id, reason: "target", target: spec });
+  return undefined;
 }
 
 /** A target or a spec as one line: platform, model, OS and mode, the parts it names. */

@@ -126,6 +126,7 @@ function modelDemand(model: string): WaitingDemand {
   };
 }
 
+// fallow-ignore-next-line complexity -- one test fixture builder; each option is a plain pass-through to a view field.
 function view(
   devices: readonly DeviceRecord[],
   options: {
