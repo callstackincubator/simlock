@@ -395,10 +395,9 @@ describe("LeaseReleaseCoordinator", () => {
       await harness.coordinator.release(granted.lease.id, "explicit");
       await harness.coordinator.settleBackgroundReclaims();
 
-      // ReclaimCoordinator fires its own availability kick while this claim is still
-      // held, and AcquisitionPlanner skips claimed devices -- so without a notice on
-      // this side of the claim release, a waiter queued for exactly this device sleeps
-      // through the only signal it was going to get.
+      // ReclaimCoordinator already wakes the queue itself, so this notice is a safety
+      // net: it runs after the claim is gone, so matching sees the device even if an
+      // earlier wake-up raced the release.
       expect(claimedAtNotice).toContain(false);
     });
 
