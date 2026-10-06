@@ -29,8 +29,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import type { Filesystem } from "../ports/index.js";
-import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import type { Filesystem, IpcConnector, IpcListenerFactory } from "../ports/index.js";
+import {
+  FakeHostInfo,
+  MemoryFilesystem,
+  NodeIpcTransport,
+  NoopLogger,
+  SystemClock,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -176,6 +182,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
      * directory and filesystem below. Omit for a worker that starts once and is never restarted.
      */
     readonly existing?: { readonly filesystem: Filesystem; readonly directory: string };
+    /** The worker's own socket transport; omitted, the real one. */
+    readonly ipc?: IpcConnector & IpcListenerFactory;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
@@ -212,6 +220,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
         }),
       ],
       filesystem,
+      ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
@@ -300,6 +309,66 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     expect(result.exitCode).toBe(7);
     expect(chunks.join("")).toBe("hello-from-b");
 
+    await gateway.dispatch("lease.release", { leaseId: grant.lease.id }, agentSession());
+  }, 30_000);
+
+  /**
+   * #395: a worker whose own socket takes a while to claim. The gateway must still see it as
+   * running once it has started, and route to it, rather than keep the view it read while the
+   * worker was starting until its next periodic refresh.
+   */
+  it("reports a worker running and grants a no-wait lease on it, when the worker's socket claim is slow", async () => {
+    const gateway = await startGateway();
+    const { secret } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label: "worker-a" },
+      adminSession(),
+    );
+    const transport = new NodeIpcTransport();
+    let claimSocket = (): void => undefined;
+    const socketClaimHeld = new Promise<void>((resolve) => {
+      claimSocket = resolve;
+    });
+    const slowClaim: IpcConnector & IpcListenerFactory = {
+      connect: (endpoint) => transport.connect(endpoint),
+      listen: async (endpoint, accept) => {
+        await socketClaimHeld;
+        return transport.listen(endpoint, accept);
+      },
+    };
+
+    const started = startWorker({
+      ipc: slowClaim,
+      label: "worker-a",
+      model: "Pixel-A",
+      stdout: "hello-from-a",
+      token: secret,
+    });
+    // The claim is held long enough for an uplink that dials at once to join and be read.
+    await vi
+      .waitFor(
+        async () => {
+          const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+          expect(workerServes(workers, "Pixel-A")).toBe(true);
+        },
+        { timeout: 2_000 },
+      )
+      .catch(() => undefined);
+    claimSocket();
+    await started;
+    await vi.waitFor(async () => {
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      expect(workerServes(workers, "Pixel-A")).toBe(true);
+    });
+
+    const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+    expect(workers.map((worker) => worker.health)).toEqual(["running"]);
+    const grant = await gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", platform: "android", noWait: true },
+      agentSession(),
+    );
+    expect(grant.lease.worker?.label).toBe("worker-a");
     await gateway.dispatch("lease.release", { leaseId: grant.lease.id }, agentSession());
   }, 30_000);
 
