@@ -26,6 +26,27 @@ async function deviceStates(env: TestEnv): Promise<readonly string[]> {
   return (listed.json as { readonly state: string }[]).map((device) => device.state);
 }
 
+async function makeReadyCalls(env: TestEnv): Promise<number> {
+  return (await env.driverLog.calls()).filter((call) => call.operation === "makeReady").length;
+}
+
+/** Returns once no boot has started and no device has changed state for two seconds. */
+async function untilQuiet(env: TestEnv): Promise<void> {
+  const snapshot = async () =>
+    `${await makeReadyCalls(env)}:${(await deviceStates(env)).join(",")}`;
+  let last = await snapshot();
+  let stableSince = Date.now();
+  for (let waited = 0; waited < 30_000; waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const now = await snapshot();
+    if (now !== last) {
+      last = now;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= 2_000) return;
+  }
+  throw new Error("the warm pool never went quiet");
+}
+
 async function eventsNamed(env: TestEnv, name: string): Promise<readonly { payload: unknown }[]> {
   return (await events(env.env)).filter((entry) => entry.event === name);
 }
@@ -54,7 +75,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       await lease(env, "agent-c"),
     ];
     const readyBefore = (await eventsNamed(env, "device.ready")).length;
-    // A slow boot, so a pool boot that wrongly starts stays visible as `booting`.
+    // A slow boot, so a pool boot that wrongly starts is still running, and logged, at the check.
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
 
     // Two leases still held leave no slot above the reserve, so the first device stays down.
@@ -64,21 +85,20 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       label: "the released device finished its reclaim",
     });
     expect((await deviceStates(env)).filter((state) => state === "shutdown")).toHaveLength(1);
-    expect(
-      (await env.driverLog.calls()).filter((call) => call.operation === "makeReady"),
-    ).toHaveLength(3);
+    expect(await makeReadyCalls(env)).toBe(3);
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore);
 
+    // The check is made; boots now run at full speed, and the test waits for them to end.
+    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 0 } } });
     expect((await env.cli(["release", second.lease.id])).code).toBe(0);
     expect((await env.cli(["release", third.lease.id])).code).toBe(0);
+    await untilQuiet(env);
 
-    await waitFor(
-      async () => (await deviceStates(env)).filter((state) => state === "ready").length === 2,
-      {
-        label: "two devices are warm",
-      },
-    );
-    expect((await deviceStates(env)).filter((state) => state === "shutdown")).toHaveLength(1);
+    // Exact counts: a third wrongful boot, or a missing one, changes them.
+    expect(await makeReadyCalls(env)).toBe(5);
+    const states = await deviceStates(env);
+    expect(states.filter((state) => state === "ready")).toHaveLength(2);
+    expect(states.filter((state) => state === "shutdown")).toHaveLength(1);
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore + 2);
     const status = await env.cli(["status", "--json"]);
     expect(status.json).toMatchObject({ capacity: { ios: { warm: 2 } } });
