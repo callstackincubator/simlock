@@ -29,7 +29,7 @@ import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { AdminSecretManager } from "../daemon/admin-secret.js";
 import { createCredentialRoleResolver } from "../daemon/session.js";
-import { SimlockError, type AnySimlockError } from "../contract/index.js";
+import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -3971,6 +3971,40 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
     // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
     expect(requested).toEqual([30 * 60_000, undefined]);
+  });
+
+  it("the CLI --lease-id flag sends leaseId and exits 13 on LEASE_ID_TAKEN", async () => {
+    const output = outputCapture();
+    const requested: unknown[] = [];
+    let answer: "grant" | "taken" = "grant";
+    const environment = output.environmentWith({
+      clock: new FakeClock(0),
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push((input as Record<string, unknown>).leaseId);
+            return answer === "grant"
+              ? Promise.resolve(detachedGrant)
+              : Promise.reject(
+                  fromWireError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+                    leaseId: "ad-7f3a",
+                  }),
+                );
+          },
+        }),
+    });
+    const lease = ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"];
+
+    await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+    await runCli(lease, environment);
+    answer = "taken";
+    const exitCode = await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+
+    // The flag's value goes out as typed and an omitted flag sends none: the contract decides
+    // what an ID may look like.
+    expect(requested).toEqual(["ad-7f3a", undefined, "ad-7f3a"]);
+    expect(exitCode).toBe(13);
+    expect(output.stderr).toContain('"code":"LEASE_ID_TAKEN"');
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(

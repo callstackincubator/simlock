@@ -120,6 +120,31 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("the MCP lease tool passes leaseId through", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "ad-7f3a" }));
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("leaseId");
+
+      const lease = await call(mcpClient, "lease_simulator", {
+        leaseId: "ad-7f3a",
+        model: "iPhone 17 Pro",
+        platform: "ios",
+      });
+
+      expect(lease.isError).not.toBe(true);
+      expect(client.calls[0]).toMatchObject({
+        input: { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" },
+        method: "requestLease",
+      });
+    } finally {
+      await close();
+    }
+  });
+
   it("surfaces a daemon FORBIDDEN as-is when releasing a lease this session does not own -- no client-side pre-check", async () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = () =>

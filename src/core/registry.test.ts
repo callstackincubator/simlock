@@ -1584,6 +1584,93 @@ describe("Registry", () => {
     expect(reloaded.snapshot.leases[0]?.ownerId).toBe("agent-1");
   });
 
+  it("a state file without idChosenByRequester loads every lease as false", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const lease = (id: string, deviceId: string) => ({
+      deviceId,
+      grantedAt: 1_000,
+      id,
+      lastRenewedAt: 1_000,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    });
+    const device = (id: string) => ({
+      createdAt: 1_000,
+      driverData: {},
+      driverDeviceId: `driver_${id}`,
+      id,
+      spec,
+      state: "leased",
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [device("dev_1"), device("dev_2")],
+        leases: [lease("lse_1", "dev_1"), lease("ad-7f3a", "dev_2")],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.snapshot.leases.map((loaded) => [loaded.id, loaded])).toEqual([
+      ["lse_1", expect.objectContaining({ idChosenByRequester: false })],
+      ["ad-7f3a", expect.objectContaining({ idChosenByRequester: false })],
+    ]);
+  });
+
+  it("writes idChosenByRequester true for a lease created with a leaseId, false without one, and keeps both across a reload", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    let next = 0;
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => String((next += 1)) },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const ready = async (driverDeviceId: string) => {
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId,
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      return device.id;
+    };
+    const base = { ownerId: "agent-1", requesterId: "agent-1", ttlDeadline: 2_000, ttlMs: 60_000 };
+
+    const chosen = await registry.createLease({
+      ...base,
+      deviceId: await ready("one"),
+      leaseId: "ad-7f3a",
+    } as Parameters<Registry["createLease"]>[0]);
+    const generated = await registry.createLease({ ...base, deviceId: await ready("two") });
+
+    expect(chosen).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
+    expect(generated).toMatchObject({
+      id: expect.stringMatching(/^lse_/),
+      idChosenByRequester: false,
+    });
+    const reloaded = await Registry.load(options);
+    expect(reloaded.snapshot.leases).toEqual([chosen, generated]);
+  });
+
   it("migrates a lease record written before ADR 0004's ttlMs/lastRenewedAt, dropping mode", async () => {
     const filesystem = new MemoryFilesystem();
     const clock = new FakeClock(5_000);

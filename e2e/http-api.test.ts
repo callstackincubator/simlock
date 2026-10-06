@@ -413,4 +413,135 @@ describe("HTTP API", () => {
     expect(polled.state).toBe("granted");
     expect(polled.lease).toMatchObject({ device: "iPhone 16", os: "18.4", platform: "ios" });
   });
+
+  it("POST /v1/lease-requests with leaseId grants a lease with exactly that ID, and renew and release name it", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
+      secret: string;
+    };
+    const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections" },
+    );
+
+    const created = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ device: "iPhone 16", leaseId: "ad-7f3a_01", platform: "ios" }),
+      headers,
+      method: "POST",
+    });
+    expect(created.status).toBe(201);
+    let polled = ((await created.json()) as { request: RequestResource }).request;
+    while (polled.state !== "granted" && polled.state !== "failed") {
+      const response = await fetch(`${baseUrl}/v1/lease-requests/${polled.id}?wait=10`, {
+        headers,
+      });
+      polled = ((await response.json()) as { request: RequestResource }).request;
+    }
+    expect(polled.state).toBe("granted");
+    expect(polled.lease?.id).toBe("ad-7f3a_01");
+
+    const renewed = await fetch(`${baseUrl}/v1/leases/ad-7f3a_01/renew`, {
+      headers,
+      method: "POST",
+    });
+    expect(renewed.status).toBe(200);
+    expect(((await renewed.json()) as { leaseId: string }).leaseId).toBe("ad-7f3a_01");
+
+    const released = await fetch(`${baseUrl}/v1/leases/ad-7f3a_01`, { headers, method: "DELETE" });
+    expect(released.status).toBe(202);
+  });
+
+  it("POST /v1/lease-requests answers 400 BAD_REQUEST for each leaseId the pattern rejects, and 201 for a 64-character one", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
+      secret: string;
+    };
+    const headers = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections" },
+    );
+
+    for (const leaseId of ["", "a".repeat(65), "w1.myid", "my id", "-s", "--help", "_x", "ząb"]) {
+      const response = await fetch(`${baseUrl}/v1/lease-requests`, {
+        body: JSON.stringify({ device: "iPhone 16", leaseId, platform: "ios" }),
+        headers,
+        method: "POST",
+      });
+      expect(response.status, `leaseId ${JSON.stringify(leaseId)}`).toBe(400);
+      expect(
+        ((await response.json()) as { error: { code: string } }).error.code,
+        `leaseId ${JSON.stringify(leaseId)}`,
+      ).toBe("BAD_REQUEST");
+    }
+
+    const longest = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ device: "iPhone 16", leaseId: "a".repeat(64), platform: "ios" }),
+      headers,
+      method: "POST",
+    });
+    expect(longest.status).toBe(201);
+  });
+
+  it("POST /v1/lease-requests answers 409 LEASE_ID_TAKEN, naming the ID, for an ID an active lease holds", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const tokens = await Promise.all(
+      [0, 1].map(async () => {
+        const result = await env.cli(["token", "create", "--role", "agent"]);
+        return `Bearer ${(result.json as { secret: string }).secret}`;
+      }),
+    );
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections" },
+    );
+    const post = (authorization: string) =>
+      fetch(`${baseUrl}/v1/lease-requests`, {
+        body: JSON.stringify({ device: "iPhone 16", leaseId: "ad-7f3a", platform: "ios" }),
+        headers: { authorization, "content-type": "application/json" },
+        method: "POST",
+      });
+
+    const first = await post(tokens[0] ?? "");
+    expect(first.status).toBe(201);
+    const second = await post(tokens[1] ?? "");
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({
+      error: { code: "LEASE_ID_TAKEN", leaseId: "ad-7f3a" },
+    });
+  });
 });
