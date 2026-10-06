@@ -547,6 +547,24 @@ describe("warm pool converger", () => {
     expect(rig.sink.records).toEqual([]);
   });
 
+  it("marks only devices that are shut down while a reset holds acquisition closed, and copes with one that left the registry", async () => {
+    let closed = true;
+    const rig = harness([device("up", "ready", 1_000), device("gone", "shutdown", 2_000)], {
+      maintenance: () => closed,
+    });
+    await rig.pool.pass();
+    closed = false;
+
+    // `up` is shut down only after the reset; `gone` leaves the registry before the next pass.
+    rig.state.devices = rig.state.devices
+      .filter((item) => item.id !== "gone")
+      .map((item) => ({ ...item, state: "shutdown" as const }));
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual(["up"]);
+    expect(rig.sink.records).toEqual([]);
+  });
+
   it("clears the reset mark once the device has left shutdown, so it is an ordinary recently released device again", async () => {
     let closed = true;
     const rig = harness([device("down", "shutdown", 1_000)], { maintenance: () => closed });
