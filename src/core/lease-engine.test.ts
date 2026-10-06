@@ -2820,6 +2820,75 @@ describe("LeaseEngine warm pool", () => {
       );
     });
 
+    async function twoRoomsHarness(warmPoolEnabled: boolean) {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock,
+        latencyMs: { makeReady: 50 },
+        platform: "ios",
+        reclaimResult: "shutdown",
+      });
+      const harness = await createHarness({
+        driver,
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 2, maxRunning: 2 },
+          maxRunning: 2,
+        },
+        warmPoolEnabled,
+      });
+      return { clock, driver, harness };
+    }
+
+    it("a request arriving while another request is creating its own device provisions its own device rather than waiting for that one", async () => {
+      const { clock, driver, harness } = await twoRoomsHarness(true);
+
+      const first = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+      await vi.waitFor(() =>
+        expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1),
+      );
+      const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
+      await flush();
+      // Before either boot ends: the second request did not wait for the first one's device.
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+      clock.advance(50);
+      await flush();
+      clock.advance(50);
+      const granted = await Promise.all([first, second]);
+
+      expect(granted[0].device.id).not.toBe(granted[1].device.id);
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+    });
+
+    it("a request arriving while another request is booting a shut-down device provisions its own device rather than waiting for that one", async () => {
+      const { clock, driver, harness } = await twoRoomsHarness(false);
+      const holder = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+      await flush();
+      clock.advance(50);
+      const held = await holder;
+      await harness.engine.release(held.lease.id, "explicit");
+      await harness.engine.settle();
+      expect(harness.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
+
+      const booting = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
+      await vi.waitFor(() =>
+        expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
+      );
+      const other = harness.engine.request(request, { ownerId: "c", requesterId: "c" });
+      await flush();
+      // Before either boot ends: the other request did not wait for the one booting.
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+      clock.advance(50);
+      await flush();
+      clock.advance(50);
+      const granted = await Promise.all([booting, other]);
+
+      expect(granted[0].device.id).toBe(held.device.id);
+      expect(granted[1].device.id).not.toBe(held.device.id);
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+    });
+
     it("under noWait a request arriving during a warm-pool boot provisions its own device", async () => {
       const { clock, driver, first, harness } = await releasedDeviceBooting();
 
