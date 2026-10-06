@@ -1,3 +1,4 @@
+import { readySince } from "../domain.js";
 import type { CleanupRule, Proposal, RegistryView } from "./types.js";
 
 const GIBIBYTE = 1024 ** 3;
@@ -17,15 +18,13 @@ export const idleDestroyRule: CleanupRule = {
       : view.config.idle.deleteAfterMs;
 
     return view.devices.flatMap((device) => {
-      if (
-        device.state !== "shutdown" ||
-        device.lastLeaseEndedAt === undefined ||
-        hasActiveLease(view, device.id)
-      ) {
+      if (device.state !== "shutdown" || hasActiveLease(view, device.id)) {
         return [];
       }
 
-      const idleMs = view.now - device.lastLeaseEndedAt;
+      // A device that never served a lease has no end of one: it is timed from when it was last
+      // ready, so one the pool created and later shut down is deleted too.
+      const idleMs = view.now - (device.lastLeaseEndedAt ?? readySince(device));
       if (idleMs <= threshold) {
         return [];
       }

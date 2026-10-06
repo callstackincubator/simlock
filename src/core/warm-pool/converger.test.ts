@@ -1227,6 +1227,53 @@ describe("warm pool targets", () => {
 
     expect([...(await rig.pool.targeted())]).toEqual(["ready"]);
     expect(rig.resolveCalls).toHaveLength(1);
+    // Resolved once: a later ask reads what is there, and a pass resolves again on its own.
+    await rig.pool.targeted();
+    expect(rig.resolveCalls).toHaveLength(1);
+  });
+
+  it("stops acting on the rest of a pass's proposals once a drain begins", async () => {
+    let rig: ReturnType<typeof harness> | undefined;
+    rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        shutdown: async (target) => {
+          void rig?.pool.drain();
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("does not hold a target back for a keep boot that succeeds or fails, which no target owns", async () => {
+    const released = device("released", "shutdown", 1_000, "ios");
+    const ipad = { ...released, spec: { ...released.spec, model: "iPad Pro" } };
+    const failing = harness([ipad, ofKind("ready", "ready")], {
+      boot: async () => {
+        throw new Error("simulator did not boot");
+      },
+      targets: [iphone17],
+    });
+    await failing.pool.pass();
+    await failing.pool.settle();
+    await failing.pool.pass();
+    expect(failing.bootCalls).toEqual(["released"]);
+    expect(failing.sink.records.filter((record) => record.level === "error")).toEqual([]);
+    expect(failing.clock.pendingTimerCount).toBe(0);
+
+    const working = harness([ipad, ofKind("ready", "ready")], { targets: [iphone17] });
+    await working.pool.pass();
+    await working.pool.settle();
+    expect(working.sink.records.filter((record) => record.level !== "info")).toEqual([]);
   });
 
   it("resolves no target, reports none and names no device with warmPool disabled", async () => {
@@ -1238,9 +1285,9 @@ describe("warm pool targets", () => {
 
     await rig.pool.pass();
 
-    expect(rig.resolveCalls).toEqual([]);
     expect(rig.pool.targets()).toEqual([]);
     expect([...(await rig.pool.targeted())]).toEqual([]);
+    expect(rig.resolveCalls).toEqual([]);
     expect(
       rig.sink.records.filter((record) => record.message === "a warm pool target is short"),
     ).toEqual([]);
@@ -1264,6 +1311,11 @@ describe("warm pool targets", () => {
     await rig.pool.pass();
     expect(rig.shutdownCalls).toEqual(["stale"]);
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "runtime-missing" })]);
+
+    // The spec it once had is gone with a settled refusal: a later failed read has none to keep.
+    answer = { message: "simctl timed out", refusal: "unresolvable" };
+    await rig.pool.pass();
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "unresolvable" })]);
   });
 
   it("starts nothing new once draining, though a creation that was running ends", async () => {

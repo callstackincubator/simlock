@@ -74,11 +74,15 @@ const config: Config = {
 
 function view(
   now: number,
-  overrides: { readonly diskFreeBytes?: number; readonly leases?: readonly LeaseRecord[] } = {},
+  overrides: {
+    readonly devices?: RegistryView["devices"];
+    readonly diskFreeBytes?: number;
+    readonly leases?: readonly LeaseRecord[];
+  } = {},
 ): RegistryView {
   return {
     config,
-    devices: [
+    devices: overrides.devices ?? [
       {
         createdAt: 0,
         driverData: {},
@@ -155,5 +159,65 @@ describe("idleDestroyRule", () => {
     });
 
     expect(idleDestroyRule.evaluate({ ...leased, config: pressuredConfig })).toEqual([]);
+  });
+
+  describe("a device that never served a lease", () => {
+    const never = (id: string, overrides: Partial<RegistryView["devices"][number]> = {}) => ({
+      createdAt: 0,
+      driverData: {},
+      driverDeviceId: `driver-${id}`,
+      id,
+      mode: "full" as const,
+      readyAt: 5_000,
+      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" as const },
+      state: "shutdown" as const,
+      ...overrides,
+    });
+
+    it("is proposed for destruction once it has been idle past T2 from readyAt, and not before", () => {
+      const devices = [never("dev_never")];
+
+      expect(idleDestroyRule.evaluate(view(35_000, { devices }))).toEqual([]);
+      expect(idleDestroyRule.evaluate(view(35_001, { devices }))).toEqual([
+        {
+          action: "destroy",
+          reason: "idle 30s > T2=30s",
+          rule: "idle-destroy",
+          target: "dev_never",
+        },
+      ]);
+    });
+
+    it("is timed from createdAt when the record has no readyAt", () => {
+      const { readyAt: _readyAt, ...older } = never("dev_old", { createdAt: 1_000 });
+
+      expect(idleDestroyRule.evaluate(view(31_000, { devices: [older] }))).toEqual([]);
+      expect(idleDestroyRule.evaluate(view(31_001, { devices: [older] }))).toHaveLength(1);
+    });
+
+    it("uses T1 under disk pressure, as a device that was leased does", () => {
+      const devices = [never("dev_never")];
+
+      const pressured = (now: number): RegistryView => ({
+        ...view(now, { devices, diskFreeBytes: 2 * gibibyte }),
+        config: { ...config, diskPressure: { freeBytesThreshold: 10 * gibibyte } },
+      });
+
+      expect(idleDestroyRule.evaluate(pressured(15_000))).toEqual([]);
+      expect(idleDestroyRule.evaluate(pressured(15_001))).toMatchObject([{ target: "dev_never" }]);
+    });
+
+    it("is never proposed while it is ready, leased, or still has a lease record", () => {
+      const ready = never("ready", { state: "ready" });
+      const leased = never("leased", { state: "leased" });
+      const recorded = never("recorded");
+      const lease = { deviceId: "recorded" } as LeaseRecord;
+
+      expect(
+        idleDestroyRule.evaluate(
+          view(1_000_000, { devices: [ready, leased, recorded], leases: [lease] }),
+        ),
+      ).toEqual([]);
+    });
   });
 });

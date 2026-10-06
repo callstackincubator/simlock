@@ -1044,8 +1044,14 @@ describe("Registry", () => {
       payload: { bootDuration: 5, deviceId: device.id },
     });
 
+    clock.advance(5_000);
+    await registry.transitionDevice(device.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: device.id, initiator: "test" },
+    });
     const reloaded = await Registry.load(options);
 
+    // Stamped on the move into `ready`, and left alone by a later move out of it.
     expect(reloaded.snapshot.devices[0]?.readyAt).toBe(1_000);
     const state = JSON.parse(await filesystem.readFile(statePath)) as {
       devices: Record<string, unknown>[];

@@ -1180,7 +1180,7 @@ The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
 `no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
 `device-limit`, `ram-budget`) in its log and through `WarmPool#targets`.
 A device that never served a lease has no `lastLeaseEndedAt`, which the
-reaper's idle rule times from, so the policy itself shuts down a ready,
+reaper's idle-shutdown rule times from (idle-destroy falls back to `readyAt`), so the policy itself shuts down a ready,
 unleased, never-leased device that no target keeps once it has been ready
 (`DeviceRecord.readyAt`, `createdAt` for an older record) longer than
 `idle.shutdownAfterMs`, with initiator `warm-pool`.
@@ -1590,7 +1590,8 @@ v1 rules — the tiered cleanup:
 
 1. idle > T1 → `shutdown` (reclaim RAM); a device a warm target keeps (the
    view's `targeted` set, read from the pool at each run) is never proposed
-2. idle > T2 → `destroy` (reclaim disk); under disk pressure (free space
+2. idle > T2 → `destroy` (reclaim disk), idle counted from the last lease's end,
+   or from `readyAt` for a device that never served one; under disk pressure (free space
    below `diskPressure.freeBytesThreshold`) `idle-destroy` uses T1 instead of
    T2, so a full disk shortens the wait to reclaim it — the rule reads
    `diskFreeBytes` off the view itself rather than depending on the

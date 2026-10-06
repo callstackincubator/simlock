@@ -98,7 +98,8 @@ export class WarmPool {
   /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
   /** The targets that resolved on the last pass, and every target's state as it left them. */
-  #resolved: readonly ResolvedTarget[] | undefined;
+  #resolved: readonly ResolvedTarget[] = [];
+  #hasResolved = false;
   /** The spec each target last resolved to, which a transient refusal does not take away. */
   readonly #lastSpecs = new Map<string, DeviceSpec>();
   #reports: readonly TargetReport[] = [];
@@ -168,13 +169,13 @@ export class WarmPool {
    */
   async targeted(): Promise<ReadonlySet<string>> {
     if (!this.options.config.enabled) return new Set();
-    if (this.#resolved === undefined) await this.#resolveTargets();
+    if (!this.#hasResolved) await this.#resolveTargets();
     const { devices, leases } = this.options.registry.snapshot;
     return targetedDevices({
       devices,
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
-      targets: this.#resolved ?? [],
+      targets: this.#resolved,
     });
   }
 
@@ -280,6 +281,7 @@ export class WarmPool {
       });
     }
     this.#resolved = resolved;
+    this.#hasResolved = true;
     return refused;
   }
 
@@ -342,7 +344,7 @@ export class WarmPool {
       now: this.options.clock.now(),
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
-      targets: this.#resolved ?? [],
+      targets: this.#resolved,
       waiting: this.options.acquisition.waitingDemand(),
     };
   }

@@ -3332,6 +3332,28 @@ describe("createLeasing warm targets", () => {
     ]);
   });
 
+  it("on a graceful drain finishes the creation in flight and creates no further device for the target", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { makeReady: 50 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver, limits: roomy, warmPool: { targets: [target] } });
+    await harness.engine.convergeRunningCapacity();
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await flush();
+    expect(eventsNamed(harness, "device.provisioned")).toHaveLength(1);
+
+    const draining = harness.engine.core.drain();
+    await drain(harness, clock);
+    await draining;
+
+    expect(eventsNamed(harness, "device.provisioned")).toHaveLength(1);
+    expect(harness.registry.snapshot.devices.map((device) => device.state)).toEqual(["ready"]);
+  });
+
   it("grants the first lease of the targeted kind from a ready device with no booting stage, then keeps the count by creating another", async () => {
     const harness = await createHarness({ limits: roomy, warmPool: { targets: [target] } });
     await harness.engine.convergeRunningCapacity();
