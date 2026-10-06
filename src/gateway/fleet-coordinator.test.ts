@@ -15,6 +15,7 @@ import {
   catalogFixture,
   deviceFixture,
   grantFixture,
+  hostFixture,
   leaseFixture,
   noCapacityError,
   ScriptedWorkerClient,
@@ -3415,5 +3416,63 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
 
     expect(leaseRequests(warm)).toHaveLength(1);
     expect(leaseRequests(free)).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator: a worker that is still starting", () => {
+  const gatewayLease = {
+    deviceId: "dev_1",
+    grantedAt: 1,
+    id: "lse_1",
+    lastRenewedAt: 1,
+    ownerId: "agent-9",
+    requesterId: `${GATEWAY_PREFIX}agent-9`,
+    ttlDeadline: 900_001,
+    ttlMs: 900_000,
+  };
+  const running = (leases: (typeof gatewayLease)[]) => ({
+    capacity: statusFixture().capacity,
+    devices: [deviceFixture("dev_1", "leased")],
+    health: "running" as const,
+    host: hostFixture(),
+    leases,
+    queueDepth: 0,
+  });
+
+  it("gives a starting worker a view with health and host and no devices, leases or capacity, indexes none of its leases, then indexes them once the worker answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    const starting = workers.view("wrk_a");
+    expect(starting?.health).toBe("starting");
+    expect(starting?.host).toEqual(hostFixture());
+    expect(Object.keys(starting ?? {})).not.toContain("devices");
+    expect(Object.keys(starting ?? {})).not.toContain("leases");
+    expect(Object.keys(starting ?? {})).not.toContain("capacity");
+    expect(leaseIndex.all()).toEqual([]);
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("keeps the leases it indexed for a worker through every answer the worker gives while starting, until it answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+
+    // The worker restarts. Three starting answers: more than the two empty snapshots after
+    // which the index forgets a lease the worker stopped reporting.
+    for (let answer = 0; answer < 3; answer += 1) {
+      workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+      expect(Object.keys(workers.view("wrk_a") ?? {})).not.toContain("leases");
+      expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+    }
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
   });
 });

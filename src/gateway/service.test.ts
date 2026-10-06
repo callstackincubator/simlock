@@ -165,6 +165,47 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("builds a starting worker's view from health and host alone, asks it for nothing else, and builds the full view once it answers running", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    // A starting worker answers `status.get` with `daemon` and `host` only.
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture({ arch: "x64" }),
+    } as unknown as typeof worker.status;
+    worker.devices = [deviceFixture("dev_1", "leased")];
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+
+    const view = harness.service.workers.view("wrk_1");
+    expect(view?.host).toEqual(hostFixture({ arch: "x64" }));
+    for (const field of [
+      "capacity",
+      "catalog",
+      "devices",
+      "installs",
+      "leases",
+      "queueDepth",
+      "waiting",
+    ]) {
+      expect(Object.keys(view ?? {})).not.toContain(field);
+    }
+    expect(worker.calls).not.toContain("list.get:devices");
+
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")] });
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    worker.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("running"));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      devices: [{ id: "dev_1" }],
+      leases: [{ id: "lease_1" }],
+    });
+    await harness.service.stop();
+  });
+
   it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
     const harness = fleet();
     await harness.service.start();

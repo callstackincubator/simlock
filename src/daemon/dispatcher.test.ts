@@ -203,6 +203,8 @@ async function buildDispatcher(
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
     >;
+    /** The daemon's health, as `status.get` reports it; `running` by default. */
+    readonly health?: "starting" | "running" | "failed";
     /** `gateway.label` in this daemon's config; unset by default. */
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
@@ -301,7 +303,7 @@ async function buildDispatcher(
     doctor,
     eventBus,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
-    health: () => "running",
+    health: () => overrides.health ?? "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     instanceId: "instance-1",
     leases: engine,
@@ -3202,4 +3204,50 @@ describe("Dispatcher: component.remove", () => {
     driver.releaseRemovals();
     await expect(removal).resolves.toMatchObject({ outcome: "removed" });
   });
+});
+
+describe("Dispatcher: status.get while the daemon is starting", () => {
+  it("status.get on a worker whose health is starting returns daemon and host and no other field", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
+    await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-unchecked",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
+  });
+
+  it.each(["running", "failed"] as const)(
+    "status.get on a %s daemon returns every field it returns today",
+    async (health) => {
+      const { dispatcher, registry } = await buildDispatcher({ health });
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver-known",
+        provisionDuration: 0,
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect(Object.keys(status).sort()).toEqual([
+        "capacity",
+        "daemon",
+        "devices",
+        "host",
+        "installs",
+        "leases",
+        "queueDepth",
+        "waiting",
+      ]);
+      expect(status.daemon.health).toBe(health);
+      expect(status.devices).toHaveLength(1);
+    },
+  );
 });

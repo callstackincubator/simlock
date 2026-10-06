@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../api";
 import { Loaded } from "../live/route-state";
-import { DeviceTable } from "./worker-detail";
+import { DeviceTable, WorkerDetail } from "./worker-detail";
+import { WorkerFacts } from "./worker-facts";
 import { busiestWorkers, type WorkerView } from "./workers-model";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
@@ -165,5 +166,37 @@ describe("the busiest workers", () => {
     ]);
     // The daemon's list is left as it came.
     expect(fleet.map((entry) => entry.id)[0]).toBe("wrk_one");
+  });
+
+  describe("a worker that reports starting", () => {
+    // A gateway's view of a starting worker: its health and host, and nothing else it reports.
+    const starting = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      id: "wrk_1",
+      lastSeenAt: NOW,
+    } as unknown as WorkerView;
+
+    it("the worker's page shows it as starting, and no device, lease or capacity view", () => {
+      const shown = text(
+        renderToStaticMarkup(<WorkerDetail id="wrk_1" workers={[starting]} now={NOW} />),
+      );
+
+      expect(shown).toContain("starting");
+      expect(shown).toContain("Devices, leases and capacity appear once startup finishes.");
+      expect(shown).not.toContain("No devices.");
+      expect(shown).not.toContain("0 leased");
+    });
+
+    it("the worker's card shows it as starting, with no device or capacity count", () => {
+      const html = renderToStaticMarkup(<WorkerFacts worker={starting} />);
+
+      expect(html).toContain("status-warn");
+      expect(text(html)).toContain("Health starting");
+      expect(text(html)).not.toContain("Devices");
+      expect(text(html)).not.toContain("Capacity");
+    });
   });
 });

@@ -127,6 +127,8 @@ function harness(
     readonly eventHistory?: Pick<EventHistory, "replay">;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
+    /** The gateway's own health; `running` by default. */
+    readonly health?: "starting" | "running" | "failed";
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -182,7 +184,7 @@ function harness(
         logger: new NoopLogger(),
         path: "/events.jsonl",
       }),
-    health: () => "running",
+    health: () => options.health ?? "running",
     host: GATEWAY_HOST,
     leaseIndex,
     // `classifyError`'s answer for the errors this dispatcher throws itself.
@@ -271,6 +273,28 @@ describe("GatewayDispatcher", () => {
     expect(status.workers).toHaveLength(1);
     expect(status.devices).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
+  });
+
+  it("status.get on a gateway whose health is starting returns daemon and host and no other field", async () => {
+    const { dispatcher, workers } = harness({ health: "starting" });
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: statusFixture().capacity,
+      devices: [deviceFixture("dev_1", "leased")],
+      health: "running",
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 0,
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(status.daemon).toEqual({
+      consoleUrl: "http://127.0.0.1:4700/",
+      health: "starting",
+      mode: "gateway",
+    });
+    expect(status.host).toEqual(GATEWAY_HOST);
   });
 
   it("status.get carries consoleUrl when HTTP is enabled and omits it when disabled", async () => {

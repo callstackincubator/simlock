@@ -2897,6 +2897,42 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
+  describe("against a starting daemon", () => {
+    // A starting daemon answers `status.get` with `daemon` and `host` only.
+    const STARTING = {
+      daemon: { health: "starting", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    } as unknown as StatusGetOutput;
+
+    it("simlock status prints the starting line and no device, lease or capacity line", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+    });
+
+    it("simlock status --json prints the answer with those fields absent", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+    });
+  });
+
   it("prints the host line", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
