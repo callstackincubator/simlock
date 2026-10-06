@@ -479,6 +479,14 @@ describe(
           expect(await onlineEmulators(adbServerPort), "no emulator came back online").toEqual([]);
 
           // The next boot is clean: each lease waits on a boot, is granted, and its device really is running.
+          // Which shut-down device of the kind a lease boots is the daemon's choice: any of them serves.
+          const shutdownBefore = (await devices(env)).filter((row) => row.state === "shutdown");
+          expect(
+            shutdownBefore.map((row) => row.id),
+            "the released devices are shut down before the second leases",
+          ).toEqual(
+            expect.arrayContaining([first.ios.grant.device.id, first.android.grant.device.id]),
+          );
           const second = {
             android: await lease(env, targets.android, "again-android"),
             ios: await lease(env, targets.ios, "again-ios"),
@@ -503,8 +511,10 @@ describe(
             ).not.toMatchObject({ source: "warm" });
             expect(
               second[platform].grant.device.id,
-              `${platform}: the second lease boots the device the first one released`,
-            ).toBe(first[platform].grant.device.id);
+              `${platform}: the second lease boots a device that was shut down`,
+            ).toBeOneOf(
+              shutdownBefore.filter((row) => row.spec.platform === platform).map((row) => row.id),
+            );
           }
           const rows = await devices(env);
           for (const { grant } of [second.ios, second.android]) {
