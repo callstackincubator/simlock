@@ -15,7 +15,11 @@ export async function events(
   since = "1h",
   timeout?: number,
 ): Promise<RecordedEvent[]> {
-  const result = await cli(["events", "--since", since], env, { timeout });
+  const result = await cli(
+    ["events", "--since", since],
+    env,
+    timeout === undefined ? {} : { timeout },
+  );
   if (result.code !== 0) {
     throw new Error(`simlock events failed (exit ${String(result.code)}): ${result.stderr}`);
   }
