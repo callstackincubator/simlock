@@ -602,6 +602,72 @@ describe("startDaemon wires core and leasing together", () => {
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
 
+  it("finishes leasing's startup before core's convergence re-arms a quarantined device's retry", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    let holdWrites = false;
+    let releaseWrite: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    class HoldingFilesystem extends MemoryFilesystem {
+      async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (holdWrites && arguments_[0] === statePath) await writeHeld;
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const filesystem = new HoldingFilesystem();
+    const options = (driver: FakeDriver) =>
+      ({
+        clock,
+        dataDirectory: directory,
+        drivers: [driver],
+        filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const failing = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    failing.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    // The previous process: a device left quarantined, and one request still open.
+    const first = await startDaemon(options(failing));
+    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    await first.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    await first.stop("test");
+    const previous = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "open-request" },
+      statePath,
+    });
+    await previous.createLeaseRequest({
+      ownerId: "agent-1",
+      request: ios,
+      requesterId: "agent-1",
+    });
+    // Leasing's startup settles the open request by writing the registry; hold that write.
+    holdWrites = true;
+
+    const starting = startDaemon(
+      options(new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })),
+    );
+    await settleRealTime();
+    const timersWhileLeasingStartupPending = clock.pendingTimerCount;
+    releaseWrite();
+    runningDaemons.push(await starting);
+    const timersAfterStartup = clock.pendingTimerCount;
+
+    // One timer is startup's own (nothing to do with devices). The quarantined device's retry
+    // timer is armed by core's convergence, which must not have begun.
+    expect(timersWhileLeasingStartupPending).toBe(1);
+    expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
+  });
+
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
     const clock = new FakeClock(1_000);
     const { daemon, driver, grant } = await leasedIos({
