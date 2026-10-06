@@ -306,9 +306,9 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
 
   /**
    * Every stored request that a live wait in `places` is driving, oldest first. A wait leaves
-   * `places` the moment it ends, before its result is written, so a settled request is never
-   * listed; nor is an open record no wait drives, such as one a restarted daemon has not settled
-   * yet.
+   * `places` when the queue resolves it, and a grant's commit comes first, so a granted request
+   * is listed for that short window with its result already stored. An open record no wait
+   * drives, such as one a restarted daemon has not settled yet, is not listed.
    */
   waiting(places: readonly QueuePlace[]): WaitingRequest[] {
     const byId = new Map(places.map((place) => [place.id, place]));

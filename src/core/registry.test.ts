@@ -467,7 +467,7 @@ describe("Registry", () => {
     ).rejects.toThrow(RegistryEventError);
   });
 
-  it("reloads a lease written for a request with the request granted, holding the grant its waiter received", async () => {
+  it("reloads a lease written for a request with the request granted, holding the leased device, environment, lease and timing it was written with", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
     const suffixes = ["device", "lease"];
@@ -516,7 +516,7 @@ describe("Registry", () => {
     expect(reloaded.leaseRequests()).toMatchObject([
       {
         grant: {
-          device: { id: device.id, state: "leased" },
+          device: reloaded.snapshot.devices[0],
           environment: { SIMLOCK_UDID: "abc" },
           lease,
           timing,
@@ -525,6 +525,7 @@ describe("Registry", () => {
         state: "granted",
       },
     ]);
+    expect(reloaded.snapshot.devices[0]).toMatchObject({ id: device.id, state: "leased" });
     expect(lease.id).toBe("lse_lease");
   });
 

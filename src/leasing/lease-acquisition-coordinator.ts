@@ -701,9 +701,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * The one place a `LeaseGrant` is built, which is why the lease environment is read
-   * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
-   * through it, so there is no second construction site to keep in step.
+   * Hands the waiter the grant `LeaseLifecycle.grant` returns, which is why the lease
+   * environment is read here: every acquisition path -- ready device, fresh provision, boot,
+   * eviction -- funnels through it. The grant is built in `LeaseLifecycle.grant` from the same
+   * fields `Registry.createLease` stores for a repeat of the request, so the two must stay equal.
    */
   async #grant(
     waiter: AcquisitionWaiter,

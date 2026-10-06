@@ -1399,7 +1399,8 @@ are:
 - `LeaseRequestBook` stores every lease request in the registry before the
   queue sees it, answers a repeat under the same `(requesterId,
   idempotencyKey)` with the stored result or the wait still open, and writes
-  the result once that wait settles. The HTTP request resource reads requests
+  the result once that wait settles, except for a grant: `Registry.createLease` writes
+  the granted result in the lease's own commit, and the book's later settle writes nothing. The HTTP request resource reads requests
   through it; a gateway's `FleetLeaseCoordinator` runs the same book over an
   in-memory store.
 - `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
