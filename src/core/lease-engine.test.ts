@@ -2833,8 +2833,8 @@ describe("LeaseEngine warm pool", () => {
         driver,
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
-          ios: { maxDevices: 2, maxRunning: 2 },
-          maxRunning: 2,
+          ios: { maxDevices: 3, maxRunning: 3 },
+          maxRunning: 3,
         },
         warmPoolEnabled,
       });
