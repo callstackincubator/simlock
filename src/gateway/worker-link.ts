@@ -273,7 +273,7 @@ export class WorkerLink {
         void subscription.then(
           (unsubscribe) => {
             this.#unsubscribeEvents = unsubscribe;
-            void this.refresh({ includeCatalog: true });
+            void this.refresh();
           },
           () => undefined,
         );
