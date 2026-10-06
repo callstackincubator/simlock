@@ -1384,6 +1384,21 @@ describe("warm pool targets", () => {
     expect(rig.resolveCalls).toEqual([]);
   });
 
+  it("does not count a claimed device as ready in the report of a target it cannot resolve", async () => {
+    let answer: TargetResolution = { spec: kind };
+    const rig = harness([ofKind("busy", "ready")], { resolve: () => answer, targets: [iphone17] });
+    await rig.pool.pass();
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ ready: 1 })]);
+
+    rig.claims.tryClaim("busy", "eviction");
+    answer = { message: "simctl timed out", refusal: "unresolvable" };
+    await rig.pool.pass();
+
+    expect(rig.pool.targets()).toEqual([
+      expect.objectContaining({ ready: 0, short: "unresolvable" }),
+    ]);
+  });
+
   it("does not pause a device after a failed target boot, so a keep boot of it a moment later is not dropped", async () => {
     const targets: WarmTarget[] = [iphone17];
     let attempts = 0;
