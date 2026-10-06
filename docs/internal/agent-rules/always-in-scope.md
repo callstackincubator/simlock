@@ -24,7 +24,7 @@ spec says otherwise in its own words, the spec wins.
 4. **A test for every new path.** Every new code path has a test that goes
    red when the path is deleted, fallbacks and error paths included (testing
    rule 3), and the test fails on a named assertion for the right reason
-   (testing rule 2). Every mutant `pnpm mutate` leaves alive is killed or
+   (testing rule 2). Every surviving mutant is killed or
    explained in the PR body (testing rule 3, delivery rule 15).
 5. **Tests that see their whole rule.** A test that enforces a boundary or
    invariant looks everywhere the rule covers, not only where the change
@@ -47,7 +47,7 @@ spec says otherwise in its own words, the spec wins.
    nothing imports. `main` takes no change whose Fallow check failed
    (DELIVERY.md, "`main` and releases").
 
-**CI proves the suite.** CI runs `pnpm check`, the console lane and Fallow
-on every push, and the merge gate refuses a PR whose checks are not green
-(delivery rule 15). So "nothing shows `pnpm check` is green" is never a
+**CI proves the suite.** CI runs the checks [toolchain.md](toolchain.md)
+lists on every push, and the merge gate refuses a PR whose checks are not
+green (delivery rule 15). So "nothing shows the suite is green" is never a
 finding, in a review or in a spec check.

@@ -8,16 +8,16 @@ background: true
 
 # Implement an issue
 
-Rules 3, 7, 9 and 13 in `docs/internal/agent-rules/delivery.md`, all of
-`docs/internal/agent-rules/testing.md`, and
-`docs/internal/agent-rules/always-in-scope.md` govern this agent. The issue
-body is the spec. You build exactly what it says, plus what
-`always-in-scope.md` lists; you do not claim, review, mark ready, or merge —
-the orchestrator does those.
+Rules in `docs/internal/agent-rules/`: `delivery.md` rules 3, 7, 9 and 13,
+all of `testing.md` and `always-in-scope.md`. Every command comes from
+`toolchain.md`.
 
-Arguments: the issue number, its branch (`<kind>/<N>`), the PR number once
-there is one, and the mode: `build`, or `fix` followed by finding lines to
-address. Anything else the orchestrator pasted is context.
+The issue body is the spec. Build exactly what it says, plus what
+`always-in-scope.md` lists. Do not claim, review, mark ready or merge.
+
+Arguments: the issue number, its branch `<kind>/<N>`, the PR number once
+there is one, and the mode: `build`, or `fix` followed by finding lines.
+Anything else is context.
 
 ## 1. Workspace
 
@@ -26,46 +26,42 @@ dir=$(.agents/scripts/worktree.sh <kind>/<N>)    # resumes origin/<kind>/<N> if 
 cd "$dir"
 ```
 
-If the worktree already exists (`git worktree list`), use it. For a bug
-whose branch does not exist yet, start from the reproduction instead:
-`.agents/scripts/worktree.sh <kind>/<N> origin/bug/<N>-repro`. A branch
-that already has commits: read `git log origin/main..` and the PR body's
-`### Status` lines, and continue from there.
+- A worktree for the branch already exists (`git worktree list`): use it.
+- A bug whose branch does not exist yet: start from the reproduction,
+  `.agents/scripts/worktree.sh <kind>/<N> origin/bug/<N>-repro`.
+- A branch with commits: read `git log origin/main..` and the PR body's
+  `### Status`, and continue from there.
 
 ## 2. Read the spec, and only the spec
 
-The issue body; for a task, its parent's body and the ADRs under Decisions;
-for a bug, the triage report (its Simplest fix is the agreed approach); the
-latest `## Handoff` comment, whose Findings are facts. Never the rest of the
-comment thread. Reread the files under Rules in play before touching the
-code they cover.
+Read the issue body; for a task, its parent's body and the ADRs under
+Decisions; for a bug, the triage report (its Simplest fix is the agreed
+approach); the latest `## Handoff` comment (its Findings are facts). Never
+the rest of the comment thread. Reread the files under Rules in play before
+touching the code they cover.
 
 **A small gap is an assumption, not a stop** (rule 3). When the body, the
-agent rules, the accepted ADRs and `always-in-scope.md` all leave a small
-question open — a wording, an order, a bound the spec implies but does not
-number, which existing helper to reuse — take the conservative option: the
-smallest change, the one that matches existing behaviour, the one easiest
-to undo. Build it, and record it in the PR body's `## Assumptions` section,
-one line each:
+rules, the accepted ADRs and `always-in-scope.md` leave a small question
+open (a wording, an order, a bound the spec implies but does not number,
+which helper to reuse), take the conservative option: the smallest change,
+the one that matches existing behaviour, the one easiest to undo. Build it
+and add one line to the PR body's `## Assumptions`:
 
 ```markdown
 - Assumption: <the question, in a few words> — <what you chose and why it is the conservative option>.
 ```
 
-An assumption is a visible proposal, not a spec change: the spec review
-checks every line, and the maintainer may reject one.
-
 Stop only when building would contradict the body, a rule or an accepted
-ADR, or would change behaviour a user sees in a way nobody decided. Then
-push what you have and report it under Open as `spec needs: <line>`. Do not
-work around it.
+ADR, or would change behaviour a user sees in a way nobody decided. Push
+what you have and report `spec needs: <line>` under Open. Do not work
+around it.
 
 ## 3. Red tests first (`build` mode)
 
-Write one test per line under Tests (for a bug, the triage test already
-exists). Each title is the claim from the spec, word for word where it
-fits. Run them; each must fail on a named assertion for the reason the spec
-gives, not on a typo or a timeout (testing rule 2). Then:
+Write one test per line under Tests (a bug's triage test already exists).
+Each title is the spec's claim, word for word where it fits. Run them: each
+fails on a named assertion, for the reason the spec gives, not on a typo or
+a timeout (testing rule 2). Then:
 
 ```bash
 git add <test files> && git commit -m "test: <issue title, imperative> (#<N>)"
@@ -73,128 +69,96 @@ git push -u origin <kind>/<N>
 gh pr create --draft --title "<type>(<scope>): <summary>" --body-file <scratch>/pr.md
 ```
 
-The PR body starts with `Closes #<N>`, then a `### Status` section the
-orchestrator keeps current, then the Done when lines as an unchecked list,
-then `## Assumptions` ("none", or one `- Assumption:` line per gap you
-closed), and ends with `*Written by an agent.*`. Keep that section current
-as you go, so a resumed run sees it.
+The PR body, in this order: `Closes #<N>`; a `### Status` section the
+orchestrator keeps current; the Done when lines as an unchecked list;
+`## Assumptions` ("none", or one `- Assumption:` line per gap); the line
+`*Written by an agent.*`. Keep it current as you go.
 
 ## 4. Green in checkpoints
 
-Implement the smallest change that turns the next test green. Each commit
-lowers the failing count and says so in its body: `3 failing -> 1 failing`.
+Make the smallest change that turns the next test green. Each commit body
+states the failing count: `3 failing -> 1 failing`.
 
-**You run tests, and only tests; the hooks run every other check when its
-time comes.** Two commands, nothing else:
-
-```bash
-pnpm test:changed                # unit tests that import what this branch changed
-pnpm test:e2e <e2e files>        # only the e2e files you added or edited
-```
-
-Never run `pnpm check`, `pnpm test`, `pnpm typecheck`, `pnpm lint`,
-`pnpm format:check`, `pnpm fallow`, `pnpm mutate`, the whole e2e suite or
-the console lane, and never the tools behind them either (`tsc`, `oxlint`,
-`oxfmt`, `fallow`, `stryker`, from `node_modules/.bin` or anywhere else): a
-type or lint error shows up in the commit hook's output.
-Commit runs format, lint and typecheck. Push runs Fallow, the e2e typecheck
-and `pnpm mutate` on the lines this branch changed; it takes minutes, so run
-`git push` in the background and read its output when it ends. CI runs the
-full suite on every push. Never pass `--no-verify` or `-n`. Push once per
-step, not after every commit, and never in the foreground.
-
-Never wait on CI: do not poll `gh pr checks`, `gh run watch` or loop with
-`sleep`. Read `gh pr checks <M>` at most once, before the report, and only to
-report what it already says.
-
-Never use `git stash`: every worktree shares one stash list, so a `pop` can
-apply another branch's work. Commit instead. Temporary files go in your
-scratchpad, not `/tmp`.
-
-Build what `always-in-scope.md` lists as you go: both `EVENTS.md` files for
-a new or changed event; a search of `README.md`, `docs/` and every
-user-facing string (help text, error messages, HTTP error bodies) for claims
-your change makes false, fixed in the same branch; a test for every new
-path, fallbacks included; a `.fallowrc.json` entry for a new file nothing
-imports. Do not widen scope beyond that list: something you notice that is
-not in the spec becomes a `bug:new` issue or one line under Open.
+- Run only the commands under "Tests agents run" in `toolchain.md`: the
+  changed unit tests, and the e2e files you added or edited. Never run a
+  check listed under "Checks agents never run", nor a tool behind it, from
+  any path. A type or lint error shows in the commit hook's output.
+- Push once per step, not after every commit, in the background, and read
+  its output when it ends. Never pass `--no-verify` or `-n`.
+- Never wait on CI: no polling `gh pr checks`, no `gh run watch`, no
+  `sleep` loops. Read `gh pr checks <M>` at most once, before the report.
+- Never use `git stash`: all worktrees share one stash list. Commit instead.
+  Temporary files go in your scratchpad, not `/tmp`.
+- Build what `always-in-scope.md` lists as you go. Anything else you notice
+  outside the spec becomes a `bug:new` issue or one line under Open.
 
 ## 5. Prove it
 
-**Audit the diff before the reviewers do.** Read `git diff origin/main`
-as someone who has not seen the spec, and answer four questions. Each miss
-here has cost a review round before.
+**Audit `git diff origin/main`** as someone who has not seen the spec:
 
-- **What did I take away?** For every name, behaviour, limit or guarantee
-  the diff removes, renames or narrows, search the whole repo (code
-  comments, `docs/` including `docs/internal/`, test titles, config, help
-  text) by its name and by the plain words that describe it. Fix every line
-  that now states the old fact. Your change is not done while the repo
-  still describes the old world.
-- **What did I replace?** When one mechanism takes over another's job (a
-  lint rule for a test, a type for a runtime check, a new module for an old
-  one), list the cases the old one caught and prove each against the new
-  one before deleting the old. A case the new one misses is a gap, not a
-  cleanup.
-- **What does the new code accept that it should not?** For every rule,
-  pattern, filter or validator you add, try the inputs a careless or
-  creative caller would use: other spellings, other paths, other import or
-  call forms, empty and boundary values. Each one it lets through either
-  gets a fixture or an `Open:` line.
-- **What did I promise?** Walk every Scope and Done when line and name the
-  hunk or test that delivers it. A line you cannot point to is not done:
-  do it, or leave it unticked and say why under Open. Never tick a box on
-  intent.
+- **Removed.** For every name, behaviour, limit or guarantee the diff
+  removes, renames or narrows, search the whole repo (comments, docs, test
+  titles, config, help text) by its name and by the plain words that
+  describe it. Fix every line that still states the old fact.
+- **Replaced.** When one mechanism takes over another's job (a lint rule for
+  a test, a type for a runtime check, a new module for an old one), list the
+  cases the old one caught and prove each against the new one before
+  deleting the old. A case the new one misses is a gap.
+- **Accepted.** For every rule, pattern, filter or validator you add, try
+  other spellings, other paths, other import or call forms, empty and
+  boundary values. Each one it lets through gets a fixture or an `Open:`
+  line.
+- **Promised.** For every Scope and Done when line, name the hunk or test
+  that delivers it. None: do it, or leave the line unticked and say why
+  under Open. Never tick a box on intent.
 
-**Check your own tests**, the way the reviewers will. For each test you
-added or changed, including every test whose setup or assertions you
+**Check every test you added or changed**, including setup or assertions
 edited after the red commit:
 
-- Its title, its assertions and its fixture state make the same claim. A
-  title naming two claims has an assertion for each.
+- Its title, assertions and fixture state make the same claim. A title with
+  two claims has an assertion for each.
 - Break the code it covers once (flip the condition, drop the filter, return
-  early) and run that test file: it must fail on the assertion its title
-  names. Restore the code. A test that stays green is vacuous; fix it now.
-- A test that compares two outputs fails when both are wrong in the same
-  way: assert one of them against a literal.
+  early) and run its file: it fails on the assertion its title names.
+  Restore the code. A test that stays green is vacuous: fix it.
+- A test comparing two outputs also asserts one of them against a literal.
 
-If the diff changed a schema, a contract type or a validator, rerun the
-tests of every surface that publishes it (MCP `tools/list`, HTTP error
-bodies, CLI help) — a refinement can empty a published schema while every
-unit test stays green.
+Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
+tests from step 4 pass, and you push.
 
-Then `pnpm test:changed` and the e2e files you touched must pass, and you
-push. A failing test you did not touch, locally or in a CI run that has
-already failed (`gh run view <id> --log-failed`):
-if an open `flaky-test` issue names it (`gh issue list --label flaky-test
---search "<title>"`), list it under Flaky and move on. Otherwise apply
-testing rule 5 to that one file: run `pnpm vitest run <file>` in a worktree
-of the base commit (`git worktree add <scratch>/base origin/main`), up to
-three times. If it fails there, open a `bug:new` issue labelled
-`flaky-test` naming the file, the title and the error line, list it, and
-move on. If it never fails there, it is yours. Do not stash your work or
-re-run the whole suite or the whole e2e project to decide. Never skip,
-disable or loosen a test.
+**A failing test you did not touch**, locally or in a failed CI run
+(`gh run view <id> --log-failed`):
 
-The push output lists every mutant left alive. Each is a line you can
-change or delete with a green suite. Write the test that kills it, or delete the line if it
-does nothing. A mutant that cannot be killed because it changes nothing
-observable (an equivalent mutant) goes in the report with the reason.
+1. An open `flaky-test` issue names it
+   (`gh issue list --label flaky-test --search "<title>"`): list it under
+   Flaky and move on.
+2. Otherwise run that one file up to three times in a worktree of the base
+   commit (`git worktree add <scratch>/base origin/main`), with the
+   one-file command from `toolchain.md` (testing rule 5). It fails there:
+   open a `bug:new` issue labelled `flaky-test` naming the file, the title
+   and the error line, list it, and move on. It never fails there: it is
+   yours.
 
-Note every Done when line that needs a real simulator or emulator; the
-orchestrator runs those through the `verify-hardware` skill. Do not run the
-slow lane yourself.
+Never rerun the whole suite to decide. Never skip, disable or loosen a test.
+
+**Mutants.** The push output lists every mutant left alive. Kill each with
+a test, or delete the line if it does nothing. A mutant that changes nothing
+observable (equivalent) goes in the report with the reason.
+
+**Slow lane.** List every Done when line that needs the slow lane
+(`toolchain.md`) under Hardware. Do not run it: the orchestrator does.
 
 ## 6. Fix mode
 
-Each finding line is a defect someone verified. For one that changes
-behaviour, write the test that fails first, then the fix; for a stale doc or
-comment, just fix it. A line ending in `(record as Assumption: ...)` also
-adds that assumption to the PR body. A hardware Evidence line is a failing
-slow-lane test: fix the code, not the test. One commit per finding or per
-closely related group. Then step 5 again, including the audit (a fix
-removes or renames things too) and the self-check on every test the fix
-touched: a fix that leaves a test vacuous costs a review round.
+Each finding line is a verified defect.
+
+- Behaviour: write the failing test first, then the fix.
+- Stale doc or comment: fix it.
+- A line ending in `(record as Assumption: ...)`: also add that assumption
+  to the PR body.
+- A slow-lane Evidence line is a failing test: fix the code, not the test.
+
+One commit per finding or closely related group. Then step 5 again: the
+audit, and the test check on every test the fix touched.
 
 ## Report
 
@@ -204,9 +168,9 @@ End with exactly this block, nothing after it:
 Issue: #N  Branch: <kind>/<N>  PR: #M (draft)
 Tests: k of n spec tests green (red commit <short sha>)
 Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
-Run: test:changed pass | fail (<what failed>); CI <pass | fail | running | not checked>
+Run: tests pass | fail (<what failed>); CI <pass | fail | running | not checked>
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
-Hardware: <Done when lines that need real devices, or "none">
+Hardware: <Done when lines that need the slow lane, or "none">
 Flaky: <test title — #issue per line, or "none">
 Assumptions: <n, as listed in the PR body, or "none">
 Open: <"spec needs: ..." lines, blockers, or "none">

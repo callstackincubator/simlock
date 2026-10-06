@@ -8,9 +8,9 @@ background: true
 
 # Triage a bug
 
-You produce a report, not a fix. Rule 8 in `docs/internal/agent-rules/delivery.md`
-defines the report; `docs/internal/agent-rules/testing.md` defines what a reproduction
-is worth.
+You produce a report, not a fix. Rules in `docs/internal/agent-rules/`:
+`delivery.md` rule 8 defines the report, `testing.md` what a reproduction
+is worth, `toolchain.md` the commands.
 
 Argument: an issue number. Without one, take the oldest:
 
@@ -20,15 +20,14 @@ gh issue list --label bug:triage --search 'no:assignee' --json number,title --jq
 
 ## 1. Claim
 
-Check the issue carries exactly `bug:triage` and has no assignee. If either
-is false, stop and say so. Otherwise:
+The issue must carry exactly `bug:triage` and have no assignee. Otherwise
+stop and say why. Then:
 
 ```bash
 gh issue edit <N> --add-assignee @me
 ```
 
-Then look for a previous attempt and continue from it rather than repeating
-it:
+Continue from a previous attempt, if any, rather than repeating it:
 
 ```bash
 gh issue view <N> --json comments --jq '[.comments[] | select(.body | startswith("## Handoff"))] | last | .body'
@@ -37,32 +36,29 @@ git fetch origin bug/<N>-repro 2>/dev/null && git log --oneline origin/bug/<N>-r
 
 ## 2. Reproduce
 
-Read the body and the comment thread. The reporter may already have done
-part of the analysis; the report confirms or corrects what the body says
-and adds only what is new. Write a test in the project that can prove it — a unit test when the behaviour is in-process, an e2e test when it
-needs a daemon. The test must fail on a named assertion, not a timeout. Run
-it and keep the failing output.
+Read the body and the comment thread. The report confirms or corrects what
+the reporter already found and adds only what is new.
 
-The title is the claim the test proves: the bug's claim narrowed to what
-this process can observe. What the OS or a tool outside Simlock does is
-evidence for the report, never part of the title. "Reports assets that
-outlive `simctl runtime delete`" claims a delete the test never runs;
-"reports downloaded runtime assets for runtimes not in the catalog" is what
-the body shows.
+Write a test that proves the bug: a unit test when the behaviour is
+in-process, an e2e test when it needs the running service. It fails on a
+named assertion, not a timeout. Run it and keep the failing output.
 
-Assert the whole claim. Every case the fixture sets up appears in the
-expectation, so a fix that does less than the report proposes fails the
-test. Two orphan builds in the fixture means two builds in the assertion.
+- **Title** = the bug's claim narrowed to what this process can observe.
+  What the OS or an outside tool does is evidence for the report, never part
+  of the title. Wrong: "reports assets that outlive `<tool> delete`" when
+  the test never runs that delete. Right: "reports downloaded assets for
+  entries not in the catalog", which the body shows.
+- **Assert the whole claim.** Every case the fixture sets up appears in the
+  expectation, so a fix that does less than the report proposes fails. Two
+  orphans in the fixture means two in the assertion.
 
-Read-only inspection of the host — listing a directory, reading a plist,
-running `df` — is fine and often the fastest evidence. Say what you read.
-Do not run the slow e2e lane or anything that starts real simulators or
-emulators: you run as a background agent, with nobody to ask. Go as far as the fake driver
-allows. If only a real device reproduces it, stop and hand off (Stopping
-early) with Blocked on: "a real-device run of <test>", which the maintainer
-runs with the `verify-hardware` skill.
+Read-only inspection of the host (listing a directory, reading a config
+file, `df`) is allowed and often the fastest evidence; say what you read.
+Never run the slow lane (`toolchain.md`). If only the slow lane reproduces
+it, stop and hand off (Stopping early) with Blocked on: "a slow-lane run of
+<test>", which the maintainer runs with the `verify-hardware` skill.
 
-If you cannot reproduce after a genuine attempt:
+Cannot reproduce after a genuine attempt:
 
 ```bash
 gh issue comment <N> --body "<what you tried, and exactly what information would let you reproduce it>
@@ -76,22 +72,24 @@ and stop.
 ## 3. Find the root cause
 
 Follow the failing assertion back to the line that makes it fail. Name the
-file and line. Distinguish the root cause from the place the symptom shows
-up.
+file and line. Separate the root cause from where the symptom shows.
 
-Say first which of three things this is:
+Say first which of three this is:
 
-- **Defect**: Simlock does the wrong thing. The test's expectation is the
+- **Defect**: the code does the wrong thing. The test's expectation is the
   right behaviour.
-- **Gap**: Simlock does nothing wrong and something is missing. The test's
-  expectation is a proposal — say so in Reproduction, and put the shape it
-  pins (a code, a message, a field) under Simplest fix so the maintainer can
-  reject the shape without rejecting the reproduction. A gap that needs more
-  than one PR is a feature: recommend a spec session and stop there.
-- **Decision**: the code does what an ADR says and the ADR is wrong. Say so;
-  that bug becomes a feature with a superseding ADR, not a fix.
+- **Gap**: nothing is wrong; something is missing. The test's expectation
+  is a proposal: say so in Reproduction, and put the shape it pins (a code,
+  a message, a field) under Simplest fix, so the maintainer can reject the
+  shape and keep the reproduction. A gap that needs more than one PR is a
+  feature: recommend a spec session and stop there.
+- **Decision**: the code does what an ADR says and the ADR is wrong. That
+  bug becomes a feature with a superseding ADR, not a fix.
 
 ## 4. Push the reproduction
+
+Only the test goes on this branch: no fix, no pull request. Branch from
+`origin/main`, not `main` (rule 13):
 
 ```bash
 git fetch origin
@@ -101,10 +99,8 @@ git commit -m "test: reproduce #<N> — <claim>"
 git push -u origin bug/<N>-repro
 ```
 
-Only the test goes on this branch. No fix, no pull request. You are
-probably in a worktree (rule 13): branch from `origin/main`, not `main`,
-and if `bug/<N>-repro` is already held by another checkout, branch from
-`origin/bug/<N>-repro` under a temporary name and push to the real one:
+If another checkout holds `bug/<N>-repro`, branch from it under a temporary
+name and push to the real one:
 
 ```bash
 git switch -c wip/<N>-repro origin/bug/<N>-repro && git push origin HEAD:bug/<N>-repro
@@ -112,8 +108,8 @@ git switch -c wip/<N>-repro origin/bug/<N>-repro && git push origin HEAD:bug/<N>
 
 ## 5. Side findings
 
-A separate problem found on the way — a stale doc, a wrong error reason,
-another bug — is its own issue, not a paragraph in the report:
+A separate problem found on the way (a stale doc, a wrong error reason,
+another bug) is its own issue, not a paragraph in the report:
 
 ```bash
 gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<what you saw, file:line, found while triaging #<N>>
@@ -121,17 +117,12 @@ gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<
 *Written by an agent.*"
 ```
 
-List each one as a link under Side findings. The maintainer decides what
-happens to it.
+List each as a link under Side findings.
 
 ## 6. Report and release
 
-You run as a background agent, so post directly; the maintainer reads the report before
-deciding anything.
-
-Post one comment with exactly these sections, then unassign. If a report
-already exists on the thread, yours replaces it: make the first line
-`Supersedes the report above.` so the maintainer knows which one is current.
+Post one comment with exactly these sections. If a report is already on the
+thread, yours replaces it: its first line is `Supersedes the report above.`
 
 ```markdown
 ## Reproduction
@@ -161,28 +152,25 @@ already exists on the thread, yours replaces it: make the first line
 _Written by an agent._
 ```
 
-The report exists for one decision: `bug:ready` or not. Rule 12 applies:
-300 words outside code blocks, conclusion first, short sentences, plain
-words, evidence in code blocks. Root cause is one paragraph. If it runs
-long, cut what does not change the decision.
+The report serves one decision: `bug:ready` or not. Rule 12: 300 words
+outside code blocks, conclusion first, evidence in code blocks. Root cause
+is one paragraph.
 
 ```bash
 gh issue edit <N> --remove-assignee @me
 ```
 
-Leave the label at `bug:triage`. Moving it to `bug:ready` is the
-maintainer's decision after reading the report.
+Leave the label at `bug:triage`: `bug:ready` is the maintainer's decision.
 
 ## Stopping early
 
-If you stop before the report is posted — out of context, told to stop,
-needing a real-device run — push whatever is on
-`bug/<N>-repro`, leave one comment headed `## Handoff` with Done, Not done,
-Findings and Blocked on, and unassign yourself. Findings is where a partial
-root cause or a rejected hypothesis goes so the next agent does not redo it.
-If you are waiting on the maintainer, also move the issue to `bug:blocked`
-so no other agent starts the same triage; the maintainer re-adds
-`bug:triage` when the answer is in:
+Stopping before the report is posted (out of context, told to stop, needing
+a slow-lane run): push whatever is on `bug/<N>-repro`, leave one
+`## Handoff` comment (Done, Not done, Findings, Blocked on), and unassign
+yourself. Findings holds a partial root cause or a rejected hypothesis, so
+the next agent does not redo it. Waiting on the maintainer: also move the
+issue to `bug:blocked`; the maintainer re-adds `bug:triage` when the answer
+is in:
 
 ```bash
 gh issue edit <N> --add-label bug:blocked --remove-label bug:triage

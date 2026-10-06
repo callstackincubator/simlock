@@ -5,6 +5,6 @@ description: Check a feature or task spec as posted on GitHub, with a fresh cont
 
 Arguments: $ARGUMENTS
 
-1. **Title.** Rename this session with `mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it with ToolSearch first). If the tool is missing or the rename is declined, carry on without it: the title is a courtesy, never a reason to stop or ask. Title: `[Spec check #N] <issue title>`, its title read with `gh issue view` or `gh pr view`. If the arguments name no issue or PR, skip this step.
-2. **Run.** Start the `spec-checker` agent with the Agent tool: `subagent_type: "spec-checker"`, the arguments above as its whole prompt, no model. It starts without this conversation and runs on the model its frontmatter in `.claude/agents/spec-checker.md` pins. Do not do its work yourself.
-3. **Report.** Wait for it to finish, then print its report block exactly as it returned it, with nothing added.
+1. **Title.** Rename this session with `mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it with ToolSearch first) to `[Spec check #N] <issue title>`, read with `gh issue view` or `gh pr view`. Skip this step when the arguments name no issue or PR, or the tool is missing or declined: the title never stops the run.
+2. **Run.** Start the `spec-checker` agent with the Agent tool: `subagent_type: "spec-checker"`, the arguments above as its whole prompt, no model. Do not do its work yourself.
+3. **Report.** When it finishes, print its report block exactly as returned, with nothing added.

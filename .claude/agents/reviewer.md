@@ -130,7 +130,7 @@ and break things without touching anyone else's checkout:
 ```bash
 W="$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/worktrees/review-<PR>"
 git fetch origin <branch> && git worktree add --detach "$W" origin/<branch>
-.agents/scripts/worktree.sh --prepare "$W"     # node_modules in seconds, pinned pnpm
+.agents/scripts/worktree.sh --prepare "$W"     # makes the worktree buildable
 ```
 
 The reviewer reads `$R/diff.patch` and `$R/rules/`, and nothing else under
@@ -144,12 +144,11 @@ issue this diff implements; judge the code, not the intent.
 Rules: <path to $R/rules/>. Diff: <path>. Repository: <worktree path>,
 checked out at the reviewed commit.
 
-Prove a claim with the affected test file only:
-`pnpm exec vitest run --project unit <file>` for a unit test, or
-`pnpm run build && pnpm run build:e2e && pnpm exec vitest run --project e2e <file>`
-for a fast e2e test. Do not run `pnpm check`, `pnpm test`, `pnpm mutate`,
-the whole e2e suite, the console lane (`pnpm test:console`) or the slow
-lane: the git hooks and CI already ran them on this commit.
+Prove a claim with the affected test file only, using the one-file
+commands under "Tests agents run" in the rules directory's
+`toolchain.md`. Run nothing
+listed there under "Checks agents never run", and never the slow lane: the
+git hooks and CI already ran them on this commit.
 
 You may break code to see what a test catches, at most three times in this
 review, on your riskiest claims: a changed error path, a bound, a parser,
@@ -193,7 +192,7 @@ Keep the code review's worktree until step 3 is done, then remove it:
 
 A blocking finding is a claim, not a fact. For each one, reproduce its
 evidence yourself: read the cited lines, or run the cited command in `$W`,
-one test file at a time and never `pnpm check`. Then decide:
+one test file at a time, with the commands in `toolchain.md`. Then decide:
 
 - **Confirmed**: it goes under Fix in the report, as `path:line what is
 wrong`, written so it makes sense without the PR open.
