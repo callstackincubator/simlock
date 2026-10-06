@@ -1379,6 +1379,39 @@ describe("Registry", () => {
         }),
       ).rejects.toThrow("Invalid device record in registry state");
     });
+
+    it("rejects a non-string address when loading persisted state", async () => {
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        statePath,
+        JSON.stringify({
+          devices: [
+            {
+              createdAt: 500,
+              address: 7,
+              driverData: {},
+              driverDeviceId: "driver_bad",
+              id: "dev_bad",
+              spec,
+              state: "reclaiming",
+            },
+          ],
+          leases: [],
+        }),
+      );
+
+      await expect(
+        Registry.load({
+          clock,
+          eventBus: new EventBus(clock),
+          filesystem,
+          idGenerator: { generate: () => "new" },
+          statePath,
+        }),
+      ).rejects.toThrow("Invalid device record in registry state");
+    });
   });
 
   it("writes a device the same way whether it is marked missing alone or together with its lease's end", async () => {
