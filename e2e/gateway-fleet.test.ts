@@ -757,9 +757,22 @@ describe("gateway fleet", () => {
       "the worker connected with its catalog",
     );
     const lease = (agentId: string, extra: readonly string[]) =>
-      gateway.cli(["lease", "--platform", "ios", "--agent-id", agentId, "--detach", ...extra], {
-        timeout: 30_000,
-      });
+      gateway.cli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16 Pro",
+          "--agent-id",
+          agentId,
+          "--detach",
+          ...extra,
+        ],
+        {
+          timeout: 30_000,
+        },
+      );
 
     const chosen = await lease("agent-a", ["--lease-id", "ad-7f3a"]);
     expect(chosen.code, chosen.stderr).toBe(0);
