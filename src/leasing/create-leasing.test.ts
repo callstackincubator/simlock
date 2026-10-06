@@ -3654,7 +3654,11 @@ describe("createLeasing a lease ID chosen by the requester", () => {
   it("a second request for an ID held by a waiting request fails with LEASE_ID_TAKEN", async () => {
     const harness = await withWaiting("agent-2", "myid");
 
-    await expect(harness.engine.request(request, asking("agent-3", "myid"))).rejects.toMatchObject({
+    const clash = harness.engine.request(request, asking("agent-3", "myid"));
+    void clash.catch(() => undefined);
+
+    // Settled at once: a request that was let in would wait for the one device instead.
+    await expect(settledOrPending(clash)).resolves.toMatchObject({
       leaseId: "myid",
       name: "LeaseIdTakenError",
     });
@@ -3689,7 +3693,7 @@ describe("createLeasing a lease ID chosen by the requester", () => {
 
   it("lease.requested and lease.rejected requestSpec, and the status waiting spec, carry no leaseId", async () => {
     const harness = await withWaiting("agent-2", "myid");
-    await harness.engine.request(request, asking("agent-3", "myid")).catch(() => undefined);
+    await settledOrPending(harness.engine.request(request, asking("agent-3", "myid")));
 
     const requested = harness.bus.replay().filter((event) => event.event === "lease.requested");
     const rejected = harness.bus.replay().filter((event) => event.event === "lease.rejected");

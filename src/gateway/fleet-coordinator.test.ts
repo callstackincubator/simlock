@@ -3607,6 +3607,20 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
     return (client.lastRequestLeaseInput as Record<string, unknown> | undefined)?.leaseId;
   }
 
+  /** A new answer from the worker `oneWorker` connected, as a periodic refresh brings one. */
+  function refreshWorker(workers: WorkerRegistry, capacity: ReturnType<typeof roomierIos>): void {
+    workers.refresh("wrk_a", {
+      capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      downloads: { policy: "on-request" },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+  }
+
   function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
     const fleet = harness(overrides);
     const client = new ScriptedWorkerClient();
@@ -3741,6 +3755,30 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
     expect(outcome.state).toBe("pending");
     expect(coordinator.queueDepth).toBe(1);
     expect(JSON.stringify(logger.warnings)).toContain("wrk_a");
+  });
+
+  it("a worker that answered a grant under another ID is not asked again until its view changes, then is, and the right grant settles the request", async () => {
+    const { client, coordinator, workers } = oneWorker();
+    client.requestLeaseQueue.push(
+      { grant: chosenGrant("not-what-was-sent"), kind: "grant" },
+      { grant: chosenGrant("myid"), kind: "grant" },
+    );
+    const request = coordinator.request(REQUEST, chosen("myid"));
+    const outcome = promiseState(request);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    // The same view again: nothing changed, so the worker is left alone.
+    refreshWorker(workers, statusFixture().capacity);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    // A changed view: it is asked again, and this time answers with the ID it was given.
+    refreshWorker(workers, roomierIos());
+    await tick();
+    expect(outcome.state).toBe("fulfilled");
+    await expect(request).resolves.toMatchObject({ lease: { id: "myid" } });
+    expect(leaseRequests(client)).toHaveLength(2);
   });
 
   it("the gateway answers UNKNOWN_LEASE for a renew of an ID missing from its index", async () => {
