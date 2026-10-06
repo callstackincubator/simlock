@@ -81,6 +81,7 @@ describe("the workers views", () => {
       ownerId: "agent",
       requesterId: "agent",
       ttlDeadline: NOW + 60_000,
+      idChosenByRequester: false,
       ttlMs: 185_000,
     };
     // The worker answered 10 seconds ago, when the provisioning device was 4 seconds in.
@@ -159,6 +160,7 @@ describe("the busiest workers", () => {
       ownerId: "agent",
       requesterId: "agent",
       ttlDeadline: NOW + 60_000,
+      idChosenByRequester: false,
       ttlMs: 60_000,
     });
     const fleet = [
@@ -194,6 +196,7 @@ describe("the busiest workers", () => {
       ownerId: "agent",
       requesterId: "agent",
       ttlDeadline: NOW + 60_000,
+      idChosenByRequester: false,
       ttlMs: 60_000,
     };
     // A gateway's view of a starting worker: its health and host, and nothing else it reports.

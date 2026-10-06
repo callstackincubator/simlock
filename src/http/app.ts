@@ -8,6 +8,7 @@ import {
   describeSchemaIssues,
   refuseModelWithClass,
   deviceClassSchema,
+  leaseIdSchema,
   imageTagSchema,
 } from "../contract/index.js";
 import { parseDurationMs } from "../contract/duration.js";
@@ -96,6 +97,8 @@ const leaseRequestBodySchema = z
     class: deviceClassSchema.optional(),
     device: z.string().min(1).optional(),
     imageTag: imageTagSchema.optional(),
+    // ADR 0020: the lease ID the requester chooses. Shape and bounds are the contract's own.
+    leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
     noWait: z.boolean().optional(),
     // ADR §27a (H7, round 2 review): declared and forwarded, not silently dropped -- the shared
@@ -181,6 +184,7 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
+    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
   };
 }
 

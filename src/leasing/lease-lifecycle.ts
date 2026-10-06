@@ -19,6 +19,7 @@ export interface LeaseLifecycleRegistry {
     readonly ownerId: string;
     readonly ttlMs: number;
     readonly ttlDeadline: number;
+    readonly leaseId?: string;
     readonly request?: {
       readonly id: string;
       readonly environment: LeaseGrant["environment"];
@@ -75,6 +76,9 @@ export class LeaseLifecycle {
      * none. Whatever it resolves to is stored on the record, because that is what a later
      * body-less renew re-applies. */
     readonly ttlMs?: number;
+    /** ADR 0020: the lease ID the requester chose, when it did. The caller has already refused one
+     * that is in use. */
+    readonly leaseId?: string;
   }): Promise<LeaseGrant> {
     const { ttlMs, requestId, environment, timing, source, ...createInput } = input;
     const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;

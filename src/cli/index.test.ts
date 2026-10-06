@@ -82,6 +82,7 @@ const detachedGrant: LeaseGrant = {
     ownerId: "test-requester",
     grantedAt: 0,
     lastRenewedAt: 0,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 61_000,
   },
@@ -391,6 +392,7 @@ describe("CLI: exit codes", () => {
       grantedAt: 0,
       id: "lse_mine",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "some-other-principal",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -2584,6 +2586,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
         grantedAt: 1,
         id: "lease_1",
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ownerId: "agent-1",
         requesterId: "agent-1",
         ttlDeadline: 2,
@@ -2886,6 +2889,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           grantedAt: 1,
           id: "lease_1",
           lastRenewedAt: 1,
+          idChosenByRequester: false,
           ownerId: "agent-1",
           requesterId: "agent-1",
           ttlDeadline: 2,
@@ -3543,6 +3547,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3598,6 +3603,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3648,6 +3654,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3710,6 +3717,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3755,6 +3763,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 30_000,
         });
@@ -3858,6 +3867,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: clock.now(),
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         }),
@@ -4245,6 +4255,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -4315,6 +4326,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         });
@@ -5039,6 +5051,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       ownerId: "test-requester",
       grantedAt: 0,
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ttlMs: 60_000,
       ttlDeadline: 60_000,
     },
@@ -5549,6 +5562,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
       grantedAt: 0,
       id: "lse_1",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "test-requester",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -5607,7 +5621,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );

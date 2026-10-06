@@ -1,3 +1,4 @@
+import { LEASE_ID_PATTERN } from "../contract/index.js";
 import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
@@ -7,8 +8,9 @@ import { NoopLogger } from "../ports/index.js";
  * worker reports (`rebuildFromWorker`) whenever the gateway can see it, which is what makes a
  * gateway restart lose nothing a worker restart would not also lose (Decision 5).
  *
- * A gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) and never
- * re-derived by splitting the string back apart -- every lookup in this class goes through the
+ * A gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) -- or, for
+ * a lease whose requester chose its id (ADR 0020), as that id bare, routed by this index alone --
+ * and never re-derived by splitting the string back apart -- every lookup in this class goes through the
  * map this index keeps, keyed by the id it minted or by the `(workerId, workerLeaseId)` pair a
  * relayed worker event carries. The "split on the first `.`" the ADR describes is what makes the
  * id *routable in principle* (a worker id is a UUID, so it can never itself contain the
@@ -35,6 +37,8 @@ export interface WorkerReportedLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  /** ADR 0020: whether the requester chose `id`. Absent, the id is a generated one. */
+  readonly idChosenByRequester?: boolean;
 }
 
 /** A lease record projected for a fleet client: rewritten to the gateway's id and fleet-level
@@ -132,12 +136,19 @@ export class FleetLeaseIndex {
     return this.#byRequester.get(requesterId);
   }
 
-  /** Records a lease this gateway just granted. Idempotent by `gatewayLeaseId`: granting twice
-   * under the same id (it never happens outside a test) replaces rather than duplicates. */
-  add(entry: FleetLeaseEntry): void {
+  /**
+   * Records a lease this gateway just granted. Idempotent by `gatewayLeaseId` for one worker:
+   * granting twice under the same id (it never happens outside a test) replaces rather than
+   * duplicates. A bare id (ADR 0020) belongs to the worker that first held it: another worker's
+   * entry under it is not added, and `false` says so.
+   */
+  add(entry: FleetLeaseEntry): boolean {
+    const existing = this.#byGatewayId.get(entry.gatewayLeaseId);
+    if (existing !== undefined && existing.workerId !== entry.workerId) return false;
     this.#byGatewayId.set(entry.gatewayLeaseId, entry);
     this.#byRequester.set(entry.requesterId, entry.gatewayLeaseId);
     this.#byWorkerLease.set(workerKey(entry.workerId, entry.workerLeaseId), entry.gatewayLeaseId);
+    return true;
   }
 
   /** Forgets one lease by its gateway id -- the gateway's own `lease.release` completing. */
@@ -216,10 +227,21 @@ export class FleetLeaseIndex {
     const reported = new Set<string>();
     for (const lease of leases) {
       if (!this.isGatewayRequester(lease.requesterId)) continue;
-      const gatewayLeaseId = `${workerId}.${lease.id}`;
+      const gatewayLeaseId = this.#gatewayLeaseId(workerId, lease);
+      const existing = this.#byGatewayId.get(gatewayLeaseId);
+      if (existing !== undefined && existing.workerId !== workerId) {
+        // ADR 0020: two workers hold the same caller-chosen id. The first reported keeps it; this
+        // lease is not routed and expires at its TTL. Not counted as a report from this worker's
+        // entry, because it is not one, so it never resets the first entry's missing count.
+        this.logger.warn(
+          "Two workers report a lease with the same caller-chosen id; routing the first and ignoring the second",
+          { gatewayLeaseId, firstWorkerId: existing.workerId, secondWorkerId: workerId },
+        );
+        continue;
+      }
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);
-      if (this.#byGatewayId.has(gatewayLeaseId)) continue;
+      if (existing !== undefined) continue;
       // C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
       // `lease.expired`/`lease.released` -- reappearing in a snapshot now means that snapshot
       // was gathered before the relayed fact landed and is only completing late (see
@@ -242,6 +264,24 @@ export class FleetLeaseIndex {
       });
     }
     return reported;
+  }
+
+  /**
+   * The id a reported lease is routed under (ADR 0020): bare when the requester chose it and it
+   * is a valid chosen id, `<workerId>.<id>` otherwise. A lease flagged as chosen whose id could
+   * not have been chosen is prefixed and logged: the worker's claim is not trusted past the
+   * pattern a requester's id must match (safety rule 10).
+   */
+  #gatewayLeaseId(workerId: string, lease: WorkerReportedLease): string {
+    if (lease.idChosenByRequester !== true) return `${workerId}.${lease.id}`;
+    if (LEASE_ID_PATTERN.test(lease.id)) return lease.id;
+    if (!this.#byWorkerLease.has(workerKey(workerId, lease.id))) {
+      this.logger.warn(
+        "A worker reported a lease flagged as caller-chosen whose id is not a valid one; routing it under a worker-prefixed id",
+        { leaseId: lease.id, workerId },
+      );
+    }
+    return `${workerId}.${lease.id}`;
   }
 
   /** `rebuildFromWorker`'s removal half: forgets an existing entry for `workerId` that this

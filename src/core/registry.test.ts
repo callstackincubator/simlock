@@ -1563,6 +1563,7 @@ describe("Registry", () => {
         ownerId: "agent-1",
         grantedAt: 1_000,
         lastRenewedAt: 1_000,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 2_000,
       },
@@ -1727,6 +1728,7 @@ describe("Registry", () => {
         ttlDeadline: 2_000,
         // A lease that has never been renewed reports the moment it was granted.
         lastRenewedAt: 1_000,
+        idChosenByRequester: false,
       },
     ]);
 
@@ -1741,6 +1743,7 @@ describe("Registry", () => {
       grantedAt: 1_000,
       id: "lse_1",
       lastRenewedAt: 5_000,
+      idChosenByRequester: false,
       ownerId: "agent-1",
       requesterId: "agent-1",
       ttlDeadline: 9_000,

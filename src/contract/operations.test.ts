@@ -314,6 +314,7 @@ describe("operation input/output round trips", () => {
         ownerId: "req_1",
         grantedAt: 1,
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ttlMs: 1,
         ttlDeadline: 2,
       },
@@ -616,6 +617,7 @@ describe("operation input/output round trips", () => {
       ttlMs: 2,
       ttlDeadline: 3,
       lastRenewedAt: 1,
+      idChosenByRequester: false,
       workerId: "wrk_1",
     };
     const parsed = OPERATIONS["status.get"].output.parse({

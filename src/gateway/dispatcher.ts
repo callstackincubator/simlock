@@ -456,6 +456,8 @@ export class GatewayDispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        // ADR 0020: forwarded to the worker as sent, and the gateway's own lease ID when it grants.
+        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         // Always explicit past this point (§15): a request that named none is filled in here,
         // before dispatch, rather than left for whichever worker happens to grant it to default

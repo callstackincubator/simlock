@@ -11,6 +11,7 @@ export {
   type WaitingRequest,
 } from "./lease-request-book.js";
 export {
+  LeaseIdTakenError,
   type LeaseRequestOptions,
   QueueTimeoutError,
   type QueuePlace,

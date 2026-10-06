@@ -222,6 +222,7 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
       ownerId: "mcp-test",
       requesterId: "mcp-test",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ttlMs: 60_000,
       ttlDeadline: 12_345,
     },

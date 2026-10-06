@@ -129,6 +129,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     ownerId: "tok_agent",
     requesterId: "tok_agent",
     lastRenewedAt: 1_000,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 1_000 + 900_000,
     ...overrides,

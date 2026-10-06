@@ -2641,6 +2641,24 @@ describe("createLeasing: lease.rejected names its request", () => {
       await settledOrPending(harness.engine.request(request, holder));
       return { harness, requester: "holder" };
     },
+    "lease-id-taken": async () => {
+      const harness = await createHarness({
+        limits: {
+          android: { maxDevices: 2, maxRunning: 2 },
+          ios: { maxDevices: 3, maxRunning: 3 },
+          maxRunning: 4,
+        },
+      });
+      await harness.engine.request(request, { ...holder, leaseId: "myid" });
+      await settledOrPending(
+        harness.engine.request(request, {
+          leaseId: "myid",
+          ownerId: "clash",
+          requesterId: "clash",
+        }),
+      );
+      return { harness, requester: "clash" };
+    },
     "boot-timeout": async () => {
       const driver = new FakeDriver({
         availableOsVersions: ["26.5"],

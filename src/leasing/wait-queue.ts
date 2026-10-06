@@ -21,6 +21,12 @@ export interface LeaseRequestOptions {
    * `requesterId`; both are the caller's own claims, so a replay is authorized on `ownerId`.
    */
   readonly idempotencyKey?: string;
+  /**
+   * ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; the
+   * requester guarantees it is unique for all time, and while the request waits it holds the ID.
+   * An option of the request, not part of the device it names.
+   */
+  readonly leaseId?: string;
   /** Called with the stored request's id once it is admitted (`replayed` false), or once a
    * repeat finds it (`replayed` true). */
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
@@ -52,6 +58,14 @@ export class RequesterAlreadyLeasedError extends Error {
         : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`simlock release ${existingLeaseId}\`) before requesting another device`,
     );
     this.name = "RequesterAlreadyLeasedError";
+  }
+}
+
+/** A request named a lease ID an active lease or a waiting request already holds (ADR 0020). */
+export class LeaseIdTakenError extends Error {
+  constructor(readonly leaseId: string) {
+    super(`lease ID ${leaseId} is already in use`);
+    this.name = "LeaseIdTakenError";
   }
 }
 

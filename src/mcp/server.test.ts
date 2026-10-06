@@ -51,6 +51,7 @@ describe("MCP server (smoke)", () => {
                 ownerId: grant.lease.ownerId,
                 requesterId: grant.lease.requesterId,
                 lastRenewedAt: grant.lease.grantedAt,
+                idChosenByRequester: false,
                 ttlMs: 60_000,
                 ttlDeadline: grant.lease.ttlDeadline,
               },

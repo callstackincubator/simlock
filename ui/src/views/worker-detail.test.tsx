@@ -64,6 +64,7 @@ const RUNNING: WorkerView = {
       ownerId: "agent",
       requesterId: "agent",
       ttlDeadline: NOW + 60_000,
+      idChosenByRequester: false,
       ttlMs: 60_000,
     },
   ],

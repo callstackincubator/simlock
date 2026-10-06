@@ -152,6 +152,7 @@ describe("idleDestroyRule", () => {
           requesterId: "agent-1",
           ownerId: "agent-1",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: 1,
         },

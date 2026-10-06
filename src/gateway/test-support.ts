@@ -88,6 +88,7 @@ export function leaseFixture(id: string, deviceId: string) {
     grantedAt: 1,
     id,
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "agent-1",
     requesterId: "agent-1",
     ttlDeadline: 900_001,

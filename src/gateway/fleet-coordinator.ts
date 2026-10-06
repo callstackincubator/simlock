@@ -248,6 +248,7 @@ export class FleetLeaseCoordinator {
       if (replay !== undefined) return { replay };
       const requestId = newLeaseRequestId(this.options.idGenerator);
       this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
+      this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
       const { id, started: created } = await this.requests.admit(
         deviceRequest,
         options,
@@ -284,6 +285,34 @@ export class FleetLeaseCoordinator {
       });
       throw new RequesterAlreadyLeasedError(requesterId, existingLeaseId);
     }
+  }
+
+  /**
+   * ADR 0020: the one clash check on a gateway, after the one-lease check and in the same
+   * admission section. A caller-chosen id is held by one of this gateway's leases and by one of
+   * its own requests still open; leases a local client holds on a worker are not checked (a
+   * worker refuses its own, and the requester's uniqueness guarantee makes a clash unlikely).
+   */
+  #refuseIfLeaseIdTaken(
+    deviceRequest: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    if (
+      this.options.leaseIndex.resolve(leaseId) === undefined &&
+      !this.requests.holdsLeaseId(leaseId)
+    ) {
+      return;
+    }
+    this.#emit("lease.rejected", {
+      requestId,
+      requester: options.requesterId,
+      requestSpec: deviceRequest,
+      reason: "lease-id-taken",
+    });
+    throw leaseIdTaken(leaseId);
   }
 
   async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
@@ -925,6 +954,9 @@ export class FleetLeaseCoordinator {
             // own* queue is where a "wait" request actually waits.
             noWait: true,
             ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
+            // ADR 0020: sent as the requester sent it. The worker grants exactly this id, and
+            // its refusal (`LEASE_ID_TAKEN`) is the caller's answer: no other worker is tried.
+            ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
           },
           {
             onProgress: (progress) => {
@@ -985,7 +1017,14 @@ export class FleetLeaseCoordinator {
     }
 
     announceDispatched();
-    this.#settleGrant(waiter, workerId, grant);
+    if (this.#settleGrant(waiter, workerId, grant) === "retry") {
+      // The worker answered with an id the gateway did not ask for: the attempt failed, and the
+      // request goes back to the queue as after an unreachable worker. This worker is left out
+      // until its view changes, so a worker that keeps answering so is not asked in a loop.
+      this.#rememberRefusal(waiter, workerId);
+      this.#staleView(waiter, workerId);
+      return;
+    }
     // C1 (round 3 review): see the catch branch above -- a grant settling this waiter is just as
     // much a reason for whoever else is queued to get another look, not only a terminal failure.
     this.#dispatch();
@@ -1070,8 +1109,23 @@ export class FleetLeaseCoordinator {
    * worker, but this path already knows the answer. A mismatched echo is logged -- it means
    * either a worker bug or something worth knowing about, never silently swallowed.
    */
-  #settleGrant(waiter: FleetWaiter, workerId: string, grant: LeaseGrant): void {
-    const gatewayLeaseId = `${workerId}.${grant.lease.id}`;
+  #settleGrant(waiter: FleetWaiter, workerId: string, grant: LeaseGrant): "settled" | "retry" {
+    // ADR 0020: a forwarded `leaseId` is the gateway lease id, bare, and never the worker's echo
+    // of it -- a worker that granted something else is not believed, and its lease is given back.
+    const forwardedLeaseId = waiter.options.leaseId;
+    if (forwardedLeaseId !== undefined && grant.lease.id !== forwardedLeaseId) {
+      this.#logger.warn(
+        "Worker granted a lease ID different from the leaseId the gateway forwarded",
+        {
+          forwardedLeaseId,
+          grantedLeaseId: grant.lease.id,
+          workerId,
+        },
+      );
+      this.#releaseOnWorker(workerId, grant.lease.id);
+      return "retry";
+    }
+    const gatewayLeaseId = forwardedLeaseId ?? `${workerId}.${grant.lease.id}`;
     if (grant.lease.ownerId !== waiter.options.ownerId) {
       this.#logger.warn("Worker echoed an ownerId different from the one the gateway forwarded", {
         echoedOwnerId: grant.lease.ownerId,
@@ -1088,7 +1142,13 @@ export class FleetLeaseCoordinator {
       workerId,
       workerLeaseId: grant.lease.id,
     };
-    this.options.leaseIndex.add(entry);
+    if (!this.options.leaseIndex.add(entry)) {
+      // The index already routes this bare id to another worker, which got it there first: the
+      // new worker's lease is given back and the caller is told the id is taken.
+      this.#releaseOnWorker(workerId, grant.lease.id);
+      this.#reject(waiter, leaseIdTaken(gatewayLeaseId), "lease-id-taken");
+      return "settled";
+    }
     const fleetGrant: FleetLeaseGrant = {
       device: grant.device,
       environment: grant.environment,
@@ -1096,6 +1156,21 @@ export class FleetLeaseCoordinator {
       timing: grant.timing,
     };
     this.#queue.resolve(waiter, fleetGrant);
+    return "settled";
+  }
+
+  /** Gives a lease back to the worker that granted it, when the gateway will not route it. A
+   * failure is logged: the worker's own TTL ends the lease. */
+  #releaseOnWorker(workerId: string, workerLeaseId: string): void {
+    void this.#forwardToWorker(workerId, (client) =>
+      client.releaseLease({ leaseId: workerLeaseId }),
+    ).catch((error: unknown) => {
+      this.#logger.warn("Failed to release a lease the gateway will not route", {
+        message: error instanceof Error ? error.message : String(error),
+        workerId,
+        workerLeaseId,
+      });
+    });
   }
 
   #enqueue(waiter: FleetWaiter): void {
@@ -1108,7 +1183,7 @@ export class FleetLeaseCoordinator {
   #reject(
     waiter: FleetWaiter,
     error: Error,
-    reason: Rejection["reason"] | "no-wait" | "cancelled" | "timeout",
+    reason: Rejection["reason"] | "no-wait" | "cancelled" | "timeout" | "lease-id-taken",
   ): void {
     if (this.#queue.reject(waiter, error)) {
       this.#emitRejected(waiter, reason);
@@ -1266,6 +1341,12 @@ function forwardedModel(
   if (request.model === undefined) return {};
   const view = views.find((worker) => worker.id === decision.workerId);
   return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };
+}
+
+/** The refusal for a lease ID this gateway already holds (ADR 0020), with the code and details a
+ * worker gives the same refusal. */
+function leaseIdTaken(leaseId: string): DispatchError {
+  return new DispatchError("LEASE_ID_TAKEN", `lease ID ${leaseId} is already in use`, { leaseId });
 }
 
 /** The `model` a forward overrides the request's own with: none for a class request. */

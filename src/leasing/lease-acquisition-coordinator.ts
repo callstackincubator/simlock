@@ -55,6 +55,7 @@ import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-pla
 import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import {
+  LeaseIdTakenError,
   type LeaseRequestOptions,
   RequestCancelledError,
   RequesterAlreadyLeasedError,
@@ -142,7 +143,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
   /** Stores each request before it is queued and answers repeats of it (`LeaseRequestBook`). */
-  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "replay">;
+  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
 }
 
 interface AcquisitionWaiter extends Waiter {
@@ -265,6 +266,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           );
           throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
         }
+        this.#refuseIfLeaseIdTaken(request, options, requestId);
         const { id, started: accepted } = await this.options.requests.admit(
           request,
           options,
@@ -291,6 +293,37 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const { waiter } = admitted;
     this.#track(this.#resolveAndDrive(waiter, request, options));
     return waiter.promise;
+  }
+
+  /**
+   * ADR 0020: the one clash check on a host, inside the same admission section as the
+   * one-lease-per-requester check and after it. An ID is held by an active lease and by a
+   * request still waiting, so a restart, which fails every waiting request, frees it.
+   */
+  #refuseIfLeaseIdTaken(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    if (
+      !this.options.registry.snapshot.leases.some((lease) => lease.id === leaseId) &&
+      !this.options.requests.holdsLeaseId(leaseId)
+    ) {
+      return;
+    }
+    this.options.eventBus.emit(
+      "lease.rejected",
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "lease-id-taken",
+      },
+      "lease-acquisition-coordinator",
+    );
+    throw new LeaseIdTakenError(leaseId);
   }
 
   /** Closes acquisition admission, settles all demand, and drains driver work. */
@@ -774,6 +807,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       source: GRANT_SOURCE[kind],
       timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
+      ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
     });
     this.options.queue.resolve(waiter, granted);
   }

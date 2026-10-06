@@ -182,8 +182,9 @@ describe("DaemonServer", () => {
   it.each([
     [17, "cannot parse a starting status.get answer"],
     [18, "cannot parse config.get's warmPool.targets"],
+    [20, "cannot send lease.request's leaseId or read a lease's idChosenByRequester"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 20, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 21, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -193,7 +194,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 20, max: 20 } },
+          details: { client: { min: version, max: version }, daemon: { min: 21, max: 21 } },
         },
         ok: false,
       });

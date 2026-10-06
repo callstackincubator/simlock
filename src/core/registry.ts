@@ -103,6 +103,11 @@ export interface CreateLeaseInput {
   readonly ttlMs: number;
   readonly ttlDeadline: number;
   /**
+   * The ID the requester chose for this lease (ADR 0020). Omitted, the registry generates one.
+   * The caller has already refused an ID that is in use: one place enforces that rule.
+   */
+  readonly leaseId?: string;
+  /**
    * The request this lease is granted for, and the rest of the grant its repeat answers. When
    * given, the commit that adds the lease also marks that request `granted` with the whole
    * `LeaseGrant` (device, environment, lease, timing), so no crash can fall between the two.
@@ -586,6 +591,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     requesterId,
     ttlMs,
     ttlDeadline,
+    leaseId,
     request,
   }: CreateLeaseInput): Promise<LeaseRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -606,7 +612,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const lease: LeaseRecord = {
       deviceId,
       grantedAt,
-      id: `lse_${this.options.idGenerator.generate()}`,
+      id: leaseId ?? `lse_${this.options.idGenerator.generate()}`,
+      idChosenByRequester: leaseId !== undefined,
       // ADR 0004: set at grant, then again on every renew -- a lease that has never been
       // renewed reports the moment it was granted rather than nothing at all.
       lastRenewedAt: grantedAt,
@@ -920,12 +927,14 @@ const leaseRecordKeys = [
   "ttlMs",
   "ttlDeadline",
   "lastRenewedAt",
+  "idChosenByRequester",
 ] as const;
 const leaseRequestRecordKeys = [
   "id",
   "requesterId",
   "ownerId",
   "idempotencyKey",
+  "leaseId",
   "request",
   "createdAt",
   "state",
@@ -1198,6 +1207,7 @@ function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
     deviceId,
     grantedAt,
     id,
+    idChosenByRequester: value.idChosenByRequester === true,
     lastRenewedAt: finiteTimestampOr(lastRenewedAt, grantedAt),
     ownerId: ownerId ?? requesterId,
     requesterId,
@@ -1212,13 +1222,14 @@ function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
  */
 function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
   if (!hasLeaseRequestFields(value)) return undefined;
-  const { createdAt, id, idempotencyKey, ownerId, request, requesterId, state } = value;
+  const { createdAt, id, idempotencyKey, leaseId, ownerId, request, requesterId, state } = value;
   const result = parseLeaseRequestResult(state, value);
   if (result === undefined) return undefined;
   return {
     createdAt,
     id,
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+    ...(leaseId === undefined ? {} : { leaseId }),
     ownerId,
     request: withoutRetiredRequestKeys(request),
     requesterId,
@@ -1232,6 +1243,7 @@ function hasLeaseRequestFields(value: unknown): value is Record<string, unknown>
   readonly createdAt: number;
   readonly id: string;
   readonly idempotencyKey?: string;
+  readonly leaseId?: string;
   readonly ownerId: string;
   readonly request: DeviceRequest;
   readonly requesterId: string;
@@ -1243,6 +1255,7 @@ function hasLeaseRequestFields(value: unknown): value is Record<string, unknown>
     typeof value.requesterId === "string" &&
     typeof value.ownerId === "string" &&
     (value.idempotencyKey === undefined || typeof value.idempotencyKey === "string") &&
+    (value.leaseId === undefined || typeof value.leaseId === "string") &&
     isDeviceRequest(value.request) &&
     typeof value.createdAt === "number" &&
     isLeaseRequestState(value.state)
@@ -1271,7 +1284,8 @@ function parseLeaseRequestResult(
 /**
  * A stored grant's device follows the device record's own load rule (ADR 0007 §11): no `mode`
  * loads as `full`, the retired keys (and the spec's `full`) are dropped, and an unknown `mode` makes the record
- * unusable, so it is skipped like any other inconsistent lease request.
+ * unusable, so it is skipped like any other inconsistent lease request. Its lease loads
+ * `idChosenByRequester` as a lease record does (`parseLease`).
  */
 function parseStoredGrant(grant: unknown): LeaseGrant | undefined {
   if (!isObject(grant) || !isObject(grant.device)) return undefined;
@@ -1283,7 +1297,11 @@ function parseStoredGrant(grant: unknown): LeaseGrant | undefined {
   }
   if (device.mode === undefined) device.mode = "full";
   if (device.mode !== "slim" && device.mode !== "full") return undefined;
-  return { ...grant, device } as unknown as LeaseGrant;
+  // A grant written before ADR 0020 names a lease whose ID simlock generated, as every ID then was.
+  const lease = isObject(grant.lease)
+    ? { ...grant.lease, idChosenByRequester: grant.lease.idChosenByRequester === true }
+    : grant.lease;
+  return { ...grant, device, lease } as unknown as LeaseGrant;
 }
 
 function isDeviceRequest(value: unknown): value is DeviceRequest {
