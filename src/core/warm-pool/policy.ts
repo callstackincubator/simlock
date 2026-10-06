@@ -38,6 +38,9 @@ export type WarmProposal =
       readonly target: DeviceSpec;
     };
 
+/** A proposal that acts on a device already in the registry: a shutdown or a boot. */
+type DeviceProposal = Extract<WarmProposal, { readonly deviceId: string }>;
+
 /** A target that resolved: the spec a request for it resolves to, and how many to keep ready. */
 export interface ResolvedTarget {
   readonly spec: DeviceSpec;
@@ -221,8 +224,8 @@ function overBudget(
   running: readonly DeviceRecord[],
   room: Slots,
   held: Slots,
-): WarmProposal[] {
-  const proposals: WarmProposal[] = [];
+): DeviceProposal[] {
+  const proposals: DeviceProposal[] = [];
   const candidates = running.filter(
     (device) => !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
   );
@@ -250,10 +253,10 @@ function boots(
   bootable: readonly DeviceRecord[],
   room: Slots,
   held: Slots,
-): WarmProposal[] {
-  const proposals: WarmProposal[] = [];
+): DeviceProposal[] {
+  const proposals: DeviceProposal[] = [];
   const taken = new Set<string>();
-  const boot = (device: DeviceRecord, reason: WarmProposal["reason"]): void => {
+  const boot = (device: DeviceRecord, reason: DeviceProposal["reason"]): void => {
     taken.add(device.id);
     claim(room, device);
     proposals.push({ action: "boot", deviceId: device.id, reason });
@@ -364,10 +367,10 @@ function neverLeasedIdle(
   view: WarmPolicyView,
   running: readonly DeviceRecord[],
   targets: readonly ResolvedTarget[],
-  proposed: readonly WarmProposal[],
+  proposed: readonly DeviceProposal[],
   isIdle: (device: DeviceRecord) => boolean,
   room: Slots,
-): WarmProposal[] {
+): DeviceProposal[] {
   const kept = new Set(
     targets.flatMap((target) =>
       readyOfKind(view.devices, isIdle, target.spec)
@@ -375,10 +378,8 @@ function neverLeasedIdle(
         .map((device) => device.id),
     ),
   );
-  const already = new Set(
-    proposed.flatMap((proposal) => ("deviceId" in proposal ? [proposal.deviceId] : [])),
-  );
-  const proposals: WarmProposal[] = [];
+  const already = new Set(proposed.map((proposal) => proposal.deviceId));
+  const proposals: DeviceProposal[] = [];
   for (const device of running) {
     if (
       device.lastLeaseEndedAt !== undefined ||
@@ -435,14 +436,12 @@ function planTargets(
   view: WarmPolicyView,
   targets: readonly ResolvedTarget[],
   bootable: readonly DeviceRecord[],
-  keeps: readonly WarmProposal[],
+  keeps: readonly DeviceProposal[],
   room: Slots,
   held: Slots,
   isIdle: (device: DeviceRecord) => boolean,
 ): { proposals: WarmProposal[]; reports: TargetReport[] } {
-  const keepBoots = keeps.flatMap((proposal) =>
-    proposal.action === "boot" && "deviceId" in proposal ? [proposal.deviceId] : [],
-  );
+  const keepBoots = keeps.map((proposal) => proposal.deviceId);
   const plan: TargetPlan = {
     bootable,
     held,

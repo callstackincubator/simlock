@@ -94,4 +94,12 @@ describe("retry schedule", () => {
     expect(schedule.nextAttemptAt(minute)).toBe(30_000 + minute + 2 * minute);
     expect(schedule.nextAttemptAt(30_000 + 3 * minute)).toBeUndefined();
   });
+
+  it("names the earliest moment even when the spec that failed first is not the one held back for the shortest time", () => {
+    const schedule = new RetrySchedule();
+    schedule.failed(spec, 100_000);
+    schedule.failed(other, 0);
+
+    expect(schedule.nextAttemptAt(0)).toBe(minute);
+  });
 });

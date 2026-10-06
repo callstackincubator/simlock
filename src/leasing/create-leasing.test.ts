@@ -3488,5 +3488,7 @@ describe("createLeasing warm targets", () => {
       "ready",
     );
     expect(eventsNamed(harness, "device.shutdown")).toEqual([]);
+    // The reaper reads the same set through the core, so it leaves the device alone too.
+    expect([...harness.engine.core.targetedDevices()]).toEqual([device.id]);
   });
 });

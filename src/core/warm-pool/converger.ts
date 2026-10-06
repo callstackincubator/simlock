@@ -263,7 +263,7 @@ export class WarmPool {
         ready: report.ready,
         short: report.short,
         target: report.target,
-        ...(report.message === undefined ? {} : { message: report.message }),
+        message: report.message,
       });
     }
     this.#loggedShort = shorts;
@@ -429,9 +429,9 @@ export class WarmPool {
     this.options.acquisition.kick();
   }
 
+  /** Remembers the failure; the pass the ended flight asks for arms the timer for the retry. */
   #failed(target: DeviceSpec): void {
     this.#schedule.failed(target, this.options.clock.now());
-    this.#armRetry();
   }
 
   /** The device, when it is still in `state`, has no lease and no operation claim on it. */

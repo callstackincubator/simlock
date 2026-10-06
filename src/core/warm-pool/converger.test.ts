@@ -136,7 +136,8 @@ function harness(
         };
         return { android: entry, global: entry, ios: entry };
       },
-      canBoot: () => ({ ok: true }),
+      canBoot: () =>
+        options.refuseBoot === true ? { ok: false, reason: "ram-budget" } : { ok: true },
       canProvision: () =>
         options.refuseProvision === true ? { ok: false, reason: "device-limit" } : { ok: true },
       tryReserveProvisioning: () => {
@@ -982,6 +983,12 @@ describe("warm pool targets", () => {
       short: "boot-failed",
       target: "ios iPhone 17 26.0",
     });
+    const failure = rig.sink.records.filter(
+      (record) => record.message === "warm pool creation of a device failed",
+    );
+    expect(failure).toHaveLength(1);
+    expect(failure[0]?.fields).toMatchObject({ model: "iPhone 17", step: "provision" });
+    expect(String(failure[0]?.fields?.["error"])).toContain("the runtime would not boot");
   });
 
   it("holds a failed boot of a shut-down device of the kind back for a minute, then boots it again", async () => {
@@ -1053,9 +1060,17 @@ describe("warm pool targets", () => {
         target: "ios iPhone 17 27.0",
       },
     ]);
-    expect(
-      rig.sink.records.filter((record) => record.message === "a warm pool target is short"),
-    ).toHaveLength(1);
+    const shortLines = rig.sink.records.filter(
+      (record) => record.message === "a warm pool target is short",
+    );
+    expect(shortLines).toHaveLength(1);
+    expect(shortLines[0]?.fields).toMatchObject({
+      count: 1,
+      message: "iOS 27.0 is not installed",
+      ready: 0,
+      short: "runtime-missing",
+      target: "ios iPhone 17 27.0",
+    });
   });
 
   it.each([
@@ -1104,7 +1119,7 @@ describe("warm pool targets", () => {
 
     await rig.pool.pass();
 
-    expect(rig.resolveCalls).toEqual([
+    expect(rig.resolveCalls).toStrictEqual([
       { mode: "slim", model: "iPhone 16", osVersion: ">=18", platform: "ios" },
       { model: "Pixel 9", platform: "android" },
     ]);
@@ -1142,6 +1157,200 @@ describe("warm pool targets", () => {
 
     expect(rig.provisionCalls).toEqual([]);
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "device-limit" })]);
+  });
+
+  it("reports and logs nothing, and names no device, before its first pass", () => {
+    const rig = harness([ofKind("ready", "ready")], { targets: [iphone17] });
+
+    expect(rig.pool.targets()).toEqual([]);
+    expect([...rig.pool.targeted()]).toEqual([]);
+  });
+
+  it("reports ram-budget and boots nothing when the capacity strategy refuses the shut-down device's boot", async () => {
+    const rig = harness([ofKind("shut", "shutdown")], { refuseBoot: true, targets: [iphone17] });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "ram-budget" })]);
+  });
+
+  it("counts a creation still running toward its target, so a second pass starts no second one even with room for two boots", async () => {
+    const gate = held();
+    const rig = harness([], {
+      maxConcurrentBoots: 2,
+      provision: async () => gate.gate,
+      targets: [iphone17],
+    });
+
+    await rig.pool.pass();
+    await flush();
+    await rig.pool.pass();
+    await flush();
+
+    expect(rig.provisionCalls).toHaveLength(1);
+    expect(rig.sink.records.filter((record) => record.level === "error")).toEqual([]);
+    gate.finish();
+    await rig.pool.settle();
+    expect(rig.provisionCalls).toHaveLength(1);
+  });
+
+  it("asks for no pass and arms no timer once disposed, for a creation that ends afterwards", async () => {
+    const gate = held();
+    const rig = harness([], { provision: async () => gate.gate, targets: [iphone17] });
+    await rig.pool.pass();
+    await flush();
+
+    rig.pool.dispose();
+    gate.fail(new Error("the runtime would not boot"));
+    await flush();
+
+    expect(rig.resolveCalls).toHaveLength(1);
+    expect(rig.clock.pendingTimerCount).toBe(0);
+  });
+
+  it("cancels the retry timer on dispose, and arms none when a pass that was running ends after it", async () => {
+    let hold: Promise<void> | undefined;
+    const rig = harness([], {
+      provision: async () => {
+        throw new Error("no luck");
+      },
+      resolve: async (request) => {
+        await hold;
+        return {
+          spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
+        };
+      },
+      targets: [iphone17],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.clock.pendingTimerCount).toBe(1);
+
+    let release: () => void = () => undefined;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const running = rig.pool.pass();
+    rig.pool.dispose();
+    expect(rig.clock.pendingTimerCount).toBe(0);
+    release();
+    await running;
+
+    expect(rig.clock.pendingTimerCount).toBe(0);
+  });
+
+  it("keeps one retry timer however many passes run while a target is held back", async () => {
+    const rig = harness([], {
+      provision: async () => {
+        throw new Error("no luck");
+      },
+      targets: [iphone17],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    await rig.pool.pass();
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.clock.pendingTimerCount).toBe(1);
+  });
+
+  it("arms the timer for a second held-back target when the first one's retry succeeds, so no tick is needed", async () => {
+    let rig: ReturnType<typeof harness> | undefined;
+    rig = harness([], {
+      provision: async (spec, attempt) => {
+        // Attempt 1 (iPhone 17) fails at once, attempt 2 (iPhone 16) fails ten seconds later,
+        // attempt 3 (iPhone 17 again) succeeds, attempt 4 (iPhone 16 again) is the one under test.
+        if (attempt === 2) rig?.clock.advance(10_000);
+        if (attempt <= 2) throw new Error(`no luck for ${spec.model}`);
+      },
+      targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.provisionCalls.map((call) => call.spec.model)).toEqual(["iPhone 17", "iPhone 16"]);
+
+    // iPhone 17 may be tried at 60s and succeeds; iPhone 16 failed ten seconds later.
+    rig.clock.advance(50_000);
+    await rig.pool.settle();
+    expect(rig.provisionCalls.map((call) => call.spec.model)).toEqual([
+      "iPhone 17",
+      "iPhone 16",
+      "iPhone 17",
+    ]);
+
+    rig.clock.advance(10_000);
+    await rig.pool.settle();
+    expect(rig.provisionCalls.map((call) => call.spec.model)).toEqual([
+      "iPhone 17",
+      "iPhone 16",
+      "iPhone 17",
+      "iPhone 16",
+    ]);
+  });
+
+  it("clears the schedule when a boot of a shut-down device succeeds, so a later failure waits one minute again", async () => {
+    let bootAttempts = 0;
+    let creating = false;
+    let rig: ReturnType<typeof harness> | undefined;
+    rig = harness([ofKind("shut", "shutdown")], {
+      boot: async (target) => {
+        bootAttempts += 1;
+        if (bootAttempts === 1) throw new Error("simulator did not boot");
+        const ready = { ...target, state: "ready" as const };
+        if (rig !== undefined) rig.state.devices = [ready];
+        return ready;
+      },
+      provision: async () => {
+        if (creating) throw new Error("no luck");
+      },
+      targets: [iphone17],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(bootAttempts).toBe(1);
+
+    // The boot is retried after a minute and succeeds.
+    rig.clock.advance(minute);
+    await rig.pool.settle();
+    expect(bootAttempts).toBe(2);
+
+    // The device is then leased, the target is short again, and a creation fails: one minute
+    // later it is tried again, not two.
+    creating = true;
+    rig.lease("shut");
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.provisionCalls).toHaveLength(1);
+    rig.clock.advance(minute);
+    await rig.pool.settle();
+    expect(rig.provisionCalls).toHaveLength(2);
+  });
+
+  it("logs a target again when the reason it is short changes, and logs two targets short for the same reason once each", async () => {
+    let refusal: "runtime-missing" | "unresolvable" = "runtime-missing";
+    const rig = harness([], {
+      resolve: () => ({ message: "why", refusal }),
+      targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
+    });
+
+    await rig.pool.pass();
+    await rig.pool.pass();
+    refusal = "unresolvable";
+    await rig.pool.pass();
+
+    const lines = rig.sink.records
+      .filter((record) => record.message === "a warm pool target is short")
+      .map((record) => `${String(record.fields?.["target"])}:${String(record.fields?.["short"])}`);
+    expect(lines).toEqual([
+      "ios iPhone 17 26.0:runtime-missing",
+      "ios iPhone 16 26.0:runtime-missing",
+      "ios iPhone 17 26.0:unresolvable",
+      "ios iPhone 16 26.0:unresolvable",
+    ]);
   });
 
   describe("targeted", () => {

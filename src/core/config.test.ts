@@ -408,29 +408,69 @@ describe("loadConfig", () => {
     });
 
     it.each([
-      ["a missing model", { count: 1, platform: "ios" }, "warmPool.targets[0].model"],
-      ["an empty model", { count: 1, model: "", platform: "ios" }, "warmPool.targets[0].model"],
+      [
+        "a missing model",
+        { count: 1, platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].model": expected a non-empty string',
+      ],
+      [
+        "an empty model",
+        { count: 1, model: "", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].model": expected a non-empty string',
+      ],
+      [
+        "a missing platform",
+        { count: 1, model: "iPhone 17" },
+        'Invalid config value for "warmPool.targets[0].platform"',
+      ],
+      [
+        "a missing count",
+        { model: "iPhone 17", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].count": expected a positive integer',
+      ],
       [
         "a mode that is neither slim nor full",
         { count: 1, mode: "lean", model: "iPhone 17", platform: "ios" },
-        "warmPool.targets[0].mode",
+        'Invalid config value for "warmPool.targets[0].mode"',
       ],
       [
         "an OS range that does not parse",
         { count: 1, model: "iPhone 17", osVersion: ">=", platform: "ios" },
-        "warmPool.targets[0].osVersion",
+        'Invalid config value for "warmPool.targets[0].osVersion": expected an OS version or an OS range',
+      ],
+      [
+        "an empty OS version",
+        { count: 1, model: "iPhone 17", osVersion: "", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].osVersion": expected a non-empty string',
       ],
       [
         "a count that is not an integer",
         { count: 1.5, model: "iPhone 17", platform: "ios" },
-        "warmPool.targets[0].count",
+        'Invalid config value for "warmPool.targets[0].count": expected a positive integer',
       ],
-    ])("rejects a target with %s naming the key", async (_name, target, key) => {
-      await expect(load({ targets: [target] })).rejects.toThrow(key);
+      [
+        "a class",
+        { class: "phone", count: 1, model: "iPhone 17", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].class": expected a known target key',
+      ],
+      [
+        "an inherited property name as a key",
+        JSON.parse('{"count":1,"model":"iPhone 17","platform":"ios","constructor":1}') as object,
+        'Invalid config value for "warmPool.targets[0].constructor": expected a known target key',
+      ],
+      [
+        "a target that is not an object",
+        "iPhone 17",
+        'Invalid config value for "warmPool.targets[0]": expected an object',
+      ],
+    ])("rejects a target with %s naming the key", async (_name, target, message) => {
+      await expect(load({ targets: [target] })).rejects.toThrow(message);
     });
 
     it("rejects targets that are not an array naming warmPool.targets", async () => {
-      await expect(load({ targets: { count: 1 } })).rejects.toThrow("warmPool.targets");
+      await expect(load({ targets: { count: 1 } })).rejects.toThrow(
+        'Invalid config value for "warmPool.targets": expected an array of targets',
+      );
     });
 
     it.each([0, 1.5, "2", null])(

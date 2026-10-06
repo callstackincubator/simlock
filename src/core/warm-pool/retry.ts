@@ -1,4 +1,4 @@
-import type { DeviceSpec } from "../domain.js";
+import { type DeviceSpec, specMode } from "../domain.js";
 
 /** The wait after a spec's first failure; each further failure in a row doubles it. */
 export const RETRY_FIRST_MS = 60_000;
@@ -51,11 +51,5 @@ export class RetrySchedule {
 
 /** The spec's identity as `sameSpec` reads it: a slim and a full spec are two keys. */
 function keyOf(spec: DeviceSpec): string {
-  return JSON.stringify([
-    spec.platform,
-    spec.model,
-    spec.osVersion,
-    spec.mode ?? "full",
-    spec.imageTag ?? null,
-  ]);
+  return JSON.stringify([spec.platform, spec.model, spec.osVersion, specMode(spec), spec.imageTag]);
 }
