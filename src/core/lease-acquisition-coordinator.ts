@@ -863,7 +863,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
-      if (destroyed) this.#wakeQueue();
+      // A failed destroy wakes too: a request that planned `wait` during the destroy, on its
+      // ownerless boot claim, replans now that the device is fenced under this waiter's claim.
+      this.#wakeQueue();
       return;
     }
     await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
