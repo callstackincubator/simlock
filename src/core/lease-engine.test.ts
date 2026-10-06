@@ -2688,6 +2688,16 @@ describe("LeaseEngine warm pool", () => {
     ]);
   });
 
+  it("cancels the pool's tick when the engine is disposed", async () => {
+    const harness = await createHarness();
+    await harness.engine.convergeRunningCapacity();
+    expect(harness.clock.pendingTimerCount).toBe(1);
+
+    harness.engine.dispose();
+
+    expect(harness.clock.pendingTimerCount).toBe(0);
+  });
+
   it("accepts a new request again once a nuke has finished", async () => {
     const harness = await createHarness();
     await harness.engine.request(request, { ownerId: "held", requesterId: "held" });

@@ -614,6 +614,9 @@ describe("warm pool converger", () => {
     rig.clock.advance(WARM_POOL_TICK_MS);
     await rig.pool.settle();
     expect(rig.waitingDemand.mock.calls.length).toBe(beforeTick + 1);
+    rig.clock.advance(WARM_POOL_TICK_MS);
+    await rig.pool.settle();
+    expect(rig.waitingDemand.mock.calls.length).toBe(beforeTick + 2);
 
     rig.pool.dispose();
     const afterDispose = rig.waitingDemand.mock.calls.length;
