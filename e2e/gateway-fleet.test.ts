@@ -164,8 +164,11 @@ describe("gateway fleet", () => {
     const joined = await waitForWorkers(
       gateway,
       (workers) =>
-        workers.length === 2 && workers.every((worker) => worker.connection === "connected"),
-      "both workers connected to the gateway",
+        workers.length === 2 &&
+        // The gateway marks a worker connected before its first refresh builds the view, so
+        // "connected" alone can still be a view with no capacity: wait for the capacity too.
+        workers.every((worker) => worker.connection === "connected" && iosLimit(worker) > 0),
+      "both workers connected to the gateway, each with its capacity",
     );
     expect(joined.map((worker) => worker.label).sort()).toEqual(["worker-a", "worker-b"]);
     // Two machines, two identities: the ids are the workers' own `instance.json`, never a name
