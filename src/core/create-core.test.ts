@@ -267,6 +267,27 @@ describe("createCore", () => {
     expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
   });
 
+  it("logs a deferred wipe whose commit fails, releases its claim, and tells acquisition", async () => {
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink });
+    const harness = await build({ logger });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    const order: string[] = [];
+    harness.core.connect(ports(order));
+    vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
+
+    await harness.core.converge(await harness.core.readStartup());
+    await harness.core.settle();
+
+    expect(
+      sink.records.filter((record) => record.message === "deferred wipe failed"),
+    ).toMatchObject([
+      { level: "error", fields: { deviceId: released.device.id, error: "write failed" } },
+    ]);
+    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
+    expect(order).toContain("notifyAvailability");
+  });
+
   describe("startup's quarantine restore", () => {
     async function quarantinedDevice(options: { readonly platformReadable: boolean }) {
       const harness = await build();
