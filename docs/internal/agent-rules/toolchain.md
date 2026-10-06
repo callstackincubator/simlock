@@ -24,8 +24,9 @@ them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
   lines the branch changed. It takes minutes. Its output lists every mutant
   left alive; a survivor does not block the push.
 - **CI:** `pnpm check` and Fallow on every push. The console lane runs on
-  every push to `main`, and on a pull request (Chromium only) when it changes
-  a source, UI, console spec or build file.
+  every push to `main`, and on a pull request when it changes a source, UI,
+  console spec or build file: in every browser when it changes `ui/` or the
+  console specs, else in Chromium only.
 
 ## Mutation testing
 

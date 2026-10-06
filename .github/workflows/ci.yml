@@ -49,6 +49,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       console: ${{ steps.filter.outputs.console }}
+      browsers: ${{ steps.filter.outputs.browsers }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,17 +61,26 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "console=true" >>"$GITHUB_OUTPUT"
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           # The daemon and the CLI the console fixtures start reach almost all of src/, so any
           # source file counts; so do the UI, the console specs, their helpers and the build
           # config. Unit tests, docs, agent config and the other e2e files do not.
-          changed=$(git diff --name-only HEAD^1 HEAD)
+          # --no-renames lists a moved file's old path too.
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
           if printf '%s\n' "$changed" | grep -v -E '^(src|ui)/.*\.test\.tsx?$' | grep -q -E \
             '^(src/|ui/|e2e/(console|fake-driver|helpers)/|playwright\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig[^/]*\.json$|\.github/workflows/ci\.yml$)'; then
             echo "console=true" >>"$GITHUB_OUTPUT"
           else
             echo "console=false" >>"$GITHUB_OUTPUT"
+          fi
+          # Most console failures are Firefox- or WebKit-only, so a change to the UI or its
+          # specs runs every browser; any other change runs Chromium.
+          if printf '%s\n' "$changed" | grep -q -E '^(ui/|e2e/console/|playwright\.config\.ts$)'; then
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
+          else
+            echo "browsers=chromium" >>"$GITHUB_OUTPUT"
           fi
 
   console:
@@ -95,17 +105,20 @@ jobs:
           corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      # A pull request runs Chromium only; a push to main runs every browser.
       - name: Install Playwright browsers
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          if [ "$BROWSERS" = chromium ]; then
             pnpm exec playwright install --with-deps chromium
           else
             pnpm exec playwright install --with-deps chromium firefox webkit
           fi
       - name: Browser lane
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          if [ "$BROWSERS" = chromium ]; then
             pnpm test:console --project=chromium
           else
             pnpm test:console
