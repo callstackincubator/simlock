@@ -1515,7 +1515,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
   });
 
-  it("A failed boot whose device the destroy can no longer claim leaves that device fenced under its waiter.", async () => {
+  it("A failed boot whose device the destroy can no longer claim frees the waiter's running slot and leaves no fence.", async () => {
     const harness = await createHarness();
     const shutdown = await seedShutdown(harness);
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
@@ -1536,10 +1536,31 @@ describe("LeaseAcquisitionCoordinator", () => {
       harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
 
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+  });
+
+  it("A failed boot whose destroy throws keeps the waiter's running slot and fences the device under its waiter.", async () => {
+    const harness = await createHarness({
+      lifecycle: (lifecycle) => ({
+        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        dispose: (...args) => lifecycle.dispose(...args),
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
+      }),
+    });
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
     expect(harness.claims.claim(shutdown.id)).toEqual({
       kind: "boot",
       owner: expect.stringMatching(/^req_/),
     });
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(1);
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
