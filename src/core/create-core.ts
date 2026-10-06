@@ -103,7 +103,8 @@ export interface Core {
   /**
    * Read-only claim view for `Doctor`, which must not read a device a service is actively
    * operating on as a stalled transition. Exposed as a reader, not the claims themselves, so
-   * nothing outside core can take or release a claim.
+   * a consumer handed only this view cannot take or release a claim. (`claims` above is the
+   * full surface; leasing takes and releases through it.)
    */
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
   readonly cleanup: CleanupActionExecutor;

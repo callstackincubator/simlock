@@ -625,7 +625,7 @@ export class DaemonServer {
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
     // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the
-    // next daemon restores its timer from that deadline (`StartupConverger`); one whose
+    // next daemon restores its timer from that deadline (leasing's `LeaseStartup`); one whose
     // deadline passed in between expires as soon as a daemon is there to expire it. What is
     // drained here is only work already in flight -- a release someone else asked for commits
     // the registry half and hands its purge off, so draining keeps `daemon stop` finishing on

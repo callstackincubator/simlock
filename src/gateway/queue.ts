@@ -1,5 +1,5 @@
 /**
- * The fleet's one FIFO (ADR 0005 §10/§11): a thin composition over `src/core/wait-queue.ts`'s
+ * The fleet's one FIFO (ADR 0005 §10/§11): a thin composition over `src/leasing/wait-queue.ts`'s
  * `WaitQueue`, not a fork of it. `WaitQueue` already owns exactly the state a fleet queue needs
  * -- FIFO membership, per-request timeout/cancellation, and settlement promises -- and its
  * `LeaseRequestOptions` (`requesterId`, `ownerId`, `timeoutMs`, `noWait`, `allowDownload`,
@@ -8,8 +8,9 @@
  * (a `DeviceRequest` for the request, and a lease record that may additionally carry `worker`
  * once it names a machine) and forwards every method through.
  *
- * `DeviceRequest`/`DeviceRecord`/`LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive
- * type imports (`core/domain.js`, `core/driver.js`) -- both on core's index, and
+ * `WaitQueue` and its types come from `../leasing/index.js`. `DeviceRequest`/`DeviceRecord`/
+ * `LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive type imports
+ * (`core/domain.js`, `core/driver.js`) -- on core's index, and
  * allowed to the gateway by name in `.oxlintrc.json` -- not a reach into the registry, capacity, or lifecycle engine ADR 0005
  * §33 keeps off limits.
  */
