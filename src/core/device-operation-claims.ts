@@ -24,7 +24,12 @@ export interface DeviceOperationClaim {
 export class DeviceOperationClaims {
   readonly #claims = new Map<string, DeviceOperationClaim>();
 
-  tryClaim(deviceId: string, operation: DeviceOperation): DeviceOperationClaim | undefined {
+  tryClaim(
+    deviceId: string,
+    operation: DeviceOperation,
+    owner?: string,
+  ): DeviceOperationClaim | undefined {
+    void owner;
     if (this.#claims.has(deviceId)) return undefined;
 
     let released = false;
@@ -39,6 +44,11 @@ export class DeviceOperationClaims {
     };
     this.#claims.set(deviceId, claim);
     return claim;
+  }
+
+  claim(deviceId: string): { readonly kind: DeviceOperation; readonly owner?: string } | undefined {
+    void deviceId;
+    return undefined;
   }
 
   operationFor(deviceId: string): DeviceOperation | undefined {

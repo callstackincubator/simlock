@@ -38,6 +38,8 @@ export interface DeviceProvisionerOptions {
 }
 
 export interface ProvisionDeviceOptions {
+  /** A boot claim to take on the new device in the section that registers it. */
+  readonly claim?: { readonly kind: "boot"; readonly owner?: string };
   readonly onProgress?: (progress: ProvisionProgress) => void;
   readonly reservation: CapacityReservation;
 }

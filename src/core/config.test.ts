@@ -116,6 +116,7 @@ describe("loadConfig", () => {
       http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
         enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
         quarantine: {
           maxRetries: 3,
           retryBackoffMs: 30_000,
@@ -300,6 +301,38 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow("warmPool.quarantine.maxRetries");
+  });
+
+  it("defaults warmPool.reserveRunning to 0 on both platforms and applies a file-level value", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    expect(
+      (await loadConfig({ configPath, filesystem, systemStats: createStats() })).warmPool
+        .reserveRunning,
+    ).toEqual({ android: 0, ios: 0 });
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ warmPool: { reserveRunning: { ios: 4 } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.warmPool.reserveRunning).toEqual({ android: 0, ios: 4 });
+  });
+
+  it("rejects a negative or non-integer warmPool.reserveRunning.ios naming the key", async () => {
+    for (const bad of [-1, 1.5, "1", null]) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        configPath,
+        JSON.stringify({ warmPool: { reserveRunning: { ios: bad } } }),
+      );
+
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats() }),
+      ).rejects.toThrow("warmPool.reserveRunning.ios");
+    }
   });
 
   it("rejects a quarantine backoff multiplier below 1", async () => {

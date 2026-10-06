@@ -95,6 +95,7 @@ function config(
     },
     warmPool: {
       enabled: warmPoolEnabled,
+      reserveRunning: { android: 0, ios: 0 },
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -2764,6 +2765,93 @@ describe("LeaseEngine warm pool", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
+  });
+
+  describe("a request for a device on its way", () => {
+    /** One released iOS device whose warm-pool boot is held on the clock, room for a second. */
+    async function releasedDeviceBooting(failBoot = false) {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock,
+        latencyMs: { makeReady: 50 },
+        platform: "ios",
+        reclaimResult: "shutdown",
+      });
+      const harness = await createHarness({
+        driver,
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 2, maxRunning: 2 },
+          maxRunning: 2,
+        },
+      });
+      const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+      await flush();
+      clock.advance(50);
+      const first = await granting;
+      if (failBoot) driver.failOn("makeReady", 2, new Error("boom"));
+      await harness.engine.release(first.lease.id, "explicit");
+      await vi.waitFor(() =>
+        expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
+      );
+      return { clock, driver, first, harness };
+    }
+
+    it("a request arriving during a warm-pool boot that serves it is granted that device when the boot settles, and device.provisioned does not fire", async () => {
+      const { clock, driver, first, harness } = await releasedDeviceBooting();
+
+      const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
+      await flush();
+      expect(await settledOrPending(second)).toBe("still pending");
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+
+      clock.advance(50);
+      const granted = await second;
+      await harness.engine.settle();
+
+      expect(granted.device.id).toBe(first.device.id);
+      expect(
+        harness.bus.replay().filter((event) => event.event === "device.provisioned"),
+      ).toHaveLength(1);
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+      expect(harness.bus.replay().filter((event) => event.event === "device.ready")).toHaveLength(
+        2,
+      );
+    });
+
+    it("under noWait a request arriving during a warm-pool boot provisions its own device", async () => {
+      const { clock, driver, first, harness } = await releasedDeviceBooting();
+
+      const second = harness.engine.request(request, {
+        noWait: true,
+        ownerId: "b",
+        requesterId: "b",
+      });
+      await flush();
+      clock.advance(50);
+      const granted = await second;
+
+      expect(granted.device.id).not.toBe(first.device.id);
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+    });
+
+    it("a request waiting on a warm-pool boot that fails re-plans on the kick and gets a device of its own", async () => {
+      const { clock, driver, first, harness } = await releasedDeviceBooting(true);
+
+      const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
+      await flush();
+      clock.advance(50);
+      await flush();
+      clock.advance(50);
+      const granted = await second;
+      await harness.engine.settle();
+
+      // The failed boot left the device `shutdown` and unclaimed, so the request boots it itself.
+      expect(granted.device.id).toBe(first.device.id);
+      expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(3);
+      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    });
   });
 
   it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {

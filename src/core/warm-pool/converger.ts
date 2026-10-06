@@ -137,6 +137,7 @@ export class WarmPool {
       capacity: this.options.capacity.runningCapacity(capacityDevices(devices)),
       config: {
         enabled: this.options.config.enabled,
+        reserveRunning: this.options.config.reserveRunning,
         shutdownAfterMs: this.options.idle.shutdownAfterMs,
       },
       devices,

@@ -23,7 +23,11 @@ export interface WarmPolicyView {
   readonly waiting: readonly WaitingDemand[];
   readonly capacity: RunningCapacity;
   readonly isClaimed: (deviceId: string) => boolean;
-  readonly config: { readonly enabled: boolean; readonly shutdownAfterMs: number };
+  readonly config: {
+    readonly enabled: boolean;
+    readonly reserveRunning: { readonly ios: number; readonly android: number };
+    readonly shutdownAfterMs: number;
+  };
   readonly now: number;
   /**
    * A device is on its way to a lease: booted, `ready` and claimed, still counted as running

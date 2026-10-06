@@ -32,6 +32,8 @@ export interface AcquisitionPlannerSnapshot {
 export interface AcquisitionPlannerInput {
   readonly failures: number;
   readonly noWait: boolean;
+  /** The waiter's id, put on the boot claim the plan takes. */
+  readonly owner?: string | undefined;
   readonly snapshot: AcquisitionPlannerSnapshot;
   /** The spec a new device would have, and so the pool mode an idle device must be in. */
   readonly spec: DeviceSpec;
