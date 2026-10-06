@@ -20,7 +20,7 @@ import type {
   ObservedMark,
   PrerequisiteCheck,
 } from "./driver.js";
-import type { LeaseExpirer } from "./core-ports.js";
+import type { CapacityReader, LeaseExpirer, WarmPoolReader } from "./core-ports.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =
@@ -99,6 +99,22 @@ export type DoctorFinding =
       readonly prerequisite: string;
       readonly message: string;
       readonly remedy: string;
+    }
+  | {
+      /**
+       * A warm pool target that cannot be met as configured: its runtime or model is not there, or
+       * the targets of a platform (or all of them) add up to more than the running limit leaves
+       * once the reserve is held back. Configuration information, not drift: `--fix` never acts
+       * on it and `doctor.reconciled` does not carry it.
+       */
+      readonly kind: "warm-pool-target-unreachable";
+      /** Absent for the finding about every platform's targets together. */
+      readonly platform?: Platform;
+      /** The target as `status` prints it, or the platform's or every target's sum. */
+      readonly target: string;
+      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
+      readonly message: string;
+      readonly remedy: string;
     };
 
 /**
@@ -144,6 +160,14 @@ export interface DoctorOptions {
    */
   readonly driverRejections?: readonly DriverRejection[];
   readonly logger?: Logger;
+  /**
+   * The warm pool's last figures and the running limits its targets must fit in. Both are needed
+   * for the `warm-pool-target-unreachable` findings; without them the doctor reports none.
+   */
+  readonly warmPool?: {
+    readonly figures: WarmPoolReader["figures"];
+    readonly runningCapacity: () => CapacityReader["runningCapacity"];
+  };
   /** One per platform this host could run, whether or not its driver started. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   /**
@@ -944,7 +968,11 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
 
 /** Whether a finding belongs in `doctor.reconciled`'s `driftFindings` -- see the emit call. */
 function isDrift(finding: DoctorFinding): boolean {
-  return finding.kind !== "driver-advisory" && finding.kind !== "prerequisite-missing";
+  return (
+    finding.kind !== "driver-advisory" &&
+    finding.kind !== "prerequisite-missing" &&
+    finding.kind !== "warm-pool-target-unreachable"
+  );
 }
 
 /** One platform's check result, as findings -- see `Doctor#collectPrerequisites`. */

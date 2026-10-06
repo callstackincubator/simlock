@@ -29,6 +29,7 @@ import {
   type TargetReport,
   type WarmProposal,
 } from "./policy.js";
+import type { WarmPoolFigures } from "./figures.js";
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
@@ -51,7 +52,7 @@ export interface WarmPoolOptions {
   readonly clock: Clock;
   readonly config: WarmPoolConfig;
   readonly decisions: Pick<SerializedDecision, "run">;
-  readonly eventBus: Pick<EventBus, "subscribe">;
+  readonly eventBus: Pick<EventBus, "emit" | "subscribe">;
   readonly idle: { readonly shutdownAfterMs: number };
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
@@ -197,6 +198,15 @@ export class WarmPool {
     return this.#reports;
   }
 
+  /** What `status`, `doctor` and the console read: the pool as the last pass left it. */
+  figures(): WarmPoolFigures {
+    return {
+      enabled: this.options.config.enabled,
+      reserveRunning: this.options.config.reserveRunning,
+      targets: [],
+    };
+  }
+
   #trigger(): void {
     if (this.#disposed || this.#draining) return;
     void this.pass();
@@ -286,7 +296,14 @@ export class WarmPool {
       if (last === undefined) this.#lastSpecs.delete(key);
       else spared.push({ count: target.count, spec: last });
       refused.push({
+        booting: 0,
         count: target.count,
+        kind: {
+          mode: target.mode ?? "full",
+          model: target.model,
+          platform: target.platform,
+          ...(target.osVersion === undefined ? {} : { osVersion: target.osVersion }),
+        },
         message: resolution.message,
         ready: last === undefined ? 0 : readyCount(this.#deviceCounts(), last),
         short: resolution.refusal,

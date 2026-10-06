@@ -382,6 +382,45 @@ export const statusCapacitySchema = z.object({
     .optional(),
 });
 
+/** Bounds on the warm pool block: a gateway parses it off the wire from every worker. */
+const WARM_POOL_TARGETS_MAX = 256;
+const WARM_POOL_NAME_MAX = 256;
+
+/** Why a warm target is short, in the order the first that applies is the one reported. */
+export const warmPoolShortSchema = z.enum([
+  "disabled",
+  "no-driver",
+  "runtime-missing",
+  "unknown-model",
+  "unresolvable",
+  "boot-failed",
+  "device-limit",
+  "running-limit",
+  "reserve",
+  "ram-budget",
+]);
+
+const warmPoolTargetSchema = z.object({
+  platform: platformSchema,
+  model: z.string().max(WARM_POOL_NAME_MAX),
+  osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
+  mode: z.enum(["slim", "full"]),
+  count: z.number().int().nonnegative(),
+  ready: z.number().int().nonnegative(),
+  booting: z.number().int().nonnegative(),
+  short: warmPoolShortSchema.optional(),
+});
+
+/** The warm pool as `status.get` and a worker's view report it. */
+export const statusWarmPoolSchema = z.object({
+  enabled: z.boolean(),
+  reserveRunning: z.object({
+    ios: z.number().int().nonnegative(),
+    android: z.number().int().nonnegative(),
+  }),
+  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_TARGETS_MAX),
+});
+
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
 
 /**
@@ -641,6 +680,14 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("prerequisite-missing"),
     platform: platformSchema,
     prerequisite: z.string(),
+    message: z.string(),
+    remedy: z.string(),
+  }),
+  z.object({
+    kind: z.literal("warm-pool-target-unreachable"),
+    platform: platformSchema.optional(),
+    target: z.string(),
+    reason: z.enum(["runtime-missing", "unknown-model", "over-limit"]),
     message: z.string(),
     remedy: z.string(),
   }),
@@ -980,6 +1027,8 @@ export const workerViewSchema = z.object({
     .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
     .optional(),
   capacity: statusCapacitySchema.optional(),
+  /** The worker's warm pool as its last `status.get` read it; absent until one was read. */
+  warmPool: statusWarmPoolSchema.optional(),
   /**
    * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
    * connects. Display only: routing counts installed runtimes and never reads it, and the

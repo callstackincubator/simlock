@@ -420,6 +420,50 @@ describe("WorkerRegistry", () => {
     expect(workers.view("wrk_2")?.installs).toBeUndefined();
   });
 
+  describe("a worker's warm pool block", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [],
+    };
+
+    it("is on the view after a refresh, and stays on a disconnected worker's view as it was last read", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      workers.refresh("wrk_1", { warmPool });
+      workers.disconnected("wrk_1");
+
+      expect(workers.view("wrk_1")?.warmPool).toEqual(warmPool);
+    });
+
+    it("is absent for a worker whose status was never read", () => {
+      const { workers } = registry();
+
+      expect(workers.connected("wrk_1", undefined, "0.3.0").warmPool).toBeUndefined();
+    });
+
+    it("is dropped from the view when the worker turns incompatible or starts over", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.connected("wrk_2", undefined, "0.3.0");
+      workers.refresh("wrk_1", { warmPool });
+      workers.refresh("wrk_2", { warmPool });
+
+      const incompatible = workers.incompatible(
+        "wrk_1",
+        undefined,
+        { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+        "0.2.0",
+      );
+      workers.refresh("wrk_2", { health: "starting" });
+
+      expect(incompatible.warmPool).toBeUndefined();
+      expect(workers.view("wrk_1")?.warmPool).toBeUndefined();
+      expect(workers.view("wrk_2")?.warmPool).toBeUndefined();
+    });
+  });
+
   it("drops a worker's waiting requests from its view when it disconnects or turns incompatible", () => {
     const { workers } = registry();
     const waiting = [

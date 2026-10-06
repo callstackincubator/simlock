@@ -2344,3 +2344,198 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     },
   };
 }
+
+describe("Doctor: warm pool targets", () => {
+  const entry = (maxRunning: number) => ({
+    maxRunning,
+    overLimit: false,
+    reserved: 0,
+    running: 0,
+  });
+  const limits = (limit: { ios?: number; android?: number; global?: number }) => ({
+    android: entry(limit.android ?? 10),
+    global: entry(limit.global ?? 20),
+    ios: entry(limit.ios ?? 10),
+  });
+  const figuresOf = (
+    targets: readonly {
+      model: string;
+      osVersion: string;
+      short?: "runtime-missing" | "unknown-model" | "ram-budget";
+    }[],
+  ) => ({
+    enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: targets.map((target) => ({
+      booting: 0,
+      count: 1,
+      mode: "full" as const,
+      platform: "ios" as const,
+      ready: 0,
+      ...target,
+    })),
+  });
+
+  async function findings(options: {
+    readonly targets?: Config["warmPool"]["targets"];
+    readonly reserve?: { ios: number; android: number };
+    readonly enabled?: boolean;
+    readonly limit?: { ios?: number; android?: number; global?: number };
+    readonly figures?: ReturnType<typeof figuresOf>;
+  }): Promise<DoctorFinding[]> {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const base = config();
+    const doctor = new Doctor({
+      clock,
+      config: {
+        ...base,
+        warmPool: {
+          ...base.warmPool,
+          enabled: options.enabled ?? true,
+          reserveRunning: options.reserve ?? { android: 0, ios: 0 },
+          targets: options.targets ?? [],
+        },
+      },
+      drivers: [new FakeDriver({ clock, platform: "ios" })],
+      eventBus,
+      registry,
+      warmPool: {
+        figures: () => options.figures ?? figuresOf([]),
+        runningCapacity: () => limits(options.limit ?? {}),
+      },
+    });
+    const report = await doctor.reconcile();
+    return report.findings.filter((finding) => finding.kind === "warm-pool-target-unreachable");
+  }
+
+  it("reports a target short with runtime-missing as unreachable, naming the install command", async () => {
+    const found = await findings({
+      figures: figuresOf([
+        { model: "iPhone 17", osVersion: "26.0" },
+        { model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" },
+      ]),
+    });
+
+    expect(found).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "iOS 27.0 is not installed",
+        platform: "ios",
+        reason: "runtime-missing",
+        remedy: "run simlock component install ios 27.0",
+        target: "iPhone 17 / 27.0 / full",
+      },
+    ]);
+  });
+
+  it("reports a target short with unknown-model as unreachable", async () => {
+    const found = await findings({
+      figures: figuresOf([{ model: "iPhone 99", osVersion: "26.0", short: "unknown-model" }]),
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        kind: "warm-pool-target-unreachable",
+        platform: "ios",
+        reason: "unknown-model",
+        target: "iPhone 99 / 26.0 / full",
+      }),
+    ]);
+  });
+
+  it("reports one finding for two iOS targets of 2 on a running limit of 3, naming the sum and the limit", async () => {
+    const found = await findings({
+      limit: { ios: 3 },
+      targets: [
+        { count: 2, model: "iPhone 17", platform: "ios" },
+        { count: 2, model: "iPhone 16", platform: "ios" },
+      ],
+    });
+
+    expect(found).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "the ios targets want 4 running devices, and the running limit leaves room for 3",
+        platform: "ios",
+        reason: "over-limit",
+        remedy: "lower the counts of the ios warmPool.targets, or raise the running limit",
+        target: "ios targets",
+      },
+    ]);
+  });
+
+  it("takes the platform's reserve off the room its targets have", async () => {
+    const targets = [{ count: 3, model: "iPhone 17", platform: "ios" as const }];
+
+    expect(await findings({ limit: { ios: 3 }, reserve: { android: 0, ios: 1 }, targets })).toEqual(
+      [expect.objectContaining({ platform: "ios", reason: "over-limit" })],
+    );
+    expect(await findings({ limit: { ios: 3 }, targets })).toEqual([]);
+  });
+
+  it("reports one finding for targets that fit each platform but not the machine's running limit together", async () => {
+    const found = await findings({
+      limit: { android: 5, global: 3, ios: 5 },
+      targets: [
+        { count: 2, model: "iPhone 17", platform: "ios" },
+        { count: 2, model: "Pixel 8", platform: "android" },
+      ],
+    });
+
+    expect(found).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "the targets want 4 running devices, and the running limit leaves room for 3",
+        reason: "over-limit",
+        remedy: "lower the counts of the warmPool.targets, or raise the running limit",
+        target: "all targets",
+      },
+    ]);
+  });
+
+  it("does not report a target short for ram-budget, or one that fits", async () => {
+    const found = await findings({
+      figures: figuresOf([{ model: "iPhone 17", osVersion: "26.0", short: "ram-budget" }]),
+      targets: [{ count: 1, model: "iPhone 17", platform: "ios" }],
+    });
+
+    expect(found).toEqual([]);
+  });
+
+  it("reports nothing with the pool off", async () => {
+    const found = await findings({
+      enabled: false,
+      figures: figuresOf([{ model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" }]),
+      limit: { ios: 1 },
+      targets: [{ count: 5, model: "iPhone 17", platform: "ios" }],
+    });
+
+    expect(found).toEqual([]);
+  });
+
+  it("leaves the finding out of the doctor.reconciled event's driftFindings", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const base = config();
+    const doctor = new Doctor({
+      clock,
+      config: base,
+      drivers: [new FakeDriver({ clock, platform: "ios" })],
+      eventBus,
+      registry,
+      warmPool: {
+        figures: () =>
+          figuresOf([{ model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" }]),
+        runningCapacity: () => limits({}),
+      },
+    });
+
+    await doctor.reconcile();
+
+    const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
+    expect(reconciled?.payload).toEqual({ driftFindings: [] });
+  });
+});

@@ -1069,7 +1069,9 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toEqual([]);
     expect(rig.pool.targets()).toEqual([
       {
+        booting: 0,
         count: 1,
+        kind: { mode: "full", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
         message: "iOS 27.0 is not installed",
         ready: 0,
         short: "runtime-missing",
@@ -1652,6 +1654,180 @@ describe("warm pool targets", () => {
       "ios iPhone 17 26.0:unresolvable",
       "ios iPhone 16 26.0:unresolvable",
     ]);
+  });
+
+  describe("figures", () => {
+    const wanted = {
+      mode: "full",
+      model: "iPhone 17",
+      osVersion: "26.0",
+      platform: "ios",
+    } as const;
+
+    it("lists a target with its kind, count, ready and booting, and no reason while it fills", async () => {
+      let finish: () => void = () => undefined;
+      const rig = harness([ofKind("ready", "ready")], {
+        limit: 5,
+        provision: () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+        targets: [{ ...iphone17, count: 2 }],
+      });
+
+      await rig.pool.pass();
+
+      expect(rig.pool.figures()).toStrictEqual({
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [{ ...wanted, booting: 1, count: 2, ready: 1 }],
+      });
+      finish();
+      await rig.pool.settle();
+    });
+
+    it("lists a target the resolver refuses with the kind it was configured with and the refusal as short", async () => {
+      const rig = harness([], {
+        resolve: () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
+        targets: [{ ...iphone17, osVersion: "27.0" }],
+      });
+
+      await rig.pool.pass();
+
+      expect(rig.pool.figures().targets).toStrictEqual([
+        { ...wanted, booting: 0, count: 1, osVersion: "27.0", ready: 0, short: "runtime-missing" },
+      ]);
+    });
+
+    it("lists every configured target as short disabled with the pool off, before and after a pass", async () => {
+      const rig = harness([ofKind("ready", "ready")], {
+        enabled: false,
+        targets: [iphone17, { ...iphone17, mode: "slim", model: "iPhone 16" }],
+      });
+      const expected = {
+        enabled: false,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [
+          { ...wanted, booting: 0, count: 1, ready: 0, short: "disabled" },
+          {
+            ...wanted,
+            booting: 0,
+            count: 1,
+            mode: "slim",
+            model: "iPhone 16",
+            ready: 0,
+            short: "disabled",
+          },
+        ],
+      };
+
+      expect(rig.pool.figures()).toStrictEqual(expected);
+      await rig.pool.pass();
+      expect(rig.pool.figures()).toStrictEqual(expected);
+    });
+
+    it("leaves out osVersion for a refused target that names none", async () => {
+      const { osVersion: _osVersion, ...unversioned } = iphone17;
+      const rig = harness([], {
+        resolve: () => ({ message: "no driver", refusal: "no-driver" }),
+        targets: [unversioned],
+      });
+
+      await rig.pool.pass();
+
+      expect(rig.pool.figures().targets[0]).toStrictEqual({
+        booting: 0,
+        count: 1,
+        mode: "full",
+        model: "iPhone 17",
+        platform: "ios",
+        ready: 0,
+        short: "no-driver",
+      });
+    });
+  });
+
+  describe("warm-pool.target-missed", () => {
+    const missed = (rig: ReturnType<typeof harness>): unknown[] => {
+      const payloads: unknown[] = [];
+      rig.eventBus.subscribe("warm-pool.target-missed", (envelope) => {
+        payloads.push(envelope.payload);
+      });
+      return payloads;
+    };
+
+    it("fires once when a target first ends a pass short, with its kind, count, ready and reason", async () => {
+      const rig = harness([], {
+        resolve: () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
+        targets: [{ ...iphone17, osVersion: "27.0" }],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+
+      expect(payloads).toStrictEqual([
+        {
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          reason: "runtime-missing",
+        },
+      ]);
+    });
+
+    it("does not fire again on the next pass that leaves the target short", async () => {
+      const rig = harness([], {
+        resolve: () => ({ message: "why", refusal: "runtime-missing" }),
+        targets: [iphone17],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+      await rig.pool.pass();
+      await rig.pool.pass();
+
+      expect(payloads).toHaveLength(1);
+    });
+
+    it("fires again when the target was met in between and is missed again", async () => {
+      let refuse = true;
+      const rig = harness([], {
+        resolve: (request) =>
+          refuse
+            ? { message: "why", refusal: "runtime-missing" }
+            : {
+                spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
+              },
+        targets: [iphone17],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+      refuse = false;
+      await rig.pool.pass();
+      await rig.pool.settle();
+      expect(rig.pool.figures().targets[0]).not.toHaveProperty("short");
+      refuse = true;
+      await rig.pool.pass();
+
+      expect(payloads).toHaveLength(2);
+    });
+
+    it("fires nothing for a target that is filling, and nothing with the pool off", async () => {
+      const filling = harness([], { limit: 5, targets: [iphone17] });
+      const fillingPayloads = missed(filling);
+      await filling.pool.pass();
+      await filling.pool.settle();
+      const off = harness([], { enabled: false, targets: [iphone17] });
+      const offPayloads = missed(off);
+      await off.pool.pass();
+
+      expect(fillingPayloads).toEqual([]);
+      expect(offPayloads).toEqual([]);
+    });
   });
 
   describe("targeted", () => {

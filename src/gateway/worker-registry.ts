@@ -40,6 +40,7 @@ export type WorkerViewSnapshot = Pick<
   | "queueDepth"
   | "version"
   | "waiting"
+  | "warmPool"
 >;
 
 /** A worker's device in the shape a grant carries it: what `GET /v1/leases/{id}` builds a lease

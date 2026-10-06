@@ -15,6 +15,7 @@ import {
   redactConfig,
   UnknownPassthroughToolError,
   type CapacityReader,
+  type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
 } from "../core/index.js";
@@ -140,6 +141,7 @@ interface Connection {
  */
 export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
+  readonly warmPool: WarmPoolReader;
   readonly deviceModes: DeviceModeReader;
   readonly catalog: CatalogReader;
   /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
@@ -301,6 +303,7 @@ function buildDispatcher(
   return new Dispatcher({
     awaitReady: hooks.awaitReady,
     capacity: options.capacity,
+    warmPool: options.warmPool,
     catalog: options.catalog,
     deviceModes: options.deviceModes,
     clock: options.clock,

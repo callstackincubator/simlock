@@ -183,7 +183,7 @@ describe("DaemonServer", () => {
     [17, "cannot parse a starting status.get answer"],
     [18, "cannot parse config.get's warmPool.targets"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 19, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 20, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -193,7 +193,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 19, max: 19 } },
+          details: { client: { min: version, max: version }, daemon: { min: 20, max: 20 } },
         },
         ok: false,
       });
@@ -2969,6 +2969,7 @@ async function createHarness(
   const daemon = new DaemonServer({
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",

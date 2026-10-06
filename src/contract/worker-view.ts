@@ -60,6 +60,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
       | "leases"
       | "queueDepth"
       | "waiting"
+      | "warmPool"
     >
   >;
 

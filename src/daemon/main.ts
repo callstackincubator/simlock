@@ -385,6 +385,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
     beginStop: () => core.closeWarmPool(),
     capacity: core.capacityReader,
+    warmPool: core.warmPoolReader,
     catalog: core.catalog,
     deviceModes: leasing,
     clock,

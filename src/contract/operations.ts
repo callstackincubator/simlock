@@ -32,6 +32,7 @@ import {
   platformSchema,
   proposalSchema,
   statusCapacitySchema,
+  statusWarmPoolSchema,
   statusDeviceSchema,
   statusInstallsSchema,
   statusLeaseSchema,
@@ -103,6 +104,7 @@ export const statusGet = defineOperation({
     devices: z.array(statusDeviceSchema).optional(),
     leases: z.array(statusLeaseSchema).optional(),
     capacity: statusCapacitySchema.optional(),
+    warmPool: statusWarmPoolSchema.optional(),
     /**
      * What this daemon *is*, as opposed to what it currently holds: its health, and its run
      * mode (ADR 0005 §1). `mode` is the one field that tells a client which kind of daemon

@@ -50,18 +50,31 @@ export interface ResolvedTarget {
 /** Why a target has fewer ready devices than its count, when nothing but time will not fix it. */
 export type TargetShort =
   | TargetRefusal
+  | "disabled"
   | "boot-failed"
   | "running-limit"
   | "device-limit"
   | "ram-budget"
   | "reserve";
 
+/** A target's kind as reported: the platform, the exact model, and the OS and mode it names. */
+export interface TargetKind {
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly osVersion?: string;
+  readonly mode: "slim" | "full";
+}
+
 /** One target as a pass left it: what it asked for, how many are ready, and why not more. */
 export interface TargetReport {
   readonly target: string;
+  /** The kind as resolved, or as configured for a target that did not resolve. */
+  readonly kind: TargetKind;
   readonly spec?: DeviceSpec;
   readonly count: number;
   readonly ready: number;
+  /** Boots and creations of the kind running or proposed in the pass. */
+  readonly booting: number;
   readonly short?: TargetShort;
   readonly message?: string;
 }
@@ -468,7 +481,14 @@ function planTargets(
     ).length;
   const reports = targets.map(({ count, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
-    const report = { count, ready, spec, target: describeTarget(spec) };
+    const report = {
+      booting: 0,
+      count,
+      kind: kindOf(spec),
+      ready,
+      spec,
+      target: describeTarget(spec),
+    };
     const filling = pending(spec);
     const missing = count - ready - filling;
     const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
@@ -529,6 +549,16 @@ function addOne(plan: TargetPlan, spec: DeviceSpec): TargetShort | undefined {
   plan.taken.add(shutDown.id);
   plan.proposals.push({ action: "boot", deviceId: shutDown.id, reason: "target", target: spec });
   return undefined;
+}
+
+/** A spec's kind as a report names it. */
+export function kindOf(spec: DeviceSpec): TargetKind {
+  return {
+    mode: specMode(spec),
+    model: spec.model,
+    platform: spec.platform,
+    osVersion: spec.osVersion,
+  };
 }
 
 /** A target or a spec as one line: platform, model, OS and mode, the parts it names. */

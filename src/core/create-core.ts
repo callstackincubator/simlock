@@ -12,6 +12,7 @@ import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
 import type {
   CapacityReader,
+  WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
   PassthroughResolver,
@@ -106,6 +107,8 @@ export interface Core {
   readonly capacity: CapacityCoordinator;
   /** Read-only capacity view for status, and for the daemon's status reporting. */
   readonly capacityReader: CapacityReader;
+  /** The warm pool's figures, for status and doctor. */
+  readonly warmPoolReader: WarmPoolReader;
   /** The device catalog and the passthrough resolver, both answered by the driver catalog. */
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
@@ -327,6 +330,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    warmPoolReader: warmPool,
     catalog: drivers,
     claims,
     claimReader: claims,

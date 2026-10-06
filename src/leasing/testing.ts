@@ -2,6 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
 import {
   type CapacityReader,
+  type WarmPoolReader,
   type CatalogReader,
   type ComponentInstaller,
   type Config,
@@ -54,6 +55,7 @@ export interface TestEngine
     QueueControl,
     DeviceModeReader,
     CapacityReader,
+    WarmPoolReader,
     CatalogReader,
     PassthroughResolver,
     LeaseExpirer,
@@ -132,6 +134,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     cancelPending: (requesterId) => leasing.cancelPending(requesterId),
     pendingRequestOwner: (requesterId) => leasing.pendingRequestOwner(requesterId),
     servesDefaultMode: (spec: DeviceSpec) => leasing.servesDefaultMode(spec),
+    figures: () => core.warmPoolReader.figures(),
     get runningCapacity() {
       return core.capacityReader.runningCapacity;
     },

@@ -1,4 +1,5 @@
 import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/index.js";
+import type { WarmPoolFigures } from "./warm-pool/index.js";
 import type { Platform } from "./domain.js";
 import type { PassthroughCommand, PassthroughContext } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
@@ -13,6 +14,12 @@ export interface CapacityReader {
   /** Whether creating one more full device of `platform` would be refused for RAM, by the same
    * check the planner makes. */
   atRamBudget(platform: CapacityPlatform): boolean;
+}
+
+/** Read-only view of the warm pool, used by daemon status and doctor. */
+export interface WarmPoolReader {
+  /** The pool as its last pass left it. */
+  figures(): WarmPoolFigures;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */
