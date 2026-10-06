@@ -222,7 +222,8 @@ async function untilState(
 /**
  * Runs `check` (which throws on a violation) at every poll for `duration`, and fails on the first
  * poll that throws: waitFor swallows a throwing predicate and keeps polling, so the violation is
- * kept here and rethrown after the window, and the loop stops at once.
+ * kept here, the predicate returns true so the loop stops at once, and the violation is rethrown
+ * straight after, without waiting out the window.
  */
 async function holds(label: string, duration: number, check: () => Promise<void>): Promise<void> {
   const until = Date.now() + duration;
