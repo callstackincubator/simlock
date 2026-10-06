@@ -71,6 +71,8 @@ function harness(
     /** Holds a creation until the test lets it go; the creation fails when this rejects. */
     provision?: (spec: DeviceSpec, attempt: number) => Promise<void>;
     refuseProvision?: boolean;
+    /** The budget allows a creation when asked, then refuses the reservation: a lost race. */
+    refuseReservation?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -141,7 +143,8 @@ function harness(
       canProvision: () =>
         options.refuseProvision === true ? { ok: false, reason: "device-limit" } : { ok: true },
       tryReserveProvisioning: () => {
-        if (options.refuseProvision === true) return { ok: false, reason: "device-limit" };
+        if (options.refuseProvision === true || options.refuseReservation === true)
+          return { ok: false, reason: "device-limit" };
         const reservation = { released: 0 };
         provisionReservations.push(reservation);
         return {
@@ -1157,6 +1160,33 @@ describe("warm pool targets", () => {
 
     expect(rig.provisionCalls).toEqual([]);
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "device-limit" })]);
+  });
+
+  it("creates nothing, and reports no failure, when the budget refuses the reservation after the policy allowed the creation", async () => {
+    const rig = harness([], { refuseReservation: true, targets: [iphone17] });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.provisionCalls).toEqual([]);
+    expect(rig.sink.records.filter((record) => record.level === "error")).toEqual([]);
+    // A declined creation asks for no pass of its own: the same view would propose it again.
+    expect(rig.resolveCalls).toHaveLength(1);
+    // Not a failure: the target is not held back, and the next pass tries it again.
+    await rig.pool.pass();
+    expect(rig.resolveCalls).toHaveLength(2);
+    expect(rig.pool.targets()[0]?.short).toBeUndefined();
+  });
+
+  it("boots nothing, and asks for no pass of its own, when the device's boot claim is refused", async () => {
+    const rig = harness([ofKind("shut", "shutdown")], { refuseClaim: true, targets: [iphone17] });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.resolveCalls).toHaveLength(1);
+    expect(rig.reservations.every((reservation) => reservation.released === 1)).toBe(true);
   });
 
   it("reports and logs nothing, and names no device, before its first pass", () => {

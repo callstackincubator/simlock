@@ -994,6 +994,21 @@ describe("warm pool policy", () => {
       expect(result.targets[0]).toMatchObject({ ready: 0, short: "running-limit" });
     });
 
+    it.each([
+      ["the machine", { limit: 1, limits: { ios: 5 } }],
+      ["the platform", { limit: 5, limits: { ios: 1 } }],
+    ])(
+      "stops proposing for a target of two once the slot is taken when %s alone has room for one",
+      (_name, limits) => {
+        const result = plan(view([], { ...limits, maxConcurrentBoots: 2, targets: [target(2)] }));
+
+        expect(result.proposals).toEqual([
+          { action: "provision", reason: "target", spec: kind, target: kind },
+        ]);
+        expect(result.targets[0]).toMatchObject({ short: "running-limit" });
+      },
+    );
+
     it("counts a recently released device of its kind the keep rule boots as one of the target's, and one of another kind not", () => {
       const released = device("released", "shutdown", { endedAgo: minute, spec: kind });
       const other = device("other", "shutdown", { endedAgo: 2 * minute, spec: spec("iPad Pro") });

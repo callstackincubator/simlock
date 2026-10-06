@@ -332,9 +332,11 @@ export class WarmPool {
 
   /**
    * Starts a target's boot or creation beside the pass, which does not wait for it: the policy
-   * counts it toward `maxConcurrentBoots` until it ends, and its end asks for the next pass.
+   * counts it toward `maxConcurrentBoots` until it ends, and its end asks for the next pass when
+   * an attempt was made. One that was declined (the device or the budget was gone by then) asks
+   * for none: the same view would propose it again at once, and the pool would spin.
    */
-  #launch(spec: DeviceSpec, run: () => Promise<void>): void {
+  #launch(spec: DeviceSpec, run: () => Promise<boolean>): void {
     const flight: Flight = { done: Promise.resolve(), spec };
     this.#flights.add(flight);
     flight.done = run()
@@ -343,10 +345,11 @@ export class WarmPool {
           step: "flight",
           error: stableError(error),
         });
+        return true;
       })
-      .finally(() => {
+      .then((attempted) => {
         this.#flights.delete(flight);
-        this.#trigger();
+        if (attempted) this.#trigger();
       });
   }
 
@@ -362,8 +365,11 @@ export class WarmPool {
     this.options.acquisition.kick();
   }
 
-  /** Boots a shut-down device; for a target, also reports the outcome to the failure schedule. */
-  async #boot(deviceId: string, target: DeviceSpec | undefined): Promise<void> {
+  /**
+   * Boots a shut-down device; for a target, also reports the outcome to the failure schedule.
+   * Whether a boot was attempted: not when the device is no longer there to boot.
+   */
+  async #boot(deviceId: string, target: DeviceSpec | undefined): Promise<boolean> {
     const held = await this.options.decisions.run(() => {
       const device = this.#unleased(deviceId, "shutdown");
       if (device === undefined) return undefined;
@@ -379,10 +385,10 @@ export class WarmPool {
       }
       return { claim, device, reservation: reservation.reservation };
     });
-    if (held === undefined) return;
+    if (held === undefined) return false;
     try {
       const done = await this.options.lifecycle.bootWarm(held.device, held.claim);
-      if (done === undefined) return;
+      if (done === undefined) return false;
       if (target !== undefined) this.#schedule.succeeded(target);
     } catch (error: unknown) {
       this.#logFailure(held.device, "boot", error);
@@ -394,6 +400,7 @@ export class WarmPool {
       });
     }
     this.options.acquisition.kick();
+    return true;
   }
 
   /**
@@ -402,7 +409,7 @@ export class WarmPool {
    * ready under an ownerless `boot` claim, so a request that serves it may wait on it (#369), and
    * the claim ends once it is ready and unleased.
    */
-  async #provision(spec: DeviceSpec, target: DeviceSpec): Promise<void> {
+  async #provision(spec: DeviceSpec, target: DeviceSpec): Promise<boolean> {
     const reservation = await this.options.decisions.run(() => {
       const attempt = this.options.capacity.tryReserveProvisioning(
         plannedCapacityDevice(spec),
@@ -410,7 +417,7 @@ export class WarmPool {
       );
       return attempt.ok ? attempt.reservation : undefined;
     });
-    if (reservation === undefined) return;
+    if (reservation === undefined) return false;
     try {
       const handoff = await this.options.provisioner.provision(spec, {
         claim: { kind: "boot" },
@@ -427,6 +434,7 @@ export class WarmPool {
       this.#failed(target);
     }
     this.options.acquisition.kick();
+    return true;
   }
 
   /** Remembers the failure; the pass the ended flight asks for arms the timer for the retry. */

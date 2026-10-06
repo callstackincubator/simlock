@@ -32,7 +32,17 @@ async function untilDevices(
   label: string,
   timeout = 30_000,
 ): Promise<void> {
-  await waitFor(async () => matches(await devices(env)), { label, timeout });
+  let last: readonly Device[] = [];
+  await waitFor(
+    async () => {
+      last = await devices(env);
+      return matches(last);
+    },
+    {
+      label: () => `${label}; last saw ${JSON.stringify(last.map((row) => [row.id, row.state]))}`,
+      timeout,
+    },
+  );
 }
 
 async function lease(env: TestEnv, agent: string, model: string) {
@@ -207,7 +217,9 @@ describe("warm pool targets", () => {
 
     await untilDevices(
       env,
-      (rows) => rows.length === 1 && rows[0]?.state === "ready" && rows[0]?.id !== first?.id,
+      (rows) =>
+        rows.find((row) => row.id === first?.id)?.state === "deleted" &&
+        rows.filter((row) => row.state === "ready" && row.id !== first?.id).length === 1,
       "the spent device is deleted and a new one is ready",
     );
   });
