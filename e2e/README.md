@@ -65,4 +65,4 @@ running test body silently never fires — see the comment in `helpers/env.ts`.
 - `daemon status` ignores `--json` and always prints raw JSON; documented by an
   `it.fails` in `daemon-lifecycle.test.ts`.
 - Android is exercised through the fake driver in the fast lane; only
-  `slow-android-smoke.test.ts` touches a real emulator.
+  `slow-android-smoke.test.ts` and `slow-warm-pool.test.ts` touch a real emulator.
