@@ -2141,11 +2141,7 @@ function formatWorkers(
               .map((install) => `\n  ${formatInstall(install, installsAt)}`)
               .join("");
       const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
-      const state = [
-        worker.connection,
-        ...(worker.health === "starting" ? ["starting"] : []),
-        ...(worker.drained ? ["drained"] : []),
-      ].join(", ");
+      const state = workerState(worker);
       const capacity =
         worker.capacity === undefined
           ? "capacity unknown"
@@ -2157,9 +2153,24 @@ function formatWorkers(
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
       const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
-      return `${label}: ${state} -- ${capacity}, ${worker.leases === undefined ? "leases unknown" : `${String(worker.leases.length)} lease(s)`}${skew}${host}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${installs}`;
     })
     .join("\n");
+}
+
+/** A worker's state words: its connection, then `starting` while it has not finished starting, then `drained`. */
+function workerState(worker: WorkerView): string {
+  return [
+    worker.connection,
+    ...(worker.health === "starting" ? ["starting"] : []),
+    ...(worker.drained ? ["drained"] : []),
+  ].join(", ");
+}
+
+/** How many leases a worker holds, or that they are unknown: a starting worker has not been read. */
+function leaseCount(worker: WorkerView): string {
+  if (worker.leases === undefined) return "leases unknown";
+  return `${String(worker.leases.length)} lease(s)`;
 }
 
 /** `Install ios 26.4: downloading for 42s, 2 waiters` -- platform, component, state, age, waiters. */

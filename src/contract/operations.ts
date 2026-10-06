@@ -237,7 +237,7 @@ export function refuseModelWithClass(
 }
 
 /** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
-export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {

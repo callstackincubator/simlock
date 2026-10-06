@@ -22,7 +22,7 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
-import type { SimlockAdminClient } from "../admin/index.js";
+import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -360,11 +360,7 @@ export class WorkerLink {
     // it would say is unchecked. Nothing more is asked of it, and its view is built from those
     // two facts; the next refresh reads it in full once it answers `running`.
     if (status.daemon.health === "starting") {
-      if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
-      this.options.registry.refresh(this.workerId, {
-        ...workerViewFields({ status }),
-        version: client.daemonVersion,
-      });
+      this.#refreshStarting(client, status);
       return;
     }
 
@@ -399,6 +395,17 @@ export class WorkerLink {
         ...(config === undefined ? {} : { config }),
       }),
       grantedDevices: grantedDevices(devices),
+      version: client.daemonVersion,
+    });
+  }
+
+  /** A starting worker's view: its health and host, which `workerViewFields` builds from the
+   * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
+   * write is (H2). */
+  #refreshStarting(client: SimlockAdminClient, status: StatusGetOutput): void {
+    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    this.options.registry.refresh(this.workerId, {
+      ...workerViewFields({ status }),
       version: client.daemonVersion,
     });
   }
