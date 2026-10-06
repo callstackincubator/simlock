@@ -138,7 +138,9 @@ Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
 managed/running capacity per platform, active leases, managed devices (each
 with its device mode, `mode`: `"slim"` or `"full"`), queue depth, and the warm
 pool: `warmPool` carries `enabled`, `reserveRunning` (`ios`, `android`) and
-`targets`, each with `platform`, `model`, `osVersion` (when it names one),
+`targets`, each with `platform`, `model`, `osVersion` (the one the target resolved
+to, or the one it names when it did not resolve; absent when it names none and
+did not resolve),
 `mode`, `count`, `ready`, `booting` and, for a target the last pass could do
 nothing for, `short` — one of `disabled`, `no-driver`, `runtime-missing`,
 `unknown-model`, `unresolvable`, `boot-failed`, `device-limit`, `running-limit`,

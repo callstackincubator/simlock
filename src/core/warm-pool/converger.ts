@@ -9,9 +9,12 @@ import {
 import type { DeviceOperationClaims } from "../device-operation-claims.js";
 import type { DeviceProvisioner } from "../device-provisioner.js";
 import {
+  type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
   type LeaseRecord,
+  type Platform,
+  sameSpec,
   type TargetResolution,
   type WaitingDemand,
 } from "../domain.js";
@@ -44,6 +47,8 @@ export interface WarmPoolOptions {
      * the spec or why there is none. A target is such a request (ADR 0007 §2, ADR 0015 §5).
      */
     resolve(request: DeviceRequest): Promise<TargetResolution>;
+    /** The mode a request naming none plans on a platform: where a target with no mode lands. */
+    defaultMode(platform: Platform): DeviceMode;
   };
   readonly capacity: Pick<
     CapacityCoordinator,
@@ -112,8 +117,16 @@ export class WarmPool {
   #reports: readonly TargetReport[] = [];
   /** Whether a pass has left its reports yet: until one has, the figures come from the config. */
   #passed = false;
-  /** The targets that were short after the last pass, by kind: an event fires on entering this. */
-  #missed = new Set<string>();
+  /**
+   * The configured targets (by position in `warmPool.targets`) that missed their count and have
+   * not been met since: the event fires on entering this, and a target leaves it only when its
+   * ready devices reach its count.
+   */
+  #missed = new Set<number>();
+  /** Which configured targets each report stands for: a report merges those of one spec. */
+  #covers = new WeakMap<TargetReport, readonly number[]>();
+  /** The spec each resolved target resolved to this pass, by position in `warmPool.targets`. */
+  #owners: readonly { readonly index: number; readonly spec: DeviceSpec }[] = [];
   #loggedShort = new Set<string>();
   #retryTimer: TimerHandle | undefined;
   #running: Promise<void> | undefined;
@@ -214,7 +227,7 @@ export class WarmPool {
       enabled && this.#passed
         ? this.#reports
         : targets.map((target): TargetReport => {
-            const kind = kindOfTarget(target);
+            const kind = this.#kindOfTarget(target);
             return {
               booting: 0,
               count: target.count,
@@ -299,7 +312,8 @@ export class WarmPool {
    */
   async #resolveTargets(): Promise<readonly TargetReport[]> {
     const answers = await Promise.all(
-      this.options.config.targets.map(async (target) => ({
+      this.options.config.targets.map(async (target, index) => ({
+        index,
         resolution: await this.options.acquisition.resolve(requestFor(target)),
         target,
       })),
@@ -307,10 +321,12 @@ export class WarmPool {
     const resolved: ResolvedTarget[] = [];
     const spared: ResolvedTarget[] = [];
     const refused: TargetReport[] = [];
-    for (const { resolution, target } of answers) {
+    const owners: { index: number; spec: DeviceSpec }[] = [];
+    for (const { index, resolution, target } of answers) {
       const key = JSON.stringify(target);
       if ("spec" in resolution) {
         this.#lastSpecs.set(key, resolution.spec);
+        owners.push({ index, spec: resolution.spec });
         resolved.push({ count: target.count, spec: resolution.spec });
         continue;
       }
@@ -321,16 +337,23 @@ export class WarmPool {
       const last = resolution.refusal === "unresolvable" ? this.#lastSpecs.get(key) : undefined;
       if (last === undefined) this.#lastSpecs.delete(key);
       else spared.push({ count: target.count, spec: last });
-      refused.push({
-        booting: 0,
+      const report: TargetReport = {
+        // What of the spec it last resolved to is still being booted or created.
+        booting:
+          last === undefined
+            ? 0
+            : [...this.#flights].filter((flight) => sameSpec(flight.spec, last)).length,
         count: target.count,
-        kind: kindOfTarget(target),
+        kind: this.#kindOfTarget(target),
         message: resolution.message,
         ready: last === undefined ? 0 : readyCount(this.#deviceCounts(), last),
         short: resolution.refusal,
         target: describeTarget(target),
-      });
+      };
+      this.#covers.set(report, [index]);
+      refused.push(report);
     }
+    this.#owners = owners;
     this.#resolved = resolved;
     this.#spared = spared;
     this.#hasResolved = true;
@@ -364,17 +387,23 @@ export class WarmPool {
   }
 
   /**
-   * Emits `warm-pool.target-missed` for each target that is short after this pass and was not
-   * after the one before: the edge, not each short pass. Once the pass's actions have run, so a
-   * subscriber never reads a pool the pass has not yet acted on.
+   * Emits `warm-pool.target-missed` for a target that is short after this pass and has not missed
+   * since it was last met: the edge, not each short pass (ADR 0017 §7). A target that is filling,
+   * or short again after a retry, is still the same miss; only ready devices reaching its count
+   * end it. Once the pass's actions have run, so a subscriber never reads a pool the pass has not
+   * yet acted on.
    */
   #announceMissed(reports: readonly TargetReport[]): void {
-    const now = new Set<string>();
     for (const report of reports) {
+      const covered = this.#coveredBy(report);
+      if (report.ready >= report.count) {
+        for (const index of covered) this.#missed.delete(index);
+        continue;
+      }
       if (report.short === undefined) continue;
-      const key = JSON.stringify(report.kind);
-      now.add(key);
-      if (this.#missed.has(key)) continue;
+      const fresh = covered.filter((index) => !this.#missed.has(index));
+      for (const index of covered) this.#missed.add(index);
+      if (fresh.length === 0) continue;
       this.options.eventBus.emit(
         "warm-pool.target-missed",
         {
@@ -389,7 +418,25 @@ export class WarmPool {
         "warm-pool",
       );
     }
-    this.#missed = now;
+  }
+
+  /** The configured targets a report stands for: its own, or those that resolved to its spec. */
+  #coveredBy(report: TargetReport): readonly number[] {
+    const own = this.#covers.get(report);
+    if (own !== undefined) return own;
+    const { spec } = report;
+    if (spec === undefined) return [];
+    return this.#owners.filter((owner) => sameSpec(owner.spec, spec)).map((owner) => owner.index);
+  }
+
+  /** A configured target's kind as a report names it: the mode it names, else the platform's. */
+  #kindOfTarget(target: WarmTarget): TargetKind {
+    return {
+      mode: target.mode ?? this.options.acquisition.defaultMode(target.platform),
+      model: target.model,
+      platform: target.platform,
+      ...(target.osVersion === undefined ? {} : { osVersion: target.osVersion }),
+    };
   }
 
   #view(): Parameters<typeof evaluate>[0] {
@@ -607,16 +654,6 @@ export class WarmPool {
       error: stableError(error),
     });
   }
-}
-
-/** A configured target's kind as a report names it. */
-function kindOfTarget(target: WarmTarget): TargetKind {
-  return {
-    mode: target.mode ?? "full",
-    model: target.model,
-    platform: target.platform,
-    ...(target.osVersion === undefined ? {} : { osVersion: target.osVersion }),
-  };
 }
 
 /** A report as `figures()` lists it: the kind, the numbers and the reason, never the message. */

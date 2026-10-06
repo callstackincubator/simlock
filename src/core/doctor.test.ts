@@ -2458,11 +2458,87 @@ describe("Doctor: warm pool targets", () => {
     expect(found).toStrictEqual([
       {
         kind: "warm-pool-target-unreachable",
-        message: "the ios targets want 4 running devices, and the running limit leaves room for 3",
+        message:
+          "the ios targets want 4 running devices, and the ios running limit is 3, leaving room for 3",
         platform: "ios",
         reason: "over-limit",
-        remedy: "lower the counts of the ios warmPool.targets, or raise the running limit",
+        remedy: "lower the counts of the ios warmPool.targets, raise the ios running limit",
         target: "ios targets",
+      },
+    ]);
+  });
+
+  it("names the reserve a platform's limit holds back, and offers lowering it", async () => {
+    const found = await findings({
+      limit: { ios: 3 },
+      reserve: { android: 0, ios: 1 },
+      targets: [{ count: 3, model: "iPhone 17", platform: "ios" }],
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        message:
+          "the ios targets want 3 running devices, and the ios running limit is 3, of which warmPool.reserveRunning holds 1, leaving room for 2",
+        remedy:
+          "lower the counts of the ios warmPool.targets, raise the ios running limit, or lower warmPool.reserveRunning",
+      }),
+    ]);
+  });
+
+  it("names the summed reserves in the machine's finding", async () => {
+    const found = await findings({
+      limit: { android: 5, global: 4, ios: 5 },
+      reserve: { android: 1, ios: 1 },
+      targets: [
+        { count: 2, model: "iPhone 17", platform: "ios" },
+        { count: 1, model: "Pixel 8", platform: "android" },
+      ],
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        message:
+          "the targets want 3 running devices, and the running limit is 4, of which warmPool.reserveRunning holds 2, leaving room for 2",
+        target: "all targets",
+      }),
+    ]);
+  });
+
+  it("caps a platform's reserve at its running limit, so a platform with no targets is not over it", async () => {
+    const noTargets = await findings({
+      limit: { global: 5, ios: 2 },
+      reserve: { android: 0, ios: 4 },
+    });
+    expect(noTargets).toEqual([]);
+    expect(
+      await findings({
+        limit: { global: 5, ios: 2 },
+        reserve: { android: 0, ios: 4 },
+        targets: [{ count: 1, model: "iPhone 17", platform: "ios" }],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        message:
+          "the ios targets want 1 running devices, and the ios running limit is 2, of which warmPool.reserveRunning holds 2, leaving room for 0",
+        platform: "ios",
+      }),
+    ]);
+  });
+
+  it("prints no install command for a target whose OS is a range, which names no version to install", async () => {
+    const found = await findings({
+      figures: figuresOf([{ model: "iPhone 17", osVersion: ">=27", short: "runtime-missing" }]),
+    });
+
+    expect(found).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "no installed iOS runtime satisfies >=27",
+        platform: "ios",
+        reason: "runtime-missing",
+        remedy:
+          "run simlock component list --platform ios to see the versions, then simlock component install ios <version> for one inside >=27",
+        target: "iPhone 17 / >=27 / full",
       },
     ]);
   });
@@ -2488,9 +2564,10 @@ describe("Doctor: warm pool targets", () => {
     expect(found).toStrictEqual([
       {
         kind: "warm-pool-target-unreachable",
-        message: "the targets want 4 running devices, and the running limit leaves room for 3",
+        message:
+          "the targets want 4 running devices, and the running limit is 3, leaving room for 3",
         reason: "over-limit",
-        remedy: "lower the counts of the warmPool.targets, or raise the running limit",
+        remedy: "lower the counts of the warmPool.targets, raise the running limit",
         target: "all targets",
       },
     ]);

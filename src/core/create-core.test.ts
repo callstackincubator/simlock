@@ -116,6 +116,7 @@ function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
       maintenanceActive: false,
       resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
       waitingDemand: () => [],
+      defaultMode: () => "full",
     },
   };
 }
@@ -205,6 +206,7 @@ describe("createCore", () => {
         maintenanceActive: false,
         resolve: async () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
         waitingDemand: () => [],
+        defaultMode: () => "full",
       },
     });
     await core.passWarmPool();
@@ -225,6 +227,7 @@ describe("createCore", () => {
     const { core } = await build({
       warmTargets: [{ count: 1_000, model: "iPhone 17", platform: "ios" }],
     });
+    core.connect(ports());
 
     const report = await core.doctor.reconcile();
 

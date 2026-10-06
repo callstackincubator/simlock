@@ -467,6 +467,32 @@ describe("loadConfig", () => {
       await expect(load({ targets: [target] })).rejects.toThrow(message);
     });
 
+    it("rejects a model or an OS version longer than status.get reports, and takes one of exactly that length", async () => {
+      await expect(
+        load({ targets: [{ count: 1, model: "m".repeat(257), platform: "ios" }] }),
+      ).rejects.toThrow(
+        'Invalid config value for "warmPool.targets[0].model": expected a string of at most 256 characters',
+      );
+      await expect(
+        load({ targets: [{ count: 1, model: "m", osVersion: "1".repeat(257), platform: "ios" }] }),
+      ).rejects.toThrow('Invalid config value for "warmPool.targets[0].osVersion"');
+      const config = await load({
+        targets: [
+          { count: 1, model: "m".repeat(256), osVersion: "1".repeat(256), platform: "ios" },
+        ],
+      });
+      expect(config.warmPool.targets[0]?.model).toHaveLength(256);
+    });
+
+    it("rejects more targets than status.get reports, and takes exactly that many", async () => {
+      const target = { count: 1, model: "iPhone 17", platform: "ios" };
+      await expect(load({ targets: Array.from({ length: 257 }, () => target) })).rejects.toThrow(
+        'Invalid config value for "warmPool.targets": expected an array of at most 256 targets',
+      );
+      const config = await load({ targets: Array.from({ length: 256 }, () => target) });
+      expect(config.warmPool.targets).toHaveLength(256);
+    });
+
     it("rejects targets that are not an array naming warmPool.targets", async () => {
       await expect(load({ targets: { count: 1 } })).rejects.toThrow(
         'Invalid config value for "warmPool.targets": expected an array of targets',

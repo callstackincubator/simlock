@@ -66,6 +66,8 @@ function harness(
     refuseClaim?: boolean;
     targets?: readonly WarmTarget[];
     maxConcurrentBoots?: number;
+    /** The mode a request naming none plans on iOS: `ios.defaultMode`; full when none is set. */
+    defaultMode?: "slim" | "full";
     /** What a target resolves to; by default the request's own model and OS (26.0 when none). */
     resolve?: (request: DeviceRequest) => TargetResolution | Promise<TargetResolution>;
     /** Holds a creation until the test lets it go; the creation fails when this rejects. */
@@ -129,10 +131,11 @@ function harness(
             model: request.model ?? "",
             osVersion: request.osVersion ?? "26.0",
             platform: request.platform,
-            ...(request.mode === "slim" ? { mode: "slim" as const } : {}),
+            ...((request.mode ?? options.defaultMode) === "slim" ? { mode: "slim" as const } : {}),
           },
         };
       },
+      defaultMode: () => options.defaultMode ?? "full",
       waitingDemand,
     },
     capacity: {
@@ -1736,6 +1739,52 @@ describe("warm pool targets", () => {
       });
     });
 
+    it("names the platform's default mode for a target that names none, before a pass, with the pool off, refused and resolved", async () => {
+      const { osVersion: _osVersion, ...unversioned } = iphone17;
+      const modes = async (options: { enabled?: boolean; refuse?: boolean; pass: boolean }) => {
+        const rig = harness([], {
+          defaultMode: "slim",
+          ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
+          ...(options.refuse === true
+            ? { resolve: () => ({ message: "why", refusal: "no-driver" as const }) }
+            : {}),
+          targets: [unversioned],
+        });
+        if (options.pass) await rig.pool.pass();
+        return rig.pool.figures().targets.map((target) => target.mode);
+      };
+
+      expect(await modes({ pass: false })).toEqual(["slim"]);
+      expect(await modes({ enabled: false, pass: true })).toEqual(["slim"]);
+      expect(await modes({ pass: true, refuse: true })).toEqual(["slim"]);
+      expect(await modes({ pass: true })).toEqual(["slim"]);
+    });
+
+    it("counts the boot still running for the spec a target keeps while its resolution is refused unresolvable", async () => {
+      const creation = held();
+      let refuse = false;
+      const rig = harness([], {
+        limit: 5,
+        provision: () => creation.gate,
+        resolve: (request) =>
+          refuse
+            ? { message: "why", refusal: "unresolvable" }
+            : {
+                spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
+              },
+        targets: [iphone17],
+      });
+      await rig.pool.pass();
+      expect(rig.pool.figures().targets[0]?.booting).toBe(1);
+
+      refuse = true;
+      await rig.pool.pass();
+
+      expect(rig.pool.figures().targets[0]).toMatchObject({ booting: 1, short: "unresolvable" });
+      creation.finish();
+      await rig.pool.settle();
+    });
+
     it("leaves out osVersion for a refused target that names none", async () => {
       const { osVersion: _osVersion, ...unversioned } = iphone17;
       const rig = harness([], {
@@ -1830,9 +1879,9 @@ describe("warm pool targets", () => {
       ]);
     });
 
-    it("fires again when the target was met in between and is missed again", async () => {
+    it("fires again when the target was met in between, ready reaching its count, and is missed again", async () => {
       let refuse = true;
-      const rig = harness([], {
+      const rig = harness([ofKind("ready", "ready")], {
         resolve: (request) =>
           refuse
             ? { message: "why", refusal: "runtime-missing" }
@@ -1847,11 +1896,94 @@ describe("warm pool targets", () => {
       refuse = false;
       await rig.pool.pass();
       await rig.pool.settle();
-      expect(rig.pool.figures().targets[0]).not.toHaveProperty("short");
+      expect(rig.pool.figures().targets[0]).toMatchObject({ count: 1, ready: 1 });
       refuse = true;
       await rig.pool.pass();
 
       expect(payloads).toHaveLength(2);
+    });
+
+    it("does not fire again for a target that is only not short on a pass, filling or retrying, until it is met", async () => {
+      const rig = harness([], {
+        limit: 5,
+        provision: async () => {
+          throw new Error("no luck");
+        },
+        targets: [iphone17],
+      });
+      const payloads = missed(rig);
+
+      // The first creation fails and the target is short `boot-failed`; the retry a minute later
+      // is a pass that is not short (a creation runs), and it fails again.
+      await rig.pool.pass();
+      await rig.pool.settle();
+      expect(rig.pool.figures().targets[0]?.short).toBe("boot-failed");
+      rig.clock.advance(minute);
+      await rig.pool.settle();
+      rig.clock.advance(2 * minute);
+      await rig.pool.settle();
+
+      expect(rig.provisionCalls).toHaveLength(3);
+      expect(payloads).toStrictEqual([expect.objectContaining({ reason: "boot-failed" })]);
+    });
+
+    it("fires once for a target with no OS that is refused one pass and short the next, though its kind changes", async () => {
+      const { osVersion: _osVersion, ...unversioned } = iphone17;
+      let refuse = true;
+      const rig = harness([], {
+        limit: 0,
+        resolve: (request) =>
+          refuse
+            ? { message: "why", refusal: "unresolvable" }
+            : {
+                spec: { model: request.model ?? "", osVersion: "26.0", platform: request.platform },
+              },
+        targets: [unversioned],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+      refuse = false;
+      await rig.pool.pass();
+
+      expect(rig.pool.figures().targets[0]).toMatchObject({
+        osVersion: "26.0",
+        short: "running-limit",
+      });
+      expect(payloads).toStrictEqual([expect.objectContaining({ reason: "unresolvable" })]);
+    });
+
+    it("fires once for two targets that resolve to one spec, and on no later pass", async () => {
+      const rig = harness([], {
+        limit: 0,
+        targets: [iphone17, { ...iphone17, count: 2 }],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+      await rig.pool.pass();
+
+      expect(payloads).toStrictEqual([
+        expect.objectContaining({ count: 3, reason: "running-limit" }),
+      ]);
+    });
+
+    it("fires for a configured target that is refused though another target already has the same kind short", async () => {
+      const rig = harness([], {
+        resolve: (request) =>
+          request.model === "iPhone 17"
+            ? { message: "why", refusal: "runtime-missing" }
+            : { message: "why", refusal: "unknown-model" },
+        targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
+      });
+      const payloads = missed(rig);
+
+      await rig.pool.pass();
+
+      expect(payloads.map((payload) => (payload as { model: string }).model)).toEqual([
+        "iPhone 17",
+        "iPhone 16",
+      ]);
     });
 
     it("fires nothing for a target that is filling, and nothing with the pool off", async () => {

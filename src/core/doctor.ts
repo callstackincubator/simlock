@@ -1,4 +1,5 @@
 import type { EventBus } from "../bus/index.js";
+import { parseOsConstraint } from "../contract/os-range.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
@@ -538,6 +539,7 @@ export class Doctor {
     const findings = warmPool.figures().targets.flatMap(unreachableTarget);
     let wanted = 0;
     let room = limits.global.maxRunning;
+    let reserved = 0;
     for (const platform of ["ios", "android"] as const) {
       const sum = targets
         .filter((target) => target.platform === platform)
@@ -546,11 +548,33 @@ export class Doctor {
       const available = limits[platform].maxRunning - reserve;
       wanted += sum;
       room -= reserve;
+      reserved += reserve;
       if (sum > available) {
-        findings.push(overLimit(`${platform} targets`, sum, available, `${platform} `, platform));
+        findings.push(
+          overLimit({
+            limit: limits[platform].maxRunning,
+            platform,
+            reserve,
+            room: available,
+            scope: `${platform} `,
+            sum,
+            target: `${platform} targets`,
+          }),
+        );
       }
     }
-    if (wanted > room) findings.push(overLimit("all targets", wanted, room, ""));
+    if (wanted > room) {
+      findings.push(
+        overLimit({
+          limit: limits.global.maxRunning,
+          reserve: reserved,
+          room,
+          scope: "",
+          sum: wanted,
+          target: "all targets",
+        }),
+      );
+    }
     return findings;
   }
 
@@ -1001,12 +1025,31 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
 
 const PLATFORM_NAMES: Readonly<Record<Platform, string>> = { android: "Android", ios: "iOS" };
 
+/** Whether an OS constraint is a range rather than one version. */
+function isRange(osVersion: string): boolean {
+  const parsed = parseOsConstraint(osVersion);
+  return parsed.ok && parsed.constraint.kind === "range";
+}
+
 /** A warm target the last pass could find no runtime or no model for, as a finding. */
 function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
   const { model, osVersion, platform, short } = target;
   const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
   const name = PLATFORM_NAMES[platform];
   if (short === "runtime-missing") {
+    // A range names no version to install: `component install` takes one catalog version.
+    if (osVersion !== undefined && isRange(osVersion)) {
+      return [
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `no installed ${name} runtime satisfies ${osVersion}`,
+          platform,
+          reason: short,
+          remedy: `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version> for one inside ${osVersion}`,
+          target: named,
+        },
+      ];
+    }
     return [
       {
         kind: "warm-pool-target-unreachable",
@@ -1034,18 +1077,23 @@ function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
 }
 
 /** Targets whose counts add up to more than the running limit leaves for them. */
-function overLimit(
-  target: string,
-  wanted: number,
-  room: number,
-  scope: string,
-  platform?: Platform,
-): DoctorFinding {
+function overLimit(input: {
+  readonly target: string;
+  readonly sum: number;
+  readonly limit: number;
+  readonly reserve: number;
+  readonly room: number;
+  /** `ios ` or `android `, or empty for the machine. */
+  readonly scope: string;
+  readonly platform?: Platform;
+}): DoctorFinding {
+  const { limit, platform, reserve, room, scope, sum, target } = input;
+  const held = reserve > 0 ? `, of which warmPool.reserveRunning holds ${reserve}` : "";
   return {
     kind: "warm-pool-target-unreachable",
-    message: `the ${scope}targets want ${wanted} running devices, and the running limit leaves room for ${room}`,
+    message: `the ${scope}targets want ${sum} running devices, and the ${scope}running limit is ${limit}${held}, leaving room for ${room}`,
     reason: "over-limit",
-    remedy: `lower the counts of the ${scope}warmPool.targets, or raise the running limit`,
+    remedy: `lower the counts of the ${scope}warmPool.targets, raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
     target,
     ...(platform === undefined ? {} : { platform }),
   };

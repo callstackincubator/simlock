@@ -1182,12 +1182,15 @@ The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
 turns those reports into the one block `status.get` serves (`WarmPoolReader`, beside
 `CapacityReader`): the switch, the reserve, and per target the kind, count, ready,
 booting and the first reason that applies (`disabled` first, with the pool off and
-every configured target listed). The reason is recorded once, in `policy.ts`, for a
-target the pass could do nothing for; a target filling, held by `maxConcurrentBoots`
+every configured target listed). The reason is recorded where the target is seen: in
+`policy.ts` for one that resolved (the capacity reasons and `boot-failed`), in
+`converger.ts` for one the resolver refused (`no-driver`, `runtime-missing`,
+`unknown-model`, `unresolvable`) and for `disabled`, which `figures` alone reports;
+a target the pass could do nothing for has one, and a target filling, held by `maxConcurrentBoots`
 or waiting behind a queued request has none. The doctor reads the same figures for
 `warm-pool-target-unreachable`, and the converger emits `warm-pool.target-missed`
-once the pass's actions have run, for each target that is short now and was not
-after the pass before. A gateway keeps each worker's block on its worker view, from
+once the pass's actions have run, for each configured target that is short now and
+has not missed since it was last met (its ready devices reaching its count). A gateway keeps each worker's block on its worker view, from
 the same `status.get` read, and has an empty one of its own.
 A device that never served a lease has no `lastLeaseEndedAt`, which the
 reaper's idle-shutdown rule times from (idle-destroy times it from `shutdownAt`), so the policy itself shuts down a ready,

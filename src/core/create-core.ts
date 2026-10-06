@@ -20,7 +20,7 @@ import type {
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { Doctor } from "./doctor.js";
-import type { TargetResolution, WaitingDemand } from "./domain.js";
+import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
 import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
@@ -87,6 +87,8 @@ export interface CorePorts {
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
+    /** The mode a request naming none plans on a platform: where a target with no mode lands. */
+    defaultMode(platform: Platform): DeviceMode;
     /** A target as a request, resolved with downloads off: the spec, or why there is none. */
     resolve(request: DeviceRequest): Promise<TargetResolution>;
   };
@@ -258,6 +260,7 @@ export function createCore(options: CoreOptions): Core {
       },
       resolve: (request) => port("warmPoolDemand").resolve(request),
       waitingDemand: () => port("warmPoolDemand").waitingDemand(),
+      defaultMode: (platform) => port("warmPoolDemand").defaultMode(platform),
     },
     capacity,
     claims,
