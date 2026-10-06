@@ -2601,8 +2601,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
-    expect(output.stdout).toContain("ios 1/2");
+    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected -- ios 1/2");
     // No host facts on this view yet, so the line ends at the lease count.
     expect(output.stdout).toContain("1 lease(s)\n");
   });

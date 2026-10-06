@@ -249,10 +249,42 @@ describe("the busiest workers", () => {
       expect(deviceOfLease(LEASE, [starting])).toBeUndefined();
     });
 
-    it("the busiest table shows a dash for its leases", () => {
-      const html = renderToStaticMarkup(<BusiestWorkers workers={[starting]} />);
+    it("the busiest table shows a dash for its leases, under a numeric Leases heading", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+      const html = renderToStaticMarkup(<BusiestWorkers workers={[starting, busy]} />);
 
+      expect(text(html)).toContain("Worker Leases");
+      expect(html).toContain('<th scope="col" class="num">Leases</th>');
       expect(text(html)).toContain("wrk_1 —");
+      expect(text(html)).toContain("wrk_busy 1");
+    });
+
+    it("ranks it last whichever side of a comparison it is on", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+      const ids = (workers: WorkerView[]) => busiestWorkers(workers).map(({ id }) => id);
+
+      expect(ids([busy, starting])).toEqual(["wrk_busy", "wrk_1"]);
+      expect(ids([starting, busy, starting])).toEqual(["wrk_busy", "wrk_1", "wrk_1"]);
+    });
+
+    it("tells a leased device's time from its own lease, and none for a lease it does not find", () => {
+      const own = { ...LEASE, deviceId: "dev_1", grantedAt: NOW - 5_000, id: "l_own" };
+      const other = { ...LEASE, deviceId: "dev_2", grantedAt: NOW - 9_000, id: "l_other" };
+      const holder = worker({ leases: [other, own] });
+
+      expect(stateEnteredAt({ ...DEVICE, state: "leased" }, holder)).toBe(NOW - 5_000);
+      expect(stateEnteredAt({ ...DEVICE, id: "dev_3", state: "leased" }, holder)).toBeUndefined();
+    });
+
+    it("finds a lease's own device among its worker's", () => {
+      const holder = worker({
+        devices: [
+          { ...DEVICE, id: "dev_0" },
+          { ...DEVICE, id: "dev_1", mode: "slim" },
+        ],
+      });
+
+      expect(deviceOfLease(LEASE, [holder])).toMatchObject({ id: "dev_1", mode: "slim" });
     });
 
     it("the worker's card shows it as starting, with no device or capacity count", () => {

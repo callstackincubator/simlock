@@ -391,7 +391,7 @@ export class WorkerLink {
     // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
-    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    if (this.#superseded()) return;
     // The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
@@ -411,11 +411,17 @@ export class WorkerLink {
     });
   }
 
+  /** Whether this link has been closed or replaced by a newer one for the same worker, so what
+   * it read must not be written (H2). The one place that asks. */
+  #superseded(): boolean {
+    return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
+  }
+
   /** A starting worker's view: its health and host, which `workerViewFields` builds from the
    * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
    * write is (H2). */
   #refreshStarting(client: SimlockAdminClient, status: StatusGetOutput): void {
-    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    if (this.#superseded()) return;
     this.options.registry.refresh(this.workerId, {
       ...workerViewFields({ status }),
       version: client.daemonVersion,

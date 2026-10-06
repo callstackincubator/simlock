@@ -1171,6 +1171,38 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  // H2's case again, for the answer a starting worker gives: a replaced link's late `starting`
+  // must not strip the successor's view of its devices and leases.
+  it("does not let a stale link's late starting answer overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const clientA = new ScriptedWorkerClient("admin", "0.1.0");
+    await harness.join("wrk_1", clientA);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("0.1.0"));
+    const release = clientA.holdStatus();
+    clientA.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(clientA.calls.at(-1)).toBe("status.get"));
+    const clientB = new ScriptedWorkerClient("admin", "9.9.9");
+    clientB.devices = [deviceFixture("dev_b", "ready")];
+    await harness.join("wrk_1", clientB);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+
+    // A's held `status.get` now answers `starting`, after B built the current view.
+    clientA.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      devices: [{ id: "dev_b" }],
+      health: "running",
+      version: "9.9.9",
+    });
+    await harness.service.stop();
+  });
+
   // H4: a timed-out `events.subscribe` used to be logged exactly like a rejection ("Worker
   // refused an event subscription"), asserting something this code cannot know -- the worker may
   // never have answered at all, or may have subscribed successfully with the reply just arriving

@@ -3494,6 +3494,30 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
     expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
   });
 
+  it("keeps dispatching a queued request to a running worker while another, already reconciled, answers starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const restarting = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_a", restarting);
+    directory.add("wrk_b", other);
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    // wrk_b frees a slot: the views-changed pass reaches it though wrk_a, before it in id order,
+    // has no leases to reconcile.
+    workers.refresh("wrk_b", { capacity: statusFixture().capacity });
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(0);
+    expect(other.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
   it("fails a request at once with NO_CAPACITY when the only worker has answered starting, as it does for a worker not yet read", async () => {
     const { coordinator, directory, workers } = harness();
     const starting = new ScriptedWorkerClient();

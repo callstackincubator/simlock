@@ -507,6 +507,38 @@ describe("GatewayDispatcher", () => {
     expect(Object.keys(views[0] ?? {})).not.toContain("leases");
   });
 
+  it("lists each of an owner's gateway-issued leases under its own record, and none whose worker has no view", async () => {
+    const { dispatcher, leaseIndex, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const owned = (id: string, deviceId: string) => ({
+      ...leaseFixture(id, deviceId),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+      ttlMs: id === "lease_1" ? 111 : 222,
+    });
+    workers.refresh("wrk_1", { leases: [owned("lease_1", "dev_1"), owned("lease_2", "dev_2")] });
+    // An entry for a worker the gateway holds no view of, as a race with a removal leaves it.
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_gone.lease_9",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_gone",
+      workerLeaseId: "lease_9",
+    });
+
+    const { leases } = await dispatcher.dispatch(
+      "lease.list",
+      {},
+      session({ principal: "agent-1", role: "agent" }),
+    );
+
+    expect(leases.map(({ id, ttlMs }) => ({ id, ttlMs }))).toEqual([
+      { id: "wrk_1.lease_1", ttlMs: 111 },
+      { id: "wrk_1.lease_2", ttlMs: 222 },
+    ]);
+  });
+
   // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
   // of the session's own principal to each lease's `ownerId` -- a comparison that was false by
   // construction (see `#leaseList`'s own comment) and so, in practice, indistinguishable from
