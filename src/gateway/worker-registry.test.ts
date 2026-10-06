@@ -515,13 +515,11 @@ describe("WorkerRegistry", () => {
       waiting: [],
     };
 
-    it("drops every field a running read filled in, whatever an earlier session saw", () => {
+    it("drops capacity, catalog, catalogReadAt, devices, installs, leases, queueDepth and waiting a running read filled in, on a worker that stays connected", () => {
       const { workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
       workers.refresh("wrk_1", running);
       workers.refresh("wrk_1", { catalog: running.catalog });
-      workers.disconnected("wrk_1");
-      workers.connected("wrk_1", undefined, undefined);
 
       workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
 

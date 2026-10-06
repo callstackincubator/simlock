@@ -456,14 +456,17 @@ their models of the class pair with an installed runtime in fails at once with
 
 A gateway fails a request no worker can serve at once, with or without
 `noWait` and `timeoutMs`, instead of queueing it. A worker *takes requests*
-when it is connected, not drained, and the gateway has read its catalog since
-it connected; the gateway *knows* a worker once it has read a catalog from it
+when it is connected, not drained, and either it has reported its capacity and
+the gateway has read its catalog since it connected, or it answers that it is
+still starting and the gateway holds a catalog for it from an earlier read; the
+gateway *knows* a worker once it has read a catalog from it
 and the worker is not `incompatible`, so a drained or disconnected worker stays
 known and a reconnecting one stays known from its last catalog.
 
 | Situation | Result |
 |---|---|
-| No worker takes requests | `503 NO_CAPACITY` |
+| No worker takes requests, including a still-starting worker the gateway has never read a catalog from (gateway and workers restarted together) | `503 NO_CAPACITY` |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Queued until the worker is ready |
 | A worker takes requests, and no known worker has the platform | `422 NO_DRIVER` |
 | ... and no known worker lists the model | `422 UNKNOWN_MODEL` |
 | ... and no known worker has the runtime, or can pair it with the model | `422 RUNTIME_MISSING`, with `downloadable: false` and `osVersion: "default"` when `os` is absent |

@@ -393,7 +393,9 @@ export class WorkerRegistry {
   /**
    * ADR 0005 §6: the uplink is the reachability signal, and a closed one does not delete
    * anything. The view keeps its last-known state -- capacity, devices, and above all the
-   * leases the worker still holds -- until retention elapses or an operator removes it.
+   * leases the worker still holds -- until retention elapses or an operator removes it. A view
+   * that disconnects while `starting` holds no capacity, devices or leases; the leases last read
+   * from it sit in `#lastLeases`, which the retention sweep and `worker.disconnected` read.
    */
   disconnected(workerId: string): void {
     const existing = this.#workers.get(workerId);
@@ -490,7 +492,8 @@ export class WorkerRegistry {
    * ADR 0005 §6's retention sweep, run from the gateway's periodic tick. Two conditions, both
    * required:
    *
-   * 1. every *gateway-issued* lease the view still shows has passed its deadline -- a lease
+   * 1. every *gateway-issued* lease the view shows, or the last leases read from it when it
+   *    shows none (a view that answered `starting`), has passed its deadline -- a lease
    *    this gateway granted with time left on it is a device still held on a machine that went
    *    away, which is exactly what an operator must be able to see, however long ago it went.
    *    Once the last deadline passes, the worker's own TTL has reclaimed everything (or will

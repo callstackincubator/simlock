@@ -655,8 +655,9 @@ lists are code, and no config key lists or orders stages.
 The v1 policy (`warm-then-free`) is eight stages:
 
 1. `takes-requests` (filter): drop workers that are disconnected,
-   incompatible, drained, or whose capacity or catalog has not been read
-   since they connected;
+   incompatible, drained, or, unless they answer `starting` while the gateway
+   holds a catalog for them (`routingViews`), whose capacity or catalog has not
+   been read since they connected;
 2. `can-serve` (filter): drop workers whose catalog cannot serve the request
    (ADR 0009 §3, `routing/request-match.ts`). The model is the first entry of
    the worker's `models` whose name or `modelAliases` entry equals the
@@ -729,12 +730,17 @@ constraint as typed, `"default"` for an unnamed runtime (the
 last three with reason `unresolvable-spec`); a known worker can serve it but
 none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
 wait. A worker *takes requests* when it passes `takes-requests`; the gateway
-*knows* a worker when its view holds a catalog and it is not
-`incompatible`. The view's `catalogReadAt` is set by a refresh that carries a
-catalog and cleared when the worker connects, so a reconnecting worker is
-known from its last catalog but takes requests only once the new one arrives,
-and a first-time worker with no catalog yet is neither (its catalog is empty,
-so it says nothing about any platform or model). `WorkerLink` coalesces refreshes and keeps
+*knows* a worker when it is not `incompatible` and the gateway holds a catalog
+for it: its view's, or, for a worker that answered `starting` (whose view holds
+none), the last one read, which `routingViews` supplies. The view's
+`catalogReadAt` is set by a refresh that carries a catalog and cleared when the
+worker connects, so a reconnecting worker is known from its last catalog; it
+takes requests from that catalog while it answers `starting` (the `healthy`
+stage makes them wait), and once it is running only when the new catalog
+arrives. A first-time worker never read has no catalog (absent, so it says
+nothing about any platform or model): it is neither known nor taking requests,
+so a request whose only candidate is such a starting worker fails at once with
+`NO_CAPACITY`. `WorkerLink` coalesces refreshes and keeps
 `includeCatalog` on a queued follow-up, so a catalog refresh that arrives
 during another refresh is still read.
 
