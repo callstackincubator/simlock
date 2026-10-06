@@ -270,6 +270,9 @@ describe("ReclaimCoordinator", () => {
 
       const operations = harness.driver.calls.map((call) => call.operation);
       expect(operations).toContain("reclaim");
+      expect(
+        harness.driver.calls.find((call) => call.operation === "reclaim")?.arguments[1],
+      ).toEqual({ clean: "standard" });
       expect(operations).not.toContain("shutdown");
       expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
       expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
