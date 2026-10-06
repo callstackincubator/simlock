@@ -224,7 +224,10 @@ describe("DeviceProvisioner", () => {
     ).rejects.toBeInstanceOf(BootTimeoutError);
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(harness.eventBus.replay()).toContainEqual(
-      expect.objectContaining({ event: "device.deleted" }),
+      expect.objectContaining({
+        event: "device.deleted",
+        payload: expect.objectContaining({ initiator: "lease-engine" }),
+      }),
     );
     expect(reserved.releaseCount()).toBe(1);
   });

@@ -1441,7 +1441,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
   it("grants a request that arrives while a failed boot's device is being destroyed a device of its own, without waiting for the destroy.", async () => {
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
-    await seedShutdown(harness);
+    const shutdownId = (await seedShutdown(harness)).id;
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
     let failDestroy: (error: Error) => void = () => undefined;
     const realDestroy = harness.driver.destroy.bind(harness.driver);
@@ -1468,6 +1468,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await settle();
 
     expect(secondGranted).toBe(true);
+    expect(harness.claims.claim(shutdownId)).toEqual({ kind: "cleanup" });
 
     failDestroy(new DriverCrashError("simulator would not die"));
     await booterOutcome;
