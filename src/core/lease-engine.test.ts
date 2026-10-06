@@ -2905,7 +2905,7 @@ describe("LeaseEngine warm pool", () => {
       expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     });
 
-    it("a request waiting on a warm-pool boot that fails re-plans on the kick and gets a device of its own", async () => {
+    it("a request waiting on a warm-pool boot that fails re-plans on the kick and boots the device the failed boot left", async () => {
       const { clock, driver, first, harness } = await releasedDeviceBooting(true);
 
       const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });

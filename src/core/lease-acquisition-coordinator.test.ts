@@ -242,7 +242,18 @@ async function createHarness(
       store: registry,
     }),
   });
-  return { bus, clock, components, coordinator, driver, filesystem, queue, registry, requestIds };
+  return {
+    bus,
+    claims,
+    clock,
+    components,
+    coordinator,
+    driver,
+    filesystem,
+    queue,
+    registry,
+    requestIds,
+  };
 }
 
 async function seedReady(
@@ -1409,6 +1420,23 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
+  });
+
+  it("A device fenced after a failed boot and a failed destroy stays under a boot claim its waiter owns.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    // An ownerless boot claim is the warm pool's: a request would wait for it for good.
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.any(String),
+    });
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {

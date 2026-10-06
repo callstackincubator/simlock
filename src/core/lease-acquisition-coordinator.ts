@@ -858,7 +858,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.options.decisions.run(async () => {
         if (destroyed) capacityReservation.release();
         else if (!this.options.claims.isClaimed(device.id))
-          this.options.claims.tryClaim(device.id, "boot");
+          this.options.claims.tryClaim(device.id, "boot", waiter.id);
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
