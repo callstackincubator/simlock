@@ -1173,6 +1173,28 @@ schema's source of truth.
 
 ## `simlock status`
 
+Below the capacity lines, `status` prints the warm pool: whether it is on, the
+running slots it holds back per platform, and each `warmPool.targets` entry with
+how many devices it wants, how many are ready and how many are booting or being
+created. A target the last pass could do nothing for ends with the reason:
+
+```
+warm pool: enabled, reserve ios 1 android 0
+  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1
+  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing
+```
+
+`short` is one of `disabled` (the pool is off: every target shows it),
+`no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`,
+`device-limit`, `running-limit`, `reserve` or `ram-budget`; when several apply,
+the first of that list is shown. A target that is filling, held back by
+`warmPool.maxConcurrentBoots` or waiting behind a queued request is not short.
+In `--json` the block is `warmPool`: `enabled`, `reserveRunning` (`ios`,
+`android`) and `targets`, each with `platform`, `model`, `osVersion` (when it
+names one), `mode`, `count`, `ready`, `booting` and `short` when it is short.
+A gateway prints no such block of its own; with `--json` each worker's is on its
+entry in `workers`.
+
 Human and JSON status include derived warm counts globally and per platform.
 `ready` devices contribute to those counts; `reclaiming` and `quarantined`
 devices remain visible as busy running capacity and never contribute to warm
@@ -1811,6 +1833,26 @@ findings say so; once everything it needs is present, it gets one
 `daemon-restart` finding until the daemon is restarted. A check that cannot
 tell — a command that times out, say — reports nothing. These findings never
 change the exit code, and `--fix` never installs anything.
+
+`doctor` also reports a `warm-pool-target-unreachable` finding for a
+[`warmPool.targets`](CONFIGURATION.md) entry that cannot be met as configured:
+one whose runtime is not installed (`reason` `runtime-missing`, with the
+`simlock component install` command that adds it) or whose model does not exist
+(`unknown-model`), and, with `reason` `over-limit`, one finding for each platform
+whose targets add up to more than its running limit leaves after
+`warmPool.reserveRunning`, and one when all targets together add up to more than
+the machine's running limit leaves after both reserves. A target that is short
+only because the machine is full, out of RAM or retrying a failed boot is not
+reported: that passes, or is a choice of limit. The finding carries `target`,
+`reason`, `message` and `remedy` (and `platform`, except for the sum over every
+platform), and is printed to stderr as one line:
+
+```text
+warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0
+```
+
+It never changes the exit code, and `--fix` never acts on it. With
+`warmPool.enabled` `false` there is none.
 
 ## `simlock nuke [--delete-devices] [--yes]`
 

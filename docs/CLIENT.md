@@ -492,10 +492,10 @@ const { host } = await client.getStatus();
 
 While a daemon is starting (`daemon.health` is `"starting"`), `getStatus()`
 returns `daemon` and `host` and nothing else. `devices`, `leases`, `capacity`,
-`queueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
+`warmPool`, `queueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
 because the daemon has not yet checked what it holds. The same is true of a
 worker's entry in `workers` and in `listWorkers()`: a worker that is starting has
-`health` and `host` and none of `devices`, `leases`, `capacity`, `queueDepth`,
+`health` and `host` and none of `devices`, `leases`, `capacity`, `warmPool`, `queueDepth`,
 `catalog`, `installs` or `waiting`. Check `daemon.health` before reading them:
 
 ```ts

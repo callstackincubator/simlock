@@ -157,6 +157,12 @@ Select a worker to open its page. It adds:
   each platform tool, such as Xcode or the Android emulator.
 - **Catalog**: the models and runtimes the worker can lease. It is read again
   straight after a component is installed, and otherwise every 30 seconds.
+- **Warm pool**: whether the worker keeps devices warm, the running slots it
+  holds back per platform, and each target with the model, runtime and mode it
+  keeps ready, how many it wants, how many are ready and how many are booting.
+  A target the worker could do nothing for shows the reason, such as
+  `runtime-missing`, in the last column, and `—` when it has none. It says "Not
+  reported" for a worker that has not sent it.
 - **Installs in progress**: each runtime or system image being downloaded or
   waiting to, how long it has been going, and how many requests wait on it.
 
