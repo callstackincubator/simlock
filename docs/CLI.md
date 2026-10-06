@@ -750,8 +750,10 @@ rules, so the grant names what you got.
 ### A request no worker can serve
 
 A lease through a gateway never waits for something that cannot arrive. A
-worker *takes requests* when it is connected, not drained, and the gateway has
-read its catalog since it connected. The gateway *knows* a worker once it has
+worker *takes requests* when it is connected, not drained, and either it has
+reported its capacity and the gateway has read its catalog since it connected,
+or it answers that it is still starting and the gateway holds a catalog for it
+from an earlier read. The gateway *knows* a worker once it has
 read a catalog from it and the worker is not `incompatible`: a drained or
 disconnected worker stays known, and a worker that reconnects stays known from
 its last catalog. A worker that has just connected for the first time, whose
@@ -759,7 +761,8 @@ catalog has not arrived, is neither.
 
 | Situation | Result |
 | --- | --- |
-| No worker takes requests | `NO_CAPACITY` (exit 11) at once |
+| No worker takes requests, including a worker that is still starting and that the gateway has never read a catalog from (for example after the gateway and its workers restart together) | `NO_CAPACITY` (exit 11) at once |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Waits in the queue until the worker is ready |
 | At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
 | ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
 | ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
@@ -1190,6 +1193,21 @@ and `list --devices` well before it crosses the threshold that would make
 and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
+
+While the daemon is starting, `simlock status` prints the daemon and host
+lines and one more line in place of everything else, because the daemon has not
+yet checked what it holds:
+
+```
+Daemon: starting (worker)
+Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Devices, leases and capacity appear once startup finishes.
+```
+
+`--json` prints the answer as the daemon sent it, with `devices`, `leases`,
+`capacity` and `queueDepth` absent. On a gateway, a worker that is still starting
+shows `starting` after its connection state and `leases unknown` in place of a
+lease count, in the same way.
 
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see

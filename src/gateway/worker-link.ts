@@ -22,7 +22,7 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
-import type { SimlockAdminClient } from "../admin/index.js";
+import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -356,7 +356,26 @@ export class WorkerLink {
   async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
     this.#consecutiveRefreshTimeouts = 0;
+    // A starting worker answers `status.get` with its health and host only, and everything else
+    // it would say is unchecked. Nothing more is asked of it, and its view is built from those
+    // two facts; the next refresh reads it in full once it answers `running`.
+    if (status.daemon.health === "starting") {
+      this.#refreshStarting(client, status);
+      return;
+    }
+    // A starting answer dropped the view's catalog, and a refresh that does not read one would
+    // leave the worker without it (and so not taking requests) until the next periodic read.
+    const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
+    await this.#refreshRunning(client, status, includeCatalog || !catalogKnown);
+  }
 
+  /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
+   * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
+  async #refreshRunning(
+    client: SimlockAdminClient,
+    status: StatusGetOutput,
+    includeCatalog: boolean,
+  ): Promise<void> {
     const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
@@ -372,7 +391,7 @@ export class WorkerLink {
     // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
-    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    if (this.#superseded()) return;
     // The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
@@ -388,6 +407,23 @@ export class WorkerLink {
         ...(config === undefined ? {} : { config }),
       }),
       grantedDevices: grantedDevices(devices),
+      version: client.daemonVersion,
+    });
+  }
+
+  /** Whether this link has been closed or replaced by a newer one for the same worker, so what
+   * it read must not be written (H2). The one place that asks. */
+  #superseded(): boolean {
+    return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
+  }
+
+  /** A starting worker's view: its health and host, which `workerViewFields` builds from the
+   * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
+   * write is (H2). */
+  #refreshStarting(client: SimlockAdminClient, status: StatusGetOutput): void {
+    if (this.#superseded()) return;
+    this.options.registry.refresh(this.workerId, {
+      ...workerViewFields({ status }),
       version: client.daemonVersion,
     });
   }

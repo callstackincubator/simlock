@@ -3,8 +3,19 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../api";
 import { Loaded } from "../live/route-state";
-import { DeviceTable } from "./worker-detail";
-import { busiestWorkers, type WorkerView } from "./workers-model";
+import { DeviceTable, WorkerDetail } from "./worker-detail";
+import { BusiestWorkers } from "./workers";
+import { WorkerFacts } from "./worker-facts";
+import { attentionItems } from "./attention-model";
+import { deviceOfLease } from "./leases-model";
+import {
+  busiestWorkers,
+  deviceCounts,
+  leasesHeld,
+  stateEnteredAt,
+  type WorkerView,
+  workersStats,
+} from "./workers-model";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -37,7 +48,7 @@ describe("the workers views", () => {
       spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       // A state a newer daemon may send, which this console has never heard of.
       state: "hibernating",
-    } as unknown as WorkerView["devices"][number];
+    } as unknown as NonNullable<WorkerView["devices"]>[number];
 
     const html = renderToStaticMarkup(
       <DeviceTable worker={worker({ devices: [device] })} now={NOW} />,
@@ -165,5 +176,124 @@ describe("the busiest workers", () => {
     ]);
     // The daemon's list is left as it came.
     expect(fleet.map((entry) => entry.id)[0]).toBe("wrk_one");
+  });
+
+  describe("a worker that reports starting", () => {
+    const DEVICE = {
+      id: "dev_1",
+      mode: "full",
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+      state: "ready",
+    } as const;
+    const LEASE = {
+      deviceId: "dev_1",
+      grantedAt: NOW,
+      id: "l_0",
+      lastRenewedAt: NOW,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: NOW + 60_000,
+      ttlMs: 60_000,
+    };
+    // A gateway's view of a starting worker: its health and host, and nothing else it reports.
+    const starting: WorkerView = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      id: "wrk_1",
+      lastSeenAt: NOW,
+    };
+
+    it("the worker's page shows it as starting, and no device, lease or capacity view", () => {
+      const shown = text(
+        renderToStaticMarkup(<WorkerDetail id="wrk_1" workers={[starting]} now={NOW} />),
+      );
+
+      expect(shown).toContain("starting");
+      expect(shown).toContain("Devices, leases and capacity appear once startup finishes.");
+      expect(shown).not.toContain("No devices.");
+      expect(shown).not.toContain("0 leased");
+    });
+
+    it("counts no devices, leases or capacity for it, ranks it last by leases, and lists nothing that needs attention on it", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+
+      expect(deviceCounts(starting)).toBeUndefined();
+      // A worker that reported its capacity but no leases has no count of leased devices either.
+      const entry = {
+        atRamBudget: false,
+        limit: 4,
+        maxRunning: 4,
+        overLimit: false,
+        reserved: 0,
+        running: 1,
+        used: 1,
+        warm: 0,
+      };
+      const capacity = {
+        android: entry,
+        global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 0 },
+        ios: entry,
+      };
+      expect(deviceCounts({ ...starting, capacity })).toBeUndefined();
+      expect(leasesHeld([starting, busy])).toBe(1);
+      expect(busiestWorkers([starting, busy]).map((entry) => entry.id)).toEqual([
+        "wrk_busy",
+        "wrk_1",
+      ]);
+      expect(workersStats([starting]).map((stat) => stat.value)).toEqual(["1", "0", "0", "0"]);
+      expect(attentionItems([starting])).toEqual([]);
+      expect(stateEnteredAt({ ...DEVICE, state: "leased" }, starting)).toBeUndefined();
+      expect(deviceOfLease(LEASE, [starting])).toBeUndefined();
+    });
+
+    it("the busiest table shows a dash for its leases, under a numeric Leases heading", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+      const html = renderToStaticMarkup(<BusiestWorkers workers={[starting, busy]} />);
+
+      expect(text(html)).toContain("Worker Leases");
+      expect(html).toContain('<th scope="col" class="num">Leases</th>');
+      expect(text(html)).toContain("wrk_1 —");
+      expect(text(html)).toContain("wrk_busy 1");
+    });
+
+    it("ranks it last whichever side of a comparison it is on", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+      const ids = (workers: WorkerView[]) => busiestWorkers(workers).map(({ id }) => id);
+
+      expect(ids([busy, starting])).toEqual(["wrk_busy", "wrk_1"]);
+      expect(ids([starting, busy, starting])).toEqual(["wrk_busy", "wrk_1", "wrk_1"]);
+    });
+
+    it("tells a leased device's time from its own lease, and none for a lease it does not find", () => {
+      const own = { ...LEASE, deviceId: "dev_1", grantedAt: NOW - 5_000, id: "l_own" };
+      const other = { ...LEASE, deviceId: "dev_2", grantedAt: NOW - 9_000, id: "l_other" };
+      const holder = worker({ leases: [other, own] });
+
+      expect(stateEnteredAt({ ...DEVICE, state: "leased" }, holder)).toBe(NOW - 5_000);
+      expect(stateEnteredAt({ ...DEVICE, id: "dev_3", state: "leased" }, holder)).toBeUndefined();
+    });
+
+    it("finds a lease's own device among its worker's", () => {
+      const holder = worker({
+        devices: [
+          { ...DEVICE, id: "dev_0" },
+          { ...DEVICE, id: "dev_1", mode: "slim" },
+        ],
+      });
+
+      expect(deviceOfLease(LEASE, [holder])).toMatchObject({ id: "dev_1", mode: "slim" });
+    });
+
+    it("the worker's card shows it as starting, with no device or capacity count", () => {
+      const html = renderToStaticMarkup(<WorkerFacts worker={starting} />);
+
+      expect(html).toContain("status-warn");
+      expect(text(html)).toContain("Health starting");
+      expect(text(html)).not.toContain("Devices");
+      expect(text(html)).not.toContain("Capacity");
+    });
   });
 });

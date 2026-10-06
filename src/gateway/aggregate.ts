@@ -18,7 +18,7 @@ import type { WorkerView } from "./worker-registry.js";
 
 type StatusOutput = z.infer<(typeof OPERATIONS)["status.get"]["output"]>;
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
-type StatusCapacity = StatusOutput["capacity"];
+type StatusCapacity = NonNullable<StatusOutput["capacity"]>;
 type PlatformCatalog = CatalogOutput["platforms"][number];
 type CatalogImage = NonNullable<PlatformCatalog["images"]>[number];
 
@@ -87,10 +87,10 @@ export function aggregateStatus(
     host: options.host,
     installs: fleetInstalls(views),
     devices: views.flatMap((view) =>
-      view.devices.map((device) => ({ ...device, workerId: view.id })),
+      (view.devices ?? []).map((device) => ({ ...device, workerId: view.id })),
     ),
     leases: views.flatMap((view) =>
-      view.leases.map((lease) =>
+      (view.leases ?? []).map((lease) =>
         options.leaseIndex === undefined
           ? { ...lease, workerId: view.id }
           : options.leaseIndex.project(lease, view.id, view.label),
@@ -240,7 +240,7 @@ function indexCatalogs(
   const inIdOrder = [...views].sort((left, right) => left.id.localeCompare(right.id));
   for (const view of inIdOrder) {
     if (view.connection !== "connected") continue;
-    for (const entry of view.catalog) {
+    for (const entry of view.catalog ?? []) {
       if (platform === undefined || entry.platform === platform) {
         addCatalogEntry(byPlatform, entry, view.id);
       }

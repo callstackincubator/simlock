@@ -35,21 +35,33 @@ type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[
 type WorkerView = z.infer<typeof workerViewSchema>;
 
 /** The answers a view is built from. `catalog` and `config` are optional because a gateway's
- * per-event refresh re-reads only status and devices; a field left out stays as it was. */
+ * per-event refresh re-reads only status and devices; a field left out stays as it was.
+ * `devices` is optional because a starting worker is not asked for them. */
 export interface WorkerReads {
   readonly status: Output<"status.get">;
-  readonly devices: Output<"list.get">;
+  readonly devices?: Output<"list.get">;
   readonly catalog?: Output<"catalog.get">;
   readonly config?: Output<"config.get">;
 }
 
 /** The view fields the reads fill. `catalog`, `downloads` and `lease` are present only when the
- * reads that carry them were made. */
-export type WorkerViewReport = Pick<
-  WorkerView,
-  "capacity" | "devices" | "health" | "host" | "installs" | "leases" | "queueDepth" | "waiting"
-> &
-  Partial<Pick<WorkerView, "catalog" | "downloads" | "lease">>;
+ * reads that carry them were made, and every field a running worker's reads fill is absent for
+ * a worker that is starting. */
+export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
+  Partial<
+    Pick<
+      WorkerView,
+      | "capacity"
+      | "catalog"
+      | "devices"
+      | "downloads"
+      | "installs"
+      | "lease"
+      | "leases"
+      | "queueDepth"
+      | "waiting"
+    >
+  >;
 
 /** The device shape a view carries. `list.get` answers an admin with full `DeviceRecord`s;
  * narrowing them here keeps `driverData` -- an opaque, driver-defined blob -- out of every
@@ -57,20 +69,23 @@ export type WorkerViewReport = Pick<
 const viewDevicesSchema = z.array(statusDeviceSchema);
 
 export function workerViewFields(reads: WorkerReads): WorkerViewReport {
-  const { catalog, config, status } = reads;
+  const { catalog, config, devices, status } = reads;
+  // A starting worker has checked nothing: its view is its health and its host, and every other
+  // field is absent -- never empty, which would read as "nothing is leased".
+  if (status.daemon.health === "starting") return { health: "starting", host: status.host };
   return {
-    capacity: status.capacity,
     health: status.daemon.health,
     host: status.host,
     // ADR 0010 §7: copied as the worker lists them, already bounded by the contract's parse
     // (safety rule 10). A worker too old to list installs reports none.
     installs: status.installs ?? [],
-    leases: status.leases,
-    queueDepth: status.queueDepth,
     // Copied as `installs` is: the requests waiting in the worker's own queue. A worker too old
     // to list them reports none.
     waiting: status.waiting ?? [],
-    devices: viewDevicesSchema.parse(reads.devices),
+    ...(status.capacity === undefined ? {} : { capacity: status.capacity }),
+    ...(status.leases === undefined ? {} : { leases: status.leases }),
+    ...(status.queueDepth === undefined ? {} : { queueDepth: status.queueDepth }),
+    ...(devices === undefined ? {} : { devices: viewDevicesSchema.parse(devices) }),
     ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
     ...(config === undefined
       ? {}

@@ -163,6 +163,24 @@ describe("assess", () => {
     });
   });
 
+  it("judges a request on the other workers when one has no catalog at all", () => {
+    const { catalog: _catalog, ...unread } = view("wrk_a", IOS, { catalogReadAt: undefined });
+
+    expect(assess(REQUEST, [unread, view("wrk_b")])).toEqual({ kind: "route-or-wait" });
+    expect(rejectionOf([unread, view("wrk_b")], { ...REQUEST, model: "iPhone 99" }).code).toBe(
+      "UNKNOWN_MODEL",
+    );
+  });
+
+  it("makes a request only a starting worker can serve wait, though another worker takes requests but lists no such model", () => {
+    const { capacity: _capacity, catalogReadAt: _readAt, ...restarting } = view("wrk_a");
+    const other = view("wrk_b", { models: ["iPad Pro"], platform: "ios", runtimes: ["26.0"] });
+
+    expect(assess(REQUEST, [{ ...restarting, health: "starting" }, other])).toEqual({
+      kind: "route-or-wait",
+    });
+  });
+
   it("does not know an incompatible worker, whatever catalog it once had", () => {
     const incompatible = view("wrk_a", IOS, { connection: "incompatible" });
     const other = view("wrk_b", { models: ["iPhone 16"], platform: "ios", runtimes: ["26.0"] });

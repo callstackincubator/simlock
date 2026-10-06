@@ -10,8 +10,8 @@ import type { workerViewSchema } from "../../../src/contract/schemas";
 import type { Stat } from "../layout";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
-export type WorkerDevice = WorkerView["devices"][number];
-export type WorkerCatalogEntry = WorkerView["catalog"][number];
+export type WorkerDevice = NonNullable<WorkerView["devices"]>[number];
+export type WorkerCatalogEntry = NonNullable<WorkerView["catalog"]>[number];
 
 export interface WorkerList {
   readonly workers: readonly WorkerView[];
@@ -47,11 +47,11 @@ export function platformName(platform: string): string {
   return PLATFORM_NAMES[platform] ?? platform;
 }
 
-/** `{ running, leased }`, or `undefined` for a worker whose capacity was never read. */
+/** `{ running, leased }`, or `undefined` for a worker whose capacity or leases were never read, as a starting one's are not. */
 export function deviceCounts(
   worker: WorkerView,
 ): { readonly running: number; readonly leased: number } | undefined {
-  if (worker.capacity === undefined) return undefined;
+  if (worker.capacity === undefined || worker.leases === undefined) return undefined;
   return { leased: worker.leases.length, running: worker.capacity.global.running };
 }
 
@@ -72,7 +72,7 @@ export function capacityByPlatform(
 
 /** How many leases the workers hold between them now: where the lease chart starts from. */
 export function leasesHeld(workers: readonly WorkerView[]): number {
-  return workers.reduce((sum, worker) => sum + worker.leases.length, 0);
+  return workers.reduce((sum, worker) => sum + (worker.leases?.length ?? 0), 0);
 }
 
 /**
@@ -82,7 +82,7 @@ export function leasesHeld(workers: readonly WorkerView[]): number {
  */
 export function workersStats(workers: readonly WorkerView[]): readonly Stat[] {
   const connected = workers.filter((worker) => worker.connection === "connected").length;
-  const devices = workers.reduce((sum, worker) => sum + worker.devices.length, 0);
+  const devices = workers.reduce((sum, worker) => sum + (worker.devices?.length ?? 0), 0);
   const running = workers.reduce((sum, worker) => sum + (deviceCounts(worker)?.running ?? 0), 0);
   const waiting = workers.reduce((sum, worker) => sum + (worker.waiting?.length ?? 0), 0);
   return [
@@ -95,7 +95,7 @@ export function workersStats(workers: readonly WorkerView[]): readonly Stat[] {
 
 /** The workers ranked by how many leases each holds now, most first; ties keep the daemon's order. */
 export function busiestWorkers(workers: readonly WorkerView[]): readonly WorkerView[] {
-  return [...workers].sort((a, b) => b.leases.length - a.leases.length);
+  return [...workers].sort((a, b) => (b.leases?.length ?? 0) - (a.leases?.length ?? 0));
 }
 
 /**
@@ -107,7 +107,7 @@ export function busiestWorkers(workers: readonly WorkerView[]): readonly WorkerV
  */
 export function stateEnteredAt(device: WorkerDevice, worker: WorkerView): number | undefined {
   if (device.state === "leased") {
-    return worker.leases.find((lease) => lease.deviceId === device.id)?.grantedAt;
+    return worker.leases?.find((lease) => lease.deviceId === device.id)?.grantedAt;
   }
   if (device.transitionAgeMs === undefined || worker.connection !== "connected") return undefined;
   return worker.lastSeenAt - device.transitionAgeMs;

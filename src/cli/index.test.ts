@@ -2601,8 +2601,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
-    expect(output.stdout).toContain("ios 1/2");
+    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected -- ios 1/2");
     // No host facts on this view yet, so the line ends at the lease count.
     expect(output.stdout).toContain("1 lease(s)\n");
   });
@@ -2636,6 +2635,33 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain(
       "1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9",
+    );
+  });
+
+  it("prints a starting worker as starting, with its leases unknown rather than none", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  connection: "connected" as const,
+                  drained: true,
+                  health: "starting" as const,
+                  id: "wrk_1",
+                  lastSeenAt: 1,
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toBe(
+      "wrk_1: connected, starting, drained -- capacity unknown, leases unknown\n",
     );
   });
 
@@ -2897,6 +2923,62 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
+  describe("against a starting daemon", () => {
+    // A starting daemon answers `status.get` with `daemon` and `host` only.
+    const STARTING: StatusGetOutput = {
+      daemon: { health: "starting", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    };
+
+    it("simlock status prints the starting line and no device, lease or capacity line", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+    });
+
+    it.each(["capacity", "devices", "leases", "queueDepth"] as const)(
+      "simlock status prints the starting line for an answer with no %s, though the rest is there",
+      async (missing) => {
+        const output = outputCapture();
+        const { [missing]: _left, ...answer } = EMPTY_STATUS;
+        await runCli(
+          ["status"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(answer as StatusGetOutput) }),
+          }),
+        );
+
+        expect(output.stdout).toContain(
+          "Devices, leases and capacity appear once startup finishes.\n",
+        );
+        expect(output.stdout).not.toContain("Queue depth");
+      },
+    );
+
+    it("simlock status --json prints the answer with those fields absent", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+    });
+  });
+
   it("prints the host line", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
@@ -3077,7 +3159,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
   });
 
   it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
-    const statusWith = (ramBudget?: NonNullable<StatusGetOutput["capacity"]["ramBudget"]>) => {
+    type RamBudget = NonNullable<NonNullable<StatusGetOutput["capacity"]>["ramBudget"]>;
+    const statusWith = (ramBudget?: RamBudget) => {
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
         capacity: { ...EMPTY_STATUS.capacity, ...(ramBudget === undefined ? {} : { ramBudget }) },
@@ -4468,7 +4551,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
       statusOut.environmentWith({ connectAdmin: environment.connectAdmin }),
     );
     const status = JSON.parse(statusOut.stdout) as StatusGetOutput;
-    expect(status.leases.map((lease) => lease.id)).toContain(grant.lease.id);
+    expect(status.leases?.map((lease) => lease.id)).toContain(grant.lease.id);
 
     const releaseOut = outputCapture();
     const releaseExit = await runCli(
@@ -4672,7 +4755,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
 
 /** Hoisted out of `fakeClient` so a test can hand back the same status with a different
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
-const EMPTY_STATUS: StatusGetOutput = {
+const EMPTY_STATUS = {
   devices: [],
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
@@ -4701,7 +4784,7 @@ const EMPTY_STATUS: StatusGetOutput = {
   },
   daemon: { health: "running", mode: "worker" },
   queueDepth: 0,
-};
+} satisfies StatusGetOutput;
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };

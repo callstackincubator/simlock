@@ -52,28 +52,51 @@ export function WorkerDetail(props: {
           <Panel title="Status" description="The worker's connection, health and capacity.">
             <WorkerFacts worker={worker} />
           </Panel>
-          <Panel title="Devices" description="Every device on this worker, and its state.">
-            <DeviceTable worker={worker} now={now} />
-          </Panel>
-          <Panel title="Leases" description="The leases on this worker's devices.">
-            <WorkerLeases worker={worker} workers={workers} now={now} />
-          </Panel>
-          <div className="panel-row panel-row-even">
-            <Panel title="Host" description="The machine the worker runs on.">
-              <HostFacts worker={worker} />
-            </Panel>
-            <Panel title="Catalog" description="The models and runtimes it can lease.">
-              <Catalog catalog={worker.catalog} />
-            </Panel>
-          </div>
-          <Panel
-            title="Installs in progress"
-            description="Runtimes and system images being downloaded, or waiting to be."
-          >
-            <Installs worker={worker} now={now} />
-          </Panel>
+          {worker.health === "starting" ? (
+            <>
+              <Panel title="Host" description="The machine the worker runs on.">
+                <HostFacts worker={worker} />
+              </Panel>
+              <p className="muted">Devices, leases and capacity appear once startup finishes.</p>
+            </>
+          ) : (
+            <WorkerReads worker={worker} workers={workers} now={now} />
+          )}
         </>
       )}
+    </>
+  );
+}
+
+/** What a worker that has finished starting reports: its devices, leases, host, catalog and installs. */
+function WorkerReads(props: {
+  readonly worker: WorkerView;
+  readonly workers: readonly WorkerView[];
+  readonly now: number;
+}) {
+  const { now, worker, workers } = props;
+  return (
+    <>
+      <Panel title="Devices" description="Every device on this worker, and its state.">
+        <DeviceTable worker={worker} now={now} />
+      </Panel>
+      <Panel title="Leases" description="The leases on this worker's devices.">
+        <WorkerLeases worker={worker} workers={workers} now={now} />
+      </Panel>
+      <div className="panel-row panel-row-even">
+        <Panel title="Host" description="The machine the worker runs on.">
+          <HostFacts worker={worker} />
+        </Panel>
+        <Panel title="Catalog" description="The models and runtimes it can lease.">
+          <Catalog catalog={worker.catalog ?? []} />
+        </Panel>
+      </div>
+      <Panel
+        title="Installs in progress"
+        description="Runtimes and system images being downloaded, or waiting to be."
+      >
+        <Installs worker={worker} now={now} />
+      </Panel>
     </>
   );
 }
@@ -124,7 +147,7 @@ export function DeviceTable({
     <DataTable
       label="Devices"
       name="devices"
-      rows={worker.devices}
+      rows={worker.devices ?? []}
       columns={columns}
       rowId={(device) => device.id}
       empty="No devices."
