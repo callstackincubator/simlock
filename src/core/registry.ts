@@ -643,7 +643,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * opens: nothing in a new process drives a wait the old one started, so an open record from
    * before the restart would otherwise stay open with nothing to settle it.
    */
-  // fallow-ignore-next-line unused-class-member -- called through StartupConverger's registry port.
+  // fallow-ignore-next-line unused-class-member -- called through LeaseStartup's registry port (LeaseStartupRegistry).
   async failOpenLeaseRequests(
     failure: LeaseRequestFailure,
   ): Promise<readonly LeaseRequestRecord[]> {
