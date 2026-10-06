@@ -2967,6 +2967,34 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
     });
 
+    it("simlock status leaves the runtime out of a target that names none", async () => {
+      const output = outputCapture();
+      const unversioned = {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [
+          {
+            booting: 0,
+            count: 1,
+            mode: "slim" as const,
+            model: "iPhone 17",
+            platform: "ios" as const,
+            ready: 0,
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(unversioned) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+      );
+    });
+
     it("simlock status prints a pool that is off as disabled, with every target short disabled", async () => {
       const output = outputCapture();
       const off = {
@@ -2999,7 +3027,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         output.environmentWith({ connectAdmin: async () => statusWith(undefined) }),
       );
 
-      expect(output.stdout).not.toContain("warm pool");
+      expect(output.stdout).toBe(
+        "Daemon: running (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
     });
 
     it("simlock status prints no warm pool line for a gateway, whose own block is empty", async () => {
@@ -3021,8 +3056,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         }),
       );
 
-      expect(output.stdout).toContain("Daemon: running (gateway)");
-      expect(output.stdout).not.toContain("warm pool");
+      expect(output.stdout).toBe(
+        "Daemon: running (gateway)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
     });
 
     it("simlock status --json carries the block as the daemon sent it", async () => {
@@ -3054,6 +3095,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           remedy: "lower the counts of the warmPool.targets, or raise the running limit",
           target: "all targets",
         },
+        { deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" },
       ];
 
       await expect(
@@ -3067,7 +3109,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       ).resolves.toBe(0);
 
       expect(
-        output.stderr.split("\n").filter((line) => line.startsWith("warm-pool-target-unreachable")),
+        output.stderr
+          .split("\n")
+          .filter((line) => line.includes("warm-pool-target-unreachable") || line.includes("d-1")),
       ).toEqual([
         "warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0",
         "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",

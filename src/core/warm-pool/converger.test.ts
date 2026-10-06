@@ -1726,6 +1726,16 @@ describe("warm pool targets", () => {
       expect(rig.pool.figures()).toStrictEqual(expected);
     });
 
+    it("lists every configured target before the first pass with no reason, so a status read just after a start is not empty", () => {
+      const rig = harness([], { targets: [iphone17] });
+
+      expect(rig.pool.figures()).toStrictEqual({
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [{ ...wanted, booting: 0, count: 1, ready: 0 }],
+      });
+    });
+
     it("leaves out osVersion for a refused target that names none", async () => {
       const { osVersion: _osVersion, ...unversioned } = iphone17;
       const rig = harness([], {
@@ -1790,6 +1800,34 @@ describe("warm pool targets", () => {
       await rig.pool.pass();
 
       expect(payloads).toHaveLength(1);
+    });
+
+    it("names the pool as the emitter, and leaves osVersion out for a target that names none", async () => {
+      const { osVersion: _osVersion, ...unversioned } = iphone17;
+      const rig = harness([], {
+        resolve: () => ({ message: "no driver", refusal: "no-driver" }),
+        targets: [unversioned],
+      });
+      const seen: { module: string; payload: unknown }[] = [];
+      rig.eventBus.subscribe("warm-pool.target-missed", (envelope) => {
+        seen.push({ module: envelope.module, payload: envelope.payload });
+      });
+
+      await rig.pool.pass();
+
+      expect(seen).toStrictEqual([
+        {
+          module: "warm-pool",
+          payload: {
+            count: 1,
+            mode: "full",
+            model: "iPhone 17",
+            platform: "ios",
+            ready: 0,
+            reason: "no-driver",
+          },
+        },
+      ]);
     });
 
     it("fires again when the target was met in between and is missed again", async () => {

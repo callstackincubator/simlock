@@ -2360,7 +2360,8 @@ describe("Doctor: warm pool targets", () => {
   const figuresOf = (
     targets: readonly {
       model: string;
-      osVersion: string;
+      osVersion?: string;
+      platform?: "ios" | "android";
       short?: "runtime-missing" | "unknown-model" | "ram-budget";
     }[],
   ) => ({
@@ -2495,6 +2496,71 @@ describe("Doctor: warm pool targets", () => {
     ]);
   });
 
+  it("pins the unknown-model message and remedy, naming the model and the platform", async () => {
+    const found = await findings({
+      figures: figuresOf([
+        { model: "Pixel 99", osVersion: "35", platform: "android", short: "unknown-model" },
+      ]),
+    });
+
+    expect(found).toStrictEqual([
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "Pixel 99 is not a known Android model",
+        platform: "android",
+        reason: "unknown-model",
+        remedy: "run simlock catalog --platform android to list the models",
+        target: "Pixel 99 / 35 / full",
+      },
+    ]);
+  });
+
+  it("names an Android runtime as Android, and a target that names no OS without one", async () => {
+    const found = await findings({
+      figures: figuresOf([
+        { model: "Pixel 8", osVersion: "35", platform: "android", short: "runtime-missing" },
+        { model: "iPhone 17", short: "runtime-missing" },
+        { model: "iPhone 99", short: "unknown-model" },
+      ]),
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        message: "Android 35 is not installed",
+        remedy: "run simlock component install android 35",
+      }),
+      {
+        kind: "warm-pool-target-unreachable",
+        message: "iOS runtime is not installed",
+        platform: "ios",
+        reason: "runtime-missing",
+        remedy: "run simlock component install ios <version>",
+        target: "iPhone 17 / full",
+      },
+      expect.objectContaining({ target: "iPhone 99 / full" }),
+    ]);
+  });
+
+  it("takes both reserves off the machine's room, and reports nothing for targets that exactly fill what is left", async () => {
+    const reserve = { android: 1, ios: 1 };
+    const targets = (ios: number) => [
+      { count: ios, model: "iPhone 17", platform: "ios" as const },
+      { count: 1, model: "Pixel 8", platform: "android" as const },
+    ];
+    const limit = { android: 5, global: 4, ios: 5 };
+
+    expect(await findings({ limit, reserve, targets: targets(2) })).toEqual([
+      expect.objectContaining({ reason: "over-limit", target: "all targets" }),
+    ]);
+    expect(await findings({ limit, reserve, targets: targets(1) })).toEqual([]);
+    expect(
+      await findings({
+        limit: { ios: 3 },
+        targets: [{ count: 3, model: "iPhone 17", platform: "ios" }],
+      }),
+    ).toEqual([]);
+  });
+
   it("does not report a target short for ram-budget, or one that fits", async () => {
     const found = await findings({
       figures: figuresOf([{ model: "iPhone 17", osVersion: "26.0", short: "ram-budget" }]),
@@ -2515,15 +2581,27 @@ describe("Doctor: warm pool targets", () => {
     expect(found).toEqual([]);
   });
 
-  it("leaves the finding out of the doctor.reconciled event's driftFindings", async () => {
+  it("leaves the finding out of the doctor.reconciled event's driftFindings, which keeps the drift beside it", async () => {
     const clock = new FakeClock(10_000);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        {
+          address: "simlock-orphan-address",
+          deviceId: "simlock-orphan",
+          driverData: { fakeDeviceId: "simlock-orphan" },
+          runState: "running",
+        },
+      ],
+      processes: [],
+    });
     const eventBus = new EventBus(clock);
     const registry = await loadRegistry(clock, eventBus);
     const base = config();
     const doctor = new Doctor({
       clock,
       config: base,
-      drivers: [new FakeDriver({ clock, platform: "ios" })],
+      drivers: [driver],
       eventBus,
       registry,
       warmPool: {
@@ -2533,9 +2611,14 @@ describe("Doctor: warm pool targets", () => {
       },
     });
 
-    await doctor.reconcile();
+    const report = await doctor.reconcile();
 
     const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
-    expect(reconciled?.payload).toEqual({ driftFindings: [] });
+    expect(report.findings.map((finding) => finding.kind).sort()).toEqual([
+      "orphan-device",
+      "warm-pool-target-unreachable",
+    ]);
+    expect(reconciled?.payload).toMatchObject({ driftFindings: [{ kind: "orphan-device" }] });
+    expect(reconciled?.payload).toHaveProperty("driftFindings.length", 1);
   });
 });

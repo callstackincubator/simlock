@@ -137,6 +137,41 @@ describe("the warm pool section of a worker's page", () => {
     expect(shown).toContain("iPhone 17 27.0 full 1 0 0 runtime-missing");
   });
 
+  it("heads the table with its seven columns, right-aligns the numbers and sets the runtime and the reason in mono", () => {
+    const html = renderToStaticMarkup(
+      <WorkerDetail id="wrk_1" workers={[{ ...RUNNING, warmPool: WARM_POOL }]} now={NOW} />,
+    );
+
+    for (const header of ["Model", "Runtime", "Mode", "Short"]) {
+      expect(html).toContain(`<th scope="col">${header}</th>`);
+    }
+    for (const header of ["Wanted", "Ready", "Booting"]) {
+      expect(html).toContain(`<th scope="col" class="num">${header}</th>`);
+    }
+    expect(html).toContain('<td data-label="Runtime" class="mono">27.0</td>');
+    expect(html).toContain('<td data-label="Short" class="mono">runtime-missing</td>');
+    expect(html).toContain('<td data-label="Wanted" class="num">2</td>');
+    expect(html).toContain('<td data-label="Model">iPhone 17</td>');
+  });
+
+  it("shows a runtime-less target's runtime as a dash, says the pool is on, and says when there are no targets", () => {
+    const unversioned = {
+      booting: 0,
+      count: 1,
+      mode: "full" as const,
+      model: "iPhone 17",
+      platform: "ios" as const,
+      ready: 0,
+      short: "runtime-missing" as const,
+    };
+    const shown = detail({ ...RUNNING, warmPool: { ...WARM_POOL, targets: [unversioned] } });
+    const empty = detail({ ...RUNNING, warmPool: { ...WARM_POOL, targets: [] } });
+
+    expect(shown).toContain("iPhone 17 — full 1 0 0 runtime-missing");
+    expect(shown).toContain("Pool On");
+    expect(empty).toContain("No targets.");
+  });
+
   it("says the pool is off when the worker reports it so, and shows the reserve", () => {
     const shown = detail({ ...RUNNING, warmPool: { ...WARM_POOL, enabled: false } });
 

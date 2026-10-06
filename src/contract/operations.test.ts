@@ -478,6 +478,53 @@ describe("operation input/output round trips", () => {
     });
   });
 
+  it.each([
+    "disabled",
+    "no-driver",
+    "runtime-missing",
+    "unknown-model",
+    "unresolvable",
+    "boot-failed",
+    "device-limit",
+    "running-limit",
+    "reserve",
+    "ram-budget",
+  ])("status.get: accepts the warm pool reason %s", (short) => {
+    const target = {
+      booting: 0,
+      count: 1,
+      mode: "full",
+      model: "iPhone 17",
+      platform: "ios",
+      ready: 0,
+      short,
+    };
+    const status = {
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
+    };
+
+    expect(OPERATIONS["status.get"].output.parse(status).warmPool?.targets[0]?.short).toBe(short);
+  });
+
+  it.each(["runtime-missing", "unknown-model", "over-limit"])(
+    "doctor.run: accepts a warm-pool-target-unreachable finding with reason %s",
+    (reason) => {
+      const finding = {
+        kind: "warm-pool-target-unreachable",
+        message: "m",
+        reason,
+        remedy: "r",
+        target: "t",
+      };
+
+      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
+        finding,
+      ]);
+    },
+  );
+
   it("doctor.run: round-trips a warm-pool-target-unreachable finding field for field", () => {
     const finding = {
       kind: "warm-pool-target-unreachable",
