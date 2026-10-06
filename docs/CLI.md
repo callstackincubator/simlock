@@ -454,8 +454,9 @@ A lease names its device in one of three ways:
 - With neither, the lease asks for a `phone`.
 
 A class lease is served by the first of these that applies: an idle device
-that is already running and fits, then an idle device that is shut down and
-fits (it is booted), then a new device. A device fits when its platform,
+that is already running and fits, then (unless `--no-wait`) a device the warm
+pool is already booting that fits, which it waits for, then an idle device that
+is shut down and fits (it is booted), then a new device. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
 lease fits a device on any installed runtime, with `--os` a device whose OS
 satisfies it, `--mode full` and `--image-tag`

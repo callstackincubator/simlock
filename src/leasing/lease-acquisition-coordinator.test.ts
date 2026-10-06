@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -105,6 +105,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     },
     warmPool: {
       enabled: true,
+      reserveRunning: { android: 0, ios: 0 },
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -163,6 +164,7 @@ async function createHarness(
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
   const provisioner = new DeviceProvisioner({
     catalog,
+    claims,
     clock,
     // Never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
     components: { claimProvision: () => () => undefined },
@@ -244,7 +246,19 @@ async function createHarness(
       store: registry,
     }),
   });
-  return { bus, clock, components, coordinator, driver, filesystem, queue, registry, requestIds };
+  return {
+    bus,
+    capacity,
+    claims,
+    clock,
+    components,
+    coordinator,
+    driver,
+    filesystem,
+    queue,
+    registry,
+    requestIds,
+  };
 }
 
 async function seedReady(
@@ -1413,6 +1427,104 @@ describe("LeaseAcquisitionCoordinator", () => {
     ]);
   });
 
+  it("A device fenced after a failed boot and a failed destroy stays under a boot claim owned by a request, not an ownerless one.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    // An ownerless boot claim is the warm pool's: a request would wait for it until its own timeout.
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.stringMatching(/^req_/),
+    });
+  });
+
+  it("grants a request that arrives while a failed boot's device is being destroyed a device of its own, without waiting for the destroy.", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const shutdownId = (await seedShutdown(harness)).id;
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    let failDestroy: (error: Error) => void = () => undefined;
+    const realDestroy = harness.driver.destroy.bind(harness.driver);
+    let destroys = 0;
+    vi.spyOn(harness.driver, "destroy").mockImplementation(async (device) => {
+      destroys += 1;
+      if (destroys > 1) return realDestroy(device);
+      return new Promise<void>((_resolve, reject) => {
+        failDestroy = reject;
+      });
+    });
+
+    const booter = harness.coordinator.request(request, {
+      ownerId: "booter",
+      requesterId: "booter",
+    });
+    const booterOutcome = booter.catch((error: unknown) => error);
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondGranted = false;
+    void second.then(() => {
+      secondGranted = true;
+    });
+    await settle();
+
+    expect(secondGranted).toBe(true);
+    expect((await second).device.id).not.toBe(shutdownId);
+    expect(harness.claims.claim(shutdownId)).toEqual({ kind: "cleanup" });
+
+    failDestroy(new DriverCrashError("simulator would not die"));
+    await booterOutcome;
+  });
+
+  it("A device whose boot for a waiter failed is deleted by the lease engine, and its slot is freed.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.bus.replay().filter((event) => event.event === "device.deleted")).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ deviceId: shutdown.id, initiator: "lease-engine" }),
+      }),
+    ]);
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+  });
+
+  it("A failed boot whose device the destroy can no longer claim leaves that device fenced under its waiter.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    const realMakeReady = harness.driver.makeReady.bind(harness.driver);
+    vi.spyOn(harness.driver, "makeReady").mockImplementation(async (...args) => {
+      try {
+        return await realMakeReady(...args);
+      } finally {
+        // The record leaves `shutdown` while the boot fails, so the destroy finds nothing to claim.
+        await harness.registry.transitionDevice(shutdown.id, "deleted", {
+          event: "device.deleted",
+          payload: { deviceId: shutdown.id, initiator: "test" },
+        });
+      }
+    });
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.stringMatching(/^req_/),
+    });
+  });
+
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
     const { logger, sink } = capturingLogger();
     const harness = await createHarness({ logger });
@@ -1551,7 +1663,7 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     });
 
     expect(granted.lease.requesterId).toBe("agent");
-    // The result is written once the wait settles, a step behind the grant itself.
+    // The grant and its stored result land in one commit; the flush lets the wait settle.
     await flush();
     expect(harness.registry.leaseRequests().map((record) => record.state)).toEqual([
       "granted",

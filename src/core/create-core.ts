@@ -200,6 +200,7 @@ export function createCore(options: CoreOptions): Core {
   );
   const provisioner = new DeviceProvisioner({
     catalog: drivers,
+    claims,
     clock: options.clock,
     components: options.components,
     decisions,

@@ -179,16 +179,16 @@ describe("DaemonServer", () => {
     });
   });
 
-  it("answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 17, to a client on protocol 16, which cannot parse a starting status.get answer", async () => {
+  it("answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 18, to a client on protocol 17, which cannot parse a starting status.get answer", async () => {
     const harness = await createHarness();
     const previous = await createClient(harness.socketPath);
 
     await expect(
-      previous.request("hello", { clientVersion: "test", protocolVersion: 16 }),
+      previous.request("hello", { clientVersion: "test", protocolVersion: 17 }),
     ).resolves.toMatchObject({
       error: {
         code: "PROTOCOL_VERSION_UNSUPPORTED",
-        details: { client: { min: 16, max: 16 }, daemon: { min: 17, max: 17 } },
+        details: { client: { min: 17, max: 17 }, daemon: { min: 18, max: 18 } },
       },
       ok: false,
     });
@@ -3302,6 +3302,7 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      reserveRunning: { android: 0, ios: 0 },
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

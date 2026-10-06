@@ -114,6 +114,8 @@ function view(
   devices: readonly DeviceRecord[],
   options: {
     limit?: number;
+    limits?: { ios?: number; android?: number };
+    reserve?: { ios?: number; android?: number };
     reserved?: number;
     waiting?: readonly WaitingDemand[];
     enabled?: boolean;
@@ -124,8 +126,16 @@ function view(
   } = {},
 ): WarmPolicyView {
   return {
-    capacity: capacityOf(devices, { global: options.limit ?? 10 }, options.reserved),
-    config: { enabled: options.enabled ?? true, shutdownAfterMs },
+    capacity: capacityOf(
+      devices,
+      { global: options.limit ?? 10, ...options.limits },
+      options.reserved,
+    ),
+    config: {
+      enabled: options.enabled ?? true,
+      reserveRunning: { android: 0, ios: 0, ...options.reserve },
+      shutdownAfterMs,
+    },
     devices,
     handoffInFlight: options.handoffInFlight ?? false,
     resetDevices: new Set(options.reset ?? []),
@@ -535,5 +545,99 @@ describe("warm pool policy", () => {
     expect(proposals).toEqual([
       { action: "boot", deviceId: "ios-shut", reason: "recently-released" },
     ]);
+  });
+
+  describe("reserveRunning", () => {
+    const idleIos = (count: number): DeviceRecord[] =>
+      Array.from({ length: count }, (_, index) =>
+        device(`ios-${index}`, "ready", { endedAgo: (index + 1) * minute }),
+      );
+
+    it("proposes a third idle iOS device for shutdown and not a second with reserveRunning.ios 1 and maxRunning 3", () => {
+      const three = idleIos(3);
+      const two = idleIos(2);
+
+      expect(evaluate(view(three, { limits: { ios: 3 }, reserve: { ios: 1 } }))).toEqual([
+        { action: "shutdown", deviceId: "ios-2", reason: "over-budget" },
+      ]);
+      expect(evaluate(view(two, { limits: { ios: 3 }, reserve: { ios: 1 } }))).toEqual([]);
+    });
+
+    it("takes the sum of the platform reserves off the global budget", () => {
+      const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
+      const idle = (count: number): DeviceRecord[] => [
+        ...idleIos(count - 1),
+        device("android-0", "ready", { endedAgo: minute, spec: androidSpec }),
+      ];
+      const reserve = { android: 1, ios: 1 };
+
+      // Global limit 4 minus the two reserves leaves room for two idle devices, not three.
+      expect(evaluate(view(idle(3), { limit: 4, reserve }))).toHaveLength(1);
+      expect(evaluate(view(idle(2), { limit: 4, reserve }))).toEqual([]);
+    });
+
+    it("proposes every idle device of a platform for shutdown when the reserve is above its limit, and none of the other", () => {
+      const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
+      const devices = [
+        ...idleIos(2),
+        device("android-0", "ready", { endedAgo: minute, spec: androidSpec }),
+      ];
+
+      const proposals = evaluate(view(devices, { limits: { ios: 2 }, reserve: { ios: 3 } }));
+
+      expect(proposals.map((proposal) => proposal.deviceId).sort()).toEqual(["ios-0", "ios-1"]);
+    });
+
+    it("counts a reserve above the platform limit as the limit, so the global budget loses no more than the platform holds", () => {
+      const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
+      const devices = [
+        device("android-0", "ready", { endedAgo: minute, spec: androidSpec }),
+        device("android-1", "ready", { endedAgo: 2 * minute, spec: androidSpec }),
+      ];
+
+      // iOS limit 1 with reserve 4 holds one slot of the global 3, leaving room for two Androids.
+      expect(
+        evaluate(view(devices, { limit: 3, limits: { ios: 1 }, reserve: { ios: 4 } })),
+      ).toEqual([]);
+    });
+
+    it("does not boot a recently released device into a global slot the other platform's reserve holds", () => {
+      const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
+      const released = device("released", "shutdown", { endedAgo: minute });
+      const running = device("android-0", "ready", { endedAgo: minute, spec: androidSpec });
+      const reserve = { android: 1, ios: 1 };
+
+      // Global limit 3 with one running leaves two, and the two reserves hold both.
+      expect(evaluate(view([released, running], { limit: 3, reserve }))).toEqual([]);
+      expect(evaluate(view([released, running], { limit: 3 }))).toEqual([
+        { action: "boot", deviceId: "released", reason: "recently-released" },
+      ]);
+    });
+
+    it("does not boot a recently released device into a slot the reserve holds", () => {
+      const released = device("released", "shutdown", { endedAgo: minute });
+      const running = idleIos(1);
+
+      expect(
+        evaluate(view([released, ...running], { limits: { ios: 2 }, reserve: { ios: 1 } })),
+      ).toEqual([]);
+      expect(evaluate(view([released, ...running], { limits: { ios: 2 } }))).toEqual([
+        { action: "boot", deviceId: "released", reason: "recently-released" },
+      ]);
+    });
+
+    it("boots a device for the waiting request at the head of the queue even into the reserved slot", () => {
+      const released = device("released", "shutdown", { endedAgo: minute });
+
+      expect(
+        evaluate(
+          view([released], {
+            limits: { ios: 1 },
+            reserve: { ios: 1 },
+            waiting: [classDemand()],
+          }),
+        ),
+      ).toEqual([{ action: "boot", deviceId: "released", reason: "waiting-request" }]);
+    });
   });
 });

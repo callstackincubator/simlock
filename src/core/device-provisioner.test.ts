@@ -55,11 +55,12 @@ async function createHarness(
     statePath,
   });
   const decisions = new SerializedDecision();
+  const claims = new DeviceOperationClaims();
   const lifecycle = new ManagedDeviceLifecycle(
     new DriverCatalog([driver]),
     registry,
     decisions,
-    new DeviceOperationClaims(),
+    claims,
     clock,
   );
   const components = new ComponentInstaller({
@@ -74,6 +75,7 @@ async function createHarness(
   });
   const provisioner = new DeviceProvisioner({
     catalog: new DriverCatalog([driver]),
+    claims,
     clock,
     components,
     decisions,
@@ -81,7 +83,17 @@ async function createHarness(
     ...(logger === undefined ? {} : { logger }),
     registry,
   });
-  return { clock, components, decisions, driver, eventBus, lifecycle, provisioner, registry };
+  return {
+    claims,
+    clock,
+    components,
+    decisions,
+    driver,
+    eventBus,
+    lifecycle,
+    provisioner,
+    registry,
+  };
 }
 
 describe("DeviceProvisioner", () => {
@@ -154,6 +166,54 @@ describe("DeviceProvisioner", () => {
     ).resolves.toMatchObject({ state: "shutdown" });
   });
 
+  it("holds the boot claim it was given, with its owner, on the new device while it boots, until the handoff is released", async () => {
+    const harness = await createHarness({ makeReady: 5 });
+    const pending = harness.provisioner.provision(spec, {
+      claim: { kind: "boot", owner: "waiter-1" },
+      reservation: reservation(),
+    });
+
+    await vi.waitFor(() =>
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1),
+    );
+    const [registered] = harness.registry.snapshot.devices;
+    expect(registered).toMatchObject({ state: "provisioning" });
+    expect(harness.claims.claim(registered?.id ?? "")).toEqual({ kind: "boot", owner: "waiter-1" });
+
+    harness.clock.advance(5);
+    const handoff = await pending;
+    expect(harness.claims.claim(handoff.device.id)).toEqual({ kind: "boot", owner: "waiter-1" });
+    handoff.claim.release();
+    expect(harness.claims.claim(handoff.device.id)).toBeUndefined();
+  });
+
+  it("holds an unowned boot claim when the one it was given names no owner", async () => {
+    const harness = await createHarness();
+
+    const handoff = await harness.provisioner.provision(spec, {
+      claim: { kind: "boot" },
+      reservation: reservation(),
+    });
+
+    expect(harness.claims.claim(handoff.device.id)).toEqual({ kind: "boot" });
+  });
+
+  it("leaves no claim behind when the device it claimed fails to become ready", async () => {
+    const harness = await createHarness();
+    harness.driver.failOn("makeReady", 1, new DriverCrashError("boot failed"));
+
+    await expect(
+      harness.provisioner.provision(spec, {
+        claim: { kind: "boot", owner: "waiter-1" },
+        reservation: reservation(),
+      }),
+    ).rejects.toBeInstanceOf(BootTimeoutError);
+
+    const [failed] = harness.registry.snapshot.devices;
+    expect(failed).toMatchObject({ state: "deleted" });
+    expect(harness.claims.isClaimed(failed?.id ?? "")).toBe(false);
+  });
+
   it("rolls back a registered device and returns BootTimeoutError-compatible failure on boot failure", async () => {
     const harness = await createHarness();
     const reserved = reservation();
@@ -164,7 +224,10 @@ describe("DeviceProvisioner", () => {
     ).rejects.toBeInstanceOf(BootTimeoutError);
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(harness.eventBus.replay()).toContainEqual(
-      expect.objectContaining({ event: "device.deleted" }),
+      expect.objectContaining({
+        event: "device.deleted",
+        payload: expect.objectContaining({ initiator: "lease-engine" }),
+      }),
     );
     expect(reserved.releaseCount()).toBe(1);
   });
@@ -224,6 +287,32 @@ describe("DeviceProvisioner", () => {
     ]);
   });
 
+  it("destroys a device whose boot failed under a cleanup claim, not a boot claim a request could wait for.", async () => {
+    const harness = await createHarness();
+    harness.driver.failOn("makeReady", 1, new DriverCrashError("simulator never booted"));
+    let finishDestroy: () => void = () => undefined;
+    const realDestroy = harness.driver.destroy.bind(harness.driver);
+    vi.spyOn(harness.driver, "destroy").mockImplementation(
+      (device) =>
+        new Promise<void>((resolve) => {
+          finishDestroy = () => void realDestroy(device).then(resolve);
+        }),
+    );
+
+    const failed = harness.provisioner.provision(spec, {
+      claim: { kind: "boot" },
+      reservation: reservation(),
+    });
+    const outcome = failed.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(harness.driver.destroy).toHaveBeenCalledTimes(1));
+    const deviceId = harness.registry.snapshot.devices[0]?.id ?? "";
+
+    expect(harness.claims.claim(deviceId)).toEqual({ kind: "cleanup" });
+
+    finishDestroy();
+    await expect(outcome).resolves.toBeInstanceOf(BootTimeoutError);
+  });
+
   it("releases its capacity reservation when the driver cannot provision", async () => {
     const harness = await createHarness();
     const reserved = reservation();
@@ -242,6 +331,7 @@ describe("DeviceProvisioner", () => {
     const registrationError = new Error("state persistence failed");
     const provisioner = new DeviceProvisioner({
       catalog: new DriverCatalog([harness.driver]),
+      claims: harness.claims,
       clock: harness.clock,
       components: harness.components,
       decisions: new SerializedDecision(),

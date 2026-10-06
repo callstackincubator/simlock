@@ -526,24 +526,6 @@ for the requests it holds for the gateway. That needs a worker operation that
 lists stored requests, and the gateway forwarding a key the worker can store
 the request under.
 
-## A restart between a grant and its record write reports the request as failed
-
-A request's result is written once its wait settles, a step after the lease
-itself is committed (`LeaseRequestBook#settle` runs after the grant resolves,
-not inside the same `state.json` write as `Registry.createLease`).
-
-**The pitfall:** a daemon that stops in that window leaves a lease on disk
-and its request still `open`. The next start settles the request as `failed`
-(daemon restarted), so a repeat under the same key answers with that failure
-even though the lease exists. Nothing is lost: the requester still holds the
-lease, and a request under a new key answers `REQUESTER_ALREADY_LEASED`
-naming it.
-
-**Status:** known; the window is one serialized registry write long.
-
-**Planned fix:** write the request's result in the same commit as the lease
-it was granted, by passing the request id into `Registry.createLease`.
-
 ## HTTP single-lease reads answer 404, not 403, for an unowned lease
 
 `GET /v1/leases/:id` and `GET /v1/leases/:id/events` resolve their lease
@@ -858,8 +840,9 @@ progress notifications precisely so clients can pass
 as in `client.callTool(request, undefined, { resetTimeoutOnProgress: true,
 timeout: 600_000 })`. Nothing hides this: a released iOS simulator is shut
 down after its erase, and the warm pool boots it back only when the running
-limit has room, so a slim lease that arrives before that boot ends, or when
-there is no room, pays the cold boot.
+limit has room, so a slim lease that arrives before that boot starts, or when
+there is no room, pays the cold boot; one that arrives while it runs waits for
+it and pays what is left of it.
 
 **`launchctl disable` accepts labels that do not exist.** Verified on iOS
 26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits

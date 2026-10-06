@@ -15,6 +15,13 @@ import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 
+const noTiming = {
+  estimatedBootMs: 0,
+  estimatedProvisionMs: 0,
+  estimatedReadyMs: 0,
+  estimatedReclaimMs: 0,
+};
+
 const statePath = "/home/agent/.simlock/state.json";
 
 async function flush(): Promise<void> {
@@ -91,6 +98,8 @@ async function grant(
     payload: { bootDuration: 0, deviceId: device.id },
   });
   const result = await harness.lifecycle.grant({
+    environment: {},
+    timing: noTiming,
     requestId: "req_1",
     source: "warm",
     deviceId: device.id,
