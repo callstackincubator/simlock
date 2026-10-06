@@ -3354,6 +3354,17 @@ describe("createLeasing warm targets", () => {
     expect(harness.registry.snapshot.devices.map((device) => device.state)).toEqual(["ready"]);
   });
 
+  it("creates no device for a target once the warm pool is closed for a stop", async () => {
+    const harness = await createHarness({ limits: roomy, warmPool: { targets: [target] } });
+    await harness.engine.convergeRunningCapacity();
+    harness.engine.core.closeWarmPool();
+
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await drain(harness);
+
+    expect(eventsNamed(harness, "device.provisioned")).toEqual([]);
+  });
+
   it("grants the first lease of the targeted kind from a ready device with no booting stage, then keeps the count by creating another", async () => {
     const harness = await createHarness({ limits: roomy, warmPool: { targets: [target] } });
     await harness.engine.convergeRunningCapacity();

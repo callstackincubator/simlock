@@ -416,7 +416,7 @@ export class WarmPool {
       const done = await this.options.lifecycle.shutdown(device, "warm-pool", "cleanup");
       if (done === undefined) return;
     } catch (error: unknown) {
-      this.#logFailure(device, "shutdown", error, true);
+      this.#logFailure(device, "shutdown", error);
     }
     this.options.acquisition.kick();
   }
@@ -447,7 +447,7 @@ export class WarmPool {
       if (done === undefined) return false;
       if (target !== undefined) this.#schedule.succeeded(target);
     } catch (error: unknown) {
-      this.#logFailure(held.device, "boot", error, target === undefined);
+      this.#logFailure(held.device, "boot", error);
       if (target !== undefined) this.#failed(target);
     } finally {
       await this.options.decisions.run(() => {
@@ -512,13 +512,8 @@ export class WarmPool {
     return device;
   }
 
-  #logFailure(
-    device: DeviceRecord,
-    step: "shutdown" | "boot",
-    error: unknown,
-    pause: boolean,
-  ): void {
-    if (pause) this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
+  #logFailure(device: DeviceRecord, step: "shutdown" | "boot", error: unknown): void {
+    this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
     this.#logger.warn(`warm pool ${step} of a device failed`, {
       deviceId: device.id,
       step,

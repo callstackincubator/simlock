@@ -1320,8 +1320,37 @@ describe("warm pool targets", () => {
 
     // The spec it once had is gone with a settled refusal: a later failed read has none to keep.
     answer = { message: "simctl timed out", refusal: "unresolvable" };
+    rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "ready" as const }));
     await rig.pool.pass();
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "unresolvable" })]);
+    expect([...(await rig.pool.targeted())]).toEqual([]);
+  });
+
+  it("lets a target boot a device whose keep boot failed a moment ago, which no target owns", async () => {
+    const targets: WarmTarget[] = [];
+    let attempts = 0;
+    const rig = harness([ofKind("shut", "shutdown")], {
+      boot: async () => {
+        attempts += 1;
+        throw new Error("simulator did not boot");
+      },
+      targets,
+    });
+    rig.state.devices = rig.state.devices.map((item) => ({
+      ...item,
+      lastLeaseEndedAt: now - 10 * minute + 10_000,
+    }));
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(attempts).toBe(1);
+
+    // No longer recently released, so the keep rule leaves it; the 30 s pause has not ended.
+    rig.clock.advance(15_000);
+    targets.push(iphone17);
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(attempts).toBe(2);
   });
 
   it("starts nothing once closed, before it drains", async () => {
