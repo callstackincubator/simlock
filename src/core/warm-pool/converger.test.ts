@@ -547,6 +547,31 @@ describe("warm pool converger", () => {
     expect(rig.sink.records).toEqual([]);
   });
 
+  it("clears the reset mark once the device has left shutdown, so it is an ordinary recently released device again", async () => {
+    let closed = true;
+    const rig = harness([device("down", "shutdown", 1_000)], { maintenance: () => closed });
+    await rig.pool.pass();
+    closed = false;
+
+    rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "leased" }));
+    await rig.pool.pass();
+    rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "shutdown" }));
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual(["down"]);
+  });
+
+  it("does not boot back a device left shut down while an operator reset holds acquisition closed", async () => {
+    let closed = true;
+    const rig = harness([device("down", "shutdown", 1_000)], { maintenance: () => closed });
+
+    await rig.pool.pass();
+    closed = false;
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual([]);
+  });
+
   it("subscribes once however many times it is started", async () => {
     const rig = harness([]);
     rig.pool.start();

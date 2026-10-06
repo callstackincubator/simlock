@@ -51,6 +51,8 @@ export class WarmPool {
   readonly #retryAfter = new Map<string, number>();
   #again = false;
   #started = false;
+  /** Devices shut down under an operator reset that have not left `shutdown` since. */
+  readonly #reset = new Set<string>();
   #running: Promise<void> | undefined;
   #tick: TimerHandle | undefined;
 
@@ -110,7 +112,14 @@ export class WarmPool {
   }
 
   async #once(): Promise<void> {
-    if (this.options.acquisition.maintenanceActive) return;
+    if (this.options.acquisition.maintenanceActive) {
+      // Whatever is shut down under a reset, an iOS device its forced release left that way
+      // included, is meant to stay down.
+      for (const device of this.options.registry.snapshot.devices) {
+        if (device.state === "shutdown") this.#reset.add(device.id);
+      }
+      return;
+    }
     try {
       const proposals = await this.options.decisions.run(() => evaluate(this.#view()));
       for (const proposal of proposals) await this.#act(proposal);
@@ -121,6 +130,9 @@ export class WarmPool {
 
   #view(): Parameters<typeof evaluate>[0] {
     const { devices, leases } = this.options.registry.snapshot;
+    for (const id of this.#reset) {
+      if (devices.find((device) => device.id === id)?.state !== "shutdown") this.#reset.delete(id);
+    }
     return {
       capacity: this.options.capacity.runningCapacity(capacityDevices(devices)),
       config: {
@@ -136,6 +148,7 @@ export class WarmPool {
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
       now: this.options.clock.now(),
+      resetDevices: new Set(this.#reset),
       waiting: this.options.acquisition.waitingDemand(),
     };
   }

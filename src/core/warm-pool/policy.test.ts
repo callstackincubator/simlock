@@ -120,6 +120,7 @@ function view(
     claimed?: readonly string[];
     leased?: readonly DeviceRecord[];
     handoffInFlight?: boolean;
+    reset?: readonly string[];
   } = {},
 ): WarmPolicyView {
   return {
@@ -127,6 +128,7 @@ function view(
     config: { enabled: options.enabled ?? true, shutdownAfterMs },
     devices,
     handoffInFlight: options.handoffInFlight ?? false,
+    resetDevices: new Set(options.reset ?? []),
     isClaimed: (id) => options.claimed?.includes(id) ?? false,
     leases: (options.leased ?? devices.filter((item) => item.state === "leased")).map(leaseOn),
     now,
@@ -326,10 +328,19 @@ describe("warm pool policy", () => {
     } satisfies WaitingDemand;
 
     const proposals = evaluate(
-      view([phone, busy], { limit: 1, waiting: [tabletHead, classDemand()] }),
+      view([phone, busy], { limit: 5, waiting: [tabletHead, classDemand()] }),
     );
 
     expect(proposals).toEqual([]);
+  });
+
+  it("does not boot back a device an operator reset shut down, though it was released a moment ago", () => {
+    const reset = device("reset", "shutdown", { endedAgo: 1_000 });
+    const other = device("other", "shutdown", { endedAgo: 2_000 });
+
+    expect(evaluate(view([reset, other], { reset: ["reset"] }))).toEqual([
+      { action: "boot", deviceId: "other", reason: "recently-released" },
+    ]);
   });
 
   it("holds a slot for a request whose device work is in flight, and boots nothing for it", () => {

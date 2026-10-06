@@ -2698,6 +2698,33 @@ describe("LeaseEngine warm pool", () => {
     expect(harness.clock.pendingTimerCount).toBe(0);
   });
 
+  it("a nuke without --delete-devices leaves the released devices shut down, not booted back by the pool", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    await harness.engine.convergeRunningCapacity();
+    const held = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+
+    await harness.engine.nuke(false);
+    await harness.engine.settle();
+    // Still inside idle.shutdownAfterMs of the forced release, and a fact that triggers a pass.
+    harness.bus.emit(
+      "cleanup.executed",
+      { action: "shutdown", reason: "test", ruleName: "test", target: held.device.id },
+      "test",
+    );
+    await harness.engine.settle();
+
+    expect(
+      harness.registry.snapshot.devices.find((item) => item.id === held.device.id)?.state,
+    ).toBe("shutdown");
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+  });
+
   it("accepts a new request again once a nuke has finished", async () => {
     const harness = await createHarness();
     await harness.engine.request(request, { ownerId: "held", requesterId: "held" });

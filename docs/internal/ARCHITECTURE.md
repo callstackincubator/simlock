@@ -1139,7 +1139,7 @@ as one running slot, until its `ready` commit. A pass proposes no budget
 shutdown while a booted device is on its way to a lease, because that device
 counts as running and as reserved until the grant, holds back the free slots a
 waiting request no idle device serves is about to take, and does nothing while
-an operator reset (`nuke`) holds acquisition closed.
+an operator reset (`nuke`) holds acquisition closed, after which a device the reset left shut down is not booted back as recently released.
 
 At startup, `StartupConverger` restores the persisted TTL timer of **every**
 lease it finds, and re-arms retry timers for devices still `quarantined` (see

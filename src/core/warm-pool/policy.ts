@@ -31,6 +31,11 @@ export interface WarmPolicyView {
    * is proposed on it.
    */
   readonly handoffInFlight: boolean;
+  /**
+   * Shut-down devices an operator reset (`nuke`) stopped. They were released a moment ago, but
+   * the reset's point is that they stay down, so they are never booted back unasked.
+   */
+  readonly resetDevices: ReadonlySet<string>;
 }
 
 type Slots = { global: number; ios: number; android: number };
@@ -129,8 +134,8 @@ function overBudget(
 }
 
 /**
- * Boots into the slots that are free: first one device per waiting request, in queue order, then
- * the shut-down devices released less than `idle.shutdownAfterMs` ago, most recently released
+ * Boots into the slots that are free: first one device for the request at the head of the queue,
+ * then the shut-down devices released less than `idle.shutdownAfterMs` ago, most recently released
  * first. A device that does not fit the free room on its platform is passed over. Slots that a
  * waiting request no idle device serves is about to take are held back from the second kind.
  */
@@ -176,6 +181,7 @@ function boots(
     .filter(
       (device) =>
         !taken.has(device.id) &&
+        !view.resetDevices.has(device.id) &&
         view.now - (device.lastLeaseEndedAt ?? Number.NEGATIVE_INFINITY) <
           view.config.shutdownAfterMs,
     )
