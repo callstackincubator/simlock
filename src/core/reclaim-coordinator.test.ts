@@ -290,8 +290,12 @@ describe("ReclaimCoordinator", () => {
     it("is wiped in the background: recovery returns while the erase runs, and the device stays claimed", async () => {
       const harness = await deferredHarness({ slowEraseMs: 30_000 });
 
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
+      const outcome = await Promise.race([
+        harness.coordinator.recoverInterrupted(harness.target.id).then((started) => started),
+        new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
+      ]);
 
+      expect(outcome).toBe(true);
       expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
       expect(harness.claims.claim(harness.target.id)?.kind).toBe("reclaim");
 

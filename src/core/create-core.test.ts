@@ -18,7 +18,9 @@ import {
   type PrerequisiteCheck,
   Registry,
 } from "./index.js";
+import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import { FakeDriver, testComponentWiring } from "./testing.js";
+import { WarmPool } from "./warm-pool/index.js";
 
 async function build(
   options: {
@@ -253,8 +255,13 @@ describe("createCore", () => {
     const { released } = await releasedLease(harness, { deferReclaim: true });
     harness.core.connect(ports());
 
-    await harness.core.converge(await harness.core.readStartup());
+    const startup = await harness.core.readStartup();
+    const outcome = await Promise.race([
+      harness.core.converge(startup).then(() => "returned" as const),
+      new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
+    ]);
 
+    expect(outcome).toBe("returned");
     expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
     expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(true);
 
@@ -265,6 +272,62 @@ describe("createCore", () => {
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
     expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
+  });
+
+  it("settle awaits the deferred wipes before the warm pool, because a wipe's commit can start a pass", async () => {
+    const harness = await build();
+    harness.core.connect(ports());
+    const order: string[] = [];
+    vi.spyOn(ReclaimCoordinator.prototype, "settle").mockImplementation(async () => {
+      order.push("reclaim");
+    });
+    vi.spyOn(WarmPool.prototype, "settle").mockImplementation(async () => {
+      order.push("warm pool");
+    });
+
+    try {
+      await harness.core.settle();
+      expect(order).toEqual(["reclaim", "warm pool"]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("nuke with deleteDevices waits for a deferred startup wipe, then deletes the device it left ready", async () => {
+    const harness = await build({ reclaimLatencyMs: 30_000 });
+    const { released } = await releasedLease(harness, { deferReclaim: true });
+    // Leasing's real acquisition pauses the warm pool while maintenance is open.
+    const base = ports();
+    const paused = { active: false };
+    harness.core.connect({
+      ...base,
+      leaseMaintenance: {
+        ...base.leaseMaintenance,
+        acquisition: {
+          ...base.leaseMaintenance.acquisition,
+          beginMaintenance: async () => void (paused.active = true),
+        },
+      },
+      warmPoolDemand: {
+        get maintenanceActive() {
+          return paused.active;
+        },
+        waitingDemand: () => [],
+      },
+    });
+    await harness.core.converge(await harness.core.readStartup());
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const nuked = harness.core.nuke.nuke(true);
+    // Long enough for a reset that does not wait to pass the device by.
+    await new Promise((resolve) => setImmediate(resolve));
+    harness.clock.advance(30_000);
+    await nuked;
+
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
+    ).toBe("deleted");
   });
 
   it("logs a deferred wipe whose commit fails, releases its claim, and tells acquisition", async () => {

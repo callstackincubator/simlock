@@ -1380,10 +1380,12 @@ Three things still wait for the purge, deliberately:
 - **An operator reset.** `NukeService` only acts on `ready`/`shutdown`
   records, so a device left mid-reclaim would be skipped by the very reset
   meant to take it down. `beginMaintenance` drains in-flight background
-  reclaims, and the maintenance-authorized release awaits its own inline.
+  reclaims and the deferred wipes a start left running, and the
+  maintenance-authorized release awaits its own inline.
 - **A graceful `simlock daemon stop`.** It drains the in-flight reclaims
-  (before disposing timers, so a purge that settles into quarantine still gets
-  its retry cancelled), leaving the pool in the same settled shape an inline
+  and deferred startup wipes, wipes first because their commit can start a pool
+  pass (before disposing timers, so a purge that settles into quarantine still
+  gets its retry cancelled), leaving the pool in the same settled shape an inline
   reclaim used to.
 - **The next start, if the daemon died instead.** Interrupted reclaims are
   recovered from the registry as before.
@@ -1440,7 +1442,7 @@ are:
   Leasing's reconciler then ends every lease whose device the read says is not
   running, and restores the expiry timers of the leases left. `StartupConverger`
   in core then re-arms quarantine retries, recovers interrupted reclaims,
-  deletes spent devices, and converges running capacity, all on the platforms
+  and deletes spent devices, all on the platforms
   the read could list. `NukeService` coordinates lease release, pending-request
   cancellation, and registry-scoped reset operations.
 
@@ -1895,9 +1897,8 @@ reconciler is about to release. Neither leasing nor convergence awaits a device
 reclaim inline (#43) — a release's reclaim runs in the background once the
 release commits, and so does the wipe convergence starts for a device a
 previous start put off (ADR 0019 §2), under a device claim — so what is left
-on this path is the read, the registry writes, and whatever unleased
-interrupted-reclaim recovery (shutdowns) and capacity-sweep shutdowns
-convergence itself still performs inline. The reconciler's rules are
+on this path is the read, the registry writes, and the spent-device
+deletes convergence itself still performs inline. The reconciler's rules are
 the next section's. Two consequences follow from
 claiming first:
 

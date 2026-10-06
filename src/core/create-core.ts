@@ -145,7 +145,10 @@ export interface Core {
    * the device as busy, and this is the first moment the pool can act on it.
    */
   passWarmPool(): Promise<void>;
-  /** Awaits the warm pool's running pass, so a graceful shutdown hands back a settled pool. */
+  /**
+   * Awaits the deferred startup wipes, then the warm pool's running pass, so a graceful shutdown
+   * hands back a settled pool.
+   */
   settle(): Promise<void>;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
@@ -264,9 +267,12 @@ export function createCore(options: CoreOptions): Core {
   const nuke = new NukeService({
     acquisition: {
       // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
-      // already has in flight is waited for, so the reset sees a settled pool.
+      // already has in flight is waited for, so the reset sees a settled pool. A startup wipe still
+      // running is waited for first: its commit can start a pool pass, and the device it holds in
+      // `reclaiming` is one the reset would skip.
       beginMaintenance: async () => {
         await leaseMaintenance.acquisition.beginMaintenance();
+        await reclaim.settle();
         await warmPool.settle();
       },
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
@@ -347,8 +353,9 @@ export function createCore(options: CoreOptions): Core {
       await warmPool.pass();
     },
     async settle() {
-      await warmPool.settle();
+      // The wipe's commit can start a pool pass, so the wipes are awaited first.
       await reclaim.settle();
+      await warmPool.settle();
     },
     dispose() {
       warmPool.dispose();
