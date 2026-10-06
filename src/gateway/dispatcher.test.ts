@@ -66,6 +66,7 @@ const gatewayConfig = {
   stalledTransition: { minimumThresholdMs: 1, thresholdMultiplier: 1 },
   warmPool: {
     enabled: true,
+    reserveRunning: { android: 0, ios: 0 },
     quarantine: {
       maxRetries: 1,
       maxRetryBackoffMs: 1,

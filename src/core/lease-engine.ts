@@ -161,6 +161,7 @@ export class LeaseEngine {
     );
     this.#provisioner = new DeviceProvisioner({
       catalog: this.#drivers,
+      claims: this.#claims,
       clock: options.clock,
       components: options.components,
       decisions: this.#decisions,

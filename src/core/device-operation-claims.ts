@@ -14,6 +14,11 @@ export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke" | "recove
 export interface DeviceOperationClaim {
   readonly deviceId: string;
   readonly operation: DeviceOperation;
+  /**
+   * The waiter this claim was taken for, absent when the warm pool took it. A request waits only
+   * for a `boot` nobody owns, never for the one another request is making for itself.
+   */
+  readonly owner?: string;
   release(): void;
 }
 
@@ -29,13 +34,13 @@ export class DeviceOperationClaims {
     operation: DeviceOperation,
     owner?: string,
   ): DeviceOperationClaim | undefined {
-    void owner;
     if (this.#claims.has(deviceId)) return undefined;
 
     let released = false;
     const claim: DeviceOperationClaim = {
       deviceId,
       operation,
+      ...(owner === undefined ? {} : { owner }),
       release: () => {
         if (released) return;
         released = true;
@@ -46,9 +51,11 @@ export class DeviceOperationClaims {
     return claim;
   }
 
+  /** What holds `deviceId` and for whom; `undefined` when nothing does. */
   claim(deviceId: string): { readonly kind: DeviceOperation; readonly owner?: string } | undefined {
-    void deviceId;
-    return undefined;
+    const held = this.#claims.get(deviceId);
+    if (held === undefined) return undefined;
+    return { kind: held.operation, ...(held.owner === undefined ? {} : { owner: held.owner }) };
   }
 
   operationFor(deviceId: string): DeviceOperation | undefined {

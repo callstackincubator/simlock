@@ -84,15 +84,24 @@ export class AcquisitionPlanner {
     const classOf = input.classOf ?? (() => undefined);
     // ADR 0015 §6: an idle device serves the request when it fits and is in the pool mode the
     // new device would have. Among several that do, the first in snapshot order is taken.
-    const servesRequest = (device: DeviceRecord): boolean =>
+    const serves = (device: DeviceRecord): boolean =>
       mayBeGranted(device) &&
-      !this.claims.isClaimed(device.id) &&
       specMode(device.spec) === specMode(spec) &&
       fits(requirement, device.spec, classOf);
+    const servesRequest = (device: DeviceRecord): boolean =>
+      !this.claims.isClaimed(device.id) && serves(device);
     const ready = snapshot.devices.find(
       (device) => device.state === "ready" && servesRequest(device),
     );
     if (ready !== undefined) return { device: ready, kind: "grant-ready" };
+
+    // A device the warm pool is booting, or creating, for nobody in particular will serve this
+    // request when it is ready: waiting for it costs less than starting a second. A device
+    // another request is booting or creating is its own, so it is left alone. Under `noWait`
+    // the case is ignored and the request plans as it always did.
+    if (!input.noWait && snapshot.devices.some((device) => this.#isOnItsWay(device, serves))) {
+      return { kind: "wait" };
+    }
 
     // A spent fresh device sits `shutdown` between its lease-end shutdown commit and its
     // delete; `mayBeGranted` is what keeps it from being booted for a new lease in that window.
@@ -102,6 +111,12 @@ export class AcquisitionPlanner {
     if (shutdown !== undefined) return this.#planShutdownBoot(input, shutdown);
 
     return this.#planProvision(input);
+  }
+
+  #isOnItsWay(device: DeviceRecord, serves: (device: DeviceRecord) => boolean): boolean {
+    if (device.state !== "provisioning" && device.state !== "shutdown") return false;
+    const claim = this.claims.claim(device.id);
+    return claim?.kind === "boot" && claim.owner === undefined && serves(device);
   }
 
   #planShutdownBoot(input: AcquisitionPlannerInput, device: DeviceRecord): AcquisitionPlan {
@@ -117,7 +132,7 @@ export class AcquisitionPlanner {
         : this.#claimEviction(victim, input.noWait);
     }
 
-    const claim = this.claims.tryClaim(device.id, "boot");
+    const claim = this.claims.tryClaim(device.id, "boot", input.owner);
     if (claim === undefined) {
       running.reservation.release();
       return blocked(input.noWait);

@@ -745,6 +745,7 @@ export const configSchema = z.object({
   }),
   warmPool: z.object({
     enabled: z.boolean(),
+    reserveRunning: z.object({ ios: z.number(), android: z.number() }),
     quarantine: z.object({
       maxRetries: z.number(),
       retryBackoffMs: z.number(),

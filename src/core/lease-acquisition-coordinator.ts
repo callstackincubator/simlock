@@ -629,6 +629,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     let handoff: ReadyDeviceHandoff;
     try {
       handoff = await this.options.provisioner.provision(spec, {
+        claim: { kind: "boot", owner: waiter.id },
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -702,6 +703,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.planner.plan({
       failures: waiter.failures,
       noWait: waiter.options.noWait ?? false,
+      owner: waiter.id,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
       requirement: waiter.requirement,

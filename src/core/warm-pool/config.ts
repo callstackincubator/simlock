@@ -1,4 +1,9 @@
-import { booleanValue, type Validator } from "../validation.js";
+import {
+  booleanValue,
+  nonNegativeInteger,
+  objectValidator,
+  type Validator,
+} from "../validation.js";
 
 /** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
@@ -16,5 +21,5 @@ export const defaultWarmPoolConfig: WarmPoolConfig = {
 /** The validators for the keys this module owns, composed into the `warmPool` object. */
 export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Validator>> = {
   enabled: booleanValue,
-  reserveRunning: (value) => value,
+  reserveRunning: objectValidator({ android: nonNegativeInteger, ios: nonNegativeInteger }),
 };

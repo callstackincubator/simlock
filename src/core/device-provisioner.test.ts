@@ -75,6 +75,7 @@ async function createHarness(
   });
   const provisioner = new DeviceProvisioner({
     catalog: new DriverCatalog([driver]),
+    claims,
     clock,
     components,
     decisions,
@@ -301,6 +302,7 @@ describe("DeviceProvisioner", () => {
     const registrationError = new Error("state persistence failed");
     const provisioner = new DeviceProvisioner({
       catalog: new DriverCatalog([harness.driver]),
+      claims: harness.claims,
       clock: harness.clock,
       components: harness.components,
       decisions: new SerializedDecision(),

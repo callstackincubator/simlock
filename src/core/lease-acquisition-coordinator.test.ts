@@ -160,6 +160,7 @@ async function createHarness(
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
   const provisioner = new DeviceProvisioner({
     catalog,
+    claims,
     clock,
     // Never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
     components: { claimProvision: () => () => undefined },
