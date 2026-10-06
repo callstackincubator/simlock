@@ -313,6 +313,25 @@ describe("warm pool policy", () => {
     expect(proposals).toEqual([]);
   });
 
+  it("boots nothing for a request behind a head whose device work is in flight", () => {
+    const phone = device("phone", "shutdown", { endedAgo: 20 * minute });
+    const busy = device("busy", "leased", { spec: spec("iPad Pro") });
+    // The head is a tablet request being served (say by an eviction); the phone waits behind it.
+    const tabletHead = {
+      ...classDemand("full", "ios", true),
+      requirement: {
+        ...classDemand().requirement,
+        target: { class: "tablet", kind: "class" },
+      },
+    } satisfies WaitingDemand;
+
+    const proposals = evaluate(
+      view([phone, busy], { limit: 1, waiting: [tabletHead, classDemand()] }),
+    );
+
+    expect(proposals).toEqual([]);
+  });
+
   it("holds a slot for a request whose device work is in flight, and boots nothing for it", () => {
     const recent = device("recent", "shutdown", { endedAgo: 1_000 });
     const busy = device("busy", "leased", { spec: spec("iPad Pro") });

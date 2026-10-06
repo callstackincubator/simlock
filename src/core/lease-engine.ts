@@ -307,8 +307,9 @@ export class LeaseEngine {
       },
       timers: this.#leases,
     });
-    // Built after the startup converger so its first pass is the one `daemon.started` triggers:
-    // by then convergence has finished, and a lowered `maxRunning` is converged here.
+    // Started by `convergeRunningCapacity`, once the startup converger has finished, so the
+    // facts convergence commits trigger no pass and the first one follows `daemon.started`,
+    // which is where a lowered `maxRunning` is converged.
     this.#warmPool = new WarmPool({
       acquisition: this.#acquisition,
       capacity: this.#capacity,
@@ -322,7 +323,6 @@ export class LeaseEngine {
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
-    this.#warmPool.start();
     this.healthMonitor = new LeaseHealthMonitor({
       clock: options.clock,
       config: options.config,
@@ -441,9 +441,10 @@ export class LeaseEngine {
     return this.#capacity.ramBudget(this.#capacityDevices());
   }
 
-  /** Runs the startup sequence after reconciliation, then starts the capacity observer. */
+  /** Runs the startup sequence after reconciliation, then starts the capacity observer and the warm pool. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
+    this.#warmPool.start();
     // Every run begins with a step in both: what the figures and the queue depth are now.
     this.#capacityObserver.start();
     this.options.eventBus.emit("queue.changed", { depth: this.#queue.depth }, "wait-queue");

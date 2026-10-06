@@ -547,6 +547,19 @@ describe("warm pool converger", () => {
     expect(rig.sink.records).toEqual([]);
   });
 
+  it("subscribes once however many times it is started", async () => {
+    const rig = harness([]);
+    rig.pool.start();
+    rig.pool.start();
+
+    rig.eventBus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await rig.pool.settle();
+    rig.pool.dispose();
+
+    expect(rig.waitingDemand).toHaveBeenCalledTimes(1);
+    expect(rig.clock.pendingTimerCount).toBe(0);
+  });
+
   it("disposes without error when it was never started", async () => {
     const rig = harness([]);
 

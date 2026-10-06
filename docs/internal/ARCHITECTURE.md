@@ -1159,8 +1159,8 @@ reclaim coordinator's recovery port — a backgrounded reclaim marks its device 
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and
 deletes spent `fresh` devices. It shuts nothing down for being over a running
-limit: the warm pool's first pass, which `daemon.started` triggers, does
-that, so a lowered limit leaves `ready` devices running only until that pass
+limit: the warm pool, started once that sequence has finished, does that in
+the pass `daemon.started` triggers, so a lowered limit leaves `ready` devices running only until that pass
 shuts the least recently used idle ones down. Leased devices are never
 touched by any of this.
 

@@ -149,24 +149,22 @@ function boots(
   };
 
   const unserved: WaitingDemand[] = [];
-  let headSeen = false;
-  for (const demand of view.waiting) {
-    if (demand.inFlight) {
-      unserved.push(demand);
-      continue;
-    }
-    // Only the head of the queue is granted a device (strict FIFO), so a device booted for a
-    // request behind it would sit idle, be shut down by the idle rule, and be booted again.
-    const device = headSeen
-      ? undefined
-      : bootable.find(
-          (candidate) =>
-            !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
-        );
-    headSeen = true;
+  view.waiting.forEach((demand, position) => {
+    // Only the first request in the line, the queue head, whether or not it is in flight, is
+    // granted a device (strict FIFO): a device booted for one behind it would sit idle, be shut
+    // down by the idle rule, and be booted again. The others still hold a slot below.
+    const device =
+      position === 0 && !demand.inFlight
+        ? bootable.find(
+            (candidate) =>
+              !taken.has(candidate.id) && hasRoom(room, candidate) && serves(candidate, demand),
+          )
+        : undefined;
     if (device !== undefined) boot(device, "waiting-request");
-    else if (!running.some((candidate) => serves(candidate, demand))) unserved.push(demand);
-  }
+    else if (demand.inFlight || !running.some((candidate) => serves(candidate, demand))) {
+      unserved.push(demand);
+    }
+  });
   // A request no device serves will take a free slot of its own (it boots a device or creates
   // one), so those slots are not the pool's to fill with a device nobody asked for.
   for (const demand of unserved) {

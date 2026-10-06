@@ -1206,8 +1206,7 @@ describe("LeaseEngine", () => {
     });
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
-    // The warm pool's tick is the one timer left; the lease's TTL timer is gone.
-    expect(harness.clock.pendingTimerCount).toBe(1);
+    expect(harness.clock.pendingTimerCount).toBe(0);
     await expect(
       harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).resolves.toMatchObject({ lease: { ownerId: "agent-1", requesterId: "agent-1" } });
@@ -1243,8 +1242,7 @@ describe("LeaseEngine", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.map((call) => call.operation)).toContain("destroy");
-    // The warm pool's tick is the one timer left; no lease timer leaked.
-    expect(harness.clock.pendingTimerCount).toBe(1);
+    expect(harness.clock.pendingTimerCount).toBe(0);
   });
 
   it("emits committed happy-path facts in lifecycle order", async () => {
@@ -2605,6 +2603,7 @@ describe("LeaseEngine warm pool", () => {
     await seedReady(harness);
     await seedReady(harness);
 
+    await harness.engine.convergeRunningCapacity();
     harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
     await harness.engine.settle();
 
@@ -2636,6 +2635,7 @@ describe("LeaseEngine warm pool", () => {
     await seedReady(harness);
     await seedReady(harness);
 
+    await harness.engine.convergeRunningCapacity();
     harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
     await harness.engine.settle();
 
@@ -2660,6 +2660,32 @@ describe("LeaseEngine warm pool", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+  });
+
+  it("starts the pool only once convergence has finished, so what convergence commits triggers no pass", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 3, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    await seedReady(harness);
+    await seedReady(harness);
+
+    harness.bus.emit("device.deleted", { deviceId: "x", initiator: "test" }, "test");
+    await harness.engine.settle();
+    expect(harness.registry.snapshot.devices.map((item) => item.state)).toEqual(["ready", "ready"]);
+
+    await harness.engine.convergeRunningCapacity();
+    await harness.engine.convergeRunningCapacity();
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.devices.map((item) => item.state).sort()).toEqual([
+      "ready",
+      "shutdown",
+    ]);
   });
 
   it("accepts a new request again once a nuke has finished", async () => {

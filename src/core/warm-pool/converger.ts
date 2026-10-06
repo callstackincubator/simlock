@@ -50,6 +50,7 @@ export class WarmPool {
   /** When a device whose boot or shutdown failed may be tried again, by device id. */
   readonly #retryAfter = new Map<string, number>();
   #again = false;
+  #started = false;
   #running: Promise<void> | undefined;
   #tick: TimerHandle | undefined;
 
@@ -58,6 +59,8 @@ export class WarmPool {
   }
 
   start(): void {
+    if (this.#started) return;
+    this.#started = true;
     for (const event of TRIGGERS) {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
