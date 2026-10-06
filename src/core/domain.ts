@@ -42,6 +42,18 @@ export interface DeviceSpec {
   readonly imageTag?: string;
 }
 
+/**
+ * Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
+ * runtime is not installed (and a target never downloads), its model is not listed, or the driver
+ * refused it some other way.
+ */
+export type TargetRefusal = "no-driver" | "runtime-missing" | "unknown-model" | "unresolvable";
+
+/** What the request resolver answers for a request that is not going to be granted a lease. */
+export type TargetResolution =
+  | { readonly spec: DeviceSpec }
+  | { readonly refusal: TargetRefusal; readonly message: string };
+
 /** The mode a spec plans: `"slim"` when it says so, `"full"` otherwise. */
 export function specMode(spec: DeviceSpec): DeviceMode {
   return spec.mode ?? "full";
@@ -173,6 +185,17 @@ export interface DeviceRecord {
   readonly driverData: unknown;
   readonly createdAt: number;
   readonly lastLeaseEndedAt?: number;
+  /**
+   * When the device last became `ready`: the registry stamps it on every move into `ready`. A record written
+   * before this field existed loads without it and counts as ready since `createdAt`
+   * (`readySince`).
+   */
+  readonly readyAt?: number;
+  /**
+   * When the device last moved into `shutdown`, stamped by the registry on every such move. A
+   * record shut down before this field existed has none.
+   */
+  readonly shutdownAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
   readonly recoveringSince?: number;
@@ -204,6 +227,11 @@ export interface DeviceRecord {
    * as `reusable`; absent reads the same way.
    */
   readonly leaseIdentity?: LeaseIdentity;
+}
+
+/** When a ready device became ready: `readyAt`, or `createdAt` for a record that has none. */
+export function readySince(device: DeviceRecord): number {
+  return device.readyAt ?? device.createdAt;
 }
 
 /**
@@ -347,6 +375,10 @@ export class IllegalTransition extends Error {
 /** Fields a driver call resolved alongside a transition -- currently a fresh `makeReady` address. */
 export interface DeviceTransitionUpdate {
   readonly address?: string;
+  /** Stamped by the registry on every move into `ready`; callers do not pass it. */
+  readonly readyAt?: number;
+  /** Stamped by the registry on every move into `shutdown`; callers do not pass it. */
+  readonly shutdownAt?: number;
   readonly driverData?: unknown;
   readonly mode?: DeviceMode;
 }

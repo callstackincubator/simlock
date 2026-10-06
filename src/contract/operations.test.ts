@@ -806,7 +806,9 @@ describe("operation input/output round trips", () => {
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       warmPool: {
         enabled: true,
+        maxConcurrentBoots: 1,
         reserveRunning: { android: 0, ios: 0 },
+        targets: [],
         quarantine: {
           maxRetries: 1,
           retryBackoffMs: 1,
@@ -842,6 +844,77 @@ describe("operation input/output round trips", () => {
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+  });
+
+  it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
+    const targets = [
+      { count: 2, mode: "slim", model: "iPhone 17", osVersion: ">=18", platform: "ios" },
+      { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
+    ];
+    const warmPool = { targets, maxConcurrentBoots: 3 };
+    const output = OPERATIONS["config.get"].output;
+    const base = {
+      mode: "worker",
+      gateway: {
+        disconnectedRetentionMs: 1,
+        execTimeoutMs: 1,
+        leaseRequestTimeoutMs: 1,
+        routing: "warm-then-free",
+      },
+      capacity: { strategy: "fixed", config: { maxRunning: 4 } },
+      downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
+      idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      lease: {
+        defaultTtlMs: 1,
+        maxTtlMs: 1,
+        identity: { ios: "fresh", android: "reusable" },
+        requestRetentionMs: 1,
+        maxRequestRecords: 1,
+      },
+      exec: { timeoutMs: 1 },
+      diskPressure: { freeBytesThreshold: 1 },
+      eventBuffer: { capacity: 1 },
+      log: { level: "info", rotateBytes: 1 },
+      http: { enabled: false, host: "127.0.0.1", port: 4700 },
+      health: {
+        enabled: true,
+        probeIntervalMs: 1,
+        stableObservations: 1,
+        maxRecoveryAttempts: 1,
+        recoveryBackoffMs: 1,
+        maxConcurrentRecoveries: 1,
+      },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      android: {
+        defaultModels: {},
+        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
+      },
+      stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
+    };
+    const config = (pool: object) => ({
+      ...base,
+      warmPool: {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        quarantine: {
+          maxRetries: 1,
+          retryBackoffMs: 1,
+          retryBackoffMultiplier: 1,
+          maxRetryBackoffMs: 1,
+        },
+        ...pool,
+      },
+    });
+
+    expect(output.parse(config(warmPool)).warmPool).toMatchObject(warmPool);
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], platform: "tvos" }] })),
+    ).toThrow();
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], mode: "lean" }] })),
+    ).toThrow();
+    expect(() => output.parse(config({ maxConcurrentBoots: 1 }))).toThrow();
+    expect(() => output.parse(config({ targets: [] }))).toThrow();
   });
 
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {

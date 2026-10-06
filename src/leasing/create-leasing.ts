@@ -233,6 +233,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
         get maintenanceActive() {
           return acquisition.maintenanceActive;
         },
+        resolve: (request) => acquisition.resolve(request),
         waitingDemand: () => acquisition.waitingDemand(),
       },
     },

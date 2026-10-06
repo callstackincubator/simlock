@@ -36,7 +36,9 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     eventBuffer: { capacity: 100 },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
       reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,

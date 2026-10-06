@@ -19,8 +19,8 @@ import type {
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { Doctor } from "./doctor.js";
-import type { WaitingDemand } from "./domain.js";
-import type { Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
+import type { TargetResolution, WaitingDemand } from "./domain.js";
+import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
@@ -86,6 +86,8 @@ export interface CorePorts {
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
+    /** A target as a request, resolved with downloads off: the spec, or why there is none. */
+    resolve(request: DeviceRequest): Promise<TargetResolution>;
   };
   /** Tells acquisition a device came back, so a waiting request is tried again. */
   readonly notifyAvailability: () => void;
@@ -138,8 +140,20 @@ export interface Core {
    * the device as busy, and this is the first moment the pool can act on it.
    */
   passWarmPool(): Promise<void>;
-  /** Awaits the warm pool's running pass, so a graceful shutdown hands back a settled pool. */
+  /** The devices the idle shutdown timer leaves alone: those a warm target keeps. */
+  targetedDevices(): Promise<ReadonlySet<string>>;
+  /** Awaits the warm pool's running pass, so a test or a reset sees a settled pool. */
   settle(): Promise<void>;
+  /**
+   * A graceful stop: the warm pool starts nothing new and finishes what is in flight, so the
+   * daemon exits on a settled pool.
+   */
+  drain(): Promise<void>;
+  /**
+   * The first step of a graceful stop: closes the warm pool to new work before leasing settles,
+   * so a reclaim that commits meanwhile cannot start a creation `drain` would then wait for.
+   */
+  closeWarmPool(): void;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
 }
@@ -239,6 +253,7 @@ export function createCore(options: CoreOptions): Core {
       get maintenanceActive() {
         return port("warmPoolDemand").maintenanceActive;
       },
+      resolve: (request) => port("warmPoolDemand").resolve(request),
       waitingDemand: () => port("warmPoolDemand").waitingDemand(),
     },
     capacity,
@@ -250,6 +265,7 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    provisioner,
     registry,
   });
   const nuke = new NukeService({
@@ -335,6 +351,15 @@ export function createCore(options: CoreOptions): Core {
     },
     async passWarmPool() {
       await warmPool.pass();
+    },
+    async targetedDevices() {
+      return warmPool.targeted();
+    },
+    closeWarmPool() {
+      warmPool.close();
+    },
+    async drain() {
+      await warmPool.drain();
     },
     async settle() {
       await warmPool.settle();

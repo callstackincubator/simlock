@@ -179,20 +179,26 @@ describe("DaemonServer", () => {
     });
   });
 
-  it("answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 18, to a client on protocol 17, which cannot parse a starting status.get answer", async () => {
-    const harness = await createHarness();
-    const previous = await createClient(harness.socketPath);
+  it.each([
+    [17, "cannot parse a starting status.get answer"],
+    [18, "cannot parse config.get's warmPool.targets"],
+  ])(
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 19, to a client on protocol %i, which %s",
+    async (version) => {
+      const harness = await createHarness();
+      const previous = await createClient(harness.socketPath);
 
-    await expect(
-      previous.request("hello", { clientVersion: "test", protocolVersion: 17 }),
-    ).resolves.toMatchObject({
-      error: {
-        code: "PROTOCOL_VERSION_UNSUPPORTED",
-        details: { client: { min: 17, max: 17 }, daemon: { min: 18, max: 18 } },
-      },
-      ok: false,
-    });
-  });
+      await expect(
+        previous.request("hello", { clientVersion: "test", protocolVersion: version }),
+      ).resolves.toMatchObject({
+        error: {
+          code: "PROTOCOL_VERSION_UNSUPPORTED",
+          details: { client: { min: version, max: version }, daemon: { min: 19, max: 19 } },
+        },
+        ok: false,
+      });
+    },
+  );
 
   // Every protocol bump so far shipped without a back-compat shim, so rejecting an older
   // client outright is a deliberate product decision, not just arithmetic on the current
@@ -2044,6 +2050,23 @@ describe("DaemonServer decorations", () => {
       expect(harness.registry.snapshot.leases).toHaveLength(1);
     });
 
+    it("calls beginStop once, before stopAuxiliary, when a stop is asked for", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        beginStop: () => {
+          order.push("beginStop");
+        },
+        stopAuxiliary: async () => {
+          order.push("stopAuxiliary");
+        },
+      });
+
+      await harness.daemon.stop("test-begin-stop");
+      await harness.daemon.stop("again");
+
+      expect(order).toEqual(["beginStop", "stopAuxiliary"]);
+    });
+
     it("reports health via the public accessor across the startup/stop lifecycle", async () => {
       const harness = await createHarness({ start: false });
       expect(harness.daemon.health).toBe("starting");
@@ -2863,6 +2886,7 @@ async function createHarness(
      * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
     readonly iosMaxDevices?: number;
     readonly settle?: () => Promise<void>;
+    readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
     /** ADR 0003 §5's per-start admin secret (`AdminSecretManager`). Undefined by default, same
@@ -2983,6 +3007,7 @@ async function createHarness(
     resolveRole: options.resolveRole ?? { resolve: () => "admin" },
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
+    ...(options.beginStop === undefined ? {} : { beginStop: options.beginStop }),
     ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
     version: "test",
   });
@@ -3302,7 +3327,9 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
       reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
