@@ -16,6 +16,10 @@ recovery. Anything provable in-process belongs in a unit test instead.
 | fast | `pnpm run test:e2e`      | scriptable fake driver, no SDKs   | `pnpm run test`, CI |
 | slow | `pnpm run test:e2e:slow` | real `simctl` / `adb` / emulators | manual, pre-release |
 
+The slow lane runs with vitest's `default` reporter: under an agent vitest's minimal reporter drops
+the console output of a passing test, and a slow flow's step and `device.ready` lines are what its log is
+read for.
+
 The slow flows are tagged `slow` plus `ios`/`android`, so the fast lane excludes
 them with `--tags-filter='!slow'`. Each also gates itself at runtime on platform and SDK
 availability: with `describe.skipIf`, or, in `slow-warm-pool.test.ts`, with

@@ -9,5 +9,6 @@ export { freeLoopbackPort } from "./port.js";
 export type { TestEnv } from "./env.js";
 export { waitFor } from "./wait.js";
 export { events } from "./events.js";
+export type { RecordedEvent } from "./events.js";
 export { waitForDeviceState, waitForLeaseCount } from "./status.js";
 export type { CliResult } from "./cli.js";

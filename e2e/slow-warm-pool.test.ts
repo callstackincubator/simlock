@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { withDaemon, waitFor, type TestEnv } from "./helpers/index.js";
+import { withDaemon, waitFor, type RecordedEvent, type TestEnv } from "./helpers/index.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 
 const execFileAsync = promisify(execFile);
@@ -61,19 +61,31 @@ interface CatalogPlatform {
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
-/** Two real boots (one of them an emulator), one lease and release of each, and a second round. */
+/** Two real boots (one of them an emulator) and, before any lease, a hold of one pool tick: well inside it. */
 const TEST_TIMEOUT = 30 * MINUTE;
+/**
+ * Two real boots, a lease and a release of each, and the wait for each to be ready again. The
+ * waits alone (a 15 min readiness wait, two 10 min leases, two 3 min releases, two 15 min waits
+ * for ready again) add up to 71 min, plus at most 9 one-minute queries and a 5 min nuke: a wait
+ * that gives up names itself before this fires.
+ */
+const WARM_ROUND_TIMEOUT = 90 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
 /** A release returns once the lease is gone; the device's reclaim is awaited separately. */
 const RELEASE_TIMEOUT = 3 * MINUTE;
-/** Every call that asks the machine or the daemon a question, so one that never answers names itself. */
+/** Every call that asks the machine or the daemon a question (`simctl`, `adb`, the CLI), so one that never answers names itself. */
 const QUERY_TIMEOUT = MINUTE;
 /**
  * The pool-off test creates each device from nothing (an Android image's first boot is a cold
- * boot), so it is two cold leases, two warm ones, two releases and two end-state holds. The
- * budgets of its steps (see `step`) sum to under this; each fires, naming its step, before it.
+ * boot), so it is two cold leases, two boots from shutdown, four releases and two end-state
+ * holds. The budgets of its steps (see `step`) sum to 84.5 min. Outside any step it makes at most
+ * eight one-minute queries, and on a failure `diagnose` asks for the devices (1 min) and `nuke`
+ * runs for up to 5 min: 84.5 + 8 + 1 + 5 = 98.5 min, under this, so each step budget fires,
+ * naming its step, before the test's own timeout, which names nothing.
  */
-const COLD_TEST_TIMEOUT = 80 * MINUTE;
+const COLD_TEST_TIMEOUT = 100 * MINUTE;
+/** The pool-off test's first step, which brings the daemon up and reads its catalog. */
+const DAEMON_START_BUDGET = 5 * MINUTE;
 const READY_TIMEOUT = 15 * MINUTE;
 /** How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
 const HOLD = 45 * SECOND;
@@ -81,14 +93,18 @@ const HOLD = 45 * SECOND;
 /** The installed iOS runtimes; empty when `xcrun simctl` is missing or unusable, so the lane skips. */
 async function installedIosRuntimes(): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"], {
+      timeout: QUERY_TIMEOUT,
+    });
     const parsed = JSON.parse(stdout) as {
       runtimes: { version: string; isAvailable: boolean; platform?: string }[];
     };
     return parsed.runtimes
       .filter((runtime) => runtime.isAvailable && (runtime.platform ?? "iOS") === "iOS")
       .map((runtime) => runtime.version);
-  } catch {
+  } catch (error: unknown) {
+    // A timed-out simctl is a hang to report, not "no iOS runtime installed".
+    if ((error as { killed?: boolean }).killed === true) throw error;
     return [];
   }
 }
@@ -191,7 +207,7 @@ async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise
   const env = await withDaemon({ driver: "real" });
   const adbServerPort = env.adbServerPort;
   if (adbServerPort === undefined) throw new Error("the real-SDK lane must allocate an adb port");
-  const reported = await env.cli(["catalog", "--json"]);
+  const reported = await env.cli(["catalog", "--json"], { timeout: QUERY_TIMEOUT });
   expect(reported.code, `catalog failed: ${reported.stderr}`).toBe(0);
   const platforms = (reported.json as { platforms: CatalogPlatform[] }).platforms;
   const catalogOf = (platform: Platform): CatalogPlatform => {
@@ -209,6 +225,20 @@ async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise
     ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
   });
   return { adbServerPort, deviceSet: iosDeviceSet(env.home), env, targets };
+}
+
+/** The business-event history, bounded like every other question put to the daemon. */
+function recordedEvents(env: TestEnv): Promise<RecordedEvent[]> {
+  return env.events(undefined, QUERY_TIMEOUT);
+}
+
+/** The two lines the verifier reads in the log: each device.ready event, with its time. */
+function logDeviceReady(ready: readonly RecordedEvent[]): void {
+  for (const entry of ready) {
+    console.info(
+      `device.ready ${JSON.stringify(entry.payload)} at ${new Date(entry.timestamp).toISOString()}`,
+    );
+  }
 }
 
 async function devices(env: TestEnv): Promise<Row[]> {
@@ -351,7 +381,9 @@ async function expectGrantedWarm(
   granted: readonly Grant[],
   readyEvents: readonly { timestamp: number }[],
 ): Promise<void> {
-  const grantedEvents = (await env.events()).filter((entry) => entry.event === "lease.granted");
+  const grantedEvents = (await recordedEvents(env)).filter(
+    (entry) => entry.event === "lease.granted",
+  );
   for (const grant of granted) {
     const entry = grantedEvents.find(
       (candidate) => (candidate.payload as { leaseId?: string }).leaseId === grant.lease.id,
@@ -414,7 +446,7 @@ async function expectBootedFromShutdown(
   released: Grant,
 ): Promise<void> {
   expect(bootingLines(second.stderr), `${platform}: the lease waited on a boot`).not.toEqual([]);
-  const granted = (await env.events()).find(
+  const granted = (await recordedEvents(env)).find(
     (entry) =>
       entry.event === "lease.granted" &&
       (entry.payload as { leaseId?: string }).leaseId === second.grant.lease.id,
@@ -455,18 +487,13 @@ describe(
           await holds("one ready device per platform", HOLD, async () => {
             expectOneReadyPerPlatform(await devices(env));
           });
-          const recorded = await env.events();
+          const recorded = await recordedEvents(env);
           expect(
             recorded.filter((entry) => entry.event.startsWith("lease.")),
             "no lease was asked for before the devices were ready",
           ).toEqual([]);
           const ready = recorded.filter((entry) => entry.event === "device.ready");
-          // The two lines the verifier reads in the log: both device.ready events, before any lease.
-          for (const entry of ready) {
-            console.info(
-              `device.ready ${JSON.stringify(entry.payload)} at ${new Date(entry.timestamp).toISOString()}`,
-            );
-          }
+          logDeviceReady(ready);
           expect(
             ready.map((entry) => (entry.payload as { deviceId: string }).deviceId).sort(),
           ).toEqual(rows.map((row) => row.id).sort());
@@ -478,23 +505,19 @@ describe(
 
     it(
       "grants the first lease of each targeted model warm with no booting progress, and after release each device is ready again",
-      { timeout: TEST_TIMEOUT },
+      { timeout: WARM_ROUND_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
         const { env, targets } = await warmDaemon();
         try {
           await untilBothReady(env);
-          const before = await env.events();
+          const before = await recordedEvents(env);
           const readyEvents = before.filter((entry) => entry.event === "device.ready");
           expect(readyEvents.length, "device.ready events before the first lease").toBeGreaterThan(
             1,
           );
-          for (const entry of readyEvents) {
-            console.info(
-              `device.ready ${JSON.stringify(entry.payload)} at ${new Date(entry.timestamp).toISOString()}`,
-            );
-          }
+          logDeviceReady(readyEvents);
 
           const granted: Grant[] = [];
           for (const platform of ["ios", "android"] as const) {
@@ -516,7 +539,7 @@ describe(
           // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
           // so the state alone cannot tell the two apart: the reclaim's own strategy does.
           const android = granted.find((grant) => grant.device.spec.platform === "android");
-          const reclaimed = (await env.events()).filter(
+          const reclaimed = (await recordedEvents(env)).filter(
             (entry) =>
               entry.event === "device.reclaimed" &&
               (entry.payload as { deviceId?: string }).deviceId === android?.device.id,
@@ -537,11 +560,17 @@ describe(
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
-        // The pool is off from the start, so the only device of each kind is the one the first lease
-        // creates: once released it is the only shut-down device of its kind, and the planner has no
-        // other to boot on the next lease.
-        const { adbServerPort, deviceSet, env, targets } = await warmDaemon({ enabled: false });
+        // The daemon is restarted with the targets and enabled false in one config write, so the
+        // pool never has a target to boot: the only device of each kind is the one the first lease
+        // creates, and once released it is the only shut-down device of its kind, so the planner
+        // has no other to boot on the next lease.
+        let lane: Lane | undefined;
         try {
+          // Inside the try and a step, so a hung setup names itself and `diagnose` and `nuke` run.
+          lane = await step("start the daemon with the pool off", DAEMON_START_BUDGET, () =>
+            warmDaemon({ enabled: false }),
+          );
+          const { adbServerPort, deviceSet, env, targets } = lane;
           // Each first lease creates its device and boots it from nothing.
           const first = {
             android: await step(
@@ -648,10 +677,10 @@ describe(
             release(env, second.android.grant),
           );
         } catch (error: unknown) {
-          await diagnose(env);
+          if (lane !== undefined) await diagnose(lane.env);
           throw error;
         } finally {
-          await nuke(env);
+          if (lane !== undefined) await nuke(lane.env);
         }
       },
     );
