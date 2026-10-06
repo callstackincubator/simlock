@@ -244,6 +244,7 @@ async function createHarness(
   });
   return {
     bus,
+    capacity,
     claims,
     clock,
     components,
@@ -1490,6 +1491,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       }),
     ]);
     expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
   });
 
   it("A failed boot whose device the destroy can no longer claim leaves that device fenced under its waiter.", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { events, waitFor, waitForDeviceState, withDaemon, type TestEnv } from "./helpers/index.js";
+import { events, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
  * `warmPool.reserveRunning`, and a request that arrives while the warm pool is booting a device
@@ -54,11 +54,19 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       await lease(env, "agent-c"),
     ];
     const readyBefore = (await eventsNamed(env, "device.ready")).length;
+    // A slow boot, so a pool boot that wrongly starts stays visible as `booting`.
+    await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
 
     // Two leases still held leave no slot above the reserve, so the first device stays down.
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
     await env.expectEvents(["lease.released", "device.reclaimed"]);
-    await waitForDeviceState(env, first.device.driverDeviceId, "shutdown");
+    await waitFor(async () => !(await deviceStates(env)).includes("reclaiming"), {
+      label: "the released device finished its reclaim",
+    });
+    expect((await deviceStates(env)).filter((state) => state === "shutdown")).toHaveLength(1);
+    expect(
+      (await env.driverLog.calls()).filter((call) => call.operation === "makeReady"),
+    ).toHaveLength(3);
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore);
 
     expect((await env.cli(["release", second.lease.id])).code).toBe(0);
