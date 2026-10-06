@@ -1201,6 +1201,9 @@ pool's call, made in a pass after the commit: it shuts idle devices down when
 the running count is over its budget, least recently used first and never one
 that serves a waiting request, and boots a shut-down device back when it
 serves a waiting request or was released a moment ago and there is room.
+`warmPool.reserveRunning` takes running slots per platform (and their sum from
+the global count) off that room for idle devices only: a request is never held
+back by it.
 `warmPool.enabled: false` keeps nothing warm. Active demand may still evict
 deterministic LRU warm inventory before starting requested work, without
 bypassing the FIFO head.
@@ -1974,8 +1977,12 @@ lists, classes alike, and pairs with an installed runtime, of the requested
 image tag if one is named) and a `DeviceRequirement` kept on the waiter
 beside its spec. `fits` in `domain.ts` is the one place a requirement meets
 a device (platform, model or class, OS, image tag); the planner adds the
-pool-mode comparison and looks for a `ready` device that fits, then a
-`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+pool-mode comparison and looks for a `ready` device that fits, then, unless the
+request is `noWait`, for a fitting device already on its way (`provisioning` or
+`shutdown` under a `boot` claim no request owns: the warm pool's own boot) and
+waits for it, then a `shutdown` one, then provisions the create spec. A claim
+carries its `owner`, the waiter id, only when a request took it, so a device
+another request is booting or creating for itself is never waited for. `sameSpec` is untouched and
 still names pool identity for the warm pool, reclaim and the idempotency
 check. A class is read from the catalog entry (`modelClasses`) at the moment
 a fit is decided; a device record stores none.
