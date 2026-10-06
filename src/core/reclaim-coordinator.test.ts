@@ -304,6 +304,16 @@ describe("ReclaimCoordinator", () => {
       expect(harness.notifyAvailability).toHaveBeenCalled();
     });
 
+    it("settles, with the claim released, when its commit fails and no logger was given", async () => {
+      const harness = await deferredHarness({});
+      vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
+
+      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
+      await expect(harness.coordinator.settle()).resolves.toBeUndefined();
+
+      expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
+    });
+
     it("is left alone when another operation already holds the device", async () => {
       const harness = await deferredHarness({});
       const held = harness.claims.tryClaim(harness.target.id, "boot");
