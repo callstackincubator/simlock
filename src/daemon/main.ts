@@ -385,12 +385,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const convergeStartup = async (): Promise<void> => {
     await leasing.settleRequests();
     const read = await core.readStartup();
-    if (stopping) return;
-    await core.doctor.reconcile({ read });
-    if (stopping) return;
-    await leasing.reconcile(read);
-    if (stopping) return;
-    await core.converge(read);
+    const steps = [
+      () => core.doctor.reconcile({ read }),
+      () => leasing.reconcile(read),
+      () => core.converge(read),
+    ];
+    for (const step of steps) {
+      if (stopping) return;
+      await step();
+    }
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
