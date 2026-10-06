@@ -64,6 +64,16 @@ const MINUTE = 60 * SECOND;
 /** Two real boots (one of them an emulator), one lease and release of each, and a second round. */
 const TEST_TIMEOUT = 30 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
+/** A release returns once the lease is gone; the device's reclaim is awaited separately. */
+const RELEASE_TIMEOUT = 3 * MINUTE;
+/** Every call that asks the machine or the daemon a question, so one that never answers names itself. */
+const QUERY_TIMEOUT = MINUTE;
+/**
+ * The pool-off test creates each device from nothing (an Android image's first boot is a cold
+ * boot), so it is two cold leases, two warm ones, two releases and two end-state holds. The
+ * budgets of its steps (see `step`) sum to under this; each fires, naming its step, before it.
+ */
+const COLD_TEST_TIMEOUT = 80 * MINUTE;
 const READY_TIMEOUT = 15 * MINUTE;
 /** How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
 const HOLD = 45 * SECOND;
@@ -116,9 +126,13 @@ async function missingPlatform(): Promise<string | undefined> {
 /** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
 async function onlineEmulators(adbServerPort: number): Promise<string[]> {
   const adb = join(ANDROID_HOME, "platform-tools", "adb");
-  const { stdout } = await execFileAsync(adb, ["-P", String(adbServerPort), "devices"]).catch(
-    () => ({ stdout: "" }),
-  );
+  const { stdout } = await execFileAsync(adb, ["-P", String(adbServerPort), "devices"], {
+    timeout: QUERY_TIMEOUT,
+  }).catch((error: unknown) => {
+    // A timed-out adb is a hang to report, not "no emulator online".
+    if ((error as { killed?: boolean }).killed === true) throw error;
+    return { stdout: "" };
+  });
   return stdout
     .split("\n")
     .slice(1)
@@ -198,7 +212,7 @@ async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise
 }
 
 async function devices(env: TestEnv): Promise<Row[]> {
-  const listed = await env.cli(["list", "--devices"]);
+  const listed = await env.cli(["list", "--devices"], { timeout: QUERY_TIMEOUT });
   expect(listed.code, listed.stderr).toBe(0);
   return listed.json as Row[];
 }
@@ -316,7 +330,7 @@ async function lease(
 }
 
 async function release(env: TestEnv, grant: Grant): Promise<void> {
-  const released = await env.cli(["release", grant.lease.id], { timeout: LEASE_TIMEOUT });
+  const released = await env.cli(["release", grant.lease.id], { timeout: RELEASE_TIMEOUT });
   expect(released.code, `release failed: ${released.stderr}`).toBe(0);
 }
 
@@ -349,6 +363,46 @@ async function expectGrantedWarm(
     expect(entry?.timestamp ?? 0).toBeGreaterThan(
       Math.max(...readyEvents.map((ready) => ready.timestamp)),
     );
+  }
+}
+
+/**
+ * Runs one named step of a long test with its own budget. It logs when the step starts and ends,
+ * so the slow-lane log shows where a run is, and it fails with the step's name when the budget
+ * runs out: a hang names itself long before the test's own timeout, which names nothing.
+ */
+async function step<T>(name: string, budget: number, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  console.info(`step start: ${name} (budget ${Math.round(budget / SECOND)}s)`);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`step "${name}" did not finish within ${budget}ms`)),
+          budget,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    console.info(`step end: ${name} after ${Math.round((Date.now() - started) / SECOND)}s`);
+  }
+}
+
+/** On a failure, what the daemon last said and what it held: the log is all that is left of a torn-down home. */
+async function diagnose(env: TestEnv): Promise<void> {
+  try {
+    const log = await readFile(env.logPath, "utf8");
+    console.info(`daemon.log tail:\n${log.split("\n").slice(-60).join("\n")}`);
+  } catch (error: unknown) {
+    console.info(`daemon.log unreadable: ${String(error)}`);
+  }
+  try {
+    console.info(`devices at failure: ${JSON.stringify(await devices(env))}`);
+  } catch (error: unknown) {
+    console.info(`devices at failure unreadable: ${String(error)}`);
   }
 }
 
@@ -455,7 +509,7 @@ describe(
 
     it(
       "with warmPool.enabled false, a released simulator and a released emulator are both shut down, and each boots on the next lease",
-      { timeout: TEST_TIMEOUT },
+      { timeout: COLD_TEST_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
@@ -464,34 +518,62 @@ describe(
         // other to boot on the next lease.
         const { adbServerPort, deviceSet, env, targets } = await warmDaemon({ enabled: false });
         try {
+          // Each first lease creates its device and boots it from nothing.
           const first = {
-            android: await lease(env, targets.android, "cold-android"),
-            ios: await lease(env, targets.ios, "cold-ios"),
+            android: await step(
+              "first lease: create and boot the emulator",
+              LEASE_TIMEOUT + MINUTE,
+              () => lease(env, targets.android, "cold-android"),
+            ),
+            ios: await step(
+              "first lease: create and boot the simulator",
+              LEASE_TIMEOUT + MINUTE,
+              () => lease(env, targets.ios, "cold-ios"),
+            ),
           };
-          await release(env, first.ios.grant);
-          await release(env, first.android.grant);
+          await step("release the simulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.ios.grant),
+          );
+          await step("release the emulator", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, first.android.grant),
+          );
 
           const iosUdid = first.ios.grant.device.driverDeviceId;
-          await untilState(env, iosUdid, "shutdown", 5 * MINUTE);
-          await untilState(env, first.android.grant.device.driverDeviceId, "shutdown", 5 * MINUTE);
-          await waitFor(
-            async () =>
-              (await setDevices(deviceSet)).find((device) => device.udid === iosUdid)?.state ===
-              "Shutdown",
-            { interval: 1000, label: "the simulator is Shutdown in simctl", timeout: MINUTE },
+          const androidId = first.android.grant.device.driverDeviceId;
+          await step("the simulator reaches shutdown", 6 * MINUTE, () =>
+            untilState(env, iosUdid, "shutdown", 5 * MINUTE),
           );
-          await waitFor(async () => (await onlineEmulators(adbServerPort)).length === 0, {
-            interval: 1000,
-            label: "no emulator is online on Simlock's adb server",
-            timeout: MINUTE,
-          });
+          await step("the emulator reaches shutdown", 6 * MINUTE, () =>
+            untilState(env, androidId, "shutdown", 5 * MINUTE),
+          );
+          await step("simctl reports the simulator Shutdown", 2 * MINUTE, () =>
+            waitFor(
+              async () =>
+                (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
+                  (device) => device.udid === iosUdid,
+                )?.state === "Shutdown",
+              { interval: 1000, label: "the simulator is Shutdown in simctl", timeout: MINUTE },
+            ),
+          );
+          await step("no emulator is online", 2 * MINUTE, () =>
+            waitFor(async () => (await onlineEmulators(adbServerPort)).length === 0, {
+              interval: 1000,
+              label: "no emulator is online on Simlock's adb server",
+              timeout: MINUTE,
+            }),
+          );
 
           // Shut down is an end state: the pool, if it were on, would boot both again within this window.
-          const androidId = first.android.grant.device.driverDeviceId;
-          await holdsState(env, iosUdid, "shutdown", HOLD);
-          await holdsState(env, androidId, "shutdown", HOLD);
+          await step("the simulator stays shutdown", HOLD + 2 * MINUTE, () =>
+            holdsState(env, iosUdid, "shutdown", HOLD),
+          );
+          await step("the emulator stays shutdown", HOLD + 2 * MINUTE, () =>
+            holdsState(env, androidId, "shutdown", HOLD),
+          );
           expect(
-            (await setDevices(deviceSet)).find((device) => device.udid === iosUdid)?.state,
+            (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
+              (device) => device.udid === iosUdid,
+            )?.state,
             "the simulator is still Shutdown in simctl",
           ).toBe("Shutdown");
           expect(await onlineEmulators(adbServerPort), "no emulator came back online").toEqual([]);
@@ -508,8 +590,12 @@ describe(
             ).toEqual([[first[platform].grant.device.id, "shutdown"]]);
           }
           const second = {
-            android: await lease(env, targets.android, "again-android"),
-            ios: await lease(env, targets.ios, "again-ios"),
+            android: await step("second lease: boot the emulator", LEASE_TIMEOUT, () =>
+              lease(env, targets.android, "again-android"),
+            ),
+            ios: await step("second lease: boot the simulator", LEASE_TIMEOUT, () =>
+              lease(env, targets.ios, "again-ios"),
+            ),
           };
           for (const platform of ["ios", "android"] as const) {
             expect(
@@ -542,7 +628,7 @@ describe(
             ).toBe("leased");
           }
           expect(
-            (await setDevices(deviceSet)).find(
+            (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
               (device) => device.udid === second.ios.grant.device.driverDeviceId,
             )?.state,
           ).toBe("Booted");
@@ -551,8 +637,15 @@ describe(
             "the emulator booted again and is online",
           ).toBeGreaterThan(0);
 
-          await release(env, second.ios.grant);
-          await release(env, second.android.grant);
+          await step("release the second simulator lease", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, second.ios.grant),
+          );
+          await step("release the second emulator lease", RELEASE_TIMEOUT + MINUTE, () =>
+            release(env, second.android.grant),
+          );
+        } catch (error: unknown) {
+          await diagnose(env);
+          throw error;
         } finally {
           await nuke(env);
         }
