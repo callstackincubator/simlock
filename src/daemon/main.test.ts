@@ -1250,6 +1250,16 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
   });
 });
 
+describe("startDaemon with HTTP off", () => {
+  // #395: the socket-claim callback now runs with HTTP off too (it dials the uplink), so it
+  // must still leave the HTTP frontend unstarted.
+  it("starts no HTTP gateway when http.enabled is false", async () => {
+    const { sink } = await start({ configOverrides: { http: { enabled: false } } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sink.records.some((record) => record.message === "HTTP gateway listening")).toBe(false);
+  });
+});
+
 describe("startDaemon HTTP gateway bind failure", () => {
   // Review finding B6: before this fix, an HTTP bind failure (occupied port) logged and
   // stopped the daemon from inside `onSocketClaimed`'s handler without `startDaemon()` itself
