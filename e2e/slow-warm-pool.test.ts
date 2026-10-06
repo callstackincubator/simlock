@@ -64,7 +64,7 @@ const MINUTE = 60 * SECOND;
 const TEST_TIMEOUT = 30 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
 const READY_TIMEOUT = 15 * MINUTE;
-/** How long a shut-down device is watched: several pool ticks, so a pool still on would have booted it. */
+/** How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
 const HOLD = 45 * SECOND;
 
 /** The installed iOS runtimes; empty when `xcrun simctl` is missing or unusable, so the lane skips. */
@@ -219,22 +219,50 @@ async function untilState(
   );
 }
 
-/** Fails if the device leaves `state` at any poll within `duration`: an end state must hold, not be seen once. */
+/**
+ * Runs `check` (which throws on a violation) at every poll for `duration`, and fails on the first
+ * poll that throws: waitFor swallows a throwing predicate and keeps polling, so the violation is
+ * kept here and rethrown after the window, and the loop stops at once.
+ */
+async function holds(label: string, duration: number, check: () => Promise<void>): Promise<void> {
+  const until = Date.now() + duration;
+  let violation: unknown;
+  await waitFor(
+    async () => {
+      try {
+        await check();
+      } catch (error: unknown) {
+        violation = error;
+        return true;
+      }
+      return Date.now() >= until;
+    },
+    { interval: 2000, label, timeout: duration + MINUTE },
+  );
+  if (violation !== undefined) throw violation;
+}
+
+/** Fails if the device is not in `state` at any poll within `duration`: an end state must hold, not be seen once. */
 async function holdsState(
   env: TestEnv,
   driverDeviceId: string,
   state: string,
   duration: number,
 ): Promise<void> {
-  const until = Date.now() + duration;
-  await waitFor(
-    async () => {
-      const row = (await devices(env)).find((entry) => entry.driverDeviceId === driverDeviceId);
-      expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
-      return Date.now() >= until;
-    },
-    { interval: 2000, label: `${driverDeviceId} stays ${state}`, timeout: duration + MINUTE },
-  );
+  await holds(`${driverDeviceId} stays ${state}`, duration, async () => {
+    const row = (await devices(env)).find((entry) => entry.driverDeviceId === driverDeviceId);
+    expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
+  });
+}
+
+/** Per platform, exactly one device, and it is ready. */
+function expectOneReadyPerPlatform(rows: readonly Row[]): void {
+  for (const platform of ["ios", "android"] as const) {
+    expect(
+      rows.filter((row) => row.spec.platform === platform).map((row) => row.state),
+      `${platform} devices`,
+    ).toEqual(["ready"]);
+  }
 }
 
 /** Waits for one ready device per platform, with no lease asked for yet. */
@@ -337,13 +365,11 @@ describe(
         try {
           const rows = await untilBothReady(env);
 
-          for (const platform of ["ios", "android"] as const) {
-            const ofPlatform = rows.filter((row) => row.spec.platform === platform);
-            expect(
-              ofPlatform.map((row) => row.state),
-              `${platform} devices`,
-            ).toEqual(["ready"]);
-          }
+          expectOneReadyPerPlatform(rows);
+          // The end state holds: no extra device starts, and none of the two leaves ready, across a pool tick.
+          await holds("one ready device per platform", HOLD, async () => {
+            expectOneReadyPerPlatform(await devices(env));
+          });
           const recorded = await env.events();
           expect(
             recorded.filter((entry) => entry.event.startsWith("lease.")),
@@ -467,9 +493,17 @@ describe(
                 (entry.payload as { leaseId?: string }).leaseId === second[platform].grant.lease.id,
             );
             expect(
+              granted,
+              `${platform}: a lease.granted event names the second lease`,
+            ).toBeDefined();
+            expect(
               granted?.payload,
               `${platform}: the grant did not come from a warm device`,
             ).not.toMatchObject({ source: "warm" });
+            expect(
+              second[platform].grant.device.id,
+              `${platform}: the second lease boots the device the first one released`,
+            ).toBe(first[platform].grant.device.id);
           }
           const rows = await devices(env);
           for (const { grant } of [second.ios, second.android]) {
