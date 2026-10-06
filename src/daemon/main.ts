@@ -443,6 +443,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await Promise.all([core.doctor.reconcile(), convergeStartup()]);
     },
     settle: async () => {
+      core.closeWarmPool();
       await leasing.settle();
       await core.drain();
     },

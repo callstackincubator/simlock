@@ -86,8 +86,10 @@ export interface WarmPolicyView {
     readonly maxConcurrentBoots: number;
   };
   readonly now: number;
-  /** The targets that resolved this pass; the policy merges those of one spec (`mergeTargets`). */
+  /** The targets to plan for this pass; the policy merges those of one spec (`mergeTargets`). */
   readonly targets: readonly ResolvedTarget[];
+  /** Targets whose resolution failed and that keep a stale spec: their devices are spared. */
+  readonly spared: readonly ResolvedTarget[];
   /** The spec of each target boot or creation still running: they count toward the boot cap. */
   readonly inFlight: readonly DeviceSpec[];
   /** The failure schedule: whether a spec may be tried now. */
@@ -126,9 +128,7 @@ type Slots = { global: number; ios: number; android: number };
  * (`neverLeasedIdle`).
  */
 export function evaluate(view: WarmPolicyView): WarmPlan {
-  const leased = new Set(view.leases.map((lease) => lease.deviceId));
-  const idle = (device: DeviceRecord): boolean =>
-    !leased.has(device.id) && !view.isClaimed(device.id);
+  const idle = idlePredicate(view.leases, view.isClaimed);
   const running = view.devices
     .filter((device) => device.state === "ready" && idle(device))
     .sort(compareLeastRecentlyUsed);
@@ -342,15 +342,21 @@ function readyOfKind(
  * first, up to its count. The one place the pool and the idle shutdown timer agree on which
  * devices a target counts.
  */
+function idlePredicate(
+  leases: readonly LeaseRecord[],
+  isClaimed: (deviceId: string) => boolean,
+): (device: DeviceRecord) => boolean {
+  const leased = new Set(leases.map((lease) => lease.deviceId));
+  return (device) => !leased.has(device.id) && !isClaimed(device.id);
+}
+
 export function targetedDevices(input: {
   readonly devices: readonly DeviceRecord[];
   readonly leases: readonly LeaseRecord[];
   readonly isClaimed: (deviceId: string) => boolean;
   readonly targets: readonly ResolvedTarget[];
 }): ReadonlySet<string> {
-  const leased = new Set(input.leases.map((lease) => lease.deviceId));
-  const isIdle = (device: DeviceRecord): boolean =>
-    !leased.has(device.id) && !input.isClaimed(device.id);
+  const isIdle = idlePredicate(input.leases, input.isClaimed);
   return new Set(
     mergeTargets(input.targets).flatMap((target) =>
       readyOfKind(input.devices, isIdle, target.spec)
@@ -372,7 +378,7 @@ function neverLeasedIdle(
   proposed: readonly DeviceProposal[],
   room: Slots,
 ): DeviceProposal[] {
-  const kept = targetedDevices(view);
+  const kept = targetedDevices({ ...view, targets: [...view.targets, ...view.spared] });
   const already = new Set(proposed.map((proposal) => proposal.deviceId));
   const proposals: DeviceProposal[] = [];
   for (const device of running) {
@@ -465,7 +471,7 @@ function planTargets(
 /**
  * Adds the boots and creations a target is missing. The reason it is short, when a pass could do
  * nothing for it: a target with a boot already running or one proposed here is still filling, and
- * is not short, whatever stopped the rest.
+ * one waiting behind a queued request is waiting, and neither is short, whatever stopped the rest.
  */
 function fillTarget(
   plan: TargetPlan,
@@ -473,11 +479,11 @@ function fillTarget(
   missing: number,
   filling: boolean,
 ): TargetShort | undefined {
-  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return "boot-failed";
   // A request queued on this platform is served first; the target waits, and is not short.
   if (plan.view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
     return undefined;
   }
+  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return filling ? undefined : "boot-failed";
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
     const refused = addOne(plan, spec);

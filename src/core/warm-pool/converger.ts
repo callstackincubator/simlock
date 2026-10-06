@@ -97,8 +97,10 @@ export class WarmPool {
   #started = false;
   /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
-  /** The targets that resolved on the last pass, and every target's state as it left them. */
+  /** The targets the last pass planned for, and every target's state as it left them. */
   #resolved: readonly ResolvedTarget[] = [];
+  /** Targets refused as `unresolvable` that keep their last spec: spared, never planned for. */
+  #spared: readonly ResolvedTarget[] = [];
   #hasResolved = false;
   /** The spec each target last resolved to, which a transient refusal does not take away. */
   readonly #lastSpecs = new Map<string, DeviceSpec>();
@@ -157,8 +159,16 @@ export class WarmPool {
    * next pass, and a stop would create every missing target device before it exited.
    */
   async drain(): Promise<void> {
-    this.#draining = true;
+    this.close();
     await this.settle();
+  }
+
+  /**
+   * Closes the pool to new work, ahead of `drain`: a graceful stop closes it before anything it
+   * waits for can ask for a pass.
+   */
+  close(): void {
+    this.#draining = true;
   }
 
   /**
@@ -175,7 +185,7 @@ export class WarmPool {
       devices,
       isClaimed: (deviceId) => this.options.claims.isClaimed(deviceId),
       leases,
-      targets: this.#resolved,
+      targets: [...this.#resolved, ...this.#spared],
     });
   }
 
@@ -244,8 +254,9 @@ export class WarmPool {
 
   /**
    * Resolves every target the way a request is resolved. Per pass, so a runtime installed since
-   * the last one takes effect without a restart. Returns the reports of the targets that did not
-   * resolve; the policy merges the ones that did.
+   * the last one takes effect without a restart. Returns the reports of the targets that were
+   * refused, one that failed to resolve for no settled reason included; the policy merges the
+   * ones that resolved.
    */
   async #resolveTargets(): Promise<readonly TargetReport[]> {
     const answers = await Promise.all(
@@ -255,6 +266,7 @@ export class WarmPool {
       })),
     );
     const resolved: ResolvedTarget[] = [];
+    const spared: ResolvedTarget[] = [];
     const refused: TargetReport[] = [];
     for (const { resolution, target } of answers) {
       const key = JSON.stringify(target);
@@ -263,15 +275,13 @@ export class WarmPool {
         resolved.push({ count: target.count, spec: resolution.spec });
         continue;
       }
-      // A refusal for any reason but a settled fact (no driver, no such runtime or model) may be a
-      // read that failed once: the target keeps the spec it last resolved to, so the pass does not
-      // treat its devices as unwanted.
+      // A refusal that is no settled fact (no driver, no such runtime or model) may be a read that
+      // failed once: the target keeps the spec it last resolved to only to spare its devices, which
+      // the pass does not treat as unwanted. It is reported short all the same, and gets no boot or
+      // creation from a spec that may be stale.
       const last = resolution.refusal === "unresolvable" ? this.#lastSpecs.get(key) : undefined;
-      if (last !== undefined) {
-        resolved.push({ count: target.count, spec: last });
-        continue;
-      }
-      this.#lastSpecs.delete(key);
+      if (last === undefined) this.#lastSpecs.delete(key);
+      else spared.push({ count: target.count, spec: last });
       refused.push({
         count: target.count,
         message: resolution.message,
@@ -281,6 +291,7 @@ export class WarmPool {
       });
     }
     this.#resolved = resolved;
+    this.#spared = spared;
     this.#hasResolved = true;
     return refused;
   }
@@ -344,6 +355,7 @@ export class WarmPool {
       now: this.options.clock.now(),
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
+      spared: this.#spared,
       targets: this.#resolved,
       waiting: this.options.acquisition.waitingDemand(),
     };
@@ -355,9 +367,15 @@ export class WarmPool {
       this.#launch(proposal.target, () => this.#provision(proposal.spec, proposal.target));
       return;
     }
-    // A failed step releases its reservation and so triggers the next pass at once; without a
-    // pause that would retry a broken boot in a loop.
-    if ((this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()) return;
+    // A failed step of a keep boot or a shutdown releases its reservation and so triggers the next
+    // pass at once; without a pause that would retry a broken one in a loop. A target's boot is
+    // held back by the retry schedule instead, which the policy reads before it proposes one.
+    if (
+      proposal.target === undefined &&
+      (this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()
+    ) {
+      return;
+    }
     if (proposal.action === "shutdown") await this.#shutdown(proposal.deviceId);
     else if (proposal.target === undefined) await this.#boot(proposal.deviceId, undefined);
     else {
@@ -398,7 +416,7 @@ export class WarmPool {
       const done = await this.options.lifecycle.shutdown(device, "warm-pool", "cleanup");
       if (done === undefined) return;
     } catch (error: unknown) {
-      this.#logFailure(device, "shutdown", error);
+      this.#logFailure(device, "shutdown", error, true);
     }
     this.options.acquisition.kick();
   }
@@ -429,7 +447,7 @@ export class WarmPool {
       if (done === undefined) return false;
       if (target !== undefined) this.#schedule.succeeded(target);
     } catch (error: unknown) {
-      this.#logFailure(held.device, "boot", error);
+      this.#logFailure(held.device, "boot", error, target === undefined);
       if (target !== undefined) this.#failed(target);
     } finally {
       await this.options.decisions.run(() => {
@@ -494,8 +512,13 @@ export class WarmPool {
     return device;
   }
 
-  #logFailure(device: DeviceRecord, step: "shutdown" | "boot", error: unknown): void {
-    this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
+  #logFailure(
+    device: DeviceRecord,
+    step: "shutdown" | "boot",
+    error: unknown,
+    pause: boolean,
+  ): void {
+    if (pause) this.#retryAfter.set(device.id, this.options.clock.now() + WARM_POOL_TICK_MS);
     this.#logger.warn(`warm pool ${step} of a device failed`, {
       deviceId: device.id,
       step,

@@ -149,6 +149,11 @@ export interface Core {
    * daemon exits on a settled pool.
    */
   drain(): Promise<void>;
+  /**
+   * The first step of a graceful stop: closes the warm pool to new work before leasing settles,
+   * so a reclaim that commits meanwhile cannot start a creation `drain` would then wait for.
+   */
+  closeWarmPool(): void;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
 }
@@ -349,6 +354,9 @@ export function createCore(options: CoreOptions): Core {
     },
     async targetedDevices() {
       return warmPool.targeted();
+    },
+    closeWarmPool() {
+      warmPool.close();
     },
     async drain() {
       await warmPool.drain();

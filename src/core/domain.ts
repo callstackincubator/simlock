@@ -191,6 +191,11 @@ export interface DeviceRecord {
    * (`readySince`).
    */
   readonly readyAt?: number;
+  /**
+   * When the device last moved into `shutdown`, stamped by the registry on every such move. A
+   * record shut down before this field existed has none.
+   */
+  readonly shutdownAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
   readonly recoveringSince?: number;
@@ -372,6 +377,8 @@ export interface DeviceTransitionUpdate {
   readonly address?: string;
   /** Stamped by the registry on every move into `ready`; callers do not pass it. */
   readonly readyAt?: number;
+  /** Stamped by the registry on every move into `shutdown`; callers do not pass it. */
+  readonly shutdownAt?: number;
   readonly driverData?: unknown;
   readonly mode?: DeviceMode;
 }

@@ -1167,8 +1167,8 @@ when it ends; a creation takes a provisioning reservation and an ownerless
 `boot` claim, which it gives up once the device is ready, so a request that
 serves it may wait for it. `retry.ts` is the one place a target's failed boot or
 creation is remembered, by resolved spec: one minute, doubling, at most ten (a
-device whose boot or shutdown failed also gets a 30 s pause of its own in the
-converger, which no target reads).
+keep boot or a shutdown that failed gets a 30 s pause of its own per device in
+the converger; a target's boot does not).
 A graceful stop drains the pool (`WarmPool#drain`): it finishes the pass and the boots
 and creations already running and starts nothing new, so a stop never creates the
 missing devices of a target. The reaper's first run after a start asks the pool
@@ -1180,7 +1180,7 @@ The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
 `no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
 `device-limit`, `ram-budget`) in its log and through `WarmPool#targets`.
 A device that never served a lease has no `lastLeaseEndedAt`, which the
-reaper's idle-shutdown rule times from (idle-destroy falls back to `readyAt`), so the policy itself shuts down a ready,
+reaper's idle-shutdown rule times from (idle-destroy times it from `shutdownAt`), so the policy itself shuts down a ready,
 unleased, never-leased device that no target keeps once it has been ready
 (`DeviceRecord.readyAt`, `createdAt` for an older record) longer than
 `idle.shutdownAfterMs`, with initiator `warm-pool`.
@@ -1591,7 +1591,7 @@ v1 rules — the tiered cleanup:
 1. idle > T1 → `shutdown` (reclaim RAM); a device a warm target keeps (the
    view's `targeted` set, read from the pool at each run) is never proposed
 2. idle > T2 → `destroy` (reclaim disk), idle counted from the last lease's end,
-   or from `readyAt` for a device that never served one; under disk pressure (free space
+   or from `shutdownAt` for a device that never served one; under disk pressure (free space
    below `diskPressure.freeBytesThreshold`) `idle-destroy` uses T1 instead of
    T2, so a full disk shortens the wait to reclaim it — the rule reads
    `diskFreeBytes` off the view itself rather than depending on the

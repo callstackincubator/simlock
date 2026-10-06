@@ -676,7 +676,10 @@ describe("Registry", () => {
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
-    await registry.completeReclaimWithoutPurge(device.id);
+    clock.advance(7_000);
+    const shutDown = await registry.completeReclaimWithoutPurge(device.id);
+    // Every path into `shutdown` stamps it, the reclaim's own included.
+    expect(shutDown.shutdownAt).toBe(8_000);
 
     const quarantined = await registry.enterQuarantine(device.id, 5_000);
 
@@ -1053,15 +1056,17 @@ describe("Registry", () => {
 
     // Stamped on the move into `ready`, and left alone by a later move out of it.
     expect(reloaded.snapshot.devices[0]?.readyAt).toBe(1_000);
+    expect(reloaded.snapshot.devices[0]?.shutdownAt).toBe(6_000);
     const state = JSON.parse(await filesystem.readFile(statePath)) as {
       devices: Record<string, unknown>[];
     };
     const [written] = state.devices;
     if (written === undefined) throw new Error("expected a written device");
-    const { readyAt: _dropped, ...older } = written;
+    const { readyAt: _dropped, shutdownAt: _also, ...older } = written;
     await filesystem.writeFileAtomic(statePath, JSON.stringify({ ...state, devices: [older] }));
     const legacy = await Registry.load(options);
     expect(legacy.snapshot.devices[0]).not.toHaveProperty("readyAt");
+    expect(legacy.snapshot.devices[0]).not.toHaveProperty("shutdownAt");
   });
 
   it("registers a new device as full", async () => {

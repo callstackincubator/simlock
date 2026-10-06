@@ -168,13 +168,14 @@ describe("idleDestroyRule", () => {
       driverDeviceId: `driver-${id}`,
       id,
       mode: "full" as const,
-      readyAt: 5_000,
+      readyAt: 1_000,
+      shutdownAt: 5_000,
       spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" as const },
       state: "shutdown" as const,
       ...overrides,
     });
 
-    it("is proposed for destruction once it has been idle past T2 from readyAt, and not before", () => {
+    it("is proposed for destruction once it has been shut down past T2, timed from shutdownAt and not readyAt, and not before", () => {
       const devices = [never("dev_never")];
 
       expect(idleDestroyRule.evaluate(view(35_000, { devices }))).toEqual([]);
@@ -188,16 +189,14 @@ describe("idleDestroyRule", () => {
       ]);
     });
 
-    it("is timed from createdAt when the record has no readyAt", () => {
-      const { readyAt: _readyAt, ...older } = never("dev_old", { createdAt: 1_000 });
+    it("is left alone when the record carries no shutdownAt, because nothing says when it was shut down", () => {
+      const { shutdownAt: _shutdownAt, ...older } = never("dev_old");
 
-      expect(idleDestroyRule.evaluate(view(31_000, { devices: [older] }))).toEqual([]);
-      expect(idleDestroyRule.evaluate(view(31_001, { devices: [older] }))).toHaveLength(1);
+      expect(idleDestroyRule.evaluate(view(1_000_000, { devices: [older] }))).toEqual([]);
     });
 
     it("uses T1 under disk pressure, as a device that was leased does", () => {
       const devices = [never("dev_never")];
-
       const pressured = (now: number): RegistryView => ({
         ...view(now, { devices, diskFreeBytes: 2 * gibibyte }),
         config: { ...config, diskPressure: { freeBytesThreshold: 10 * gibibyte } },

@@ -107,6 +107,7 @@ function harness(
     deviceId?: string;
   }[] = [];
   const provisionReservations: { released: number }[] = [];
+  const reserveAttempts = { count: 0 };
   const poolOptions: WarmPoolOptions = {
     acquisition: {
       kick,
@@ -145,6 +146,7 @@ function harness(
       canProvision: () =>
         options.refuseProvision === true ? { ok: false, reason: "device-limit" } : { ok: true },
       tryReserveProvisioning: () => {
+        reserveAttempts.count += 1;
         if (options.reserveThrows === true) throw new Error("the budget is unreadable");
         if (options.refuseProvision === true || options.refuseReservation === true)
           return { ok: false, reason: "device-limit" };
@@ -266,6 +268,7 @@ function harness(
     provisionCalls,
     provisionReservations,
     reservations,
+    reserveAttempts,
     resolveCalls,
     shutdownArgs,
     shutdownCalls,
@@ -1304,8 +1307,11 @@ describe("warm pool targets", () => {
     await rig.pool.pass();
     expect(rig.shutdownCalls).toEqual([]);
     expect([...(await rig.pool.targeted())]).toEqual(["stale"]);
-    expect(rig.pool.targets()).toEqual([expect.objectContaining({ count: 1, ready: 1 })]);
-    expect(rig.pool.targets()[0]).not.toHaveProperty("short");
+    expect(rig.pool.targets()).toEqual([
+      expect.objectContaining({ message: "simctl timed out", short: "unresolvable" }),
+    ]);
+    // No boot or creation from the spec it may no longer have.
+    expect(rig.provisionCalls).toEqual([]);
 
     answer = { message: "gone", refusal: "runtime-missing" };
     await rig.pool.pass();
@@ -1316,6 +1322,39 @@ describe("warm pool targets", () => {
     answer = { message: "simctl timed out", refusal: "unresolvable" };
     await rig.pool.pass();
     expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "unresolvable" })]);
+  });
+
+  it("starts nothing once closed, before it drains", async () => {
+    const rig = harness([], { targets: [iphone17] });
+
+    rig.pool.close();
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.provisionCalls).toEqual([]);
+    expect(rig.resolveCalls).toEqual([]);
+  });
+
+  it("makes a target boot of a shut-down device wait for the schedule only, not for the device's own pause", async () => {
+    let attempts = 0;
+    const rig = harness([ofKind("shut", "shutdown")], {
+      boot: async () => {
+        attempts += 1;
+        throw new Error("simulator did not boot");
+      },
+      targets: [iphone17],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    // 30 s later the device pause would still hold a keep boot; a target boot waits a minute.
+    rig.clock.advance(30_000);
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(attempts).toBe(1);
+    rig.clock.advance(30_000);
+    await rig.pool.settle();
+    expect(attempts).toBe(2);
   });
 
   it("starts nothing new once draining, though a creation that was running ends", async () => {
@@ -1345,8 +1384,10 @@ describe("warm pool targets", () => {
     const rig = harness([], { reserveThrows: true, targets: [iphone17] });
 
     await rig.pool.pass();
-    await rig.pool.settle();
+    // Bounded by turns, not by settle: a pool that retried at once would never settle.
+    await flush();
 
+    expect(rig.reserveAttempts.count).toBe(1);
     const errors = rig.sink.records.filter((record) => record.level === "error");
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({

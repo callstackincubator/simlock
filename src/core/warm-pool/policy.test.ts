@@ -141,6 +141,7 @@ function view(
     handoffInFlight?: boolean;
     reset?: readonly string[];
     targets?: readonly ResolvedTarget[];
+    spared?: readonly ResolvedTarget[];
     inFlight?: readonly DeviceSpec[];
     maxConcurrentBoots?: number;
     blocked?: readonly DeviceSpec[];
@@ -157,6 +158,7 @@ function view(
     retry: {
       mayAttempt: (target) => !(options.blocked ?? []).some((held) => sameSpec(held, target)),
     },
+    spared: options.spared ?? [],
     targets: options.targets ?? [],
     capacity: capacityOf(
       devices,
@@ -963,6 +965,31 @@ describe("warm pool policy", () => {
       expect(result.targets[0]).toMatchObject({ short: "running-limit" });
     });
 
+    it("is not short while held back after a failure when another boot is running, or a request is queued", () => {
+      const shut = ofKind("shut", "shutdown");
+      const held = { blocked: [kind], maxConcurrentBoots: 2, targets: [target(2)] };
+
+      expect(plan(view([shut], held)).targets[0]).toMatchObject({ short: "boot-failed" });
+      expect(plan(view([shut], { ...held, inFlight: [kind] })).targets[0]).not.toHaveProperty(
+        "short",
+      );
+      expect(
+        plan(view([shut], { ...held, waiting: [modelDemand("iPad Pro")] })).targets[0],
+      ).not.toHaveProperty("short");
+    });
+
+    it("spares the never-leased devices of a spared target and plans nothing for it", () => {
+      const stale = device("stale", "ready", { readyAt: 1, spec: kind });
+
+      const result = plan(view([stale], { spared: [target(1)] }));
+
+      expect(result.proposals).toEqual([]);
+      expect(result.targets).toEqual([]);
+      expect(evaluate(view([stale]))).toEqual([
+        { action: "shutdown", deviceId: "stale", reason: "never-leased-idle" },
+      ]);
+    });
+
     it("reports no short for a filled target whose spec may not be attempted yet", () => {
       const ready = ofKind("ready", "ready");
 
@@ -1024,6 +1051,10 @@ describe("warm pool policy", () => {
         view([], { limit: 0, refuseProvision: "ram-budget", targets: [target(1)] }),
       );
       expect(full.targets[0]).toMatchObject({ short: "running-limit" });
+      const bothLimits = plan(
+        view([], { limit: 0, refuseProvision: "device-limit", targets: [target(1)] }),
+      );
+      expect(bothLimits.targets[0]).toMatchObject({ short: "device-limit" });
       const reserved = plan(
         view([], {
           limits: { ios: 1 },

@@ -20,7 +20,8 @@ interface Failure {
  * success forgets it. The policy asks one question (`mayAttempt`), the converger reports two facts
  * (`failed`, `succeeded`) and asks when to look again (`nextAttemptAt`); nothing else knows how a
  * target is held back, so a later schedule (an attempt limit, a delay per reason) replaces this
- * file. A device's own short pause after a failed step is the converger's, not a target's.
+ * file. A device's own short pause after a failed keep boot or shutdown is the converger's; a target's
+ * boot is held back here and nowhere else.
  */
 export class RetrySchedule {
   #failures: Failure[] = [];
