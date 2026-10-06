@@ -799,12 +799,12 @@ The grant carries one additional block so you can see where it landed:
 {"lease":{"id":"3f81a2c4.lse_9f2c","worker":{"id":"3f81a2c4","label":"mac-studio-2"}}}
 ```
 
-A lease Simlock named has an id that names its worker (that is how renew,
-release, and reads route), but it is **opaque** — do not parse it. A lease
-you named with `--lease-id` keeps exactly that ID through a gateway, with no
-worker in front of it; the gateway finds the worker from a table it keeps in
-memory and rebuilds from its workers after a restart, so a renew or release
-in the moment after a restart can answer `UNKNOWN_LEASE` until the worker has
+A lease Simlock named has an id that names its worker, but it is **opaque**
+— do not parse it. A lease you named with `--lease-id` keeps exactly that ID
+through a gateway, with no worker in front of it. The gateway finds the
+worker of every lease, either kind, from a table it keeps in memory and
+rebuilds from its workers after a restart, so a renew or release in the
+moment after a restart can answer `UNKNOWN_LEASE` until the worker has
 reported. `worker.label` is display-only.
 
 **`lease renew`, `release`, and lease reads are forwarded** to the worker

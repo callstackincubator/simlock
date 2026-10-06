@@ -1663,6 +1663,39 @@ describe("Registry", () => {
     expect(reloaded.leaseRequests()[1]).not.toHaveProperty("leaseId");
   });
 
+  it("drops a stored lease request whose leaseId is not a string and keeps the others", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const open = (id: string, extra: Record<string, unknown>) => ({
+      createdAt: 1_000,
+      id,
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+      state: "open",
+      ...extra,
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [open("req_bad", { leaseId: 7 }), open("req_ok", { leaseId: "ad-7f3a" })],
+        leases: [],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_ok"]);
+  });
+
   it("keeps idChosenByRequester true on the lease of a stored grant across a reload", async () => {
     const clock = new FakeClock(1_000);
     const options = {

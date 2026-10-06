@@ -876,8 +876,8 @@ export class FleetLeaseCoordinator {
    *
    * C1 (round 3 review): the two branches that leave `waiter` *terminal* -- `#settleGrant`, and
    * the catch block's own `queue.reject` -- also each call `#dispatch()` themselves, right after.
-   * `#staleView`'s own branches (the unreachable-target check above, and the catch's immediate
-   * `NO_CAPACITY`) do not need to: both already call a worker's `refresh()`, and a real snapshot
+   * `#staleView`'s own branches (the unreachable-target check above, the catch's immediate
+   * `NO_CAPACITY`, and the mismatched-grant retry) do not need to: all already call a worker's `refresh()`, and a real snapshot
    * landing for it fires `#onViewsChanged` -> `#dispatch()`. That pass offers the waiter to every
    * other worker; it offers it to a worker that answered `NO_CAPACITY` only once that worker's
    * view has changed (ADR 0009 §5), so a worker that keeps refusing is asked once per change of
@@ -1061,9 +1061,10 @@ export class FleetLeaseCoordinator {
   }
 
   /** ADR §11: "an immediate `NO_CAPACITY` is the only answer that leaves it queued ... the
-   * request waits", because this is a stale view, not a real refusal. A `noWait` caller reaches
-   * this only from a target that turned out unreachable; a `noWait` caller refused with
-   * `NO_CAPACITY` is settled in `#attempt` instead (ADR 0009 §5). */
+   * request waits", because this is a stale view, not a real refusal. A waiter reaches
+   * this from a target that turned out unreachable, and from a grant whose id was not the one
+   * asked for (`noWait` included, in both); a `noWait` caller refused with `NO_CAPACITY` is
+   * settled in `#attempt` instead (ADR 0009 §5). */
   #staleView(waiter: FleetWaiter, workerId: string): void {
     this.#enqueue(waiter);
     this.#refreshView(workerId);

@@ -513,12 +513,13 @@ describe("HTTP API", () => {
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
     });
     const baseUrl = `http://127.0.0.1:${port}`;
-    const tokens = await Promise.all(
-      [0, 1].map(async () => {
-        const result = await env.cli(["token", "create", "--role", "agent"]);
-        return `Bearer ${(result.json as { secret: string }).secret}`;
-      }),
-    );
+    // One at a time: the token file is read, extended and rewritten per create, so two creates
+    // at once can lose a token (#424).
+    const tokens: string[] = [];
+    for (const _ of [0, 1]) {
+      const result = await env.cli(["token", "create", "--role", "agent"]);
+      tokens.push(`Bearer ${(result.json as { secret: string }).secret}`);
+    }
     await waitFor(
       async () => {
         try {
@@ -538,6 +539,18 @@ describe("HTTP API", () => {
 
     const first = await post(tokens[0] ?? "");
     expect(first.status).toBe(201);
+    // The 201 comes with the first progress push; wait for the grant so an active lease holds the ID.
+    const firstId = ((await first.json()) as { request: { id: string } }).request.id;
+    await waitFor(
+      async () => {
+        const response = await fetch(`${baseUrl}/v1/lease-requests/${firstId}?wait=10`, {
+          headers: { authorization: tokens[0] ?? "" },
+        });
+        const body = (await response.json()) as { request: { state: string } };
+        return body.request.state === "granted";
+      },
+      { timeout: 30_000, label: "the first request is granted" },
+    );
     const second = await post(tokens[1] ?? "");
     expect(second.status).toBe(409);
     expect(await second.json()).toMatchObject({

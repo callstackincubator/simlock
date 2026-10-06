@@ -603,16 +603,15 @@ never here: clients reach the device through the gateway, with
 [`POST /v1/leases/{id}/exec`](#post-v1leasesidexec).
 
 A lease whose ID Simlock generated has an `id` that names its worker
-(`<workerId>.<worker's own lease id>`, split on the **first** `.`), which is
-how a gateway routes renew, release, and reads. A worker id is a UUID, so a
+(`<workerId>.<worker's own lease id>`, split on the **first** `.`). A worker id is a UUID, so a
 real id reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples
 here and elsewhere in these docs abbreviate it to its first segment for
 legibility. A lease whose requester chose the ID (`leaseId` on
 [`POST /v1/lease-requests`](#post-v1lease-requests)) keeps exactly that ID,
-with no worker in front of it: the gateway routes it from a table it keeps in
-memory and rebuilds from its workers after a restart, so for a moment after a
-restart, renew and release of such a lease can answer `404 UNKNOWN_LEASE`
-until its worker has reported. **Treat the whole id as opaque** — pass it back
+with no worker in front of it. A gateway routes every lease, generated or
+chosen, from a table it keeps in memory and rebuilds from its workers after a
+restart, so for a moment after a restart, renew and release of any lease can
+answer `404 UNKNOWN_LEASE` until its worker has reported. **Treat the whole id as opaque** — pass it back
 verbatim in paths and bodies, and read `worker.id` when you want the machine.
 
 `dataPlane` is **reserved** and always `null` in this version: streaming a

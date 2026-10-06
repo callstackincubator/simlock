@@ -6,9 +6,9 @@ import { NoopLogger } from "../ports/index.js";
  * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
  * §27a, §30; ADR 0020). Nothing here is persisted -- like every worker view, it is rebuilt from
  * what a worker reports (`rebuildFromWorker`) whenever the gateway can see it. A gateway restart
- * loses nothing a worker restart would not also lose (Decision 5) for a generated id, which names
- * its worker; a caller-chosen id (ADR 0020) is bare and routed by this index alone, so for the
- * moment before its worker has reported, the gateway does not know it.
+ * loses nothing a worker restart would not also lose (Decision 5): every id, generated or
+ * caller-chosen (ADR 0020), is looked up in this one map, so for the moment before its worker
+ * has reported, the gateway does not know it.
  *
  * A generated gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) --
  * a caller-chosen one is that id as sent, bare -- and never re-derived by splitting the string back

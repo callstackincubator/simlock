@@ -661,6 +661,9 @@ describe("POST /v1/lease-requests leaseId", () => {
 
   it("answers 400 BAD_REQUEST for a leaseId outside the pattern, without dispatching", async () => {
     const { app, dispatcher } = buildHarness();
+    // A handler takes the call without the fake's own input parse, so only the route's schema
+    // can keep a bad ID from reaching the dispatcher.
+    dispatcher.handlers["lease.request"] = () => makeGrant({ lease: { id: "w1.myid" } });
 
     const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "w1.myid" });
 

@@ -47,7 +47,8 @@ export interface ErrorDetailsMap {
    * stored request is untouched; a new request needs a new key. */
   IDEMPOTENCY_CONFLICT: Record<string, never>;
   /** `lease.request` named a `leaseId` an active lease or a waiting request already holds
-   * (ADR 0020). Nothing was stored. */
+   * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
+   * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
   NO_DRIVER: { readonly platform: Platform };
   RUNTIME_MISSING: {
