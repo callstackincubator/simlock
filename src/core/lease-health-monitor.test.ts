@@ -30,6 +30,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     drivers: {},
     eventBuffer: { capacity: 100 },
     warmPool: {
+      enabled: true,
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,

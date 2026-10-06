@@ -41,6 +41,7 @@ import { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { WaitQueue } from "./wait-queue.js";
+import { WarmPool } from "./warm-pool/index.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
@@ -132,6 +133,7 @@ export class LeaseEngine {
   readonly #decisions: SerializedDecision;
   readonly #startup: StartupConverger;
   readonly #reclaim: ReclaimCoordinator;
+  readonly #warmPool: WarmPool;
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#decisions = options.decisions;
@@ -247,7 +249,13 @@ export class LeaseEngine {
       decisions: this.#decisions,
       lifecycle: this.#leases,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
-      notifyAvailability: () => this.#acquisition.kick(),
+      // Called once a backgrounded reclaim has given up its claim. `device.reclaimed` fires while
+      // that claim is still held, so the pass it triggers sees the device as busy; this is the
+      // first moment the pool can act on it.
+      notifyAvailability: () => {
+        this.#acquisition.kick();
+        void this.#warmPool.pass();
+      },
       registry: options.registry,
       reclaim: this.#reclaim,
     });
@@ -258,7 +266,15 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#nuke = new NukeService({
-      acquisition: this.#acquisition,
+      acquisition: {
+        // Closing acquisition first makes the pool skip every new action; then a boot or
+        // shutdown it already has in flight is waited for, so the reset sees a settled pool.
+        beginMaintenance: async () => {
+          await this.#acquisition.beginMaintenance();
+          await this.#warmPool.settle();
+        },
+        endMaintenance: async () => this.#acquisition.endMaintenance(),
+      },
       devices: this.#deviceLifecycle,
       leases: this.#releaseCoordinator,
       registry: options.registry,
@@ -290,6 +306,22 @@ export class LeaseEngine {
         },
       },
       timers: this.#leases,
+    });
+    // Started by `convergeRunningCapacity`, once the startup converger has finished, so the
+    // facts convergence commits trigger no pass and the first one follows `daemon.started`,
+    // which is where a lowered `maxRunning` is converged.
+    this.#warmPool = new WarmPool({
+      acquisition: this.#acquisition,
+      capacity: this.#capacity,
+      claims: this.#claims,
+      clock: options.clock,
+      config: options.config.warmPool,
+      decisions: this.#decisions,
+      eventBus: options.eventBus,
+      idle: options.config.idle,
+      lifecycle: this.#deviceLifecycle,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      registry: options.registry,
     });
     this.healthMonitor = new LeaseHealthMonitor({
       clock: options.clock,
@@ -343,6 +375,7 @@ export class LeaseEngine {
    */
   async settle(): Promise<void> {
     await this.#releaseCoordinator.settleBackgroundReclaims();
+    await this.#warmPool.settle();
   }
 
   /**
@@ -357,6 +390,7 @@ export class LeaseEngine {
    * one is there to expire it.
    */
   dispose(): void {
+    this.#warmPool.dispose();
     this.#quarantine.dispose();
     this.#expiry.dispose();
   }
@@ -407,9 +441,10 @@ export class LeaseEngine {
     return this.#capacity.ramBudget(this.#capacityDevices());
   }
 
-  /** Runs the startup sequence after reconciliation, then starts the capacity observer. */
+  /** Runs the startup sequence after reconciliation, then starts the capacity observer and the warm pool. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
+    this.#warmPool.start();
     // Every run begins with a step in both: what the figures and the queue depth are now.
     this.#capacityObserver.start();
     this.options.eventBus.emit("queue.changed", { depth: this.#queue.depth }, "wait-queue");

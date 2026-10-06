@@ -100,6 +100,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -2394,6 +2395,55 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       });
     });
 
+    it("lists a queued class request's class requirement and the catalog's class lookup", async () => {
+      const harness = await createHarness({
+        drivers: [iosDriver()],
+        maxDevices: 1,
+        maxRunning: 1,
+        preferences: iosPreferences,
+      });
+      await harness.coordinator.request(phone, owner("holder"));
+      void harness.coordinator.request(phone, owner("waiter")).catch(() => undefined);
+      await settle();
+
+      const [demand] = harness.coordinator.waitingDemand();
+
+      expect(demand).toMatchObject({
+        inFlight: false,
+        mode: "full",
+        platform: "ios",
+        requirement: { platform: "ios", target: { class: "phone", kind: "class" } },
+      });
+      expect(demand?.classOf("iPhone 15")).toBe("phone");
+    });
+
+    it("lists no waiting demand for a request whose class is still being resolved", async () => {
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const harness = await createHarness({
+        catalogReader: {
+          listCatalog: async () => {
+            await gate;
+            return [];
+          },
+        },
+        drivers: [iosDriver()],
+        preferences: iosPreferences,
+      });
+
+      const pending = harness.coordinator.request(phone, owner("agent"));
+      const settled = pending.catch(() => undefined);
+      await flush();
+      const whileResolving = harness.coordinator.waitingDemand();
+      open();
+      await settled;
+
+      expect(whileResolving).toEqual([]);
+      await expect(pending).rejects.toMatchObject({ name: "UnknownModelError" });
+    });
+
     it("fails a class request with UnknownModelError when the catalog reader answers no entry for the platform", async () => {
       const harness = await createHarness({
         catalogReader: { listCatalog: async () => [] },
@@ -2617,5 +2667,80 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
         requester: "agent",
       }),
     ]);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator waiting demand", () => {
+  it("lists a request waiting for a device with what a device must satisfy, and drops it once it is granted", async () => {
+    const harness = await createHarness();
+    const held = await harness.coordinator.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+
+    const waiting = harness.coordinator.request(request, {
+      ownerId: "waiter",
+      requesterId: "waiter",
+    });
+    await flush();
+
+    expect(harness.coordinator.waitingDemand()).toEqual([
+      {
+        classOf: expect.any(Function),
+        inFlight: false,
+        mode: "full",
+        platform: "ios",
+        requirement: {
+          imageTag: undefined,
+          osVersion: { kind: "exact", version: "26.5" },
+          platform: "ios",
+          target: { kind: "model", model: "iPhone 16" },
+        },
+      },
+    ]);
+
+    await harness.registry.beginRelease(held.lease.id);
+    await harness.registry.transitionDevice(held.device.id, "ready", {
+      event: "device.reclaimed",
+      payload: { deviceId: held.device.id, duration: 0, strategy: "wipe" },
+    });
+    harness.coordinator.kick();
+    await waiting;
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+  });
+
+  it("reports the mode a request resolved to, and marks a request whose device work has begun as in flight", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { provision: 50 },
+      platform: "ios",
+      slimmableOsVersions: ["26.5"],
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const pending = harness.coordinator.request(
+      { ...request, mode: "slim" },
+      { ownerId: "slim", requesterId: "slim" },
+    );
+    await flush();
+
+    expect(harness.coordinator.waitingDemand()).toMatchObject([{ inFlight: true, mode: "slim" }]);
+
+    clock.advance(50);
+    await pending;
+    expect(harness.coordinator.waitingDemand()).toEqual([]);
+  });
+
+  it("reports maintenance active between beginMaintenance and endMaintenance", async () => {
+    const harness = await createHarness();
+    expect(harness.coordinator.maintenanceActive).toBe(false);
+
+    await harness.coordinator.beginMaintenance();
+    expect(harness.coordinator.maintenanceActive).toBe(true);
+
+    await harness.coordinator.endMaintenance();
+    expect(harness.coordinator.maintenanceActive).toBe(false);
   });
 });

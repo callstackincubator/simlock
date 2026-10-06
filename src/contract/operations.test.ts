@@ -805,6 +805,7 @@ describe("operation input/output round trips", () => {
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       warmPool: {
+        enabled: true,
         quarantine: {
           maxRetries: 1,
           retryBackoffMs: 1,

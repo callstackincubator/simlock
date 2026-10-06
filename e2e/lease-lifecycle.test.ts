@@ -69,10 +69,11 @@ describe("lease lifecycle across both frontends", () => {
     ["ios", "iPhone 16", "18.4", "shutdown"],
     ["android", "Pixel 8", "34", "ready"],
   ] as const)(
-    "releasing a %s lease (%s, OS %s) leaves its device %s in list --devices, the state its reclaim returns",
+    "releasing a %s lease (%s, OS %s) leaves its device ready in list --devices when the running limit has room, whatever state its reclaim returns",
     async (platform, model, osVersion, reclaimResult) => {
       // The iOS reclaim ends shut down and the Android one ready; the fake driver's default is
-      // `ready`, so iOS has to ask for `shutdown` the way the real driver returns it.
+      // `ready`, so iOS has to ask for `shutdown` the way the real driver returns it. The warm
+      // pool then boots the iOS device back, so both end ready.
       const env = await withDaemon({
         driverScript: {
           [platform]: { availableOsVersions: [osVersion], knownModels: [model], reclaimResult },
@@ -95,8 +96,49 @@ describe("lease lifecycle across both frontends", () => {
       const release = await env.cli(["release", grant.lease.id]);
       expect(release.code, release.stderr).toBe(0);
 
-      await waitForDeviceState(env, grant.device.driverDeviceId, reclaimResult);
+      await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
       await env.expectEvents(["lease.released", "device.reclaimed"]);
+    },
+  );
+
+  it.each([
+    ["ios", "iPhone 16", "18.4", "shutdown", ["lease.released", "device.reclaimed"]],
+    [
+      "android",
+      "Pixel 8",
+      "34",
+      "ready",
+      ["lease.released", "device.reclaimed", "device.shutdown"],
+    ],
+  ] as const)(
+    "with warmPool.enabled false, releasing a %s lease (%s, OS %s) leaves its device shutdown in list --devices",
+    async (platform, model, osVersion, reclaimResult, events) => {
+      const env = await withDaemon({
+        configOverrides: { warmPool: { enabled: false } },
+        driverScript: {
+          [platform]: { availableOsVersions: [osVersion], knownModels: [model], reclaimResult },
+        },
+      });
+
+      const lease = await env.cli([
+        "lease",
+        "--platform",
+        platform,
+        "--device",
+        model,
+        "--os",
+        osVersion,
+        "--detach",
+      ]);
+      expect(lease.code, lease.stderr).toBe(0);
+      const grant = lease.json as { lease: { id: string }; device: { driverDeviceId: string } };
+
+      const release = await env.cli(["release", grant.lease.id]);
+      expect(release.code, release.stderr).toBe(0);
+
+      await waitForDeviceState(env, grant.device.driverDeviceId, "shutdown");
+      // An iOS reclaim already ends shut down, so only the Android device is shut down by the pool.
+      await env.expectEvents(events);
     },
   );
 

@@ -27,6 +27,7 @@ import {
   type Platform,
   sameSpec,
   specMode,
+  type WaitingDemand,
 } from "./domain.js";
 import {
   ComponentBeingRemovedError,
@@ -109,6 +110,7 @@ export type AcquisitionQueue = Pick<
   | "markNew"
   | "markProcessing"
   | "notifyProgress"
+  | "pending"
   | "reject"
   | "resolve"
 >;
@@ -544,6 +546,35 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
       return "cancelled";
     });
+  }
+
+  /**
+   * The requests that have no device yet, oldest first, whose spec has resolved: those in state
+   * `new` or `queued` are waiting; one in `processing` has device work in flight, a provision, boot
+   * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
+   * `LeaseEngine#waitingRequests` is a different view and does not change.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
+  waitingDemand(): readonly WaitingDemand[] {
+    return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
+      waiter.spec === undefined
+        ? []
+        : [
+            {
+              classOf: waiter.classOf ?? (() => undefined),
+              inFlight: waiter.state === "processing",
+              mode: specMode(waiter.spec),
+              platform: waiter.spec.platform,
+              requirement: waiter.requirement ?? exactRequirement(waiter.spec),
+            },
+          ],
+    );
+  }
+
+  /** Whether an administrative reset holds acquisition closed; the warm pool does nothing meanwhile. */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
+  get maintenanceActive(): boolean {
+    return this.#admissionClosed;
   }
 
   /** Direct availability notification for release, cleanup, and queue-timeout callers. */

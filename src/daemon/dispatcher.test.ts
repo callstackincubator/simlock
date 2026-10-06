@@ -3022,6 +3022,7 @@ function testConfig(
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
