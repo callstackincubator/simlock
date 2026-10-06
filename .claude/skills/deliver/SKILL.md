@@ -99,21 +99,26 @@ it under Blocked on.
 Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
 `<kind>/<N>`.
 
-1. **Implement**: `implementer` with `issue #N, branch <kind>/<N>, mode
-build`. `spec needs` under Open: park (step 6).
+1. **Implement**: `implementer` with the issue, the branch and
+   `mode build`. `spec needs` under Open: park (step 6).
 2. **Review**: `reviewer` with the PR number.
 3. **Decide** on the review report:
    - Fix lines: one `implementer` run in mode `fix` with the Fix lines
-     pasted, then the next round: `reviewer` with `round 2` (or `round 3`)
-     and the report's Rerun value.
+     pasted, then the next round: `reviewer` with `round <n+1>`, the
+     report's Rerun value, `previous <Commit>`, and the Fix lines pasted.
+   - `Rerun: claims-only`: the same, with `claims-only` as the Rerun value;
+     at most two such rounds per PR. Claims Fix lines still open after the
+     second: park.
+   - Out of scope lines: open one `bug:new` issue each, naming the PR. They
+     do not block it.
    - Spec needs, or a blocking finding reported open with `Rerun: none`:
      park.
    - No Fix lines, and implement reported Hardware lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`: one `implementer` fix
-     run with the Evidence lines, then `reviewer` with the next round and
-     `Rerun: code`, then `hardware-verifier` again on the commit that review
-     passes.
+     run with the Evidence lines, then `reviewer` with the next round,
+     `Rerun: code`, `previous <Commit>` and the Evidence lines as Fix lines,
+     then `hardware-verifier` again on the commit that review passes.
    - Hardware `busy` or `unavailable`: finish the review rounds, do steps 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
      and park instead of running the gate.
@@ -125,19 +130,20 @@ build`. `spec needs` under Open: park (step 6).
    ```markdown
    ## Review
 
-   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes.
+   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
    Mutate: <n> mutants, <a> alive.
 
    Rejected:
 
-   - spec|code: <claim> — <reason>
+   - spec|code|claims: <claim> — <reason>
    ```
 
    `<b>` counts the blocking findings that review raised over all rounds,
    `<m>` those confirmed and fixed, `<k>` its notes. Every blocking finding
    not fixed is a Rejected line; omit "Rejected:" when there is none. Keep
-   the counts line in exactly this shape (`Code review: skipped.` for an
-   ADR-only diff) and the Rejected lines with their tags:
+   the counts line in exactly this shape (for an ADR-only diff:
+   `Code review: skipped. Claims review: skipped.`) and the Rejected lines
+   with their tags:
    `.agents/scripts/delivery-stats.mjs` parses both. Rule 12 budget: 200
    words plus the checklist, Assumptions and Review, ending with
    `*Written by an agent.*`.
@@ -150,7 +156,7 @@ build`. `spec needs` under Open: park (step 6).
 
    Not blocking, not verified. Each is one reviewer's claim.
 
-   - spec|code: <path:line what could be better>
+   - spec|code|claims: <path:line what could be better>
 
    _Written by an agent._
    ```

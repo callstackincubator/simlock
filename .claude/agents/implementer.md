@@ -96,7 +96,9 @@ states the failing count: `3 failing -> 1 failing`.
 
 **Audit `git diff origin/main`** as someone who has not seen the spec:
 
-- **Removed.** For every name, behaviour, limit or guarantee the diff
+- **Removed.** Run `.agents/scripts/stale-refs.sh`: it lists every line in
+  the repo that still names a path, declaration or quoted string the diff
+  removed. Then, for every name, behaviour, limit or guarantee the diff
   removes, renames or narrows, search the whole repo (comments, docs, test
   titles, config, help text) by its name and by the plain words that
   describe it. Fix every line that still states the old fact.
@@ -149,16 +151,24 @@ observable (equivalent) goes in the report with the reason.
 
 ## 6. Fix mode
 
-Each finding line is a verified defect.
+Each finding line is a verified defect, and names its Class: the general
+rule it breaks.
 
-- Behaviour: write the failing test first, then the fix.
-- Stale doc or comment: fix it.
-- A line ending in `(record as Assumption: ...)`: also add that assumption
-  to the PR body.
-- A slow-lane Evidence line is a failing test: fix the code, not the test.
-
-One commit per finding or closely related group. Then step 5 again: the
-audit, and the test check on every test the fix touched.
+1. **Find every instance.** The line is one instance of its class. Search
+   the whole diff for others, and for a stale claim the whole repo. For an
+   order, interleaving or conflict between two components, list every path
+   through the same code (each caller, flag, mode and order, including both
+   at once) and check each.
+2. **Fix every instance:**
+   - behaviour: write the failing test first, then the fix;
+   - stale doc or comment: fix it;
+   - a line ending in `(record as Assumption: ...)`: also add that
+     assumption to the PR body;
+   - a slow-lane Evidence line is a failing test: fix the code, not the
+     test.
+3. One commit per finding or closely related group. Then step 5 again: the
+   audit (with the sweep), and the test check on every test the fix touched
+   or added.
 
 ## Report
 
@@ -168,6 +178,7 @@ End with exactly this block, nothing after it:
 Issue: #N  Branch: <kind>/<N>  PR: #M (draft)
 Tests: k of n spec tests green (red commit <short sha>)
 Audit: <n stale lines fixed, m replaced cases proven, Done when k of n with evidence>
+Variants: <fix mode: per finding, its class, the instances found, the instances fixed; or "n/a">
 Run: tests pass | fail (<what failed>); CI <pass | fail | running | not checked>
 Mutate: <n> mutants, <a> alive (<path:line why> per alive mutant, or "none")
 Hardware: <Done when lines that need the slow lane, or "none">
