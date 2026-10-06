@@ -70,8 +70,13 @@ case $name in
 esac
 dir="$main_root/.claude/worktrees/$(echo "$name" | tr / -)"
 
+# A rerun for the same branch gets the worktree it already has.
 if [ -e "$dir" ]; then
-  echo "$dir already exists" >&2
+  if [ "$(git -C "$dir" branch --show-current 2>/dev/null)" = "$branch" ]; then
+    echo "$dir"
+    exit 0
+  fi
+  echo "$dir already exists, on another branch" >&2
   exit 1
 fi
 

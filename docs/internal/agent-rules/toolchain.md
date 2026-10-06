@@ -23,7 +23,8 @@ them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm mutate`, the whole e2e suite, the console lane in every browser
 (`pnpm test:console`), `tsc`, `oxlint`, `oxfmt`, `fallow`, `stryker`.
 
-- **Commit hook:** format, lint, typecheck. Errors show in its output.
+- **Commit hook:** formats the staged files and stages the result, then
+  lint and typecheck. Errors show in its output.
 - **Push hook:** Fallow, the e2e typecheck, then mutation testing on the
   lines the branch changed. It takes minutes. Its output lists every mutant
   left alive; a survivor does not block the push.
