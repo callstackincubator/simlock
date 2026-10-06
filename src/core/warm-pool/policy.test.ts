@@ -343,6 +343,17 @@ describe("warm pool policy", () => {
     ]);
   });
 
+  it("does not let a request whose device work is in flight shield an idle ready device it serves from an over-budget shutdown", () => {
+    const serving = device("serving", "ready", { endedAgo: 90 * minute });
+    const other = device("other", "ready", { endedAgo: 5 * minute, spec: spec("iPad Pro") });
+
+    const proposals = evaluate(
+      view([serving, other], { limit: 1, waiting: [classDemand("full", "ios", true)] }),
+    );
+
+    expect(proposals).toEqual([{ action: "shutdown", deviceId: "serving", reason: "over-budget" }]);
+  });
+
   it("holds a slot for a request whose device work is in flight, and boots nothing for it", () => {
     const recent = device("recent", "shutdown", { endedAgo: 1_000 });
     const busy = device("busy", "leased", { spec: spec("iPad Pro") });
