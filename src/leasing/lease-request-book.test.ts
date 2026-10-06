@@ -459,6 +459,60 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
+  it.each([
+    ["a different leaseId", "other"],
+    ["no leaseId where one was sent", undefined],
+  ])("refuses a repeat naming %s as an idempotency conflict", async (_label, leaseId) => {
+    const book = bookOver(memoryStore());
+    await book.admit(request, { ...keyed, leaseId: "myid" }, () => granted("myid"));
+    await settled();
+
+    expect(() =>
+      book.replay(request, { ...keyed, ...(leaseId === undefined ? {} : { leaseId }) }),
+    ).toThrow(IdempotencyConflictError);
+  });
+
+  it("refuses a repeat that adds a leaseId the first request did not send as an idempotency conflict, and replays one that sends the same", async () => {
+    const book = bookOver(memoryStore());
+    await book.admit(request, keyed, () => granted("lse_1"));
+    await settled();
+
+    expect(() => book.replay(request, { ...keyed, leaseId: "myid" })).toThrow(
+      IdempotencyConflictError,
+    );
+    await expect(book.replay(request, keyed)).resolves.toMatchObject({ lease: { id: "lse_1" } });
+  });
+
+  it("says an open request holds its leaseId, and a settled or cancelled one, or one that sent none, does not", async () => {
+    const book = bookOver(memoryStore());
+    let finish: (grant: { lease: { id: string } }) => void = () => undefined;
+    await book.admit(request, { ...keyed, leaseId: "waits" }, () => ({
+      promise: new Promise((resolve) => {
+        finish = resolve;
+      }),
+    }));
+    await book.admit(
+      request,
+      { idempotencyKey: "key-2", ownerId: "other", requesterId: "other", leaseId: "gone" },
+      () => ({ promise: Promise.reject(new RequestCancelledError("req_x")) }),
+    );
+    await book.admit(request, { ownerId: "third", requesterId: "third" }, () => ({
+      promise: new Promise(() => undefined),
+    }));
+    await settled();
+
+    expect([
+      book.holdsLeaseId("waits"),
+      book.holdsLeaseId("gone"),
+      book.holdsLeaseId("third"),
+      book.holdsLeaseId("never-sent"),
+    ]).toEqual([true, false, false, false]);
+
+    finish({ lease: { id: "waits" } });
+    await settled();
+    expect(book.holdsLeaseId("waits")).toBe(false);
+  });
+
   it("keeps a settled record as it is when a second result arrives for it, and settles nothing for an unknown id", async () => {
     const store = memoryStore();
     const created = await store.createLeaseRequest(newRequest("agent"));

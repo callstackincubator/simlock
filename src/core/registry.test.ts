@@ -1629,6 +1629,96 @@ describe("Registry", () => {
     ]);
   });
 
+  it("keeps the leaseId a request stored across a reload, and loads a record without one as having none", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+      leaseId: "ad-7f3a",
+    });
+    await registry.createLeaseRequest({
+      id: "req_2",
+      ownerId: "agent-2",
+      request: { platform: "ios" },
+      requesterId: "agent-2",
+    });
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.leaseRequests()).toMatchObject([
+      { id: "req_1", leaseId: "ad-7f3a" },
+      { id: "req_2" },
+    ]);
+    expect(reloaded.leaseRequests()[1]).not.toHaveProperty("leaseId");
+  });
+
+  it("loads the lease of a stored grant written before idChosenByRequester as one simlock named", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const lease = {
+      deviceId: "dev_1",
+      grantedAt: 1_000,
+      id: "lse_1",
+      lastRenewedAt: 1_000,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    };
+    const device = {
+      createdAt: 1_000,
+      driverData: {},
+      driverDeviceId: "driver_dev_1",
+      id: "dev_1",
+      spec,
+      state: "leased",
+    };
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [device],
+        leaseRequests: [
+          {
+            createdAt: 1_000,
+            grant: { device, environment: {}, lease, timing: {} },
+            id: "req_1",
+            ownerId: "agent-1",
+            request: { platform: "ios" },
+            requesterId: "agent-1",
+            settledAt: 1_000,
+            state: "granted",
+          },
+        ],
+        leases: [lease],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.leaseRequests()[0]?.grant?.lease).toMatchObject({
+      id: "lse_1",
+      idChosenByRequester: false,
+    });
+  });
+
   it("writes idChosenByRequester true for a lease created with a leaseId, false without one, and keeps both across a reload", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
@@ -1660,7 +1750,7 @@ describe("Registry", () => {
       ...base,
       deviceId: await ready("one"),
       leaseId: "ad-7f3a",
-    } as Parameters<Registry["createLease"]>[0]);
+    });
     const generated = await registry.createLease({ ...base, deviceId: await ready("two") });
 
     expect(chosen).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });

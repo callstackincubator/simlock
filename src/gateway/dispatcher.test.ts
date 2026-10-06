@@ -1061,6 +1061,36 @@ describe("GatewayDispatcher", () => {
       expect(client.lastRequestLeaseInput).toMatchObject({ imageTag: "google_apis_playstore" });
     });
 
+    it("forwards a lease.request's leaseId to the worker, and answers the grant under that ID with no worker in front of it", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({
+        grant: grantFixture({
+          lease: { ...grantFixture().lease, id: "ad-7f3a", idChosenByRequester: true },
+        }),
+        kind: "grant",
+      });
+
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { leaseId: "ad-7f3a", model: "iPhone 17", noWait: true, platform: "ios" },
+        session({ role: "agent" }),
+      );
+
+      expect(client.lastRequestLeaseInput).toMatchObject({ leaseId: "ad-7f3a" });
+      expect(grant.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
+    });
+
     it("forwards device.exec to the worker that holds the lease, gated on the caller owning it", async () => {
       const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();

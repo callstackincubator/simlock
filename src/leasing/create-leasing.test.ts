@@ -3571,8 +3571,7 @@ describe("createLeasing a lease ID chosen by the requester", () => {
     maxRunning: 4,
   };
 
-  /** What a caller that sends `leaseId` passes: the field is spread in so this file still builds
-   * against options that do not name it. */
+  /** What a caller that sends `leaseId` passes. */
   function asking(requesterId: string, leaseId?: string, more: Record<string, unknown> = {}) {
     return {
       ownerId: requesterId,
