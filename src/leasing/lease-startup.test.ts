@@ -16,8 +16,15 @@ const restarted: LeaseRequestRecord = {
   settledAt: 2,
 };
 
-function harness(settled: readonly LeaseRequestRecord[]) {
+function harness(
+  settled: readonly LeaseRequestRecord[],
+  leases: { readonly ids: string[]; readonly notRunning: ReadonlySet<string> } = {
+    ids: [],
+    notRunning: new Set(),
+  },
+) {
   const order: string[] = [];
+  const timerLeases: string[][] = [];
   const eventBus = new EventBus(new FakeClock(0));
   const events: { event: string; payload: unknown; module: string }[] = [];
   eventBus.subscribe("lease.rejected", (event) => {
@@ -40,15 +47,22 @@ function harness(settled: readonly LeaseRequestRecord[]) {
       run: async (read) => {
         order.push("reconcile");
         reads.push(read);
+        // The ending the real reconciler performs: a lease whose device is not running is gone.
+        leases.ids.splice(
+          0,
+          leases.ids.length,
+          ...leases.ids.filter((id) => !leases.notRunning.has(id)),
+        );
       },
     },
     timers: {
       restoreExpiryTimers: async () => {
         order.push("timers");
+        timerLeases.push([...leases.ids]);
       },
     },
   });
-  return { events, failures, order, reads, startup };
+  return { events, failures, order, reads, startup, timerLeases };
 }
 
 describe("LeaseStartup", () => {
@@ -87,13 +101,17 @@ describe("LeaseStartup", () => {
     expect(h.order).toEqual(["settle"]);
   });
 
-  it("ends the leases whose device is not running against the read it is given, then restores the expiry timers of the rest", async () => {
-    const h = harness([]);
+  it("runs the reconciler on the read it is given, then restores the expiry timers of only the leases it left", async () => {
+    const h = harness([], {
+      ids: ["lse_running", "lse_stopped"],
+      notRunning: new Set(["lse_stopped"]),
+    });
     const read = new StartupRead();
 
     await h.startup.reconcile(read);
 
     expect(h.order).toEqual(["reconcile", "timers"]);
+    expect(h.timerLeases).toEqual([["lse_running"]]);
     expect(h.reads).toEqual([read]);
     expect(h.reads[0]).toBe(read);
   });

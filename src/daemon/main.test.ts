@@ -668,6 +668,60 @@ describe("startDaemon wires core and leasing together", () => {
     expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
   });
 
+  it("stays starting until leasing has ended the lease whose device is not running, and no longer holds the lease once it is up", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    let holdWrites = false;
+    let releaseWrite: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    class HoldingFilesystem extends MemoryFilesystem {
+      async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (holdWrites && arguments_[0] === statePath) await writeHeld;
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const filesystem = new HoldingFilesystem();
+    const options = () =>
+      ({
+        clock,
+        dataDirectory: directory,
+        drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const first = await startDaemon(options());
+    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    await first.stop("test");
+    // The restarted process's driver knows no device, so the leased one is gone from its platform.
+    // Ending that lease writes the registry; hold that write.
+    holdWrites = true;
+
+    let started = false;
+    const starting = startDaemon(options()).then((daemon) => {
+      started = true;
+      return daemon;
+    });
+    await settleRealTime();
+    const startedWhileEndingPending = started;
+    releaseWrite();
+    const daemon = await starting;
+    runningDaemons.push(daemon);
+
+    expect(startedWhileEndingPending).toBe(false);
+    const state = JSON.parse(await filesystem.readFile(statePath)) as {
+      readonly leases: readonly { readonly id: string }[];
+    };
+    expect(state.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+  });
+
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
     const clock = new FakeClock(1_000);
     const { daemon, driver, grant } = await leasedIos({
