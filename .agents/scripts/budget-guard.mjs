@@ -10,6 +10,9 @@
 //   hard limit  → (soft × 1.2, or run time past the limit + 30 min) the whole
 //                 session process group is killed.
 //
+// Run time counts only active time: a gap of more than 30 minutes between two tool calls (a
+// session waiting overnight for a person) is not counted.
+//
 // Limits come from the environment (set them in settings.local.json "env"):
 //   CLAUDE_BUDGET_TOKENS  default 30000000    (0 disables the token limit)
 //   CLAUDE_BUDGET_HOURS   default 10          (0 disables the time limit)
@@ -22,6 +25,7 @@ const LIMIT_TOKENS = Number(process.env.CLAUDE_BUDGET_TOKENS ?? 30_000_000);
 const LIMIT_HOURS = Number(process.env.CLAUDE_BUDGET_HOURS ?? 10);
 const HARD_FACTOR = 1.2;
 const HARD_GRACE_MS = 30 * 60 * 1000;
+const IDLE_GAP_MS = 30 * 60 * 1000;
 const WEIGHTS = { input: 1, cacheWrite: 1.25, cacheRead: 0.1, output: 5 };
 
 const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
@@ -42,7 +46,7 @@ try {
 
 // Incremental state so each call reads only what was appended since the last one.
 const stateFile = path.join(os.tmpdir(), `claude-budget-${input.session_id}.json`);
-let state = { started: null, files: {} };
+let state = { activeMs: 0, lastSeen: null, files: {} };
 try {
   state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 } catch {}
@@ -71,7 +75,6 @@ for (const file of files) {
     } catch {
       continue;
     }
-    if (!state.started && rec.timestamp) state.started = rec.timestamp;
     const u = rec.message?.usage;
     const id = rec.message?.id;
     // One API message is written as several lines with the same id; count it once.
@@ -85,10 +88,14 @@ for (const file of files) {
   }
   s.offset += Buffer.byteLength(text.slice(0, end));
 }
+const now = Date.now();
+const gap = typeof state.lastSeen === "number" ? now - state.lastSeen : 0;
+if (gap > 0 && gap <= IDLE_GAP_MS) state.activeMs = (state.activeMs ?? 0) + gap;
+state.lastSeen = now;
 fs.writeFileSync(stateFile, JSON.stringify(state));
 
 const used = Object.values(state.files).reduce((a, s) => a + s.total, 0);
-const elapsedMs = state.started ? Date.now() - Date.parse(state.started) : 0;
+const elapsedMs = state.activeMs ?? 0;
 const limitMs = LIMIT_HOURS * 3600 * 1000;
 const overTokens = LIMIT_TOKENS > 0 && used >= LIMIT_TOKENS;
 const overTime = LIMIT_HOURS > 0 && elapsedMs >= limitMs;
@@ -97,7 +104,7 @@ if (!overTokens && !overTime) process.exit(0);
 const fmt = (n) => `${(n / 1e6).toFixed(1)}M`;
 const why = overTokens
   ? `used ${fmt(used)} of ${fmt(LIMIT_TOKENS)} budget tokens`
-  : `ran ${(elapsedMs / 3600000).toFixed(1)}h of ${LIMIT_HOURS}h`;
+  : `ran ${(elapsedMs / 3600000).toFixed(1)}h of ${LIMIT_HOURS}h active`;
 
 const hard =
   (LIMIT_TOKENS > 0 && used >= LIMIT_TOKENS * HARD_FACTOR) ||
