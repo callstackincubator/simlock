@@ -9,6 +9,7 @@ import {
   type DeviceSpec,
   type LeaseProgress,
   Registry,
+  UnknownLeaseError,
 } from "../core/index.js";
 import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
 import { capacityChangedPayload, testComponentWiring, FakeDriver } from "../core/testing.js";
@@ -2282,6 +2283,56 @@ describe("createLeasing restart recovery of stored lease requests", () => {
     expect(
       after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
     ).toMatchObject({ state: "failed" });
+  });
+});
+
+describe("createLeasing a grant and its request's result", () => {
+  const asker = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" };
+
+  it("answers a repeat under the same key with the lease after the daemon stopped between the grant and the request book's settle write", async () => {
+    const before = await createHarness();
+    await seedReady(before);
+    vi.spyOn(before.registry, "settleLeaseRequest").mockRejectedValue(new Error("disk gone"));
+    const grant = await before.engine.request(request, asker);
+    await flush();
+
+    const after = await createHarness({ filesystem: before.filesystem });
+    await after.engine.convergeRunningCapacity();
+    const repeat = await after.engine.request(request, asker);
+
+    expect(repeat).toEqual(grant);
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(after.registry.leaseRequests()).toMatchObject([{ state: "granted" }]);
+    expect(after.registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("answers a repeat under the same key in the same process with the lease after the request book's settle finds the request already granted", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    const settle = vi.spyOn(harness.registry, "settleLeaseRequest");
+    const grant = await harness.engine.request(request, asker);
+    await flush();
+
+    expect(settle).toHaveBeenCalledTimes(1);
+    await expect(settle.mock.results[0]?.value).resolves.toBeUndefined();
+    const repeat = await harness.engine.request(request, asker);
+    expect(repeat).toEqual(grant);
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(harness.registry.leaseRequests()).toMatchObject([{ grant, state: "granted" }]);
+  });
+
+  it("answers a repeat of a granted request whose lease was released since with the grant as recorded, and a renew of that lease with UnknownLeaseError", async () => {
+    const harness = await createHarness();
+    await seedReady(harness);
+    const grant = await harness.engine.request(request, asker);
+    await flush();
+    await harness.engine.release(grant.lease.id, "explicit");
+
+    const repeat = await harness.engine.request(request, asker);
+
+    expect(repeat.lease.id).toBe(grant.lease.id);
+    expect(repeat).toEqual(grant);
+    await expect(harness.engine.renew(grant.lease.id)).rejects.toBeInstanceOf(UnknownLeaseError);
   });
 });
 

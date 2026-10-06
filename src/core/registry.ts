@@ -102,6 +102,16 @@ export interface CreateLeaseInput {
   /** The width this lease is granted with; stored on the record, see `LeaseRecord.ttlMs`. */
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  /**
+   * The request this lease is granted for, and the rest of the grant its repeat answers. When
+   * given, the commit that adds the lease also marks that request `granted` with the whole
+   * `LeaseGrant` (device, environment, lease, timing), so no crash can fall between the two.
+   */
+  readonly request?: {
+    readonly id: string;
+    readonly environment: LeaseGrant["environment"];
+    readonly timing: LeaseGrant["timing"];
+  };
 }
 
 export type RegistryDeviceEvent =

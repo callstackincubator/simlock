@@ -467,6 +467,67 @@ describe("Registry", () => {
     ).rejects.toThrow(RegistryEventError);
   });
 
+  it("reloads a lease written for a request with the request granted, holding the grant its waiter received", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const suffixes = ["device", "lease"];
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => suffixes.shift() ?? "unexpected" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    const timing = {
+      estimatedBootMs: 2,
+      estimatedProvisionMs: 1,
+      estimatedReadyMs: 4,
+      estimatedReclaimMs: 3,
+    };
+
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      request: { environment: { SIMLOCK_UDID: "abc" }, id: "req_1", timing },
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    });
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.snapshot.leases).toEqual([lease]);
+    expect(reloaded.leaseRequests()).toMatchObject([
+      {
+        grant: {
+          device: { id: device.id, state: "leased" },
+          environment: { SIMLOCK_UDID: "abc" },
+          lease,
+          timing,
+        },
+        id: "req_1",
+        state: "granted",
+      },
+    ]);
+    expect(lease.id).toBe("lse_lease");
+  });
+
   it("enters quarantine from reclaiming, tracking attempts and the next retry deadline", async () => {
     const clock = new FakeClock(1_000);
     const registry = await Registry.load({
