@@ -10,6 +10,7 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import {
+  type Config,
   type Core,
   createCore,
   type DriverRejection,
@@ -26,6 +27,7 @@ async function build(
     readonly fresh?: boolean;
     readonly driverRejections?: readonly DriverRejection[];
     readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+    readonly warmTargets?: Config["warmPool"]["targets"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -46,7 +48,7 @@ async function build(
   });
   const core = createCore({
     clock,
-    config: await loadConfig({ filesystem, systemStats }),
+    config: withWarmTargets(await loadConfig({ filesystem, systemStats }), options.warmTargets),
     drivers: [driver],
     driverRejections: options.driverRejections,
     eventBus,
@@ -57,6 +59,13 @@ async function build(
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });
   return { core, driver, registry };
+}
+
+function withWarmTargets(
+  config: Config,
+  targets: Config["warmPool"]["targets"] | undefined,
+): Config {
+  return targets === undefined ? config : { ...config, warmPool: { ...config.warmPool, targets } };
 }
 
 /** A lease the registry has just begun releasing: the device is `reclaiming`, the reclaim not yet run. */
@@ -184,6 +193,45 @@ describe("createCore", () => {
     const report = await core.doctor.reconcile();
 
     expect(report.findings).toMatchObject([{ kind: "driver-unavailable", platform: "android" }]);
+  });
+
+  it("doctor reports a warm target the last pass found no runtime for, from the pool core itself keeps", async () => {
+    const { core } = await build({
+      warmTargets: [{ count: 1, model: "iPhone 17", osVersion: "27.0", platform: "ios" }],
+    });
+    core.connect({
+      ...ports(),
+      warmPoolDemand: {
+        maintenanceActive: false,
+        resolve: async () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
+        waitingDemand: () => [],
+      },
+    });
+    await core.passWarmPool();
+
+    const report = await core.doctor.reconcile();
+
+    expect(report.findings).toMatchObject([
+      {
+        kind: "warm-pool-target-unreachable",
+        platform: "ios",
+        reason: "runtime-missing",
+        remedy: "run simlock component install ios 27.0",
+      },
+    ]);
+  });
+
+  it("doctor reports warm targets that add up to more than core's own running limit", async () => {
+    const { core } = await build({
+      warmTargets: [{ count: 1_000, model: "iPhone 17", platform: "ios" }],
+    });
+
+    const report = await core.doctor.reconcile();
+
+    expect(report.findings).toMatchObject([
+      { kind: "warm-pool-target-unreachable", platform: "ios", reason: "over-limit" },
+      { kind: "warm-pool-target-unreachable", reason: "over-limit", target: "all targets" },
+    ]);
   });
 
   it("doctor asks for a daemon restart on a platform whose prerequisites hold but whose driver core was not given", async () => {
