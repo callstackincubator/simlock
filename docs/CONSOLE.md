@@ -131,7 +131,10 @@ Each worker shows:
 | Capacity | Devices running out of the limit, per platform |
 
 A worker the gateway could not read from yet says "Not reported" where it
-has nothing to show.
+has nothing to show. A worker that is still starting shows its health as
+`starting`, and leaves out its devices and capacity: they appear once it has
+finished starting. Its page shows the status and the host, and says that devices,
+leases and capacity appear once startup finishes.
 
 Above the workers, **Leases, last hour** charts how many leases were held at
 the end of each minute. It starts from the leases held now and counts back

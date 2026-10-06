@@ -179,6 +179,21 @@ describe("DaemonServer", () => {
     });
   });
 
+  it("answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 18, to a client on protocol 17, which cannot parse a starting status.get answer", async () => {
+    const harness = await createHarness();
+    const previous = await createClient(harness.socketPath);
+
+    await expect(
+      previous.request("hello", { clientVersion: "test", protocolVersion: 17 }),
+    ).resolves.toMatchObject({
+      error: {
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+        details: { client: { min: 17, max: 17 }, daemon: { min: 18, max: 18 } },
+      },
+      ok: false,
+    });
+  });
+
   // Every protocol bump so far shipped without a back-compat shim, so rejecting an older
   // client outright is a deliberate product decision, not just arithmetic on the current
   // constant. Protocol 3 (ADR 0003) turned the rejection into a range check; 4 (ADR 0004)
@@ -1145,10 +1160,12 @@ describe("DaemonServer startup readiness", () => {
 
     const client = await createClientRetrying(harness.socketPath);
     await hello(client);
-    await expect(client.request("status.get", {})).resolves.toMatchObject({
+    const during = await client.request("status.get", {});
+    expect(during).toMatchObject({
       ok: true,
       payload: { daemon: { health: "starting", mode: "worker" } },
     });
+    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual(["daemon", "host"]);
 
     converge.resolve();
     await startPromise;

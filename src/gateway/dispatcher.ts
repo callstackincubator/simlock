@@ -240,6 +240,15 @@ export class GatewayDispatcher {
   // ---- handlers -----------------------------------------------------------------------------
 
   #statusGet: Handler<"status.get"> = () => {
+    // ADR 0011 §3: a gateway serves the console on its own listener, as a worker does.
+    const consoleUrl = consoleUrlField(this.options.config.http);
+    // While starting, the fleet has not been read: the answer is the gateway and its host only.
+    if (this.options.health() === "starting") {
+      return {
+        daemon: { health: "starting", mode: "gateway", ...consoleUrl },
+        host: this.options.host,
+      };
+    }
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       host: this.options.host,
@@ -248,11 +257,7 @@ export class GatewayDispatcher {
       waiting: [...this.options.coordinator.waitingRequests()],
       leaseIndex: this.options.leaseIndex,
     });
-    // ADR 0011 §3: a gateway serves the console on its own listener, as a worker does.
-    return {
-      ...status,
-      daemon: { ...status.daemon, ...consoleUrlField(this.options.config.http) },
-    };
+    return { ...status, daemon: { ...status.daemon, ...consoleUrl } };
   };
 
   #catalogGet: Handler<"catalog.get"> = (input) =>
@@ -347,7 +352,7 @@ export class GatewayDispatcher {
     for (const entry of this.options.leaseIndex.all()) {
       if (entry.ownerId !== ownerId) continue;
       const view = this.options.workers.view(entry.workerId);
-      const raw = view?.leases.find((lease) => lease.id === entry.workerLeaseId);
+      const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
       if (view === undefined || raw === undefined) continue;
       leases.push(this.options.leaseIndex.project(raw, view.id, view.label));
     }
@@ -372,7 +377,9 @@ export class GatewayDispatcher {
       case undefined:
         return this.options.workers
           .views()
-          .flatMap((view) => view.devices.map((device) => ({ ...device, workerId: view.id })));
+          .flatMap((view) =>
+            (view.devices ?? []).map((device) => ({ ...device, workerId: view.id })),
+          );
     }
   };
 
@@ -402,7 +409,9 @@ export class GatewayDispatcher {
     return this.options.workers
       .views()
       .flatMap((view) =>
-        view.leases.map((lease) => this.options.leaseIndex.project(lease, view.id, view.label)),
+        (view.leases ?? []).map((lease) =>
+          this.options.leaseIndex.project(lease, view.id, view.label),
+        ),
       );
   }
 

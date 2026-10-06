@@ -87,7 +87,7 @@ function workerServes(
   workers: readonly {
     readonly connection: string;
     readonly capacity?: unknown;
-    readonly catalog: readonly { readonly models: readonly string[] }[];
+    readonly catalog?: readonly { readonly models: readonly string[] }[] | undefined;
   }[],
   model: string,
 ): boolean {
@@ -95,7 +95,7 @@ function workerServes(
     (worker) =>
       worker.connection === "connected" &&
       worker.capacity !== undefined &&
-      worker.catalog.some((entry) => entry.models.includes(model)),
+      worker.catalog?.some((entry) => entry.models.includes(model)) === true,
   );
 }
 

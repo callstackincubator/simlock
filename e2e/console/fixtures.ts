@@ -169,7 +169,9 @@ export interface Fleet {
 
 /**
  * Starts a gateway and one worker per entry of `workers`, each joined to it with its label, and
- * waits until the gateway lists every one of them as connected.
+ * waits until the gateway lists every one of them as connected and has read it: a worker that is
+ * still `starting`, or not yet read, has no capacity or catalog in its view, and a test that
+ * leases through the gateway or reads a card's capacity right away would see that gap.
  */
 export async function startFleet(
   workers: readonly { readonly label: string; readonly driverScript?: FakeDriverScript }[],
@@ -194,12 +196,22 @@ export async function startFleet(
     await waitFor(
       async () => {
         const listed = await gateway.cli(["worker", "list", "--json"]);
-        const views = (listed.json as { workers?: readonly { connection: string }[] }).workers;
+        const views = (
+          listed.json as {
+            workers?: readonly { capacity?: unknown; connection: string; health?: string }[];
+          }
+        ).workers;
         return (
-          views?.length === workers.length && views.every((view) => view.connection === "connected")
+          views?.length === workers.length &&
+          views.every(
+            (view) =>
+              view.connection === "connected" &&
+              view.health !== "starting" &&
+              view.capacity !== undefined,
+          )
         );
       },
-      { label: "every worker connected to the gateway" },
+      { label: "every worker connected to the gateway and read by it" },
     );
     return { gateway, workers: started };
   } catch (error: unknown) {

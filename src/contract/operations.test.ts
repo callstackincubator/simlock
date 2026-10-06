@@ -532,8 +532,8 @@ describe("operation input/output round trips", () => {
     });
     expect(parsed.workers?.[1]?.protocol?.worker).toEqual({ min: 3, max: 3 });
     expect(parsed.workers?.[0]?.host?.tools[0]?.name).toBe("emulator");
-    expect(parsed.devices[0]?.workerId).toBe("wrk_1");
-    expect(parsed.leases[0]?.workerId).toBe("wrk_1");
+    expect(parsed.devices?.[0]?.workerId).toBe("wrk_1");
+    expect(parsed.leases?.[0]?.workerId).toBe("wrk_1");
   });
 
   it("catalog.get: round-trips a gateway's per-entry worker annotations (ADR 0005 §21)", () => {
@@ -918,7 +918,7 @@ describe("operation input/output round trips", () => {
   });
 
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {
-    const shape = OPERATIONS["status.get"].output.shape.capacity.shape.ramBudget;
+    const shape = OPERATIONS["status.get"].output.shape.capacity.unwrap().shape.ramBudget;
     const budget = { limitBytes: 8, overLimit: false, usedBytes: 1 };
 
     expect(shape.parse(budget)).toEqual(budget);

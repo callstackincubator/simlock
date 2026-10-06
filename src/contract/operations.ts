@@ -96,9 +96,13 @@ export const statusGet = defineOperation({
     // the caller leases. `statusDeviceSchema`, not `deviceRecordSchema`, is what keeps
     // `driverData` and reclamation/recovery bookkeeping off this response; see its doc comment
     // in schemas.ts. `list.get` (admin-only) is the operation that returns the full record.
-    devices: z.array(statusDeviceSchema),
-    leases: z.array(statusLeaseSchema),
-    capacity: statusCapacitySchema,
+    //
+    // `devices`, `leases`, `capacity` and `queueDepth` are absent while `daemon.health` is
+    // `starting`: the registry has not been checked yet, so a reader sees a daemon that says
+    // it is starting and what host it runs on, and nothing it could mistake for an empty fleet.
+    devices: z.array(statusDeviceSchema).optional(),
+    leases: z.array(statusLeaseSchema).optional(),
+    capacity: statusCapacitySchema.optional(),
     /**
      * What this daemon *is*, as opposed to what it currently holds: its health, and its run
      * mode (ADR 0005 §1). `mode` is the one field that tells a client which kind of daemon
@@ -121,7 +125,7 @@ export const statusGet = defineOperation({
      * never makes `status.get` wait.
      */
     host: hostFactsSchema,
-    queueDepth: z.number(),
+    queueDepth: z.number().optional(),
     /**
      * ADR 0010 §3: the component installs waiting or running, the oldest first. A worker always
      * sends it, empty when nothing is installing; a gateway lists its connected workers'
@@ -233,7 +237,7 @@ export function refuseModelWithClass(
 }
 
 /** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
-export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {

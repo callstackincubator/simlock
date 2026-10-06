@@ -138,6 +138,17 @@ Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
 managed/running capacity per platform, active leases, managed devices (each
 with its device mode, `mode`: `"slim"` or `"full"`), queue depth.
 
+While the daemon is starting (`daemon.health` is `starting`), the answer is
+`200` with the `daemon` block and `host` only: it has not yet checked what it
+holds, so `devices`, `leases`, `capacity`, `queueDepth`, `installs`, `waiting`
+and `workers` are absent, not empty. They are all there once `health` is
+`running`, and also when it is `failed`.
+
+```json
+{ "daemon": { "health": "starting", "mode": "worker" },
+  "host": { "os": "macOS", "osVersion": "15.5", "arch": "arm64", "tools": [] } }
+```
+
 The daemon block carries `health` (`starting`/`running`) and **`mode`**
 (`"worker" | "gateway"`), the one field that tells a client which kind of
 daemon answered:
@@ -445,14 +456,17 @@ their models of the class pair with an installed runtime in fails at once with
 
 A gateway fails a request no worker can serve at once, with or without
 `noWait` and `timeoutMs`, instead of queueing it. A worker *takes requests*
-when it is connected, not drained, and the gateway has read its catalog since
-it connected; the gateway *knows* a worker once it has read a catalog from it
+when it is connected, not drained, and either it has reported its capacity and
+the gateway has read its catalog since it connected, or it answers that it is
+still starting and the gateway holds a catalog for it from an earlier read; the
+gateway *knows* a worker once it has read a catalog from it
 and the worker is not `incompatible`, so a drained or disconnected worker stays
 known and a reconnecting one stays known from its last catalog.
 
 | Situation | Result |
 |---|---|
-| No worker takes requests | `503 NO_CAPACITY` |
+| No worker takes requests, including a still-starting worker the gateway has never read a catalog from (gateway and workers restarted together) | `503 NO_CAPACITY` |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Queued until the worker is ready |
 | A worker takes requests, and no known worker has the platform | `422 NO_DRIVER` |
 | ... and no known worker lists the model | `422 UNKNOWN_MODEL` |
 | ... and no known worker has the runtime, or can pair it with the model | `422 RUNTIME_MISSING`, with `downloadable: false` and `osVersion: "default"` when `os` is absent |
@@ -1050,7 +1064,10 @@ host. A single host answers as a fleet of one: `GET /v1/workers` lists the
 host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 
 - `GET /v1/workers` — every worker view the gateway currently holds, or the
-  host's own view on a single host.
+  host's own view on a single host. A worker whose `health` is `starting` has
+  not yet checked what it holds, so its view carries `health` and `host` and
+  none of `devices`, `leases`, `capacity`, `queueDepth`, `catalog`, `installs`
+  or `waiting`: they are absent, not empty, until the worker answers `running`.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.

@@ -15,6 +15,7 @@ import {
   catalogFixture,
   deviceFixture,
   grantFixture,
+  hostFixture,
   leaseFixture,
   noCapacityError,
   ScriptedWorkerClient,
@@ -2720,7 +2721,21 @@ describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR
   }
 
   it.each([
-    ["is not healthy", { health: "starting" as const }, { health: "running" as const }],
+    ["is not healthy", { health: "failed" as const }, { health: "running" as const }],
+    [
+      "is still starting",
+      { health: "starting" as const },
+      // A worker that answers running again is read in full, as the gateway's link does.
+      {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        devices: [],
+        health: "running" as const,
+        leases: [],
+        queueDepth: 0,
+      },
+    ],
     ["has its own waiters queued", { queueDepth: 2 }, { queueDepth: 0 }],
   ])(
     "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
@@ -3415,5 +3430,148 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
 
     expect(leaseRequests(warm)).toHaveLength(1);
     expect(leaseRequests(free)).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator: a worker that is still starting", () => {
+  const gatewayLease = {
+    deviceId: "dev_1",
+    grantedAt: 1,
+    id: "lse_1",
+    lastRenewedAt: 1,
+    ownerId: "agent-9",
+    requesterId: `${GATEWAY_PREFIX}agent-9`,
+    ttlDeadline: 900_001,
+    ttlMs: 900_000,
+  };
+  const running = (leases: (typeof gatewayLease)[]) => ({
+    capacity: statusFixture().capacity,
+    devices: [deviceFixture("dev_1", "leased")],
+    health: "running" as const,
+    host: hostFixture(),
+    leases,
+    queueDepth: 0,
+  });
+
+  it("gives a starting worker a view with health and host and no devices, leases or capacity, indexes none of its leases, then indexes them once the worker answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    const starting = workers.view("wrk_a");
+    expect(starting?.health).toBe("starting");
+    expect(starting?.host).toEqual(hostFixture());
+    expect(Object.keys(starting ?? {})).not.toContain("devices");
+    expect(Object.keys(starting ?? {})).not.toContain("leases");
+    expect(Object.keys(starting ?? {})).not.toContain("capacity");
+    expect(leaseIndex.all()).toEqual([]);
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("keeps the leases it indexed for a worker through every answer the worker gives while starting, until it answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+
+    // The worker restarts. Three starting answers: more than the two empty snapshots after
+    // which the index forgets a lease the worker stopped reporting.
+    for (let answer = 0; answer < 3; answer += 1) {
+      workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+      expect(Object.keys(workers.view("wrk_a") ?? {})).not.toContain("leases");
+      expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+    }
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("sends a request to the worker that answered running, never to one that answered starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    const ready = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    directory.add("wrk_b", ready);
+    ready.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).resolves.toMatchObject({
+      lease: { worker: { id: "wrk_b" } },
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+
+  it("keeps dispatching a queued request to a running worker while another, already reconciled, answers starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const restarting = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_a", restarting);
+    directory.add("wrk_b", other);
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    // wrk_b frees a slot: the views-changed pass reaches it though wrk_a, before it in id order,
+    // has no leases to reconcile.
+    workers.refresh("wrk_b", { capacity: statusFixture().capacity });
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(0);
+    expect(other.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
+  it("queues a request for the only worker that can serve it, which is starting, though another worker takes requests but lists no such model", async () => {
+    const { coordinator, directory, workers } = harness();
+    const other = new ScriptedWorkerClient();
+    const restarting = new ScriptedWorkerClient();
+    directory.add("wrk_a", other);
+    directory.add("wrk_b", restarting);
+    restarting.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a", { models: ["iPad Pro"] });
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_b", { health: "starting", host: hostFixture() });
+
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(1);
+    expect(restarting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+
+    workers.refresh("wrk_b", {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
+  it("fails a request at once with NO_CAPACITY when the only worker has answered starting without a catalog ever read from it, as it does for a worker not yet read", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
+      code: "NO_CAPACITY",
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
   });
 });

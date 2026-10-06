@@ -85,11 +85,41 @@ export interface WorkerRegistryOptions {
   readonly logger?: Logger;
 }
 
+/**
+ * A view without what a `status.get` read of a running worker fills in. A worker that answers
+ * `starting` has had none of it checked, so what an earlier session saw is dropped rather than
+ * shown as current: absent says "not known", where a stale or empty value would say "nothing
+ * is leased".
+ */
+function withoutReadFields(view: WorkerView): WorkerView {
+  const {
+    capacity: _capacity,
+    catalog: _catalog,
+    catalogReadAt: _catalogReadAt,
+    devices: _devices,
+    installs: _installs,
+    leases: _leases,
+    queueDepth: _queueDepth,
+    waiting: _waiting,
+    ...rest
+  } = view;
+  return rest;
+}
+
 export class WorkerRegistry {
   readonly #workers = new Map<string, WorkerView>();
   /** Each worker's devices in the grant shape (see `WorkerGrantedDevice`). Set by `refresh`,
    * which writes nothing for a worker with no view, and deleted with the view by `#forget`. */
   readonly #grantedDevices = new Map<string, readonly WorkerGrantedDevice[]>();
+  /** The last catalog a refresh carried, per worker. A `starting` refresh leaves `catalog` off
+   * the view, but the gateway still knows what that worker listed when it last read it (ADR 0009
+   * §4: a reconnecting worker stays known while its new catalog is on the way), so `routingViews`
+   * hands routing this. Deleted with the view by `#forget`. */
+  readonly #lastCatalog = new Map<string, NonNullable<WorkerView["catalog"]>>();
+  /** The last leases a refresh carried, per worker. The same gap as `#lastCatalog`: a `starting`
+   * refresh leaves `leases` off the view, which is "not known", not "none", so the retention
+   * sweep and `worker.disconnected` read these instead (ADR 0005 §6). Deleted by `#forget`. */
+  readonly #lastLeases = new Map<string, NonNullable<WorkerView["leases"]>>();
   /**
    * Drained worker ids, including ids with no view yet. Kept beside the views rather than only
    * on them because drain outlives a view: an operator drains a machine, the machine is turned
@@ -120,6 +150,19 @@ export class WorkerRegistry {
 
   view(workerId: string): WorkerView | undefined {
     return this.#workers.get(workerId);
+  }
+
+  /**
+   * `views()` as routing reads them: a view with no `catalog`, a worker that answered `starting`,
+   * carries the last catalog the gateway read from it, so the worker stays known (ADR 0009 §4).
+   * Never shown to an operator: the view itself says "not read yet".
+   */
+  routingViews(): readonly WorkerView[] {
+    // A view that has a catalog holds the last one read, so only a starting view differs.
+    return this.views().map((view) => {
+      const catalog = this.#lastCatalog.get(view.id);
+      return catalog === undefined ? view : { ...view, catalog };
+    });
   }
 
   /**
@@ -179,11 +222,7 @@ export class WorkerRegistry {
   connected(workerId: string, label: string | undefined, version: string | undefined): WorkerView {
     // The catalog the last session read stays, so a reconnecting worker is still known from it
     // (ADR 0009 §4); only when it was read is cleared, since nothing has been read this session.
-    const { catalogReadAt: _stale, ...existing } = this.#workers.get(workerId) ?? {
-      catalog: [],
-      devices: [],
-      leases: [],
-    };
+    const { catalogReadAt: _stale, ...existing } = this.#workers.get(workerId) ?? {};
     const view: WorkerView = {
       ...existing,
       connection: "connected",
@@ -231,7 +270,7 @@ export class WorkerRegistry {
   ): WorkerView {
     const existing = this.#workers.get(workerId);
     const view: WorkerView = {
-      ...(existing ?? { catalog: [], devices: [], leases: [] }),
+      ...existing,
       connection: "incompatible",
       drained: this.#drained.has(workerId),
       id: workerId,
@@ -288,8 +327,11 @@ export class WorkerRegistry {
 
   /**
    * Replaces what the worker reports. Partial on purpose: a refresh triggered by a lease event
-   * re-reads status and devices but not the catalog (§7), and an absent key must leave the
-   * previous value standing rather than blank it. A refresh for a worker whose view is gone
+   * re-reads status and devices but not the catalog (§7), and an absent key leaves the previous
+   * value standing rather than blanking it -- except for a `starting` refresh, which says the
+   * worker has checked nothing: it drops capacity, catalog, catalogReadAt, devices, installs,
+   * leases, queueDepth and waiting from the view (absent means "not known"), keeping the last
+   * catalog and leases aside for routing and retention. A refresh for a worker whose view is gone
    * (removed while a status call was in flight) is dropped rather than resurrecting it.
    */
   refresh(workerId: string, refresh: WorkerRefresh): void {
@@ -298,13 +340,15 @@ export class WorkerRegistry {
     const { grantedDevices, ...snapshot } = refresh;
     const now = this.options.clock.now();
     const next: WorkerView = {
-      ...existing,
+      ...(snapshot.health === "starting" ? withoutReadFields(existing) : existing),
       ...snapshot,
       lastSeenAt: now,
       // ADR 0009 §4: a refresh that carries a catalog is a read of it.
       ...(snapshot.catalog === undefined ? {} : { catalogReadAt: now }),
     };
     this.#workers.set(workerId, next);
+    if (snapshot.catalog !== undefined) this.#lastCatalog.set(workerId, snapshot.catalog);
+    if (snapshot.leases !== undefined) this.#lastLeases.set(workerId, snapshot.leases);
     if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
     this.#warnOnLowerMaxTtl(existing, next);
     this.#notifyViewsChanged();
@@ -349,7 +393,9 @@ export class WorkerRegistry {
   /**
    * ADR 0005 §6: the uplink is the reachability signal, and a closed one does not delete
    * anything. The view keeps its last-known state -- capacity, devices, and above all the
-   * leases the worker still holds -- until retention elapses or an operator removes it.
+   * leases the worker still holds -- until retention elapses or an operator removes it. A view
+   * that disconnects while `starting` holds no capacity, devices or leases; the leases last read
+   * from it sit in `#lastLeases`, which the retention sweep and `worker.disconnected` read.
    */
   disconnected(workerId: string): void {
     const existing = this.#workers.get(workerId);
@@ -366,7 +412,9 @@ export class WorkerRegistry {
     this.options.eventBus.emit(
       "worker.disconnected",
       {
-        leaseCount: existing.leases.length,
+        // A view that went away while `starting` has no leases listed; what the gateway last
+        // read is what the worker still holds, which is what is stranded.
+        leaseCount: (existing.leases ?? this.#lastLeases.get(workerId) ?? []).length,
         workerId,
         ...(existing.label === undefined ? {} : { label: existing.label }),
       },
@@ -444,7 +492,8 @@ export class WorkerRegistry {
    * ADR 0005 §6's retention sweep, run from the gateway's periodic tick. Two conditions, both
    * required:
    *
-   * 1. every *gateway-issued* lease the view still shows has passed its deadline -- a lease
+   * 1. every *gateway-issued* lease the view shows, or the last leases read from it when it
+   *    shows none (a view that answered `starting`), has passed its deadline -- a lease
    *    this gateway granted with time left on it is a device still held on a machine that went
    *    away, which is exactly what an operator must be able to see, however long ago it went.
    *    Once the last deadline passes, the worker's own TTL has reclaimed everything (or will
@@ -473,7 +522,9 @@ export class WorkerRegistry {
       (view) =>
         view.connection === "disconnected" &&
         view.lastSeenAt <= cutoff &&
-        !view.leases.some(
+        // A view with no `leases` field is "not read" (a worker never read, or one that went
+        // away while starting): the leases last read stand, and none when none ever were.
+        !(view.leases ?? this.#lastLeases.get(view.id) ?? []).some(
           (lease) =>
             lease.ttlDeadline > now &&
             (prefix === undefined || lease.requesterId.startsWith(prefix)),
@@ -502,6 +553,8 @@ export class WorkerRegistry {
   ): Promise<void> {
     this.#workers.delete(view.id);
     this.#grantedDevices.delete(view.id);
+    this.#lastCatalog.delete(view.id);
+    this.#lastLeases.delete(view.id);
     if (clearDrain && this.#drained.delete(view.id)) {
       await this.options.drainStore?.save([...this.#drained]);
     }
