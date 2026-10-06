@@ -26,9 +26,10 @@ though the suite is green — being green is exactly the failure mode.
    red, whatever you believed covered it stops short of the part that
    matters — usually because the test exercises an internal callback rather
    than the observable output the path exists to produce. Write the test that
-   goes red, then restore the code. `pnpm mutate` does this mechanically
-   for every line a branch changed and prints each mutant the suite let
-   live; run it before review.
+   goes red, then restore the code. Mutation testing does this mechanically
+   for every line a branch changed ([toolchain.md](toolchain.md) says where
+   it runs); every mutant it leaves alive is killed by a test or explained
+   in the PR body.
 
 4. **A test that enforces a rule must see everything the rule covers.** A
    boundary or invariant test enforces its rule only where it happens to

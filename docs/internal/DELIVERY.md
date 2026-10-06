@@ -288,6 +288,28 @@ is born in a spec session, is _Proposed_ while the feature is `feature:spec`,
 _Accepted — not yet implemented_ while the feature is open, and _Accepted_
 when it closes. See [adr/README.md](adr/README.md).
 
+## Moving the agent kit to another project
+
+The agents (`.claude/agents/`), skills (`.claude/skills/`) and
+`delivery.md` and `testing.md` hold no fact about this project. They rely on
+a fixed layout:
+
+- `docs/internal/agent-rules/`: the rules; agents read every file in it.
+  `toolchain.md` holds the commands, the slow lane and the project-only
+  checks. The other files are this project's own rules.
+- `docs/internal/adr/` with a `README.md` index, and
+  `docs/internal/templates/` with `feature.md` and `task.md`.
+- `.agents/scripts/`: `worktree.sh`, `review-inputs.sh`, `merge-pr.sh`,
+  `delivery-stats.mjs` and `budget-guard.mjs`. `worktree.sh` and
+  `ensure-pnpm.sh` are this project's (they install its dependencies); the
+  others are not.
+- `.github/workflows/issue-state.yml` and the labels in `.github/labels.json`.
+
+To move it: copy the agents, skills, scripts, workflow, labels,
+`delivery.md`, `testing.md` and the templates; write the new project's
+`toolchain.md`, `always-in-scope.md` and its own rules; and rewrite
+`worktree.sh` for its package manager.
+
 ## Pointers
 
 - Rules: [agent-rules/delivery.md](agent-rules/delivery.md),

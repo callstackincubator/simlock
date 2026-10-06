@@ -1,19 +1,16 @@
 # Agent rules: delivery
 
-Rules for how work enters and leaves this repo. GitHub Issues is both the
+How work enters and leaves this repo. GitHub Issues is both the
 specification and the queue: an issue's body is the spec an agent builds
-against, and its label is the only signal that tells an agent whether it may
-act. These rules are binding in the same way the other files here are — an
-agent that picks up an issue it was not entitled to, or that implements from
-a comment thread instead of the body, has made an error even if the code is
-good.
+against, and its label alone tells an agent whether it may act. Picking up
+an issue you were not entitled to, or building from a comment thread instead
+of the body, is an error even when the code is good.
 
 ## Kinds and labels
 
-Every issue carries exactly one label of the form `<kind>:<state>`. The
-prefix is the kind; there is no separate kind label. An issue with zero or
-two such labels is in an invalid state and must be corrected before anything
-else happens to it.
+Every issue carries exactly one label of the form `<kind>:<state>`; the
+prefix is the kind. An issue with zero or two such labels is invalid: correct
+it before anything else happens to it.
 
 | Label              | Set by                              | Meaning                                                   |
 | ------------------ | ----------------------------------- | --------------------------------------------------------- |
@@ -33,8 +30,8 @@ else happens to it.
 
 Two labels sit outside that scheme. `flaky-test` marks a bug that names a
 test failing without a code change (testing rule 5). `needs-hardware` marks
-a pull request parked because a Done when line needs a real simulator or
-emulator run that has not happened (rule 16).
+a pull request parked because a Done when line needs a slow-lane run that
+has not happened (rule 16).
 
 Transitions per kind:
 
@@ -57,23 +54,20 @@ is open, done means closed as completed.
 ## Rules
 
 1. **An agent acts only on `bug:triage`, `bug:ready`, `feature:ready`, and
-   `task:ready`.** Nothing else is work. A `request:new` or `bug:new` issue
-   is a claim from outside that a maintainer has not yet looked at; a
-   `feature:spec` or `task:draft` issue is a spec that is not finished. Agents
-   do not label their way into work: only a maintainer, or the automation a
-   maintainer configured, moves an issue to a state an agent may act on.
-   One delegation follows from `feature:ready`: the maintainer has accepted
-   the business sections and every ADR the feature links, and that is the
-   approval for the rest. An agent delivering it may write the feature's
-   task specs, split it, and tick each task's approval box, then deliver
-   the tasks as they turn ready. A new decision that needs an ADR, or a
-   comment that would change the spec, is not covered: the agent stops and
-   hands off.
+   `task:ready`.** Nothing else is work. Agents never label their way into
+   work: only a maintainer, or automation a maintainer configured, moves an
+   issue to a state an agent may act on.
+   `feature:ready` delegates one thing: the maintainer accepted the business
+   sections and every ADR the feature links, and that approves the rest. An
+   agent delivering it may write the task specs, split the feature, tick
+   each task's approval box, and deliver the tasks as they turn ready. A new
+   decision that needs an ADR, or a comment that would change the spec, is
+   not covered: the agent stops and hands off.
 
 2. **The assignee is the claim, and a handoff is how a claim is released.**
    Before doing anything on an issue an agent assigns itself, and it never
-   touches an issue that already has an assignee. This is the one
-   cross-agent lock in the model; there is no other. An agent that stops
+   touches an issue that already has an assignee. This is the only
+   cross-agent lock. An agent that stops
    before the PR is merged unassigns itself and leaves exactly one comment
    headed `## Handoff` with four sections: *Done* (what is on the branch and
    how it was verified), *Not done* (what remains, in the spec's own terms),
@@ -147,8 +141,8 @@ is open, done means closed as completed.
    these sections: *Reproduction*, *Root cause* (with file and line),
    *Simplest fix*, *Alternatives rejected* (at most three, one line each),
    *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
-   (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
-   something is missing); for a gap the test's expectation is a proposal
+   (the code does the wrong thing) or a gap (nothing is wrong and something
+   is missing); for a gap the test's expectation is a proposal
    and the report says so; `bug:ready` on a gap accepts that proposal. A
    separate problem found on the way is opened as
    its own `bug:new` issue and listed under Side findings, not described in
@@ -179,10 +173,8 @@ is open, done means closed as completed.
 11. **The branch is named from the issue, and only from the issue.** Work on
     issue `<n>` of kind `<kind>` happens on `<kind>/<n>` — `task/118`,
     `bug/79`, `feature/88` — and a bug's reproduction lives on
-    `bug/<n>-repro`. No slug, no author prefix, no date. Given an issue you
-    can name its branch without looking; given a branch you can name its
-    issue by reading the second path segment. A PR from such a branch must
-    close that issue and no other.
+    `bug/<n>-repro`. No slug, no author prefix, no date. A PR from such a
+    branch closes that issue and no other.
 
 12. **Everything an agent writes on an issue or a PR is short and plain.**
     Lead with the conclusion. Short sentences, common words, no filler, no
@@ -235,9 +227,9 @@ is open, done means closed as completed.
     does the diff break a rule in this directory. It works in its own
     worktree and proves a claim with the affected test file only. It may
     break code to see what stays green (testing rules 2 and 3) at most three
-    times, on its riskiest claims, and restores the tree afterwards. It does
-    not run `pnpm check`, `pnpm mutate`, the whole fast e2e suite, the
-    console lane or the slow lane: the git hooks and CI run those.
+    times, on its riskiest claims, and restores the tree afterwards. It runs
+    none of the checks [toolchain.md](toolchain.md) leaves to the hooks and
+    CI, and never the slow lane.
     Each review returns findings, one per defect: a claim, the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
     finding is blocking when it breaks behaviour, leaves wrong state, or
@@ -269,23 +261,23 @@ is open, done means closed as completed.
     `gh pr merge` themselves. The script merges only a ready PR with no
     `needs-hardware` label, a `## Review` section and no "spec needs" line,
     green CI, and no conflict. Before calling it the agent also checks what
-    the script cannot read: no blocking finding is open, and every mutant
-    `pnpm mutate` left alive is explained in the PR body. Anything short of
+    the script cannot read: no blocking finding is open, and every surviving
+    mutant is explained in the PR body. Anything short of
     that parks the issue with a handoff and leaves the PR for the
     maintainer.
 
-16. **Real devices run one lane at a time, through the script.** The slow
-    e2e lane starts real simulators and emulators on a shared machine, and
-    two lanes at once produce timeouts that look like bugs. Agents run it
-    only through `scripts/slow-e2e.sh`, which holds a machine-wide lock,
-    runs detached so no tool time limit kills it halfway, and logs to a
-    file. It runs once per PR, on the commit the last review round passed
+16. **The slow lane runs one at a time, through its script.** The slow
+    lane is the set of tests that need real hardware on a shared machine;
+    two runs at once produce timeouts that look like bugs. Agents run it
+    only through the script [toolchain.md](toolchain.md) names, which holds
+    a machine-wide lock, runs detached so no tool time limit kills it
+    halfway, and logs to a file. It runs once per PR, on the commit the last review round passed
     (no blocking finding open), so review fixes do not each cost a lane run.
     A failure gets one fix run, then the lane and the code review run again
     on the new commit. With a person present the agent asks once per
     delivery run, before the first lane, and that answer covers every PR in
     the run. Unattended, it runs when the lock is free; when
-    the lock stays busy or the machine has no devices, the PR gets
+    the lock stays busy or the machine cannot run it, the PR gets
     `needs-hardware` and waits for the maintainer.
 
 ## Procedures

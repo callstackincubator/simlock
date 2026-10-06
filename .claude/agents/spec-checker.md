@@ -61,18 +61,17 @@ Report a finding for each of these, and nothing else:
 2. **unverifiable.** A Done when line or Completion condition no reviewer
    could check from the diff, the suite, or a named command.
 3. **failure-mode.** A way the change can fail that no line answers and no
-   rule decides: a worker or daemon that does not answer, a restart midway,
+   rule decides: a remote process that does not answer, a restart midway,
    input out of bounds, an empty list, two callers at once, a wait with no
-   budget (architecture rule 11), an exit that leaves a subject in no named
-   state (architecture rule 12). A bound with no number is one.
-4. **overlap.** Two tasks that touch the same file, or that both change a
-   contract shape (each shape change bumps `DAEMON_PROTOCOL_VERSION` by
-   one), with neither under the other's Depends on. Two agents
-   editing the same lines in parallel is a merge conflict the second one
-   resolves blind.
-5. **hardware.** A Done when line that needs a real simulator or emulator
-   but does not say so in its own words ("on a Mac with an iOS runtime:
-   ..."), or does not name the slow-lane test that proves it.
+   time budget, an exit that leaves a subject in no named state. A bound
+   with no number is one.
+4. **overlap.** Two tasks that touch the same file, or that overlap by a
+   project check in `toolchain.md`, with neither under the other's Depends
+   on. Two agents editing the same lines in parallel is a merge conflict the
+   second one resolves blind.
+5. **hardware.** A Done when line that needs the slow lane but does not
+   say so the way `toolchain.md` asks, or names no slow-lane test that
+   proves it.
 6. **undefined.** A term a grammar, parser, filter or match rule depends on
    that the body uses but never defines with examples: "bare version",
    "exact match", "a valid name". Two readers would build two rules from
