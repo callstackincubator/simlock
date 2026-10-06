@@ -15,8 +15,9 @@ const execFileAsync = promisify(execFile);
  * The warm pool on real devices: a target boots a real simulator and a real emulator ahead of any
  * lease, and with the pool off a released device of each platform ends shut down. The fast lane
  * proves what the pool decides against fake drivers; only a real `simctl` and a real emulator can
- * prove that the create-and-boot path works end to end and that the Android snapshot restore
- * followed by the pool's shutdown leaves an emulator that boots cleanly next time.
+ * prove that the create-and-boot path works end to end, that a released Android emulator comes
+ * back ready from its snapshot, and that with the pool off a released device of each platform ends
+ * shut down and is the device the next lease boots.
  *
  * Run only through `scripts/slow-e2e.sh e2e/slow-warm-pool.test.ts`, never in CI.
  */
@@ -166,8 +167,11 @@ interface Lane {
   readonly targets: Record<Platform, Target>;
 }
 
-/** A real-driver daemon whose pool targets one device of the newest runtime of each platform. */
-async function warmDaemon(): Promise<Lane> {
+/**
+ * A real-driver daemon whose pool targets one device of the newest runtime of each platform; with
+ * `enabled: false` the pool is off from the first start, so no device exists until a lease asks.
+ */
+async function warmDaemon(options: { readonly enabled?: boolean } = {}): Promise<Lane> {
   await sweepStaleDeviceSets();
   const env = await withDaemon({ driver: "real" });
   const adbServerPort = env.adbServerPort;
@@ -187,6 +191,7 @@ async function warmDaemon(): Promise<Lane> {
   await writeWarmPool(env, {
     maxConcurrentBoots: 2,
     targets: [targets.ios, targets.android],
+    ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
   });
   return { adbServerPort, deviceSet: iosDeviceSet(env.home), env, targets };
 }
@@ -441,11 +446,11 @@ describe(
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
-        const { adbServerPort, deviceSet, env, targets } = await warmDaemon();
+        // The pool is off from the start, so the only device of each kind is the one the first lease
+        // creates: once released it is the only shut-down device of its kind, and the planner has no
+        // other to boot on the next lease.
+        const { adbServerPort, deviceSet, env, targets } = await warmDaemon({ enabled: false });
         try {
-          await untilBothReady(env);
-          await writeWarmPool(env, { enabled: false });
-
           const first = {
             android: await lease(env, targets.android, "cold-android"),
             ios: await lease(env, targets.ios, "cold-ios"),
@@ -479,14 +484,16 @@ describe(
           expect(await onlineEmulators(adbServerPort), "no emulator came back online").toEqual([]);
 
           // The next boot is clean: each lease waits on a boot, is granted, and its device really is running.
-          // Which shut-down device of the kind a lease boots is the daemon's choice: any of them serves.
-          const shutdownBefore = (await devices(env)).filter((row) => row.state === "shutdown");
-          expect(
-            shutdownBefore.map((row) => row.id),
-            "the released devices are shut down before the second leases",
-          ).toEqual(
-            expect.arrayContaining([first.ios.grant.device.id, first.android.grant.device.id]),
-          );
+          // Each platform has exactly one device, the released one, so the next lease can only boot it.
+          const before = await devices(env);
+          for (const platform of ["ios", "android"] as const) {
+            expect(
+              before
+                .filter((row) => row.spec.platform === platform)
+                .map((row) => [row.id, row.state]),
+              `${platform}: the released device is the only device and it is shut down`,
+            ).toEqual([[first[platform].grant.device.id, "shutdown"]]);
+          }
           const second = {
             android: await lease(env, targets.android, "again-android"),
             ios: await lease(env, targets.ios, "again-ios"),
@@ -511,10 +518,8 @@ describe(
             ).not.toMatchObject({ source: "warm" });
             expect(
               second[platform].grant.device.id,
-              `${platform}: the second lease boots a device that was shut down`,
-            ).toBeOneOf(
-              shutdownBefore.filter((row) => row.spec.platform === platform).map((row) => row.id),
-            );
+              `${platform}: the second lease boots the device the first one released`,
+            ).toBe(first[platform].grant.device.id);
           }
           const rows = await devices(env);
           for (const { grant } of [second.ios, second.android]) {
