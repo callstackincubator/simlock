@@ -528,6 +528,60 @@ describe("Registry", () => {
     expect(lease.id).toBe("lse_lease");
   });
 
+  it("leaves a request already settled as it was when a lease is written for it", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "x" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLeaseRequest({
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    await registry.settleLeaseRequest("req_1", {
+      failure: { code: "INTERNAL", message: "gone" },
+      state: "failed",
+    });
+
+    await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent-1",
+      request: {
+        environment: {},
+        id: "req_1",
+        timing: {
+          estimatedBootMs: 0,
+          estimatedProvisionMs: 0,
+          estimatedReadyMs: 0,
+          estimatedReclaimMs: 0,
+        },
+      },
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+      ttlMs: 60_000,
+    });
+
+    expect(registry.snapshot.leases).toHaveLength(1);
+    expect(registry.leaseRequests()).toMatchObject([
+      { failure: { code: "INTERNAL", message: "gone" }, id: "req_1", state: "failed" },
+    ]);
+  });
+
   it("enters quarantine from reclaiming, tracking attempts and the next retry deadline", async () => {
     const clock = new FakeClock(1_000);
     const registry = await Registry.load({
