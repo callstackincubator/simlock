@@ -581,7 +581,10 @@ describe("warm pool converger", () => {
 
   it("does not boot back a device left shut down while an operator reset holds acquisition closed", async () => {
     let closed = true;
-    const rig = harness([device("down", "shutdown", 1_000)], { maintenance: () => closed });
+    // The shut-down device is not the first in the registry: its mark is read by its own id.
+    const rig = harness([device("busy", "leased", 1_000), device("down", "shutdown", 1_000)], {
+      maintenance: () => closed,
+    });
 
     await rig.pool.pass();
     closed = false;
