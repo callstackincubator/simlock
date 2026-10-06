@@ -563,6 +563,18 @@ describe("startDaemon wires core and leasing together", () => {
     expect(events.find((event) => event.event === "queue.changed")?.module).toBe("wait-queue");
   });
 
+  it("runs doctor's startup pass on the startup read before core's device steps announce the capacity figures", async () => {
+    const { directory } = await start();
+
+    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+
+    expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
+    expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
+  });
+
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
