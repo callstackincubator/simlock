@@ -149,6 +149,7 @@ export class LeaseLifecycle {
    * deadline had passed and `lease.released` otherwise, is emitted after the commit and before the
    * device's. Nothing is left `reclaiming`: there is nothing to wipe.
    */
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
   async endForMissingDevice(
     leaseId: string,
     reason: "expired" | "device-lost",

@@ -35,6 +35,7 @@ export interface LeaseReconcilerOptions {
 export class LeaseReconciler {
   constructor(private readonly options: LeaseReconcilerOptions) {}
 
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseStartup's reconciler port.
   async run(read: StartupRead): Promise<void> {
     const { devices, leases } = this.options.registry.snapshot;
     const now = this.options.clock.now();

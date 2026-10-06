@@ -526,6 +526,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * `announceLeaseEnd` runs once the write has committed and before `device.deleted` is emitted,
    * so the lease's own fact precedes the device's. The registry never names a lease event itself.
    */
+  // fallow-ignore-next-line unused-class-member -- called through LeaseLifecycle's registry port.
   async endLeaseAndMarkDeviceMissing(
     leaseId: string,
     initiator: string,
