@@ -21,7 +21,7 @@ export interface SpentDeviceDeletion {
 
 /** Re-arms retry timers for devices still `quarantined` at startup, from persisted state. */
 export interface QuarantineRestorer {
-  restore(): void;
+  restore(include: (device: DeviceRecord) => boolean): void;
 }
 
 /** Read-only operation claim view used to avoid an in-flight device operation. */
@@ -48,18 +48,25 @@ export interface StartupConvergerOptions {
  * convergence stops the whole daemon -- costing the healthy platform for a root the other one
  * rejected, which is the opposite of the per-platform fail-closed behaviour discovery
  * promises. `simlock doctor` reports the rejection; the inventory waits for the driver to
- * come back.
+ * come back. That includes a quarantined device's retry timer: a retry already due would drive
+ * a driver the read just found failing or hung.
  *
- * Only the device steps live here. Settling the requests a restart left open and restoring
- * every lease's expiry timer are leasing's, and the daemon runs them first (ADR 0018 §1).
+ * A device a daemon start left `reclaiming` with its wipe put off, because it could not read the
+ * device's platform (ADR 0019 §2), is recovered here by the full reclaim once a start reads that
+ * platform. Any other interrupted reclaim is only shut down.
+ *
+ * Only the device steps live here. Settling the requests a restart left open, ending the leases
+ * whose device is not running and restoring the expiry timers of the leases left are leasing's,
+ * and the daemon runs them first (ADR 0018 §1, ADR 0019 §1).
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
   async converge(read: StartupRead): Promise<void> {
     // A `quarantined` device already finished its release-time reclaim, so re-arming its retry
-    // timer never races the reclaim recovery below.
-    this.options.quarantineRestore.restore();
+    // timer never races the reclaim recovery below. A device on a platform the read could not
+    // list is skipped: a retry that is already due would drive that platform's driver now.
+    this.options.quarantineRestore.restore((device) => read.isReadable(device.spec.platform));
     await this.#recoverInterruptedReclaims(read);
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.

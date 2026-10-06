@@ -135,11 +135,13 @@ export class QuarantineCoordinator {
   /**
    * Re-arms retry timers for devices still `quarantined` after a daemon
    * restart, using the persisted `quarantineNextRetryAt` (a retry already due
-   * fires immediately, same as `LeaseExpiryScheduler.restore`).
+   * fires immediately, same as `LeaseExpiryScheduler.restore`). `include` leaves out the devices
+   * a daemon start must not act on: a retry that is due drives the driver at once, and startup
+   * does not drive a platform it could not read (ADR 0019 §1 step 5).
    */
-  restore(): void {
+  restore(include: (device: DeviceRecord) => boolean = () => true): void {
     for (const device of this.options.registry.snapshot.devices) {
-      if (device.state !== "quarantined") continue;
+      if (device.state !== "quarantined" || !include(device)) continue;
       this.#arm(device.id, device.quarantineNextRetryAt ?? this.options.clock.now());
     }
   }

@@ -296,7 +296,7 @@ export function createCore(options: CoreOptions): Core {
         await reclaim.recoverInterrupted(device.id);
       },
     },
-    quarantineRestore: { restore: () => quarantine.restore() },
+    quarantineRestore: { restore: (include) => quarantine.restore(include) },
     registry,
     spentDeviceDeletion: {
       // A failed delete must not stop the daemon from starting: the device stays `shutdown`

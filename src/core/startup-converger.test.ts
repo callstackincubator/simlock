@@ -36,7 +36,16 @@ function createHarness(
       updateState(target.id, "shutdown");
     }),
   };
-  const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
+  const quarantined = new Set<string>();
+  const restored: string[] = [];
+  const quarantineRestore = {
+    restore: vi.fn((include: (target: DeviceRecord) => boolean) => {
+      order.push("quarantine-restore");
+      for (const target of devices) {
+        if (quarantined.has(target.id) && include(target)) restored.push(target.id);
+      }
+    }),
+  };
   const spentDeviceDeletion = {
     deleteSpent: vi.fn(async (target: DeviceRecord) => {
       order.push(`delete-spent:${target.id}`);
@@ -77,8 +86,10 @@ function createHarness(
     devices,
     leases,
     order,
+    quarantined,
     quarantineRestore,
     recovery,
+    restored,
     spentDeviceDeletion,
   };
 }
@@ -167,6 +178,17 @@ describe("StartupConverger", () => {
     );
     expect(harness.devices.find((item) => item.id === interrupted.id)?.state).toBe("reclaiming");
     expect(harness.devices.find((item) => item.id === excess.id)?.state).toBe("ready");
+  });
+
+  it("re-arms the retry of a quarantined device on a platform the read listed and none on a platform it could not list", async () => {
+    const listed = device("android-quarantined", "android", "quarantined", 1);
+    const unlisted = device("ios-quarantined", "ios", "quarantined", 2);
+    const harness = createHarness([listed, unlisted], [], new Set<Platform>(["ios"]));
+    harness.quarantined.add(listed.id).add(unlisted.id);
+
+    await harness.converger.converge(harness.read);
+
+    expect(harness.restored).toEqual(["android-quarantined"]);
   });
 
   it("is idempotent after recovery", async () => {
