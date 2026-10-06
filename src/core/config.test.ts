@@ -318,6 +318,13 @@ describe("loadConfig", () => {
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
     expect(config.warmPool.reserveRunning).toEqual({ android: 0, ios: 4 });
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ warmPool: { reserveRunning: { android: 0, ios: 0 } } }),
+    );
+    const zero = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(zero.warmPool.reserveRunning).toEqual({ android: 0, ios: 0 });
   });
 
   it.each(["ios", "android"] as const)(
@@ -333,7 +340,9 @@ describe("loadConfig", () => {
 
         await expect(
           loadConfig({ configPath, filesystem, systemStats: createStats() }),
-        ).rejects.toThrow(`warmPool.reserveRunning.${platform}`);
+        ).rejects.toThrow(
+          `Invalid config value for "warmPool.reserveRunning.${platform}": expected a non-negative integer`,
+        );
       }
     },
   );

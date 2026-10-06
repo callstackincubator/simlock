@@ -56,11 +56,13 @@ export function positiveInteger(value: unknown, path: string): number {
 }
 
 export function nonNegativeInteger(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+  // `Number.isInteger` is false for anything that is not a number.
+  const number = value as number;
+  if (!Number.isInteger(number) || number < 0) {
     throw invalidValue(path, "a non-negative integer");
   }
 
-  return value;
+  return number;
 }
 
 export function nonNegativeNumber(value: unknown, path: string): number {

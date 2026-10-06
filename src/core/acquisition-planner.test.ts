@@ -438,6 +438,17 @@ describe("AcquisitionPlanner", () => {
       if (result.kind === "provision") result.reservation.release();
     });
 
+    it("ignores a ready device under a boot claim no request owns, which is a boot already done, and provisions", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const done = device("done", "ready");
+      claims.tryClaim(done.id, "boot");
+
+      const result = plan(acquisitionPlanner, [done]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
     it("ignores a serving device under an eviction or a cleanup claim and provisions", () => {
       for (const operation of ["eviction", "cleanup"] as const) {
         const { claims, planner: acquisitionPlanner } = planner(roomy);

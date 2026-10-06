@@ -18,7 +18,7 @@ export interface DeviceOperationClaim {
    * The waiter this claim was taken for, absent when the warm pool took it. A request waits only
    * for a `boot` nobody owns, never for the one another request is making for itself.
    */
-  readonly owner?: string;
+  readonly owner?: string | undefined;
   release(): void;
 }
 
@@ -40,7 +40,7 @@ export class DeviceOperationClaims {
     const claim: DeviceOperationClaim = {
       deviceId,
       operation,
-      ...(owner === undefined ? {} : { owner }),
+      owner,
       release: () => {
         if (released) return;
         released = true;

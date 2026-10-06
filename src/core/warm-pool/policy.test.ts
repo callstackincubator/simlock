@@ -601,6 +601,19 @@ describe("warm pool policy", () => {
       ).toEqual([]);
     });
 
+    it("does not boot a recently released device into a global slot the other platform's reserve holds", () => {
+      const androidSpec = spec("Pixel 9", { osVersion: "36", platform: "android" });
+      const released = device("released", "shutdown", { endedAgo: minute });
+      const running = device("android-0", "ready", { endedAgo: minute, spec: androidSpec });
+      const reserve = { android: 1, ios: 1 };
+
+      // Global limit 3 with one running leaves two, and the two reserves hold both.
+      expect(evaluate(view([released, running], { limit: 3, reserve }))).toEqual([]);
+      expect(evaluate(view([released, running], { limit: 3 }))).toEqual([
+        { action: "boot", deviceId: "released", reason: "recently-released" },
+      ]);
+    });
+
     it("does not boot a recently released device into a slot the reserve holds", () => {
       const released = device("released", "shutdown", { endedAgo: minute });
       const running = idleIos(1);

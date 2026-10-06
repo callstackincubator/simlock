@@ -51,8 +51,8 @@ describe("DeviceOperationClaims", () => {
     claims.tryClaim("device-1", "boot", "waiter-1");
     claims.tryClaim("device-2", "boot");
 
-    expect(claims.claim("device-1")).toEqual({ kind: "boot", owner: "waiter-1" });
-    expect(claims.claim("device-2")).toEqual({ kind: "boot" });
+    expect(claims.claim("device-1")).toStrictEqual({ kind: "boot", owner: "waiter-1" });
+    expect(claims.claim("device-2")).toStrictEqual({ kind: "boot" });
     expect(claims.claim("device-3")).toBeUndefined();
   });
 
@@ -62,6 +62,6 @@ describe("DeviceOperationClaims", () => {
 
     expect(claims.claim("device-1")).toBeUndefined();
     expect(claims.tryClaim("device-1", "boot")).toBeDefined();
-    expect(claims.claim("device-1")).toEqual({ kind: "boot" });
+    expect(claims.claim("device-1")).toStrictEqual({ kind: "boot" });
   });
 });
