@@ -132,13 +132,14 @@ function reviewOf(body) {
   const spec = counts(section, "Spec");
   if (spec === null) return null;
   const code = counts(section, "Code");
+  const claims = counts(section, "Claims");
   const mutate = /Mutate: (\d+) mutants?, (\d+) alive/.exec(section);
 
   const rejected = [];
   const list = /^Rejected:[ \t]*$/m.exec(section);
   if (list !== null) {
     for (const line of section.slice(list.index).split("\n")) {
-      const item = /^- (?:(spec|code): )?(.+)$/.exec(line.trim());
+      const item = /^- (?:(spec|code|claims): )?(.+)$/.exec(line.trim());
       if (item !== null) rejected.push({ review: item[1] ?? "untagged", text: item[2] });
     }
   }
@@ -148,7 +149,9 @@ function reviewOf(body) {
     specFixed: spec.fixed,
     codeFound: code?.found ?? 0,
     codeFixed: code?.fixed ?? 0,
-    notes: spec.notes + (code?.notes ?? 0),
+    claimsFound: claims?.found ?? 0,
+    claimsFixed: claims?.fixed ?? 0,
+    notes: spec.notes + (code?.notes ?? 0) + (claims?.notes ?? 0),
     mutants: mutate === null ? 0 : Number(mutate[1]),
     alive: mutate === null ? 0 : Number(mutate[2]),
     secondRound: /Review: round 2/.test(body),
@@ -194,11 +197,11 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
   const lines = [
     `# Delivery stats, ${weekCount} weeks to ${new Date(end).toISOString().slice(0, 10)}`,
     "",
-    "Spec and code columns are confirmed-and-fixed / blocking raised (every finding raised, on PRs",
+    "Review columns are confirmed-and-fixed / blocking raised (every finding raised, on PRs",
     "from before the blocking/note split). Rejected = raised − fixed. Notes are never verified.",
     "",
-    "| Week from | Merged | Reviewed | Spec review | Code review | Notes | No fix | Round 2 | Mutants alive | Handoffs |",
-    "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: |",
+    "| Week from | Merged | Reviewed | Spec review | Code review | Claims review | Notes | No fix | Round 2 | Mutants alive | Handoffs |",
+    "| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |",
   ];
   for (const window of windows) {
     const merged = prs.filter((pr) => inWindow(pr.mergedAt, window));
@@ -207,8 +210,10 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
     lines.push(
       `| ${new Date(window.from).toISOString().slice(0, 10)} | ${merged.length} | ${reviews.length}` +
         ` | ${rate(sum("specFixed"), sum("specFound"))} | ${rate(sum("codeFixed"), sum("codeFound"))}` +
+        ` | ${rate(sum("claimsFixed"), sum("claimsFound"))}` +
         ` | ${sum("notes")}` +
-        ` | ${reviews.filter((r) => r.specFixed + r.codeFixed === 0).length} | ${sum("secondRound")}` +
+        ` | ${reviews.filter((r) => r.specFixed + r.codeFixed + r.claimsFixed === 0).length}` +
+        ` | ${sum("secondRound")}` +
         ` | ${sum("alive")}/${sum("mutants")}` +
         ` | ${handoffs.filter((h) => inWindow(h.createdAt, window)).length} |`,
     );
@@ -221,7 +226,7 @@ function report({ now, prs, handoffs, needsHardware }, weekCount) {
       (reviewOf(pr.body ?? "")?.rejected ?? []).map((r) => ({ ...r, pr: pr.number })),
     );
   lines.push("", `## Rejected findings this week (${rejected.length})`);
-  for (const review of ["spec", "code", "untagged"]) {
+  for (const review of ["spec", "code", "claims", "untagged"]) {
     const group = rejected.filter((r) => r.review === review);
     if (group.length === 0) continue;
     lines.push("", `### ${review} (${group.length})`, "");
