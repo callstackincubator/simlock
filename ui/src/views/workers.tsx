@@ -121,7 +121,7 @@ const BUSIEST_COLUMNS: readonly Column<WorkerView>[] = [
  * The five workers holding the most leases now, most first, and a link to the cards below for
  * the rest. Each card links to its worker's page.
  */
-function BusiestWorkers({ workers }: { readonly workers: readonly WorkerView[] }) {
+export function BusiestWorkers({ workers }: { readonly workers: readonly WorkerView[] }) {
   return (
     <Panel title="Busiest workers" description="By leases held now, most first.">
       <DataTable

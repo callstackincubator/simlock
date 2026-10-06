@@ -470,6 +470,20 @@ describe("WorkerRegistry", () => {
     });
   });
 
+  it("reports no leases for a worker that disconnects while it is starting, and lists no leases on its view", () => {
+    const { events, workers } = registry();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+    workers.disconnected("wrk_1");
+
+    expect(events.at(-1)).toMatchObject({
+      event: "worker.disconnected",
+      payload: { leaseCount: 0, workerId: "wrk_1" },
+    });
+    expect(Object.keys(workers.view("wrk_1") ?? {})).not.toContain("leases");
+  });
+
   it("says nothing when a view that is already disconnected disconnects again", () => {
     const { events, workers } = registry();
     workers.connected("wrk_1", undefined, undefined);
@@ -499,6 +513,18 @@ describe("WorkerRegistry", () => {
         event: "worker.removed",
         payload: { reason: "retention", workerId: "wrk_1" },
       });
+    });
+
+    it("forgets a worker that disconnected while starting, which has no leases on its view, once the retention window passes", async () => {
+      const { clock, workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+      workers.disconnected("wrk_1");
+
+      clock.advance(RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeUndefined();
     });
 
     it("never forgets a worker whose gateway-issued leases are still live, however long it has been gone", async () => {

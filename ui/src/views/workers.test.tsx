@@ -4,8 +4,18 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
 import { Loaded } from "../live/route-state";
 import { DeviceTable, WorkerDetail } from "./worker-detail";
+import { BusiestWorkers } from "./workers";
 import { WorkerFacts } from "./worker-facts";
-import { busiestWorkers, type WorkerView } from "./workers-model";
+import { attentionItems } from "./attention-model";
+import { deviceOfLease } from "./leases-model";
+import {
+  busiestWorkers,
+  deviceCounts,
+  leasesHeld,
+  stateEnteredAt,
+  type WorkerView,
+  workersStats,
+} from "./workers-model";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
 
@@ -169,6 +179,23 @@ describe("the busiest workers", () => {
   });
 
   describe("a worker that reports starting", () => {
+    const DEVICE = {
+      id: "dev_1",
+      mode: "full",
+      servesDefaultMode: true,
+      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+      state: "ready",
+    } as const;
+    const LEASE = {
+      deviceId: "dev_1",
+      grantedAt: NOW,
+      id: "l_0",
+      lastRenewedAt: NOW,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: NOW + 60_000,
+      ttlMs: 60_000,
+    };
     // A gateway's view of a starting worker: its health and host, and nothing else it reports.
     const starting: WorkerView = {
       connection: "connected",
@@ -188,6 +215,27 @@ describe("the busiest workers", () => {
       expect(shown).toContain("Devices, leases and capacity appear once startup finishes.");
       expect(shown).not.toContain("No devices.");
       expect(shown).not.toContain("0 leased");
+    });
+
+    it("counts no devices, leases or capacity for it, ranks it last by leases, and lists nothing that needs attention on it", () => {
+      const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
+
+      expect(deviceCounts(starting)).toBeUndefined();
+      expect(leasesHeld([starting, busy])).toBe(1);
+      expect(busiestWorkers([starting, busy]).map((entry) => entry.id)).toEqual([
+        "wrk_busy",
+        "wrk_1",
+      ]);
+      expect(workersStats([starting]).map((stat) => stat.value)).toEqual(["1", "0", "0", "0"]);
+      expect(attentionItems([starting])).toEqual([]);
+      expect(stateEnteredAt({ ...DEVICE, state: "leased" }, starting)).toBeUndefined();
+      expect(deviceOfLease(LEASE, [starting])).toBeUndefined();
+    });
+
+    it("the busiest table shows a dash for its leases", () => {
+      const html = renderToStaticMarkup(<BusiestWorkers workers={[starting]} />);
+
+      expect(text(html)).toContain("wrk_1 —");
     });
 
     it("the worker's card shows it as starting, with no device or capacity count", () => {

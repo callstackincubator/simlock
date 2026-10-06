@@ -2639,6 +2639,33 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     );
   });
 
+  it("prints a starting worker as starting, with its leases unknown rather than none", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  connection: "connected" as const,
+                  drained: true,
+                  health: "starting" as const,
+                  id: "wrk_1",
+                  lastSeenAt: 1,
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toBe(
+      "wrk_1: connected, starting, drained -- capacity unknown, leases unknown\n",
+    );
+  });
+
   it("prints each worker's installs in progress under it", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

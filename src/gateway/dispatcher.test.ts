@@ -474,6 +474,39 @@ describe("GatewayDispatcher", () => {
     );
   });
 
+  it("lists no device or lease for a worker that is starting, whether the session is an admin or the owner of a lease the gateway indexed on it, and answers worker.list with the view as it is", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const lease = {
+      ...leaseFixture("lease_1", "dev_1"),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    };
+    workers.refresh("wrk_1", {
+      devices: [deviceFixture("dev_1", "leased")],
+      health: "running",
+      leases: [lease],
+    });
+    const owner = session({ principal: "agent-1", role: "agent" });
+    await expect(dispatcher.dispatch("lease.list", {}, owner)).resolves.toEqual({
+      leases: [expect.objectContaining({ id: "wrk_1.lease_1" })],
+    });
+
+    workers.refresh("wrk_1", { health: "starting", host: GATEWAY_HOST });
+
+    await expect(dispatcher.dispatch("lease.list", {}, session())).resolves.toEqual({
+      leases: [],
+    });
+    await expect(dispatcher.dispatch("lease.list", {}, owner)).resolves.toEqual({ leases: [] });
+    await expect(dispatcher.dispatch("list.get", { kind: "devices" }, session())).resolves.toEqual(
+      [],
+    );
+    const { workers: views } = await dispatcher.dispatch("worker.list", {}, session());
+    expect(views).toHaveLength(1);
+    expect(views[0]).toMatchObject({ health: "starting", host: GATEWAY_HOST, id: "wrk_1" });
+    expect(Object.keys(views[0] ?? {})).not.toContain("leases");
+  });
+
   // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
   // of the session's own principal to each lease's `ownerId` -- a comparison that was false by
   // construction (see `#leaseList`'s own comment) and so, in practice, indistinguishable from

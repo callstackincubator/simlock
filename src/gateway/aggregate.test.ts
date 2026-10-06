@@ -264,6 +264,34 @@ describe("aggregateStatus", () => {
     expect(status.leases).toEqual([expect.objectContaining({ id: "lease_1", workerId: "wrk_a" })]);
   });
 
+  it("reports a starting worker's view as it is, with no devices, leases or capacity of its own, and sums capacity over the workers that report it", () => {
+    const starting: WorkerView = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      host: hostFixture(),
+      id: "wrk_a",
+      lastSeenAt: 1_000,
+    };
+    const status = aggregateStatus(
+      [
+        starting,
+        view({
+          capacity: capacity(1, 4),
+          devices: [deviceFixture("dev_1", "leased")],
+          id: "wrk_b",
+          leases: [leaseFixture("lease_1", "dev_1")],
+        }),
+      ],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    expect(status.devices).toEqual([expect.objectContaining({ id: "dev_1", workerId: "wrk_b" })]);
+    expect(status.leases).toEqual([expect.objectContaining({ id: "lease_1", workerId: "wrk_b" })]);
+    expect(status.capacity).toEqual(capacity(1, 4));
+    expect(status.workers?.[0]).toEqual(starting);
+  });
+
   it("reports the gateway's own queue depth and health, not any worker's", () => {
     const status = aggregateStatus([view({ health: "failed", id: "wrk_a", queueDepth: 7 })], {
       health: "starting",

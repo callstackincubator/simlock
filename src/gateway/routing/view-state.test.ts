@@ -45,6 +45,19 @@ describe("viewLoadKey", () => {
     for (const other of changed) expect(viewLoadKey(other)).not.toBe(base);
   });
 
+  it("gives a starting view, which has no devices, leases or capacity, a key of its own", () => {
+    const starting: WorkerView = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      id: "wrk_a",
+      lastSeenAt: 1_000,
+    };
+
+    expect(viewLoadKey(starting)).toBe('{"devices":[],"health":"starting","leases":[]}');
+    expect(viewLoadKey(starting)).not.toBe(viewLoadKey(view()));
+  });
+
   it("does not depend on the order the capacity fields were written in", () => {
     const base = view();
     const capacity = Object.fromEntries(
