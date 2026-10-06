@@ -1189,6 +1189,20 @@ describe("warm pool targets", () => {
     expect(rig.reservations.every((reservation) => reservation.released === 1)).toBe(true);
   });
 
+  it("asks for no pass of its own when the lifecycle declines a target's boot", async () => {
+    const rig = harness([ofKind("shut", "shutdown")], {
+      boot: async () => undefined,
+      targets: [iphone17],
+    });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.bootCalls).toEqual(["shut"]);
+    expect(rig.resolveCalls).toHaveLength(1);
+    expect(rig.kick).not.toHaveBeenCalled();
+  });
+
   it("reports and logs nothing, and names no device, before its first pass", () => {
     const rig = harness([ofKind("ready", "ready")], { targets: [iphone17] });
 

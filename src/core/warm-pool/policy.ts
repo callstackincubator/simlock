@@ -113,14 +113,17 @@ export interface WarmPolicyView {
 type Slots = { global: number; ios: number; android: number };
 
 /**
- * The one place the pool decides what to shut down and what to boot back. Pure: reads the view,
- * returns proposals in the order they are to run; the converger revalidates each before it acts.
+ * The one place the pool decides what to shut down, what to boot back and what to create for a
+ * target. Pure: reads the view, returns proposals in the order they are to run and the state of
+ * every target; the converger revalidates each proposal before it acts.
  *
  * The budget is the running limit minus every slot a leased, reclaiming, quarantined or reserved
  * device holds, which `RunningCapacity` already totals; a `ready` idle device is the only thing
  * that is shut down to bring it back under, and only an idle `shutdown` device is booted into a
  * slot that is free. The operator's `reserveRunning` takes slots off that budget for idle devices
- * only (see `reservedOf`).
+ * only (see `reservedOf`). Apart from the budget, an idle device that never served a lease and that
+ * no target keeps is shut down once it has been ready past `idle.shutdownAfterMs`
+ * (`neverLeasedIdle`).
  */
 export function evaluate(view: WarmPolicyView): WarmPlan {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));

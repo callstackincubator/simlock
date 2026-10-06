@@ -1134,9 +1134,9 @@ every slot a leased, reclaiming, quarantined or reserved device holds, per
 platform and globally. `WarmPool` subscribes to the bus (`daemon.started`,
 `device.reclaimed`, `lease.granted`, `capacity.changed` and the other
 facts that change the budget) and to a 30 s tick, runs one pass at a time, and
-acts by direct calls: the pure `policy.ts` returns shutdown and boot proposals,
-and each is revalidated (no lease, no operation claim) before
-`ManagedDeviceLifecycle` runs it. A boot holds a boot reservation, which counts
+acts by direct calls: the pure `policy.ts` returns shutdown, boot and creation
+proposals, and each is revalidated (no lease, no operation claim) before
+`ManagedDeviceLifecycle` (or, for a creation, `DeviceProvisioner`) runs it. A boot holds a boot reservation, which counts
 as one running slot, until its `ready` commit. A pass proposes no budget
 shutdown while a booted device is on its way to a lease, because that device
 counts as running and as reserved until the grant, holds back the free slots a
