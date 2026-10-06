@@ -20,11 +20,15 @@ one, the one thing to do, and anything pasted from an earlier report. Never
 pass a model. Never invoke the stage skills from here: a skill waits for an
 earlier run of itself, so two implements would run one after the other.
 
+Every stage is a new agent. Never send a finished agent its next stage
+with SendMessage: it carries its whole context into every turn, which costs
+up to ten times what a new agent does. SendMessage is only for a question
+to a running agent, or for a report block that is missing.
+
 You are woken when an agent finishes; its report is the result. Never poll,
 sleep or read an agent's transcript while it runs. A report without its
-block, or with narration in its place, is not a result: start the same
-agent again with the same prompt plus "the last run ended without its
-report block; report on the work already done".
+block, or with narration in its place, is not a result: ask that agent for
+its report block on the work already done.
 
 **Progress.** Rename the session with
 `mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`; load it
@@ -97,7 +101,9 @@ it under Blocked on.
 ## 3. Deliver one issue
 
 Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
-`<kind>/<N>`.
+`<kind>/<N>`. If it already has a PR, read the PR body's `### Status`
+section and the latest `## Handoff` comment, and go on from the next stage
+they name; never build again or restart review at round 1.
 
 1. **Implement**: `implementer` with the issue, the branch and
    `mode build`. `spec needs` under Open: park (step 6).
@@ -106,13 +112,18 @@ Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
    - Fix lines: one `implementer` run in mode `fix` with the Fix lines
      pasted, then the next round: `reviewer` with `round <n+1>`, the
      report's Rerun value, `previous <Commit>`, and the Fix lines pasted.
-   - `Rerun: claims-only`: the same, with `claims-only` as the Rerun value;
-     at most two such rounds per PR. Claims Fix lines still open after the
-     second: park.
+   - `Rerun: claims-only`: the same, with `claims-only` as the Rerun value,
+     once per PR. Claims Fix lines it still reports: one more `implementer`
+     fix run, no review; list them in the PR body's `## Review` section as
+     fixed unreviewed.
+   - The gate refuses a conflict: an `implementer` fix run that merges the
+     base branch, then `reviewer` with the same round, `previous <Commit>`
+     and `merge`.
    - Out of scope lines: open one `bug:new` issue each, naming the PR. They
      do not block it.
    - Spec needs, or a blocking finding reported open with `Rerun: none`:
-     park.
+     park. When a person answers a Spec needs, write the answer into the
+     issue body (delivery rule 3) before the fix run.
    - No Fix lines, and implement reported Hardware lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`: one `implementer` fix
@@ -172,16 +183,21 @@ Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
    .agents/scripts/merge-pr.sh <M>
    ```
 
-   Exit 0: merged. Any other exit: park with the line it printed. A
-   surviving mutant implement could not explain also parks: the gate does
-   not read the report.
+   Exit 0: merged. A conflict: the merge fix in step 3. Red CI: one
+   `implementer` fix run with the failing test titles and the run id, then
+   the gate again. Any other exit, or red CI a second time: park with the
+   line it printed. A surviving mutant implement could not explain also
+   parks: the gate does not read the report.
 
-After every stage, update the PR body's status line so any session can
-resume from GitHub alone:
+After every stage, update the PR body's `### Status` section so any session
+can resume from GitHub alone: the status line, then the Fix lines the next
+stage works on, if any.
 
 ```
 ### Status
-Implement: done (5/5 green)  Review: round 2, 0 open  Mutate: 0 alive  Hardware: n/a  Gate: merged
+Implement: done (5/5 green)  Review: round 2, 2 open  Mutate: 0 alive  Hardware: n/a  Gate: not run
+Next: implement fix, then review round 3
+- code: src/x.ts:12 ... Class: ...
 ```
 
 ## 4. Walk a feature's tasks

@@ -17,7 +17,8 @@ The reviewers are the agents `spec-reviewer`, `code-reviewer` and
 
 Arguments: a PR number; for round 2 and later, also `round <n>`, the reviews
 to run (`Rerun:` of the last report), `previous <sha>` (the `Commit:` of the
-last report) and the last report's Fix lines. With a branch instead of a PR,
+last report), the last report's Fix lines, and `merge` when the change since
+`previous` is a merge of the base branch. With a branch instead of a PR,
 find its PR with `gh pr list --head <branch>`. A PR that is not a delivery
 PR (a person's PR the maintainer asked about): post the findings as one
 comment at the end (step 7) and push nothing.
@@ -236,6 +237,9 @@ line, `path:line — true` or `— finding <n>`:
 3. For each function, type, module or behaviour the diff changes: its doc
    comment, and every line in the docs that names it (search for its name
    and for the plain words that describe it).
+4. Every comment in each file the diff touches, not only on changed lines.
+
+Find them all now: a false claim this round misses costs a later round.
 
 A claim is false when the code at this commit contradicts it: a name or
 path that no longer exists, a behaviour, order, owner, default or limit that
@@ -267,7 +271,8 @@ file at a time with the commands in `toolchain.md`. Then:
 
 - **Confirmed**: a Fix line, written to make sense without the PR open:
   `<review>: path:line what is wrong. Class: <class>`. `<review>` is
-  `spec`, `code` or `claims`.
+  `spec`, `code` or `claims`. A finding whose fix changes only a comment, a
+  doc, a test title or a message is `claims`, whichever review raised it.
 - **Rejected**: `<review>: <claim> — <why it is wrong>`. The weekly delivery
   stats count rejections per review from that tag.
 - **True but not blocking** (breaks no behaviour, leaves no wrong state,
@@ -296,16 +301,18 @@ user-visible behaviour.
 
 ## 5. Decide what runs again
 
-- A confirmed spec or code finding reruns the review that raised it next
-  round. The claims review runs every round.
-- After round 2, a third round runs only when every confirmed spec or code
-  finding is a test that cannot fail for the reason its title gives.
-- After the last round, a confirmed spec or code finding is open:
-  `Rerun: none`, and the orchestrator parks the issue.
-- Claims findings never park and never count toward the cap. When the only
-  confirmed findings after the last round are claims findings:
-  `Rerun: claims-only`. The orchestrator runs at most two claims-only
-  rounds.
+Count the confirmed spec and code findings of this round (`c`) and of the
+last one (`p`: the `spec:` and `code:` lines in `previous-fixes.md`).
+
+- `c` is 0 and claims findings are confirmed: `Rerun: claims-only`.
+- `c` is above 0, and this is round 1, or `c` is below `p` and this is not
+  round 5: the reviews that raised them run next round, with the claims
+  review.
+- Otherwise, with `c` above 0: `Rerun: none`. The findings are open and the
+  orchestrator parks the issue.
+
+A round that reviews a merge of the base branch is reviewed as a fix and
+keeps the previous round's number and count.
 
 ## 6. Report
 

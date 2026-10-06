@@ -40,6 +40,10 @@ approach); the latest `## Handoff` comment (its Findings are facts). Never
 the rest of the comment thread. Reread the files under Rules in play before
 touching the code they cover.
 
+Read code narrowly: find what you need with `grep -n`, then read only those
+lines. Never print a whole file to skim it: everything you read stays in
+your context and is paid for again on every later turn.
+
 **A small gap is an assumption, not a stop** (rule 3). When the body, the
 rules, the accepted ADRs and `always-in-scope.md` leave a small question
 open (a wording, an order, a bound the spec implies but does not number,
@@ -84,7 +88,9 @@ states the failing count: `3 failing -> 1 failing`.
   check listed under "Checks agents never run", nor a tool behind it, from
   any path. A type or lint error shows in the commit hook's output.
 - Push once per step, not after every commit, in the background, and read
-  its output when it ends. Never pass `--no-verify` or `-n`.
+  its output when it ends. The last push before your report runs in the
+  foreground: never end your turn while a push runs. Never pass
+  `--no-verify` or `-n`.
 - Never wait on CI: no polling `gh pr checks`, no `gh run watch`, no
   `sleep` loops. Read `gh pr checks <M>` at most once, before the report.
 - Never use `git stash`: all worktrees share one stash list. Commit instead.
@@ -144,7 +150,9 @@ Never rerun the whole suite to decide. Never skip, disable or loosen a test.
 
 **Mutants.** The push output lists every mutant left alive. Kill each with
 a test, or delete the line if it does nothing. A mutant that changes nothing
-observable (equivalent) goes in the report with the reason.
+observable (equivalent) goes in the report and the PR body with the reason,
+named by file and the code it changes, not by line number: lines move with
+every fix.
 
 **Slow lane.** List every Done when line that needs the slow lane
 (`toolchain.md`) under Hardware. Do not run it: the orchestrator does.

@@ -22,6 +22,9 @@ Arguments: an issue number, and a scope:
 - `feature`: a feature with sub-issues, read with every open sub-issue.
   Only contradiction between tasks, overlap, and whether the tasks together
   deliver every Completion condition.
+- `closure`: one body and a list of finding lines a spec session fixed. Only
+  whether the body as posted closes each one; read only what that needs,
+  and skip steps 2 and 3.
 
 No scope given: `feature` for an issue with sub-issues, else `task`.
 
@@ -101,8 +104,10 @@ what goes wrong because of it.
    quote its output as evidence.
 7. **overlap** (`feature` scope). Two tasks that touch the same file, or
    overlap by a project check in `toolchain.md`, with neither under the
-   other's Depends on. Two agents editing the same lines at once is a merge
-   conflict the second one resolves blind.
+   other's Depends on. Check every open task of other features too
+   (`gh issue list --search 'label:task:draft,task:ready'`). Two agents
+   editing the same lines at once is a merge conflict the second one
+   resolves blind.
 8. **hardware.** A Done when line that needs the slow lane but does not say
    so the way `toolchain.md` asks, or names no slow-lane test that proves
    it.
@@ -135,3 +140,11 @@ Verdict: ready | fix first
 In `feature` scope, the categories it does not check are `n/a`. With no
 findings, the finding lines are absent, `Findings: 0`, and the verdict is
 `ready`.
+
+In `closure` scope, the block is instead:
+
+```
+Issue: #N  Scope: closure  Open: n of m
+- closed | open: <the finding, quoted short> — <for open: what the body still leaves wrong>
+Verdict: ready | fix first
+```
