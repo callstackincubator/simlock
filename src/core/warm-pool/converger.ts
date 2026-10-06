@@ -161,7 +161,6 @@ export class WarmPool {
   }
 
   /** Every target as the last pass left it: how many are ready, and why not more. */
-  // fallow-ignore-next-line unused-class-member -- the status report reads it (#371); until then a test does.
   targets(): readonly TargetReport[] {
     return this.#reports;
   }
@@ -282,7 +281,7 @@ export class WarmPool {
           const decision = this.options.capacity.canBoot(capacityDevice(device), everyDevice);
           return decision.ok ? undefined : decision.reason;
         },
-        provision: (spec) => {
+        create: (spec) => {
           const decision = this.options.capacity.canProvision(
             plannedCapacityDevice(spec),
             everyDevice,

@@ -339,21 +339,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      // The one place a request with no mode gets the worker's default (ADR 0007 §2).
-      const mode = request.mode ?? this.#defaultMode(request.platform);
-      const range = requestedRange(request);
-      const target =
-        range === undefined
-          ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
-          : await this.#resolveRanged(request, mode, range);
-      // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
-      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, {
-        ...options,
-        allowDownload: options.allowDownload === true && range === undefined,
-      });
-      waiter.spec = checkedSpec(resolved, request, mode);
-      waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
-      waiter.classOf = target.classOf;
+      const resolved = await this.#resolveSpec(driver, request, options, (progress) =>
+        this.options.queue.notifyProgress(waiter, progress),
+      );
+      waiter.spec = resolved.spec;
+      waiter.requirement = resolved.requirement;
+      waiter.classOf = resolved.classOf;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -362,6 +353,42 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
+  }
+
+  /**
+   * The one place a request becomes the spec its device will have: the mode defaulted (ADR 0007
+   * §2), a class or a range settled against the catalog (ADR 0015 §5), the runtime resolved by the
+   * driver, and a missing one installed when the request may download. `resolve` runs it with
+   * downloads off for the warm pool's targets, so a target and a request cannot disagree.
+   */
+  async #resolveSpec(
+    driver: Driver,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    onProgress: (progress: DownloadingProgress) => void,
+  ): Promise<{
+    readonly spec: DeviceSpec;
+    readonly requirement: DeviceRequirement;
+    readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
+  }> {
+    // The one place a request with no mode gets the worker's default (ADR 0007 §2).
+    const mode = request.mode ?? this.#defaultMode(request.platform);
+    const range = requestedRange(request);
+    const target =
+      range === undefined
+        ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
+        : await this.#resolveRanged(request, mode, range);
+    // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
+    const resolved = await this.#resolveOrInstall(onProgress, driver, target.exact, {
+      ...options,
+      allowDownload: options.allowDownload === true && range === undefined,
+    });
+    const spec = checkedSpec(resolved, request, mode);
+    return {
+      classOf: target.classOf,
+      requirement: target.requirement ?? exactRequirement(spec),
+      spec,
+    };
   }
 
   /**
@@ -478,7 +505,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * sent once per whole number.
    */
   async #resolveOrInstall(
-    waiter: AcquisitionWaiter,
+    onProgress: (progress: DownloadingProgress) => void,
     driver: Driver,
     request: ExactDeviceRequest,
     options: LeaseRequestOptions,
@@ -502,7 +529,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           const next = downloadingProgress(component, progress);
           if (lastSent !== undefined && sameDownloadingProgress(lastSent, next)) return;
           lastSent = next;
-          this.options.queue.notifyProgress(waiter, next);
+          onProgress(next);
         },
         platform: request.platform,
         requesterId: options.requesterId,
@@ -546,7 +573,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
    * `Leasing#waitingRequests` is a different view and does not change.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   waitingDemand(): readonly WaitingDemand[] {
     return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
       waiter.spec === undefined
@@ -568,13 +594,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * why there is none. A read: nothing is queued, reserved or installed. The warm pool resolves
    * its targets here, so a target and a request become a spec in one place.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
-  async resolve(_request: DeviceRequest): Promise<TargetResolution> {
-    return { message: "not resolved", refusal: "unresolvable" };
+  async resolve(request: DeviceRequest): Promise<TargetResolution> {
+    let driver: Driver;
+    try {
+      driver = this.options.drivers.get(request.platform);
+    } catch (error: unknown) {
+      return { message: asError(error).message, refusal: "no-driver" };
+    }
+    try {
+      const { spec } = await this.#resolveSpec(
+        driver,
+        request,
+        { allowDownload: false, ownerId: "warm-pool", requesterId: "warm-pool" },
+        () => undefined,
+      );
+      return { spec };
+    } catch (error: unknown) {
+      return { message: asError(error).message, refusal: refusalOf(error) };
+    }
   }
 
   /** Whether an administrative reset holds acquisition closed; the warm pool does nothing meanwhile. */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   get maintenanceActive(): boolean {
     return this.#admissionClosed;
   }
@@ -1086,6 +1126,13 @@ function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceM
     );
   }
   return mode === "slim" ? resolved : fullSpec(resolved);
+}
+
+/** What a target's refusal is called: the kinds a pool can act on, and any other as is. */
+function refusalOf(error: unknown): Exclude<TargetResolution, { spec: DeviceSpec }>["refusal"] {
+  if (error instanceof RuntimeMissingError) return "runtime-missing";
+  if (error instanceof UnknownModelError) return "unknown-model";
+  return "unresolvable";
 }
 
 /** What `#resolveClass` settles on; an exact request has only `exact`. */

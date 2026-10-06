@@ -150,7 +150,7 @@ function view(
   return {
     admit: {
       boot: () => options.refuseBoot,
-      provision: () => options.refuseProvision,
+      create: () => options.refuseProvision,
     },
     inFlight: options.inFlight ?? [],
     retry: {
@@ -787,14 +787,12 @@ describe("warm pool policy", () => {
 
     it("proposes nothing while a request is queued on its platform, and proposes while that request is already booting its own device", () => {
       const shut = ofKind("shut", "shutdown");
+      // A request for a model the shut-down device does not serve: the keep rule boots nothing.
+      const queued = modelDemand("iPad Pro");
 
+      expect(evaluate(view([shut], { targets: [target(1)], waiting: [queued] }))).toEqual([]);
       expect(
-        evaluate(view([shut], { targets: [target(1)], waiting: [classDemand("full", "ios")] })),
-      ).toEqual([]);
-      expect(
-        evaluate(
-          view([shut], { targets: [target(1)], waiting: [classDemand("full", "ios", true)] }),
-        ),
+        evaluate(view([shut], { targets: [target(1)], waiting: [{ ...queued, inFlight: true }] })),
       ).toEqual([{ action: "boot", deviceId: "shut", reason: "target", target: kind }]);
       expect(
         evaluate(view([shut], { targets: [target(1)], waiting: [classDemand("full", "android")] })),
@@ -922,7 +920,7 @@ describe("warm pool policy", () => {
     });
 
     it("does not count a slim device toward a full target of the same model", () => {
-      const slim = device("slim", "ready", { spec: { ...kind, mode: "slim" } });
+      const slim = device("slim", "ready", { endedAgo: minute, spec: { ...kind, mode: "slim" } });
 
       const proposals = evaluate(view([slim], { targets: [target(1)] }));
 

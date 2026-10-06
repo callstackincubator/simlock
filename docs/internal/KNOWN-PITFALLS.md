@@ -1137,3 +1137,19 @@ costs the boot a hit would have saved. The maintainer accepted this on
 Closing the first two needs the mode of the request that created each device stored on
 the device (ADR 0009, Alternatives considered), which no one has asked for yet.
 Closing the third needs `warm-hit` to know which runtimes cannot be slimmed.
+
+## A warm target under `lease.identity` `fresh` costs one create per lease
+
+A `warmPool.targets` entry keeps `count` ready devices of its kind. Under
+`lease.identity.ios: fresh` a device serves one lease and is deleted, so each
+lease takes a ready device and the pool creates the next one, a full create
+and boot per lease, started when the lease is granted so it runs while the
+agent works. Accepted: it moves the cost off the lease's critical path, and it
+is what a target of `fresh` devices means. It is not free: the new device
+holds a running slot and its RAM while it waits for a lease, and a burst of
+leases larger than `count` still pays the boot for the ones beyond it.
+
+**A failing target boots again and again, slowly.** A target whose devices
+never boot is retried after 1, 2, 4 and so on minutes, at most 10 apart, for
+as long as the daemon runs. There is no attempt limit; each try creates a
+device and deletes it again. `retry.ts` is the one place to add a limit.

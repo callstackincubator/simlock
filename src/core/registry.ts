@@ -824,6 +824,7 @@ const deviceRecordKeys = [
   "driverData",
   "createdAt",
   "lastLeaseEndedAt",
+  "readyAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
   "recoveringSince",
@@ -952,6 +953,7 @@ function eventForTransition(
  */
 const optionalDeviceNumberKeys = [
   "lastLeaseEndedAt",
+  "readyAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
   "recoveringSince",

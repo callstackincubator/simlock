@@ -3291,7 +3291,6 @@ describe("createLeasing warm targets", () => {
   ) {
     for (let round = 0; round < 40; round += 1) {
       await flush();
-      await harness.engine.settle();
       harness.clock.advance(stepMs);
       driverClock?.advance(stepMs);
     }
@@ -3344,6 +3343,7 @@ describe("createLeasing warm targets", () => {
       onProgress: (update) => progress.push(update),
       ownerId: "agent",
       requesterId: "agent",
+      ttlMs: 3_600_000,
     });
     await drain(harness);
 
@@ -3434,13 +3434,21 @@ describe("createLeasing warm targets", () => {
     expect(harness.registry.snapshot.devices).toHaveLength(1);
     expect(first).toMatchObject({ leaseIdentity: "fresh", state: "ready" });
 
-    const granted = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    const granted = await harness.engine.request(request, {
+      ownerId: "a",
+      requesterId: "a",
+      ttlMs: 3_600_000,
+    });
     expect(granted.device.id).toBe(first?.id);
     await harness.engine.release(granted.lease.id, "explicit");
     await drain(harness);
 
-    const devices = harness.registry.snapshot.devices;
-    expect(devices.find((device) => device.id === first?.id)).toBeUndefined();
+    const devices = harness.registry.snapshot.devices.filter(
+      (device) => device.state !== "deleted",
+    );
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === first?.id),
+    ).toMatchObject({ state: "deleted" });
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({ leaseIdentity: "fresh", state: "ready" });
     expect(devices[0]?.id).not.toBe(first?.id);

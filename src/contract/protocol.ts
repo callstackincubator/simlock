@@ -29,7 +29,7 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * workers, so a worker without it must be `incompatible` rather than fail in the middle of a
  * relay. ADR 0014 gives every event envelope an `id` (taking it to 10): a worker's pushed events
  * without one would fail the gateway's schema, so a worker on 9 is `incompatible` instead. ADR 0009 §7 makes `atRamBudget` a required field of each platform's `status.get`
- * capacity (taking it to 11), which a gateway routing on it depends on. ADR 0015 §3 makes `modelClasses` a required field of each platform's catalog (taking it to 12): a gateway reading a worker's catalog would fail its schema without it, so a worker on 11 is `incompatible`. ADR 0015 §4 makes `classDefaults` a required field of each platform's catalog too (taking it to 13), for the same reason: a worker on 12 is `incompatible`. ADR 0009 §6 makes `servesDefaultMode` a required field of each device in `status.get` (taking it to 16), which a gateway telling a warm hit for a request with no mode depends on: a worker on 15 is `incompatible`. ADR 0017 §4 and §8 make `warmPool.reserveRunning` a required field of `config.get`'s output (taking it to 17): a client parsing an older daemon's `config.get` would fail its schema without it, so a daemon on 16 is `incompatible`. It only ever widens once a second version is actually kept alive side by side with the
+ * capacity (taking it to 11), which a gateway routing on it depends on. ADR 0015 §3 makes `modelClasses` a required field of each platform's catalog (taking it to 12): a gateway reading a worker's catalog would fail its schema without it, so a worker on 11 is `incompatible`. ADR 0015 §4 makes `classDefaults` a required field of each platform's catalog too (taking it to 13), for the same reason: a worker on 12 is `incompatible`. ADR 0009 §6 makes `servesDefaultMode` a required field of each device in `status.get` (taking it to 16), which a gateway telling a warm hit for a request with no mode depends on: a worker on 15 is `incompatible`. ADR 0017 §4 and §8 make `warmPool.reserveRunning` a required field of `config.get`'s output (taking it to 17): a client parsing an older daemon's `config.get` would fail its schema without it, so a daemon on 16 is `incompatible`. `warmPool.targets` and `warmPool.maxConcurrentBoots` are required fields of it too (taking it to 18), for the same reason: a daemon on 17 is `incompatible`. It only ever widens once a second version is actually kept alive side by side with the
  * first, which nothing here does.
  *
  * A client from before any of those changes simply does not overlap this daemon, and `hello`
@@ -42,9 +42,9 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
  * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
  * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10), and so is one on 7
- * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), one on 11 (ADR 0015 §3), one on 12 (ADR 0015 §4), one on 13 (ADR 0015 §1), one on 14 (ADR 0015 §2), one on 15 (ADR 0009 §6), and one on 16 (`warmPool.reserveRunning`).
+ * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), one on 11 (ADR 0015 §3), one on 12 (ADR 0015 §4), one on 13 (ADR 0015 §1), one on 14 (ADR 0015 §2), one on 15 (ADR 0009 §6), one on 16 (`warmPool.reserveRunning`), and one on 17 (`warmPool.targets`).
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 17, max: 17 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 18, max: 18 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the

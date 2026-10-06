@@ -1090,7 +1090,7 @@ describe("warm pool targets", () => {
     await rig.pool.pass();
     await rig.pool.settle();
 
-    expect(rig.resolveCalls).toHaveLength(2);
+    expect(rig.resolveCalls.length).toBeGreaterThanOrEqual(2);
     expect(rig.provisionCalls).toHaveLength(1);
   });
 

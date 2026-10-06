@@ -5,6 +5,8 @@ import {
   fits,
   type LeaseRecord,
   mayBeGranted,
+  readySince,
+  sameSpec,
   specMode,
   type TargetRefusal,
   type WaitingDemand,
@@ -89,7 +91,7 @@ export interface WarmPolicyView {
   readonly retry: { mayAttempt(spec: DeviceSpec, now: number): boolean };
   /** What the capacity strategy refuses besides the running slots `capacity` already totals. */
   readonly admit: {
-    provision(spec: DeviceSpec): CapacityRefusalReason | undefined;
+    create(spec: DeviceSpec): CapacityRefusalReason | undefined;
     boot(device: DeviceRecord): CapacityRefusalReason | undefined;
   };
   /**
@@ -143,9 +145,13 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
+  const keeps = boots(view, running, bootable, room, held);
+  const targets = mergeTargets(view.targets);
+  const unneeded = neverLeasedIdle(view, running, targets, shutdowns, idle, room);
+  const wanted = planTargets(view, targets, bootable, keeps, room, held, idle);
   return {
-    proposals: [...shutdowns, ...boots(view, running, bootable, room, held)],
-    targets: [],
+    proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
+    targets: wanted.reports,
   };
 }
 
@@ -292,18 +298,200 @@ function boots(
   return proposals;
 }
 
+/** The targets with those that resolved to one spec merged into one, counts summed. */
+function mergeTargets(targets: readonly ResolvedTarget[]): ResolvedTarget[] {
+  const merged: ResolvedTarget[] = [];
+  for (const target of targets) {
+    const index = merged.findIndex((entry) => sameSpec(entry.spec, target.spec));
+    const existing = merged[index];
+    if (existing === undefined) merged.push(target);
+    else merged[index] = { ...existing, count: existing.count + target.count };
+  }
+  return merged;
+}
+
+/**
+ * A target's ready devices: of its kind (`sameSpec`), ready, with no lease and no claim, and not
+ * a spent `fresh` one, oldest first. The count of them is what the target has; the first `count`
+ * are the ones it keeps.
+ */
+function readyOfKind(
+  devices: readonly DeviceRecord[],
+  isIdle: (device: DeviceRecord) => boolean,
+  spec: DeviceSpec,
+): DeviceRecord[] {
+  return devices
+    .filter(
+      (device) =>
+        device.state === "ready" &&
+        isIdle(device) &&
+        mayBeGranted(device) &&
+        sameSpec(device.spec, spec),
+    )
+    .sort((left, right) => left.createdAt - right.createdAt);
+}
+
 /**
  * The devices a target keeps: for each target, its ready unleased devices of that kind, oldest
  * first, up to its count. The one place the pool and the idle shutdown timer agree on which
  * devices a target counts.
  */
-export function targetedDevices(_input: {
+export function targetedDevices(input: {
   readonly devices: readonly DeviceRecord[];
   readonly leases: readonly LeaseRecord[];
   readonly isClaimed: (deviceId: string) => boolean;
   readonly targets: readonly ResolvedTarget[];
 }): ReadonlySet<string> {
-  return new Set();
+  const leased = new Set(input.leases.map((lease) => lease.deviceId));
+  const isIdle = (device: DeviceRecord): boolean =>
+    !leased.has(device.id) && !input.isClaimed(device.id);
+  return new Set(
+    mergeTargets(input.targets).flatMap((target) =>
+      readyOfKind(input.devices, isIdle, target.spec)
+        .slice(0, target.count)
+        .map((device) => device.id),
+    ),
+  );
+}
+
+/**
+ * Shutdowns for the ready, unleased devices that never served a lease and that no target keeps,
+ * once they have been ready longer than `idle.shutdownAfterMs`. The cleanup reaper times an idle
+ * device from the end of its last lease, so it never sees one of these; this is the one rule that
+ * does. A device a waiting request is about to be granted is spared, as in the budget's choice.
+ */
+function neverLeasedIdle(
+  view: WarmPolicyView,
+  running: readonly DeviceRecord[],
+  targets: readonly ResolvedTarget[],
+  proposed: readonly WarmProposal[],
+  isIdle: (device: DeviceRecord) => boolean,
+  room: Slots,
+): WarmProposal[] {
+  const kept = new Set(
+    targets.flatMap((target) =>
+      readyOfKind(view.devices, isIdle, target.spec)
+        .slice(0, target.count)
+        .map((device) => device.id),
+    ),
+  );
+  const already = new Set(
+    proposed.flatMap((proposal) => ("deviceId" in proposal ? [proposal.deviceId] : [])),
+  );
+  const proposals: WarmProposal[] = [];
+  for (const device of running) {
+    if (
+      device.lastLeaseEndedAt !== undefined ||
+      kept.has(device.id) ||
+      already.has(device.id) ||
+      view.now - readySince(device) <= view.config.shutdownAfterMs ||
+      view.waiting.some((demand) => !demand.inFlight && serves(device, demand))
+    ) {
+      continue;
+    }
+    release(room, device);
+    proposals.push({ action: "shutdown", deviceId: device.id, reason: "never-leased-idle" });
+  }
+  return proposals;
+}
+
+/** Why a slot of `platform` is not free for an idle warm device, when it is not. */
+function slotShort(
+  room: Slots,
+  held: Slots,
+  platform: "ios" | "android",
+): "running-limit" | "reserve" | undefined {
+  if (room.global < 1 || room[platform] < 1) return "running-limit";
+  if (room.global - held.global < 1 || room[platform] - held[platform] < 1) return "reserve";
+  return undefined;
+}
+
+/** What the capacity strategy's refusal means for a target's report. */
+function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | undefined {
+  if (refusal === undefined) return undefined;
+  return refusal === "device-limit" || refusal === "ram-budget" ? refusal : "running-limit";
+}
+
+/**
+ * What each target still needs, and the boots and creations that fill it: a shut-down device of
+ * its kind is booted before a new one is created, never while a request is queued on its
+ * platform, never while its spec is held back after a failure, and never past the slots, the
+ * device limit and RAM the capacity allows, nor past `maxConcurrentBoots` pool boots at once. A
+ * target never shuts a device down: what it cannot fit it reports short.
+ */
+function planTargets(
+  view: WarmPolicyView,
+  targets: readonly ResolvedTarget[],
+  bootable: readonly DeviceRecord[],
+  keeps: readonly WarmProposal[],
+  room: Slots,
+  held: Slots,
+  isIdle: (device: DeviceRecord) => boolean,
+): { proposals: WarmProposal[]; reports: TargetReport[] } {
+  const proposals: WarmProposal[] = [];
+  const reports: TargetReport[] = [];
+  const taken = new Set(
+    keeps.flatMap((proposal) =>
+      proposal.action === "boot" && "deviceId" in proposal ? [proposal.deviceId] : [],
+    ),
+  );
+  const booting = (spec: DeviceSpec): number =>
+    view.inFlight.filter((flying) => sameSpec(flying, spec)).length +
+    keeps.filter(
+      (proposal) =>
+        proposal.action === "boot" &&
+        "deviceId" in proposal &&
+        view.devices.some(
+          (device) => device.id === proposal.deviceId && sameSpec(device.spec, spec),
+        ),
+    ).length;
+  let started =
+    view.inFlight.length + keeps.filter((proposal) => proposal.action === "boot").length;
+
+  for (const { count, spec } of targets) {
+    const ready = readyOfKind(view.devices, isIdle, spec).length;
+    const report = { count, ready, spec, target: describeTarget(spec) };
+    let missing = count - ready - booting(spec);
+    let short: TargetShort | undefined;
+    if (missing > 0 && !view.retry.mayAttempt(spec, view.now)) {
+      short = "boot-failed";
+      missing = 0;
+    }
+    // A request queued on this platform is served first; the target waits, and is not short.
+    if (view.waiting.some((demand) => !demand.inFlight && demand.platform === spec.platform)) {
+      missing = 0;
+    }
+    while (missing > 0 && started < view.config.maxConcurrentBoots) {
+      const shutDown = bootable.find(
+        (device) =>
+          !taken.has(device.id) && !view.resetDevices.has(device.id) && sameSpec(device.spec, spec),
+      );
+      const refused =
+        slotShort(room, held, spec.platform) ??
+        shortOf(shutDown === undefined ? view.admit.create(spec) : view.admit.boot(shutDown));
+      if (refused !== undefined) {
+        short = refused;
+        break;
+      }
+      room.global -= 1;
+      room[spec.platform] -= 1;
+      if (shutDown === undefined) {
+        proposals.push({ action: "provision", reason: "target", spec, target: spec });
+      } else {
+        taken.add(shutDown.id);
+        proposals.push({
+          action: "boot",
+          deviceId: shutDown.id,
+          reason: "target",
+          target: spec,
+        });
+      }
+      started += 1;
+      missing -= 1;
+    }
+    reports.push(short === undefined ? report : { ...report, short });
+  }
+  return { proposals, reports };
 }
 
 /** A target or a spec as one line: platform, model, OS and mode, the parts it names. */

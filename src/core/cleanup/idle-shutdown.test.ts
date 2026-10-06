@@ -110,7 +110,7 @@ describe("idleShutdownRule", () => {
     expect(idleShutdownRule.evaluate(view(60_000, ["dev_other"]))).toEqual([
       {
         action: "shutdown",
-        reason: "idle 60s > T1=10s",
+        reason: "idle 1m > T1=10s",
         rule: "idle-shutdown",
         target: "dev_1",
       },

@@ -806,7 +806,9 @@ describe("operation input/output round trips", () => {
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       warmPool: {
         enabled: true,
+        maxConcurrentBoots: 1,
         reserveRunning: { android: 0, ios: 0 },
+        targets: [],
         quarantine: {
           maxRetries: 1,
           retryBackoffMs: 1,

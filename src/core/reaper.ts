@@ -192,7 +192,7 @@ export class CleanupReaper {
       diskFreeBytes,
       leases: snapshot.leases,
       now: this.options.clock.now(),
-      targeted: new Set(),
+      targeted: this.options.targetedDevices?.() ?? new Set(),
     };
   }
 

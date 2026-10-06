@@ -472,6 +472,8 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("core", "device-provisioner.ts")]: 1,
       // `provisioner.provision(...)`: the lease path asking this module, not a driver.
       [join("leasing", "lease-acquisition-coordinator.ts")]: 1,
+      // The same, for a device the warm pool creates for a target.
+      [join("core", "warm-pool", "converger.ts")]: 1,
     });
   });
 

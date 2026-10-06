@@ -127,7 +127,6 @@ export {
   sameSpec,
   specMode,
   type LeaseTiming,
-  type TargetRefusal,
   type TargetResolution,
   type WaitingDemand,
 } from "./domain.js";

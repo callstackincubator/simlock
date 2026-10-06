@@ -71,10 +71,11 @@ export interface DriverDevice {
  */
 export function readyTransitionUpdate(
   readyDevice: DriverDevice,
-  _readyAt: number,
+  readyAt: number,
 ): DeviceTransitionUpdate {
   return {
     address: readyDevice.address,
+    readyAt,
     driverData: readyDevice.driverData,
     mode: readyDevice.mode ?? "full",
   };

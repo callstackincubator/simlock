@@ -287,7 +287,7 @@ async function seedReady(
 }
 
 async function flush(): Promise<void> {
-  for (let count = 0; count < 20; count += 1) await Promise.resolve();
+  for (let count = 0; count < 50; count += 1) await Promise.resolve();
 }
 
 /** Lets fire-and-forget device work that crosses several registry writes run to rest. */
