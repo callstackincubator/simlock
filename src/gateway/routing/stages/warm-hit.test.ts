@@ -29,6 +29,20 @@ describe("warm-hit", () => {
     expect(warmHit.score(view("ready"), request)).toBe(1);
   });
 
+  it("counts no device as warm on a worker whose devices were never read", () => {
+    const unread: WorkerView = {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+    };
+
+    expect(warmHit.score(unread, { model: "iPhone 17", platform: "ios" })).toBe(0);
+  });
+
   it("counts a ready device as warm only on the request's platform and the runtime it names", () => {
     const ready = deviceFixture("dev_1", "ready");
     const view = (spec: Partial<ViewDeviceSpec>): WorkerView => ({

@@ -379,6 +379,21 @@ describe("aggregateCatalog", () => {
     runtimes: ["26.0", "25.4"],
   };
 
+  it("leaves a worker with no catalog read, such as one that is starting, out of the union", () => {
+    const starting: WorkerView = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      id: "wrk_s",
+      lastSeenAt: 1_000,
+    };
+
+    const catalog = aggregateCatalog([starting, view({ catalog: [iosOnA], id: "wrk_a" })]);
+
+    expect(catalog.platforms).toHaveLength(1);
+    expect(catalog.platforms[0]?.modelWorkers).toEqual({ "iPhone 17": ["wrk_a"] });
+  });
+
   it("unions the connected workers' catalogs and annotates every entry", () => {
     const catalog = aggregateCatalog([
       view({ catalog: [iosOnA], id: "wrk_a" }),

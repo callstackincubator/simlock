@@ -221,6 +221,23 @@ describe("the busiest workers", () => {
       const busy = worker({ id: "wrk_busy", leases: [{ ...LEASE, id: "l_1" }] });
 
       expect(deviceCounts(starting)).toBeUndefined();
+      // A worker that reported its capacity but no leases has no count of leased devices either.
+      const entry = {
+        atRamBudget: false,
+        limit: 4,
+        maxRunning: 4,
+        overLimit: false,
+        reserved: 0,
+        running: 1,
+        used: 1,
+        warm: 0,
+      };
+      const capacity = {
+        android: entry,
+        global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 0 },
+        ios: entry,
+      };
+      expect(deviceCounts({ ...starting, capacity })).toBeUndefined();
       expect(leasesHeld([starting, busy])).toBe(1);
       expect(busiestWorkers([starting, busy]).map((entry) => entry.id)).toEqual([
         "wrk_busy",

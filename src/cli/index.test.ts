@@ -2947,6 +2947,26 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
     });
 
+    it.each(["capacity", "devices", "leases", "queueDepth"] as const)(
+      "simlock status prints the starting line for an answer with no %s, though the rest is there",
+      async (missing) => {
+        const output = outputCapture();
+        const { [missing]: _left, ...answer } = EMPTY_STATUS;
+        await runCli(
+          ["status"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(answer as StatusGetOutput) }),
+          }),
+        );
+
+        expect(output.stdout).toContain(
+          "Devices, leases and capacity appear once startup finishes.\n",
+        );
+        expect(output.stdout).not.toContain("Queue depth");
+      },
+    );
+
     it("simlock status --json prints the answer with those fields absent", async () => {
       const output = outputCapture();
       await runCli(
