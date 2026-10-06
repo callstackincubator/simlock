@@ -387,7 +387,7 @@ const WARM_POOL_TARGETS_MAX = 256;
 const WARM_POOL_NAME_MAX = 256;
 
 /** Why a warm target is short, in the order the first that applies is the one reported. */
-export const warmPoolShortSchema = z.enum([
+const warmPoolShortSchema = z.enum([
   "disabled",
   "no-driver",
   "runtime-missing",

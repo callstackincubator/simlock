@@ -102,6 +102,7 @@ function withoutReadFields(view: WorkerView): WorkerView {
     leases: _leases,
     queueDepth: _queueDepth,
     waiting: _waiting,
+    warmPool: _warmPool,
     ...rest
   } = view;
   return rest;
@@ -283,7 +284,13 @@ export class WorkerRegistry {
     // ADR 0008 §8: host facts come from `status.get`, which an incompatible worker is never
     // asked. A view left over from an earlier, compatible session must not keep showing them,
     // nor the installs or waiting requests that status listed (ADR 0010 §7).
-    const { host: _stale, installs: _staleInstalls, waiting: _staleWaiting, ...withoutHost } = view;
+    const {
+      host: _stale,
+      installs: _staleInstalls,
+      waiting: _staleWaiting,
+      warmPool: _staleWarmPool,
+      ...withoutHost
+    } = view;
     this.#workers.set(workerId, withoutHost);
     this.#notifyViewsChanged();
     return withoutHost;

@@ -449,8 +449,10 @@ describe("operation input/output round trips", () => {
       );
     });
 
-    it("fails to parse a running daemon's output without it, and parses a starting one without it", () => {
-      expect(() => OPERATIONS["status.get"].output.parse(running)).toThrow();
+    it("parses a starting daemon's answer without it, and a running one that carries it", () => {
+      expect(
+        OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool,
+      ).toBeDefined();
       expect(
         OPERATIONS["status.get"].output.parse({
           daemon: { health: "starting", mode: "worker" },

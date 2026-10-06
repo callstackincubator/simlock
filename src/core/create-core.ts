@@ -299,6 +299,10 @@ export function createCore(options: CoreOptions): Core {
     prerequisiteChecks: options.prerequisiteChecks ?? [],
     quarantine,
     registry,
+    warmPool: {
+      figures: () => warmPool.figures(),
+      runningCapacity: () => capacityReader.runningCapacity,
+    },
   });
   const startup = new StartupConverger({
     claims,

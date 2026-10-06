@@ -481,17 +481,18 @@ function planTargets(
     ).length;
   const reports = targets.map(({ count, spec }): TargetReport => {
     const ready = readyOfKind(view.devices, isIdle, spec).length;
+    const filling = pending(spec);
+    const missing = count - ready - filling;
+    const before = plan.proposals.length;
+    const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
     const report = {
-      booting: 0,
+      booting: filling + plan.proposals.length - before,
       count,
       kind: kindOf(spec),
       ready,
       spec,
       target: describeTarget(spec),
     };
-    const filling = pending(spec);
-    const missing = count - ready - filling;
-    const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
     return short === undefined ? report : { ...report, short };
   });
   return { proposals: plan.proposals, reports };
@@ -552,7 +553,7 @@ function addOne(plan: TargetPlan, spec: DeviceSpec): TargetShort | undefined {
 }
 
 /** A spec's kind as a report names it. */
-export function kindOf(spec: DeviceSpec): TargetKind {
+function kindOf(spec: DeviceSpec): TargetKind {
   return {
     mode: specMode(spec),
     model: spec.model,

@@ -1440,6 +1440,7 @@ async function runDoctor(
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
     writeMissingPrerequisites(environment, response);
+    writeUnreachableWarmTargets(environment, response);
     writeResult(environment, response);
     return 0;
   } finally {
@@ -1472,6 +1473,20 @@ function writeMissingPrerequisites(environment: CliEnvironment, report: DoctorRe
     if (finding.kind !== "prerequisite-missing") continue;
     environment.stderr.write(
       `Missing [${finding.platform}] ${finding.prerequisite}: ${finding.message} ${finding.remedy}\n`,
+    );
+  }
+}
+
+/**
+ * `warm-pool-target-unreachable` findings, one stderr line each: the target, what is wrong with
+ * it and what to do, so a human sees it without reading the JSON, which stdout still carries
+ * whole. Not a failure either -- the exit code stays 0.
+ */
+function writeUnreachableWarmTargets(environment: CliEnvironment, report: DoctorReport): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "warm-pool-target-unreachable") continue;
+    environment.stderr.write(
+      `${finding.kind}  ${finding.target}: ${finding.message}; ${finding.remedy}\n`,
     );
   }
 }
@@ -2354,6 +2369,11 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   // exactly the output it has always been.
   const workerLines =
     workers === undefined ? [] : [formatWorkers(workers), ""].filter((line) => line !== "");
+  // A gateway keeps no pool of its own: each worker's is on its entry in the JSON.
+  const warmPoolLines =
+    status.warmPool === undefined || daemon.mode === "gateway"
+      ? []
+      : formatWarmPool(status.warmPool);
   const deviceLines = devices.map((device) => {
     const markers = [
       device.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
@@ -2381,12 +2401,28 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     globalLine,
     ...capacityLines,
     ...ramLines,
+    ...warmPoolLines,
     ...workerLines,
     ...deviceLines,
     ...leaseLines,
     ...(installs ?? []).map((install) => formatInstall(install, now)),
     `Queue depth: ${queueDepth}`,
   ].join("\n");
+}
+
+/** The warm pool as `status` prints it: the switch and reserve, then a line per target. */
+function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): string[] {
+  const { enabled, reserveRunning, targets } = warmPool;
+  return [
+    `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
+    ...targets.map((target) => {
+      const name = [target.model, target.osVersion, target.mode]
+        .filter((part) => part !== undefined)
+        .join(" / ");
+      const short = target.short === undefined ? "" : `  short: ${target.short}`;
+      return `  ${name}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+    }),
+  ];
 }
 
 /** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */

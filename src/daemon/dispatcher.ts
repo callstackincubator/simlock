@@ -355,6 +355,7 @@ export class Dispatcher {
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
       waiting: [...this.options.queue.waitingRequests()],
+      warmPool: this.options.warmPool.figures(),
     };
   };
 

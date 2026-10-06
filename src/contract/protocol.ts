@@ -42,9 +42,9 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
  * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
  * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10), and so is one on 7
- * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), one on 11 (ADR 0015 §3), one on 12 (ADR 0015 §4), one on 13 (ADR 0015 §1), one on 14 (ADR 0015 §2), one on 15 (ADR 0009 §6), and one on 16 (`warmPool.reserveRunning`), one on 17 (a starting `status.get`), and one on 18 (`warmPool.targets`).
+ * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), one on 11 (ADR 0015 §3), one on 12 (ADR 0015 §4), one on 13 (ADR 0015 §1), one on 14 (ADR 0015 §2), one on 15 (ADR 0009 §6), and one on 16 (`warmPool.reserveRunning`), one on 17 (a starting `status.get`), one on 18 (`warmPool.targets`), and one on 19 (`status.get`'s `warmPool`).
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 19, max: 19 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 20, max: 20 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the

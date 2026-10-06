@@ -84,6 +84,7 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
     // to list them reports none.
     waiting: status.waiting ?? [],
     ...(status.capacity === undefined ? {} : { capacity: status.capacity }),
+    ...(status.warmPool === undefined ? {} : { warmPool: status.warmPool }),
     ...(status.leases === undefined ? {} : { leases: status.leases }),
     ...(status.queueDepth === undefined ? {} : { queueDepth: status.queueDepth }),
     ...(devices === undefined ? {} : { devices: viewDevicesSchema.parse(devices) }),

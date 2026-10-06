@@ -98,6 +98,8 @@ export function aggregateStatus(
     ),
     queueDepth: options.queueDepth,
     waiting: [...(options.waiting ?? [])],
+    // A gateway keeps no pool of its own: each worker's is on its entry in `workers`.
+    warmPool: { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] },
     workers: [...views],
   };
 }
