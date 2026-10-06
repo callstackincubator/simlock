@@ -149,7 +149,7 @@ describe("StartupConverger", () => {
     expect(harness.spentDeviceDeletion.deleteSpent).not.toHaveBeenCalled();
   });
 
-  it("leaves a platform without a driver untouched instead of failing convergence", async () => {
+  it("leaves a platform the startup read could not list (no driver, or a listing that failed or hung) untouched instead of failing convergence", async () => {
     const interrupted = device("ios-reclaiming", "ios", "reclaiming", 1);
     const excess = device("ios-ready", "ios", "ready", 2);
     const androidInterrupted = device("android-reclaiming", "android", "reclaiming", 3);

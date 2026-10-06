@@ -162,6 +162,8 @@ export class LeaseReleaseCoordinator
         case "wait":
           await this.#release(leaseId, ending.reason, { reclaim: "none" });
           return;
+        default:
+          throw new Error(`Unknown startup ending for ${leaseId}: ${String(ending.device)}`);
       }
     });
   }

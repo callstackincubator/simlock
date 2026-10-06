@@ -467,4 +467,118 @@ describe("LeaseReleaseCoordinator", () => {
       expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
     });
   });
+
+  describe("endAtStartup", () => {
+    function blockReclaim(harness: Awaited<ReturnType<typeof createHarness>>) {
+      let unblock!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        unblock = resolve;
+      });
+      harness.reclaim.reclaim = async (released) => {
+        harness.reclaims.push(released);
+        await blocked;
+      };
+      return unblock;
+    }
+
+    it.each([
+      ["device-lost", "lease.released"],
+      ["expired", "lease.expired"],
+    ] as const)(
+      "ends the lease as %s and reclaims the device in the background, holding its claim meanwhile",
+      async (reason, event) => {
+        const harness = await createHarness();
+        const granted = await grant(harness);
+        const unblock = blockReclaim(harness);
+
+        await harness.coordinator.endAtStartup(granted.lease.id, { device: "reclaim", reason });
+
+        expect(harness.registry.snapshot.leases).toEqual([]);
+        expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+        expect(harness.reclaims).toMatchObject([{ lease: { id: granted.lease.id } }]);
+        expect(harness.claims.isClaimed(granted.device.id)).toBe(true);
+        expect(
+          harness.eventBus
+            .replay()
+            .filter(
+              (envelope) =>
+                envelope.event === "lease.released" || envelope.event === "lease.expired",
+            ),
+        ).toMatchObject([{ event, payload: { leaseId: granted.lease.id } }]);
+        unblock();
+        await flush();
+        expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
+      },
+    );
+
+    it("ends the lease and leaves the device reclaiming with no reclaim started, no claim taken and no availability wake-up when told to wait", async () => {
+      const harness = await createHarness();
+      const granted = await grant(harness);
+
+      await harness.coordinator.endAtStartup(granted.lease.id, {
+        device: "wait",
+        reason: "device-lost",
+      });
+      await flush();
+
+      expect(harness.registry.snapshot.leases).toEqual([]);
+      expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+      expect(harness.reclaims).toEqual([]);
+      expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
+      expect(harness.availability.count).toBe(0);
+      expect(
+        harness.eventBus.replay().filter((envelope) => envelope.event === "lease.released"),
+      ).toMatchObject([{ payload: { leaseId: granted.lease.id, reason: "device-lost" } }]);
+    });
+
+    it.each([
+      ["device-lost", "lease.released"],
+      ["expired", "lease.expired"],
+    ] as const)(
+      "ends the lease as %s and marks the device deleted in one write, announcing the lease first, with no reclaim",
+      async (reason, event) => {
+        const harness = await createHarness();
+        const granted = await grant(harness);
+
+        await harness.coordinator.endAtStartup(granted.lease.id, { device: "missing", reason });
+        await flush();
+
+        expect(harness.registry.snapshot.leases).toEqual([]);
+        expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
+        expect(harness.reclaims).toEqual([]);
+        expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
+        expect(
+          harness.eventBus
+            .replay()
+            .filter((envelope) => envelope.event === event || envelope.event === "device.deleted")
+            .map((envelope) => envelope.event),
+        ).toEqual([event, "device.deleted"]);
+      },
+    );
+
+    it.each(["reclaim", "wait", "missing"] as const)(
+      "rejects an unknown lease for a %s ending and starts no reclaim",
+      async (device) => {
+        const harness = await createHarness();
+
+        await expect(
+          harness.coordinator.endAtStartup("lse_missing", { device, reason: "device-lost" }),
+        ).rejects.toBeInstanceOf(UnknownLeaseError);
+        expect(harness.reclaims).toEqual([]);
+      },
+    );
+
+    it("refuses an ending it does not know, leaving the lease granted", async () => {
+      const harness = await createHarness();
+      const granted = await grant(harness);
+
+      await expect(
+        harness.coordinator.endAtStartup(granted.lease.id, {
+          device: "bury" as "wait",
+          reason: "device-lost",
+        }),
+      ).rejects.toThrow(`Unknown startup ending for ${granted.lease.id}: bury`);
+      expect(harness.registry.snapshot.leases).toHaveLength(1);
+    });
+  });
 });

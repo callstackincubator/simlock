@@ -55,10 +55,11 @@ async function readOne(
   driver: Driver,
   { clock, logger }: StartupReadOptions,
 ): Promise<DriverReality | undefined> {
-  let timer: TimerHandle | undefined;
+  let passLimit!: (outcome: "timeout") => void;
   const limit = new Promise<"timeout">((resolve) => {
-    timer = clock.setTimer(STARTUP_READ_LIMIT_MS, () => resolve("timeout"));
+    passLimit = resolve;
   });
+  const timer: TimerHandle = clock.setTimer(STARTUP_READ_LIMIT_MS, () => passLimit("timeout"));
   const listing = Promise.resolve()
     .then(() => driver.listManaged())
     .catch((error: unknown) => {
@@ -79,6 +80,6 @@ async function readOne(
     }
     return result;
   } finally {
-    if (timer !== undefined) clock.cancel(timer);
+    clock.cancel(timer);
   }
 }
