@@ -462,6 +462,44 @@ async function expectBootedFromShutdown(
   ).toBe(released.device.id);
 }
 
+/** Each platform has exactly one device, the one its first lease released, and it is shut down. */
+function expectOnlyReleasedDevices(
+  rows: readonly Row[],
+  first: Readonly<Record<Platform, { readonly grant: Grant }>>,
+): void {
+  for (const platform of ["ios", "android"] as const) {
+    expect(
+      rows.filter((row) => row.spec.platform === platform).map((row) => [row.id, row.state]),
+      `${platform}: the released device is the only device and it is shut down`,
+    ).toEqual([[first[platform].grant.device.id, "shutdown"]]);
+  }
+}
+
+/** Both second leases hold their device, and the simulator and the emulator really are running. */
+async function expectSecondBootsRunning(
+  env: TestEnv,
+  deviceSet: string,
+  adbServerPort: number,
+  second: Readonly<Record<Platform, { readonly grant: Grant }>>,
+): Promise<void> {
+  const rows = await devices(env);
+  for (const { grant } of [second.ios, second.android]) {
+    expect(
+      rows.find((row) => row.id === grant.device.id)?.state,
+      `${grant.device.spec.platform} device is leased after its second boot`,
+    ).toBe("leased");
+  }
+  expect(
+    (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
+      (device) => device.udid === second.ios.grant.device.driverDeviceId,
+    )?.state,
+  ).toBe("Booted");
+  expect(
+    (await onlineEmulators(adbServerPort)).length,
+    "the emulator booted again and is online",
+  ).toBeGreaterThan(0);
+}
+
 async function nuke(env: TestEnv): Promise<void> {
   await env
     .cli(["nuke", "--delete-devices", "--yes"], { timeout: 5 * MINUTE })
@@ -633,15 +671,7 @@ describe(
 
           // The next boot is clean: each lease waits on a boot, is granted, and its device really is running.
           // Each platform has exactly one device, the released one, so the next lease can only boot it.
-          const before = await devices(env);
-          for (const platform of ["ios", "android"] as const) {
-            expect(
-              before
-                .filter((row) => row.spec.platform === platform)
-                .map((row) => [row.id, row.state]),
-              `${platform}: the released device is the only device and it is shut down`,
-            ).toEqual([[first[platform].grant.device.id, "shutdown"]]);
-          }
+          expectOnlyReleasedDevices(await devices(env), first);
           const second = {
             android: await step("second lease: boot the emulator", LEASE_TIMEOUT, () =>
               lease(env, targets.android, "again-android"),
@@ -653,22 +683,7 @@ describe(
           for (const platform of ["ios", "android"] as const) {
             await expectBootedFromShutdown(env, platform, second[platform], first[platform].grant);
           }
-          const rows = await devices(env);
-          for (const { grant } of [second.ios, second.android]) {
-            expect(
-              rows.find((row) => row.id === grant.device.id)?.state,
-              `${grant.device.spec.platform} device is leased after its second boot`,
-            ).toBe("leased");
-          }
-          expect(
-            (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
-              (device) => device.udid === second.ios.grant.device.driverDeviceId,
-            )?.state,
-          ).toBe("Booted");
-          expect(
-            (await onlineEmulators(adbServerPort)).length,
-            "the emulator booted again and is online",
-          ).toBeGreaterThan(0);
+          await expectSecondBootsRunning(env, deviceSet, adbServerPort, second);
 
           await step("release the second simulator lease", RELEASE_TIMEOUT + MINUTE, () =>
             release(env, second.ios.grant),
