@@ -287,7 +287,10 @@ reason is a missing rule or a missing spec line.
 `main` takes changes only through a pull request whose Quality, Fallow and
 Console checks passed. That is a ruleset on GitHub, not a convention: agents
 push with a maintainer's account, so anything that binds them binds you too,
-and nobody bypasses it. Releases therefore run in the Release workflow
+and nobody bypasses it. On a pull request the Console job is skipped when the
+PR changes no source, UI, console spec or build file (a skipped job counts
+as passed), and runs in Chromium only unless the PR changes `ui/` or the
+console specs. Every push to `main` runs it in every browser. Releases therefore run in the Release workflow
 (`.github/workflows/release.yml`), started by hand from the Actions tab on
 `main`. It runs `release-it`, which bumps the version from the commits since
 the last tag, writes `CHANGELOG.md`, pushes the release commit and tag, and
