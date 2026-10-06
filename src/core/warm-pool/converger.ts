@@ -80,8 +80,9 @@ interface Flight {
  * that arrives during a pass asks for one more, not one each.
  *
  * Every action that is attempted ends in `kick()`, whether it worked or not, so a request waiting
- * on a boot the pool started plans again either way; one declined before it began does not. A boot or creation for a target runs beside the pass, up
- * to `maxConcurrentBoots` at a time, and asks for the next pass when it ends.
+ * on a boot the pool started plans again either way; one declined before it began does not. A
+ * boot or creation for a target runs beside the pass, up to `maxConcurrentBoots` at a time, and
+ * asks for the next pass when it ends.
  */
 export class WarmPool {
   readonly #logger: Logger;
@@ -374,9 +375,11 @@ export class WarmPool {
       this.#launch(proposal.target, () => this.#provision(proposal.spec, proposal.target));
       return;
     }
-    // A failed step of a keep boot or a shutdown releases its reservation and so triggers the next
-    // pass at once; without a pause that would retry a broken one in a loop. A target's boot is
-    // held back by the retry schedule instead, which the policy reads before it proposes one.
+    // A failed keep boot releases its reservation, which changes capacity and so triggers the next
+    // pass at once; without a pause that would retry a broken one in a loop. A failed shutdown
+    // frees nothing, but any other trigger that comes soon would propose it again, so it is held
+    // back the same way. A target's boot is held back by the retry schedule instead, which the
+    // policy reads before it proposes one.
     if (
       proposal.target === undefined &&
       (this.#retryAfter.get(proposal.deviceId) ?? 0) > this.options.clock.now()

@@ -267,8 +267,8 @@ function boots(
 
   const unserved: WaitingDemand[] = [];
   view.waiting.forEach((demand, position) => {
-    // Only the first request in the line, the queue head, whether or not it is in flight, is
-    // granted a device (strict FIFO): a device booted for one behind it would sit idle, be shut
+    // Only the first request in the line, the queue head, is granted a device, and not one
+    // already in flight (strict FIFO): a device booted for one behind it would sit idle, be shut
     // down by the idle rule, and be booted again. The others still hold a slot below.
     const device =
       position === 0 && !demand.inFlight
