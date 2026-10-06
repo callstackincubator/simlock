@@ -212,7 +212,7 @@ is open, done means closed as completed.
       triage report, the PR body's `Assumption:` lines, the diff, and every
       change made to the spec's tests since they were committed red; never
       the rest of the PR body. It answers: is every line of Scope and Done
-      when delivered; does the diff do anything the spec did not ask for
+      when delivered as written; does the diff do anything the spec did not ask for
       (what `always-in-scope.md` lists counts as asked for); does every test
       title state a claim the spec made; does any change after red leave a
       line of the spec unproven; is every assumption conservative and

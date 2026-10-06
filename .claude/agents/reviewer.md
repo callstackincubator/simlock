@@ -126,7 +126,8 @@ Answer four questions, and only these:
 
 1. Is every line of Scope and Done when (for a bug: the Simplest fix; for a
    feature: every Completion condition) delivered by the diff? For each
-   line, name the hunk that delivers it or say "not delivered".
+   line, name the hunk that delivers it, or say "not delivered", or
+   "delivered differently: <how the diff departs from the line>".
 2. Does the diff do anything the specification did not ask for? Anything
    `always-in-scope.md` lists is asked for: never a finding.
 3. For every test the diff adds or changes: does its title state a claim
@@ -138,10 +139,10 @@ Answer four questions, and only these:
    the specification? One that contradicts a line of it, or decides
    behaviour a user would see that nobody decided, is blocking.
 
-Blocking: a line not delivered, a test whose body does not prove its title,
-a line of the specification left unproven, an assumption that fails
-question 4, behaviour a user sees that the specification did not ask for,
-or a breach of a file in `spec/`.
+Blocking: a line not delivered or delivered differently, a test whose body
+does not prove its title, a line of the specification left unproven, an
+assumption that fails question 4, behaviour a user sees that the
+specification did not ask for, or a breach of a file in `spec/`.
 ```
 
 For an ADR-only diff, replace questions 1 to 4 with: does the record decide
