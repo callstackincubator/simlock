@@ -4,7 +4,7 @@ import {
   type LeaseRecord,
   type ReleasedLease,
   type SerializedDecision,
-  type WarmPoolCoordinator,
+  type ReclaimCoordinator,
 } from "../core/index.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
@@ -47,7 +47,7 @@ export interface LeaseReleaseCoordinatorOptions {
    */
   readonly notifyAvailability: () => void;
   readonly registry: LeaseReleaseRegistry;
-  readonly warmPool: Pick<WarmPoolCoordinator, "reclaim">;
+  readonly reclaim: Pick<ReclaimCoordinator, "reclaim">;
 }
 
 /**
@@ -104,7 +104,7 @@ export class LeaseReleaseCoordinator
    * Gives up a lease whose device could not be brought back. Internally
    * originated only -- no client can ask for it -- but it is an ordinary
    * release otherwise, so it takes the same maintenance admission and the same
-   * warm-pool reclaim as every other one.
+   * reclaim as every other one.
    */
   async releaseDeviceLost(leaseId: string): Promise<void> {
     await this.#runNormal(() => this.#release(leaseId, "device-lost", { reclaim: "background" }));
@@ -209,7 +209,7 @@ export class LeaseReleaseCoordinator
       this.#reclaimInBackground(released);
       return;
     }
-    await this.options.warmPool.reclaim(released);
+    await this.options.reclaim.reclaim(released);
   }
 
   /**
@@ -225,13 +225,13 @@ export class LeaseReleaseCoordinator
    * The claim is released, and the failure logged rather than thrown, once the
    * reclaim settles -- no caller is awaiting this promise, so a rejection here would
    * otherwise be unhandled. A purge that fails at the driver is not that case: it is
-   * handled inside `WarmPoolCoordinator#reclaim`, which quarantines the device
+   * handled inside `ReclaimCoordinator#reclaim`, which quarantines the device
    * instead of rejecting, and stays visible in `simlock status` and
    * `device.purge-failed`.
    */
   #reclaimInBackground(released: ReleasedLease): void {
     const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
-    const reclaim = this.options.warmPool
+    const reclaim = this.options.reclaim
       .reclaim(released)
       .catch((error: unknown) => {
         this.#logger.error("background reclaim failed", {
@@ -242,7 +242,7 @@ export class LeaseReleaseCoordinator
       })
       .finally(() => {
         claim?.release();
-        // `WarmPoolCoordinator#reclaim` fires its own availability notification while
+        // `ReclaimCoordinator#reclaim` fires its own availability notification while
         // this claim is still held, and a claimed device is invisible to
         // `AcquisitionPlanner` -- so a waiter queued for exactly this device would
         // sleep through it and sit there until some unrelated event kicked the queue.

@@ -103,10 +103,6 @@ function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
       },
     },
     notifyAvailability: () => void order.push("notifyAvailability"),
-    queueHeadDemand: () => {
-      order.push("queueHeadDemand");
-      return undefined;
-    },
   };
 }
 
@@ -120,13 +116,13 @@ describe("createCore", () => {
     });
   });
 
-  it("a reclaim before connect throws an error naming the queue-head port its keep decision reads", async () => {
+  it("a reclaim before connect throws an error naming the availability port it notifies", async () => {
     const harness = await build();
     const { released } = await releasedLease(harness);
 
-    await expect(harness.core.warmPool.reclaim(released)).rejects.toMatchObject({
+    await expect(harness.core.reclaim.reclaim(released)).rejects.toMatchObject({
       name: "CorePortMissingError",
-      message: 'A core service was called before connect() supplied the "queueHeadDemand" port',
+      message: 'A core service was called before connect() supplied the "notifyAvailability" port',
     });
   });
 
@@ -147,15 +143,15 @@ describe("createCore", () => {
     ]);
   });
 
-  it("after connect, a reclaim reads the queue head's spec and then tells acquisition the device is back", async () => {
+  it("after connect, a reclaim tells acquisition the device is back", async () => {
     const harness = await build();
     const { device, released } = await releasedLease(harness);
     const order: string[] = [];
     harness.core.connect(ports(order));
 
-    await harness.core.warmPool.reclaim(released);
+    await harness.core.reclaim.reclaim(released);
 
-    expect(order).toEqual(["queueHeadDemand", "notifyAvailability"]);
+    expect(order).toEqual(["notifyAvailability"]);
     expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "ready" }]);
   });
 

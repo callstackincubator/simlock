@@ -16,9 +16,9 @@ import {
   mayBeGranted,
   type Platform,
   specMode,
+  selectIdleRunningVictim,
   selectManagedVictim,
-  selectWarmVictim,
-  type WarmVictimScope,
+  type IdleVictimScope,
 } from "../core/index.js";
 
 export interface AcquisitionPlannerSnapshot {
@@ -162,10 +162,10 @@ export class AcquisitionPlanner {
     const capacity = this.capacity.runningCapacity(capacityDevices(snapshot.devices));
     const platformBlocked =
       capacity[platform].running + capacity[platform].reserved >= capacity[platform].maxRunning;
-    const scope: WarmVictimScope = platformBlocked
+    const scope: IdleVictimScope = platformBlocked
       ? { kind: "platform", platform }
       : { kind: "global" };
-    return selectWarmVictim(this.#eligibleEvictionDevices(snapshot), scope);
+    return selectIdleRunningVictim(this.#eligibleEvictionDevices(snapshot), scope);
   }
 
   #eligibleEvictionDevices(snapshot: AcquisitionPlannerSnapshot): readonly DeviceRecord[] {

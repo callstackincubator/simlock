@@ -9,7 +9,6 @@ import {
   type DeviceSpec,
   type LeaseProgress,
   Registry,
-  RuntimeMissingError,
 } from "../core/index.js";
 import { type CapacityLimits, type ResourceStrategyOptions } from "../core/testing.js";
 import { capacityChangedPayload, testComponentWiring, FakeDriver } from "../core/testing.js";
@@ -262,45 +261,6 @@ describe("createLeasing", () => {
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
   });
 
-  it("fails warm-pool re-readiness of a device whose runtime is gone without calling the installer", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    const asked: unknown[] = [];
-    const harness = await createHarness({
-      components: {
-        claimProvision: () => () => undefined,
-        install: async (call) => {
-          asked.push(call);
-          return { outcome: "installed", version: "26.5" };
-        },
-      },
-      driver,
-    });
-    const first = await harness.engine.request(request, {
-      allowDownload: true,
-      ownerId: "a",
-      requesterId: "a",
-    });
-    // The runtime the device was made on is gone, so bringing it back fails the way a driver
-    // reports a missing runtime: downloadable, naming the component.
-    driver.failOn("makeReady", 2, new RuntimeMissingError("ios", "26.5", { component: "26.5" }));
-
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-
-    // The warm pool did try to bring the device back, it failed, and the failure went nowhere
-    // near an install.
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
-    expect(harness.registry.snapshot.devices.map((device) => device.state)).toEqual(["shutdown"]);
-    expect(asked).toEqual([]);
-    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
-  });
-
   it("tells a waiter queued behind a reclaim how long that reclaim runs", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -362,7 +322,30 @@ describe("createLeasing", () => {
     expect(progress).toEqual([{ queuePosition: 1, stage: "queued" }]);
   });
 
-  it("purges then shuts down on release when the system is over its running limit", async () => {
+  it("an iOS release ends with the device shutdown, and nothing boots it back", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(
+      harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
+    ).toBe("shutdown");
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+  });
+
+  it("a release whose reclaim leaves the device ready keeps it ready when running capacity is over its limit", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -377,17 +360,16 @@ describe("createLeasing", () => {
     const excess = await seedReady(harness);
 
     await harness.engine.release(first.lease.id, "explicit");
-    // Release commits registry-only and hands the purge off; settle() is the test's
-    // stand-in for the graceful-shutdown drain that waits on it in production.
     await harness.engine.settle();
 
     expect(harness.driver.calls.map((call) => call.operation)).toContain("reclaim");
     expect(
       harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
-    ).toBe("shutdown");
+    ).toBe("ready");
     expect(harness.registry.snapshot.devices.find((item) => item.id === excess.id)?.state).toBe(
       "ready",
     );
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
   });
 
   it("evicts warm inventory for active new-spec demand, including no-wait", async () => {
@@ -648,7 +630,7 @@ describe("createLeasing", () => {
     ).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
   });
 
-  it("converges startup excess through shutdown without touching leases and is idempotent", async () => {
+  it("leaves ready devices over maxRunning running at startup, and is idempotent", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -671,10 +653,10 @@ describe("createLeasing", () => {
 
     expect(harness.registry.snapshot.devices).toMatchObject([
       { id: leasedDevice.id, state: "leased" },
-      { id: unleasedDevice.id, state: "shutdown" },
+      { id: unleasedDevice.id, state: "ready" },
     ]);
-    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
-    expect(harness.engine.runningCapacity.global.overLimit).toBe(false);
+    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
+    expect(harness.engine.runningCapacity.global.overLimit).toBe(true);
   });
 
   it("retains in-limit warm devices at startup and never boots shutdown inventory", async () => {
@@ -1587,61 +1569,6 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
     ).resolves.toMatchObject({ device: { id: released.device.id } });
   });
 
-  it("shuts down already-ready excess capacity during convergence without waiting on an in-flight reclaim, and the reclaim settles inside the same limit", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      latencyMs: { reclaim: 34_000 },
-      platform: "ios",
-      // The reclaim itself leaves the device booted off; whether it comes back
-      // `ready` is entirely up to WarmPoolCoordinator#mayRemainWarm's capacity
-      // check at settle time -- which is exactly what this test is about.
-      reclaimResult: "shutdown",
-    });
-    const harness = await createHarness({
-      driver,
-      limits: {
-        android: { maxDevices: 1, maxRunning: 1 },
-        ios: { maxDevices: 3, maxRunning: 1 },
-        maxRunning: 1,
-      },
-    });
-    const released = await harness.engine.request(request, {
-      ownerId: "previous-holder",
-      requesterId: "previous-holder",
-    });
-    await harness.engine.release(released.lease.id, "explicit");
-    const extraReady = await seedReady(harness);
-
-    await harness.engine.convergeRunningCapacity();
-
-    // Decision (open question 1, #43): the running-capacity sweep tolerates an
-    // approximate, transient view rather than waiting for in-flight reclaims to
-    // settle or re-running afterward. It can afford to: RUNNING_STATES already
-    // counts `reclaiming` toward the running total, so the over-limit check itself
-    // is not blind to the in-flight reclaim -- only its candidate *selection* is
-    // (candidates must be `ready`), and that's fine because the already-ready
-    // excess device below is a perfectly valid, sufficient candidate on its own.
-    expect(
-      harness.registry.snapshot.devices.find((device) => device.id === extraReady.id)?.state,
-    ).toBe("shutdown");
-    expect(
-      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
-    ).toBe("reclaiming");
-
-    // The background reclaim settles afterward. Its own capacity check
-    // (#mayRemainWarm, serialized against the shutdown above) sees the slot the
-    // shutdown just freed and reboots the device back into the warm pool -- the
-    // transient view above never let the pool overshoot the limit.
-    clock.advance(34_000);
-    await flush();
-    expect(
-      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
-    ).toBe("ready");
-    expect(harness.engine.runningCapacity.ios.overLimit).toBe(false);
-  });
-
   it("recovers a background reclaim interrupted by a daemon crash on the next start", async () => {
     const filesystem = new MemoryFilesystem();
     const restartStatePath = "/home/agent/.simlock/restart-state.json";
@@ -2239,40 +2166,6 @@ describe("createLeasing logger wiring", () => {
     ]);
   });
 
-  it("createCore hands its logger to the warm-pool coordinator: a failed post-purge boot is logged", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    driver.failOn("makeReady", 2, new Error("not ready"));
-    const { logger, sink } = debugLogger();
-    const harness = await createHarness({ driver, logger });
-    const first = await harness.engine.request(request, {
-      ownerId: "first",
-      requesterId: "first",
-    });
-
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-
-    expect(
-      sink.records.filter((record) => record.message === "making a reclaimed device ready failed"),
-    ).toMatchObject([
-      {
-        level: "warn",
-        module: "daemon.warm-pool-coordinator",
-        fields: {
-          deviceId: first.device.id,
-          error: "Error: not ready",
-          leaseId: first.lease.id,
-          step: "make-ready",
-        },
-      },
-    ]);
-  });
   it("createLeasing hands its logger to the lease release coordinator: a background reclaim that cannot commit is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -2797,22 +2690,6 @@ describe("createLeasing wiring", () => {
 
     expect(harness.engine.leasing.healthMonitor).toBeInstanceOf(LeaseHealthMonitor);
     expect(without.healthMonitor).toBeUndefined();
-  });
-
-  it("hands core the spec the queue's head waits for, and nothing while no request waits", async () => {
-    const harness = await createHarness();
-    const { queueHeadDemand } = harness.engine.leasing.corePorts;
-    expect(queueHeadDemand()).toBeUndefined();
-
-    await harness.engine.request(request, { ownerId: "holder", requesterId: "holder" });
-    const waiting = harness.engine.request(request, { ownerId: "waiter", requesterId: "waiter" });
-    waiting.catch(() => undefined);
-    await flush();
-
-    expect(queueHeadDemand()).toEqual({
-      spec: expect.objectContaining({ model: "iPhone 16", osVersion: "26.5", platform: "ios" }),
-    });
-    await harness.engine.cancelPending("waiter");
   });
 
   it("hands core a leaseExpirer that expires through leasing: doctor --fix ends a lease past its deadline", async () => {

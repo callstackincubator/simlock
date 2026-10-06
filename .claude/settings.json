@@ -65,6 +65,17 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.agents/scripts/budget-guard.mjs"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

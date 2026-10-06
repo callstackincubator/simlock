@@ -190,7 +190,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability: () => acquisition.kick(),
     registry,
-    warmPool: core.warmPool,
+    reclaim: core.reclaim,
   });
   const startup = new LeaseStartup({
     decisions,
@@ -224,10 +224,6 @@ export function createLeasing(options: LeasingOptions): Leasing {
       },
       leaseMaintenance: { acquisition, leases: releaseCoordinator },
       notifyAvailability: () => acquisition.kick(),
-      queueHeadDemand: () => {
-        const spec = acquisition.queueHeadSpec;
-        return spec === undefined ? undefined : { spec };
-      },
     },
     requests,
     healthMonitor,

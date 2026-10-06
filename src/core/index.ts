@@ -145,5 +145,9 @@ export {
   withNewLeaseRequest,
   withSettledLeaseRequest,
 } from "./lease-request-store.js";
-export { selectManagedVictim, selectWarmVictim, type WarmVictimScope } from "./warm-pool.js";
-export { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+export {
+  selectIdleRunningVictim,
+  selectManagedVictim,
+  type IdleVictimScope,
+} from "./idle-order.js";
+export { ReclaimCoordinator } from "./reclaim-coordinator.js";

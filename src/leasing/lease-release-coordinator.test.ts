@@ -43,7 +43,7 @@ async function createHarness() {
     ttl: { defaultMs: 20 },
   });
   const reclaims: ReleasedLease[] = [];
-  const warmPool = {
+  const reclaim = {
     async reclaim(released: ReleasedLease) {
       reclaims.push(released);
     },
@@ -62,7 +62,7 @@ async function createHarness() {
       availability.onNotify?.();
     },
     registry,
-    warmPool,
+    reclaim,
   });
   return {
     availability,
@@ -73,7 +73,7 @@ async function createHarness() {
     lifecycle,
     reclaims,
     registry,
-    warmPool,
+    reclaim,
   };
 }
 
@@ -167,11 +167,11 @@ describe("LeaseReleaseCoordinator", () => {
   // test below) rather than surfaced. What must still hold is that the registry-only
   // half committed first: the lease is gone and the device is `reclaiming`, which is
   // the state `QuarantineCoordinator` and startup recovery both expect to find.
-  it("commits beginRelease before a warm-pool failure, and keeps the device reclaiming", async () => {
+  it("commits beginRelease before a reclaim failure, and keeps the device reclaiming", async () => {
     const harness = await createHarness();
     const granted = await grant(harness);
     let leasesAtReclaim = -1;
-    harness.warmPool.reclaim = async () => {
+    harness.reclaim.reclaim = async () => {
       leasesAtReclaim = harness.registry.snapshot.leases.length;
       throw new Error("reclaim failed");
     };
@@ -197,7 +197,7 @@ describe("LeaseReleaseCoordinator", () => {
     const blocked = new Promise<void>((resolve) => {
       unblockReclaim = resolve;
     });
-    harness.warmPool.reclaim = async (released) => {
+    harness.reclaim.reclaim = async (released) => {
       harness.reclaims.push(released);
       reclaimStarted();
       await blocked;
@@ -242,7 +242,7 @@ describe("LeaseReleaseCoordinator", () => {
     const blocked = new Promise<void>((resolve) => {
       unblockReclaim = resolve;
     });
-    harness.warmPool.reclaim = async (released) => {
+    harness.reclaim.reclaim = async (released) => {
       harness.reclaims.push(released);
       reclaimStarted();
       await blocked;
@@ -300,7 +300,7 @@ describe("LeaseReleaseCoordinator", () => {
         const blocked = new Promise<void>((resolve) => {
           unblockReclaim = resolve;
         });
-        harness.warmPool.reclaim = async (released) => {
+        harness.reclaim.reclaim = async (released) => {
           harness.reclaims.push(released);
           await blocked;
         };
@@ -337,7 +337,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async (released) => {
+      harness.reclaim.reclaim = async (released) => {
         harness.reclaims.push(released);
         await blocked;
       };
@@ -360,7 +360,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async (released) => {
+      harness.reclaim.reclaim = async (released) => {
         await blocked;
         harness.reclaims.push(released);
       };
@@ -395,7 +395,7 @@ describe("LeaseReleaseCoordinator", () => {
       await harness.coordinator.release(granted.lease.id, "explicit");
       await harness.coordinator.settleBackgroundReclaims();
 
-      // WarmPoolCoordinator fires its own availability kick while this claim is still
+      // ReclaimCoordinator fires its own availability kick while this claim is still
       // held, and AcquisitionPlanner skips claimed devices -- so without a notice on
       // this side of the claim release, a waiter queued for exactly this device sleeps
       // through the only signal it was going to get.
@@ -409,7 +409,7 @@ describe("LeaseReleaseCoordinator", () => {
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;
       });
-      harness.warmPool.reclaim = async () => {
+      harness.reclaim.reclaim = async () => {
         await blocked;
       };
 
@@ -439,7 +439,7 @@ describe("LeaseReleaseCoordinator", () => {
         logger,
         notifyAvailability: () => undefined,
         registry: harness.registry,
-        warmPool: { reclaim: async () => Promise.reject(new Error("reclaim failed")) },
+        reclaim: { reclaim: async () => Promise.reject(new Error("reclaim failed")) },
       });
 
       // Vitest fails a test on an unhandled rejection, so simply not throwing here

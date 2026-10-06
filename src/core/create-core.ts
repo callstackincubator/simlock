@@ -18,17 +18,16 @@ import type {
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import type { DeviceSpec } from "./domain.js";
 import { Doctor } from "./doctor.js";
 import type { Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
+import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
-import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
 interface CoreOptions {
   readonly clock: Clock;
@@ -80,8 +79,6 @@ export interface CorePorts {
   readonly leaseExpirer: LeaseExpirer;
   /** Tells acquisition a device came back, so a waiting request is tried again. */
   readonly notifyAvailability: () => void;
-  /** The spec the queue's head waits for, when one waits; the warm pool keeps a device for it. */
-  readonly queueHeadDemand: () => { readonly spec: DeviceSpec } | undefined;
 }
 
 /** A core service reached a port that `Core#connect` has not been given yet. */
@@ -115,11 +112,11 @@ export interface Core {
   readonly nuke: NukeService;
   readonly provisioner: DeviceProvisioner;
   readonly quarantine: QuarantineCoordinator;
+  readonly reclaim: ReclaimCoordinator;
   readonly registry: Registry;
-  readonly warmPool: WarmPoolCoordinator;
   /** Supplies the ports leasing implements. Call it once, before any request is admitted. */
   connect(ports: CorePorts): void;
-  /** The device steps of startup: quarantine restore, interrupted reclaims, spent devices, excess. */
+  /** The device steps of startup: quarantine restore, interrupted reclaims, spent devices. */
   converge(): Promise<void>;
   /** Cancels the timers core armed, so the process can exit. */
   dispose(): void;
@@ -198,16 +195,13 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
-  const warmPool = new WarmPoolCoordinator({
-    capacity,
+  const reclaim = new ReclaimCoordinator({
     clock: options.clock,
     decisions,
     drivers,
     eventBus: options.eventBus,
     notifyAvailability,
     quarantine,
-    queueHeadDemand: () => port("queueHeadDemand")(),
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
   const cleanup = new CleanupExecutor({
@@ -238,14 +232,12 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const startup = new StartupConverger({
-    capacity: capacityReader,
     claims,
-    cleanup,
     decisions,
     drivers,
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
-        await warmPool.recoverInterrupted(device.id);
+        await reclaim.recoverInterrupted(device.id);
       },
     },
     quarantineRestore: { restore: () => quarantine.restore() },
@@ -255,7 +247,7 @@ export function createCore(options: CoreOptions): Core {
       // and ungrantable, and the next start (or the idle delete rule) tries again.
       deleteSpent: async (device) => {
         try {
-          await warmPool.deleteSpent(device.id);
+          await reclaim.deleteSpent(device.id);
         } catch (error: unknown) {
           options.logger?.error("startup delete of a spent device failed", {
             deviceId: device.id,
@@ -280,8 +272,8 @@ export function createCore(options: CoreOptions): Core {
     nuke,
     provisioner,
     quarantine,
+    reclaim,
     registry,
-    warmPool,
     connect(supplied) {
       ports = supplied;
     },
