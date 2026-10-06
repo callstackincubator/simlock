@@ -1,6 +1,6 @@
 # 0020. A requester may choose its lease id, and the gateway passes it through bare
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-06
 - **Issue:** [#410](https://github.com/callstackincubator/simlock/issues/410)
 - **Supersedes:** nothing. Narrows [ADR 0005](0005-gateway-and-worker-modes.md)
