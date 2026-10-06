@@ -1432,7 +1432,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
 
-    // An ownerless boot claim is the warm pool's: a request would wait for it for good.
+    // An ownerless boot claim is the warm pool's: a request would wait for it until its own timeout.
     expect(harness.claims.claim(shutdown.id)).toEqual({
       kind: "boot",
       owner: expect.stringMatching(/^req_/),
@@ -1468,10 +1468,55 @@ describe("LeaseAcquisitionCoordinator", () => {
     await settle();
 
     expect(secondGranted).toBe(true);
+    expect((await second).device.id).not.toBe(shutdownId);
     expect(harness.claims.claim(shutdownId)).toEqual({ kind: "cleanup" });
 
     failDestroy(new DriverCrashError("simulator would not die"));
     await booterOutcome;
+  });
+
+  it("A device whose boot for a waiter failed is deleted by the lease engine, and its slot is freed.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.bus.replay().filter((event) => event.event === "device.deleted")).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ deviceId: shutdown.id, initiator: "lease-engine" }),
+      }),
+    ]);
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+  });
+
+  it("A failed boot whose device the destroy can no longer claim leaves that device fenced under its waiter.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    const realMakeReady = harness.driver.makeReady.bind(harness.driver);
+    vi.spyOn(harness.driver, "makeReady").mockImplementation(async (...args) => {
+      try {
+        return await realMakeReady(...args);
+      } finally {
+        // The record leaves `shutdown` while the boot fails, so the destroy finds nothing to claim.
+        await harness.registry.transitionDevice(shutdown.id, "deleted", {
+          event: "device.deleted",
+          payload: { deviceId: shutdown.id, initiator: "test" },
+        });
+      }
+    });
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.stringMatching(/^req_/),
+    });
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {

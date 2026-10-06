@@ -2807,6 +2807,9 @@ describe("LeaseEngine warm pool", () => {
       expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
 
       clock.advance(50);
+      await flush();
+      // The pool's kick after its boot woke the request: it is granted without another clock tick.
+      expect(await settledOrPending(second)).not.toBe("still pending");
       const granted = await second;
       await harness.engine.settle();
 

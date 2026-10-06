@@ -96,7 +96,8 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       });
       const first = await releasedAndBooting(env);
 
-      const second = await lease(env, "waiter");
+      // A bound shorter than the test timeout: a request nobody woke fails here, on QUEUE_TIMEOUT.
+      const second = await lease(env, "waiter", ["--timeout", "20s"]);
 
       expect(second.device.id).toBe(first.device.id);
       expect(await eventsNamed(env, "device.provisioned")).toHaveLength(1);

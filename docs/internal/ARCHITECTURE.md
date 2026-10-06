@@ -1978,8 +1978,9 @@ image tag if one is named) and a `DeviceRequirement` kept on the waiter
 beside its spec. `fits` in `domain.ts` is the one place a requirement meets
 a device (platform, model or class, OS, image tag); the planner adds the
 pool-mode comparison and looks for a `ready` device that fits, then, unless the
-request is `noWait`, for a fitting device already on its way (`provisioning` or
-`shutdown` under a `boot` claim no request owns: the warm pool's own boot) and
+request is `noWait`, for a fitting device already on its way (`shutdown` under a
+`boot` claim no request owns: the warm pool's own boot; a `provisioning` device
+under such a claim counts the same, for the creations the pool will make) and
 waits for it, then a `shutdown` one, then provisions the create spec. A claim
 carries its `owner`, the waiter id, only when a request took it, so a device
 another request is booting or creating for itself is never waited for. `sameSpec` is untouched and
