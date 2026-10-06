@@ -553,7 +553,7 @@ describe("WorkerRegistry", () => {
 
       workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
 
-      expect(workers.routingViews()[0]?.catalog).toBeUndefined();
+      expect(Object.keys(workers.routingViews()[0] ?? {})).not.toContain("catalog");
     });
 
     it("forgets the last catalog and leases with the view, so a worker that comes back starting is unknown", async () => {

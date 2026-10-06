@@ -158,9 +158,10 @@ export class WorkerRegistry {
    * Never shown to an operator: the view itself says "not read yet".
    */
   routingViews(): readonly WorkerView[] {
+    // A view that has a catalog holds the last one read, so only a starting view differs.
     return this.views().map((view) => {
       const catalog = this.#lastCatalog.get(view.id);
-      return view.catalog === undefined && catalog !== undefined ? { ...view, catalog } : view;
+      return catalog === undefined ? view : { ...view, catalog };
     });
   }
 
