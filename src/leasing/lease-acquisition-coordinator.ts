@@ -671,7 +671,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.options.drivers.get(plan.device.spec.platform),
         plan.device.spec,
       );
-      await this.#grant(waiter, plan.device.id, plan.kind);
+      await this.#grant(waiter, plan.device, plan.kind);
       return undefined;
     }
     const operation = operationPlan(plan);
@@ -701,25 +701,28 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * The one place a `LeaseGrant` is built, which is why the lease environment is read
-   * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
-   * through it, so there is no second construction site to keep in step.
+   * Hands the waiter the grant `LeaseLifecycle.grant` returns, which is why the lease
+   * environment is read here: every acquisition path -- ready device, fresh provision, boot,
+   * eviction -- funnels through it. The grant is built in `LeaseLifecycle.grant` from the same
+   * fields `Registry.createLease` stores for a repeat of the request, so the two must stay equal.
    */
-  async #grant(waiter: AcquisitionWaiter, deviceId: string, kind: GrantingPlanKind): Promise<void> {
-    const { device, lease } = await this.options.leases.grant({
-      deviceId,
+  async #grant(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    kind: GrantingPlanKind,
+  ): Promise<void> {
+    // Built before the write: the grant a repeat of this request answers is stored with the lease.
+    const granted = await this.options.leases.grant({
+      deviceId: device.id,
+      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
       ownerId: waiter.options.ownerId,
       requestId: waiter.id,
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
+      timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
-    this.options.queue.resolve(waiter, {
-      device,
-      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
-      lease,
-      timing: waiter.timing,
-    });
+    this.options.queue.resolve(waiter, granted);
   }
 
   async #evictRunning(
@@ -905,7 +908,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
-        await this.#grant(waiter, handoff.device.id, kind);
+        await this.#grant(waiter, handoff.device, kind);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();

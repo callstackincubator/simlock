@@ -102,6 +102,16 @@ export interface CreateLeaseInput {
   /** The width this lease is granted with; stored on the record, see `LeaseRecord.ttlMs`. */
   readonly ttlMs: number;
   readonly ttlDeadline: number;
+  /**
+   * The request this lease is granted for, and the rest of the grant its repeat answers. When
+   * given, the commit that adds the lease also marks that request `granted` with the whole
+   * `LeaseGrant` (device, environment, lease, timing), so no crash can fall between the two.
+   */
+  readonly request?: {
+    readonly id: string;
+    readonly environment: LeaseGrant["environment"];
+    readonly timing: LeaseGrant["timing"];
+  };
 }
 
 export type RegistryDeviceEvent =
@@ -514,6 +524,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     requesterId,
     ttlMs,
     ttlDeadline,
+    request,
   }: CreateLeaseInput): Promise<LeaseRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
     if (index === -1) {
@@ -544,7 +555,26 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = leasedDevice;
-    await this.#commit(devices, [...this.#leases, lease]);
+    // The request's result goes in the same write as the lease: a crash leaves both or neither.
+    // A request that is gone or already settled is left alone, as the book's own settle does.
+    const leaseRequests =
+      request === undefined
+        ? this.#leaseRequests
+        : withSettledLeaseRequest(
+            this.#leaseRequests,
+            request.id,
+            {
+              grant: {
+                device: leasedDevice,
+                environment: request.environment,
+                lease,
+                timing: request.timing,
+              },
+              state: "granted",
+            },
+            grantedAt,
+          ).records;
+    await this.#commit(devices, [...this.#leases, lease], leaseRequests);
 
     return cloneLease(lease);
   }

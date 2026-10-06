@@ -1551,7 +1551,7 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     });
 
     expect(granted.lease.requesterId).toBe("agent");
-    // The result is written once the wait settles, a step behind the grant itself.
+    // The grant and its stored result land in one commit; the flush lets the wait settle.
     await flush();
     expect(harness.registry.leaseRequests().map((record) => record.state)).toEqual([
       "granted",

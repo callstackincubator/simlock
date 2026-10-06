@@ -526,24 +526,6 @@ for the requests it holds for the gateway. That needs a worker operation that
 lists stored requests, and the gateway forwarding a key the worker can store
 the request under.
 
-## A restart between a grant and its record write reports the request as failed
-
-A request's result is written once its wait settles, a step after the lease
-itself is committed (`LeaseRequestBook#settle` runs after the grant resolves,
-not inside the same `state.json` write as `Registry.createLease`).
-
-**The pitfall:** a daemon that stops in that window leaves a lease on disk
-and its request still `open`. The next start settles the request as `failed`
-(daemon restarted), so a repeat under the same key answers with that failure
-even though the lease exists. Nothing is lost: the requester still holds the
-lease, and a request under a new key answers `REQUESTER_ALREADY_LEASED`
-naming it.
-
-**Status:** known; the window is one serialized registry write long.
-
-**Planned fix:** write the request's result in the same commit as the lease
-it was granted, by passing the request id into `Registry.createLease`.
-
 ## HTTP single-lease reads answer 404, not 403, for an unowned lease
 
 `GET /v1/leases/:id` and `GET /v1/leases/:id/events` resolve their lease
