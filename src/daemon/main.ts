@@ -378,11 +378,18 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // timers of the rest, then core's device convergence, then the queue's first depth, which every
   // run begins with. One after another: the reconciler needs the read, and convergence must not
   // pick a device the reconciler is about to release.
+  // Set once a stop begins. A `daemon.stop` is accepted while startup runs, and the read takes up
+  // to a minute: every step after it would arm timers (expiry, quarantine retry, warm pool tick)
+  // on a daemon whose disposal has already run, and nothing would cancel them.
+  let stopping = false;
   const convergeStartup = async (): Promise<void> => {
     await leasing.settleRequests();
     const read = await core.readStartup();
+    if (stopping) return;
     await core.doctor.reconcile({ read });
+    if (stopping) return;
     await leasing.reconcile(read);
+    if (stopping) return;
     await core.converge(read);
     leasing.announceQueueDepth();
   };
@@ -437,6 +444,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // Requests other than hello/status.get park until this resolves.
     converge: convergeStartup,
     settle: async () => {
+      stopping = true;
       await leasing.settle();
       await core.settle();
     },

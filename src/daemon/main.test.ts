@@ -875,6 +875,52 @@ describe("startDaemon startup readiness", () => {
   });
 });
 
+describe("startDaemon stopped while starting", () => {
+  it("arms no timer when the startup read finishes after a stop, so nothing keeps the process alive", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
+    const filesystem = new MemoryFilesystem();
+    const startPromise = startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem,
+      socketPath,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+
+    const client = await connectRetrying(socketPath);
+    try {
+      const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
+      await client.request("hello", {
+        clientVersion: "test",
+        credential: secret,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      expect((await client.request("daemon.stop", {})).ok).toBe(true);
+      // `daemon.stop` answers first and tears down after, so give the teardown real time to begin.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      client.socket.end();
+    }
+    clock.advance(30_000);
+    await startPromise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+});
+
 describe("startDaemon HTTP gateway startup readiness", () => {
   // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
   // being refused." Mirrors the socket-side test above (same FakeDriver latency trick to hold
