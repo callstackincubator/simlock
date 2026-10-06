@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -1437,6 +1437,41 @@ describe("LeaseAcquisitionCoordinator", () => {
       kind: "boot",
       owner: expect.any(String),
     });
+  });
+
+  it("grants a request that arrived while a failed boot's device was being destroyed, once that destroy fails, with room to provision.", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    let failDestroy: (error: Error) => void = () => undefined;
+    const realDestroy = harness.driver.destroy.bind(harness.driver);
+    let destroys = 0;
+    vi.spyOn(harness.driver, "destroy").mockImplementation(async (device) => {
+      destroys += 1;
+      if (destroys > 1) return realDestroy(device);
+      return new Promise<void>((_resolve, reject) => {
+        failDestroy = reject;
+      });
+    });
+
+    const booter = harness.coordinator.request(request, {
+      ownerId: "booter",
+      requesterId: "booter",
+    });
+    const booterOutcome = booter.catch((error: unknown) => error);
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondGranted = false;
+    void second.then(() => {
+      secondGranted = true;
+    });
+    await settle();
+
+    failDestroy(new DriverCrashError("simulator would not die"));
+    await booterOutcome;
+    await settle();
+
+    expect(secondGranted).toBe(true);
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
