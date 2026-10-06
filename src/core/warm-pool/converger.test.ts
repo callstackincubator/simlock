@@ -95,7 +95,14 @@ function harness(
   };
   const reservations: { released: number; claimedAtBoot?: boolean; releasedAtBoot?: number }[] = [];
   const kick = vi.fn();
-  const waitingDemand = vi.fn(options.waiting ?? (() => []));
+  // One read per pass: a pool that spins is stopped here, with a named count a test asserts on,
+  // instead of exhausting the worker's heap.
+  const passes = { count: 0 };
+  const waitingDemand = vi.fn(() => {
+    passes.count += 1;
+    if (passes.count > 200) throw new Error("the warm pool is spinning");
+    return options.waiting?.() ?? [];
+  });
   const shutdownCalls: string[] = [];
   const shutdownArgs: unknown[][] = [];
   const bootCalls: string[] = [];
@@ -264,6 +271,7 @@ function harness(
     eventBus,
     kick,
     lease,
+    passes,
     pool,
     provisionCalls,
     provisionReservations,
@@ -1299,19 +1307,27 @@ describe("warm pool targets", () => {
   it("keeps a target's last resolved spec when one pass cannot resolve it, and drops it for a settled refusal", async () => {
     let answer: TargetResolution = { spec: kind };
     const stale = { ...ofKind("stale", "ready"), readyAt: now - 11 * minute };
-    const rig = harness([stale], { resolve: () => answer, targets: [iphone17] });
+    const rig = harness([stale], { resolve: () => answer, targets: [{ ...iphone17, count: 2 }] });
     await rig.pool.pass();
+    await rig.pool.settle();
     expect(rig.shutdownCalls).toEqual([]);
+    expect(rig.provisionCalls).toHaveLength(1);
+    rig.lease("new-1");
 
+    // The target is one short, but the spec it may no longer have plans no creation for it.
     answer = { message: "simctl timed out", refusal: "unresolvable" };
     await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.provisionCalls).toHaveLength(1);
     expect(rig.shutdownCalls).toEqual([]);
     expect([...(await rig.pool.targeted())]).toEqual(["stale"]);
     expect(rig.pool.targets()).toEqual([
-      expect.objectContaining({ message: "simctl timed out", short: "unresolvable" }),
+      expect.objectContaining({ message: "simctl timed out", ready: 1, short: "unresolvable" }),
     ]);
-    // No boot or creation from the spec it may no longer have.
-    expect(rig.provisionCalls).toEqual([]);
+    const line = rig.sink.records.filter(
+      (record) => record.message === "a warm pool target is short",
+    );
+    expect(line[0]?.fields).toMatchObject({ ready: 1, short: "unresolvable" });
 
     answer = { message: "gone", refusal: "runtime-missing" };
     await rig.pool.pass();
@@ -1320,9 +1336,13 @@ describe("warm pool targets", () => {
 
     // The spec it once had is gone with a settled refusal: a later failed read has none to keep.
     answer = { message: "simctl timed out", refusal: "unresolvable" };
-    rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "ready" as const }));
+    rig.state.devices = rig.state.devices.map((item) =>
+      item.id === "stale" ? { ...item, state: "ready" as const } : item,
+    );
     await rig.pool.pass();
-    expect(rig.pool.targets()).toEqual([expect.objectContaining({ short: "unresolvable" })]);
+    expect(rig.pool.targets()).toEqual([
+      expect.objectContaining({ ready: 0, short: "unresolvable" }),
+    ]);
     expect([...(await rig.pool.targeted())]).toEqual([]);
   });
 
@@ -1364,25 +1384,31 @@ describe("warm pool targets", () => {
     expect(rig.resolveCalls).toEqual([]);
   });
 
-  it("makes a target boot of a shut-down device wait for the schedule only, not for the device's own pause", async () => {
+  it("does not pause a device after a failed target boot, so a keep boot of it a moment later is not dropped", async () => {
+    const targets: WarmTarget[] = [iphone17];
     let attempts = 0;
     const rig = harness([ofKind("shut", "shutdown")], {
       boot: async () => {
         attempts += 1;
         throw new Error("simulator did not boot");
       },
-      targets: [iphone17],
+      targets,
     });
     await rig.pool.pass();
     await rig.pool.settle();
+    expect(attempts).toBe(1);
 
-    // 30 s later the device pause would still hold a keep boot; a target boot waits a minute.
-    rig.clock.advance(30_000);
+    // The target is dropped and the device was released a moment ago: the keep rule boots it,
+    // well inside the 30 s a keep boot's own failure would hold it.
+    targets.length = 0;
+    rig.state.devices = rig.state.devices.map((item) => ({
+      ...item,
+      lastLeaseEndedAt: now - 1_000,
+    }));
+    rig.clock.advance(1_000);
     await rig.pool.pass();
     await rig.pool.settle();
-    expect(attempts).toBe(1);
-    rig.clock.advance(30_000);
-    await rig.pool.settle();
+
     expect(attempts).toBe(2);
   });
 

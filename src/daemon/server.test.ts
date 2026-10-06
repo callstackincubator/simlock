@@ -2050,6 +2050,23 @@ describe("DaemonServer decorations", () => {
       expect(harness.registry.snapshot.leases).toHaveLength(1);
     });
 
+    it("calls beginStop once, before stopAuxiliary, when a stop is asked for", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        beginStop: () => {
+          order.push("beginStop");
+        },
+        stopAuxiliary: async () => {
+          order.push("stopAuxiliary");
+        },
+      });
+
+      await harness.daemon.stop("test-begin-stop");
+      await harness.daemon.stop("again");
+
+      expect(order).toEqual(["beginStop", "stopAuxiliary"]);
+    });
+
     it("reports health via the public accessor across the startup/stop lifecycle", async () => {
       const harness = await createHarness({ start: false });
       expect(harness.daemon.health).toBe("starting");
@@ -2869,6 +2886,7 @@ async function createHarness(
      * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
     readonly iosMaxDevices?: number;
     readonly settle?: () => Promise<void>;
+    readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
     /** ADR 0003 §5's per-start admin secret (`AdminSecretManager`). Undefined by default, same
@@ -2989,6 +3007,7 @@ async function createHarness(
     resolveRole: options.resolveRole ?? { resolve: () => "admin" },
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
+    ...(options.beginStop === undefined ? {} : { beginStop: options.beginStop }),
     ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
     version: "test",
   });

@@ -337,11 +337,7 @@ function readyOfKind(
     .sort((left, right) => left.createdAt - right.createdAt);
 }
 
-/**
- * The devices a target keeps: for each target, its ready unleased devices of that kind, oldest
- * first, up to its count. The one place the pool and the idle shutdown timer agree on which
- * devices a target counts.
- */
+/** Whether a device has no lease and no operation claim on it. */
 function idlePredicate(
   leases: readonly LeaseRecord[],
   isClaimed: (deviceId: string) => boolean,
@@ -350,12 +346,25 @@ function idlePredicate(
   return (device) => !leased.has(device.id) && !isClaimed(device.id);
 }
 
-export function targetedDevices(input: {
+interface DeviceCounts {
   readonly devices: readonly DeviceRecord[];
   readonly leases: readonly LeaseRecord[];
   readonly isClaimed: (deviceId: string) => boolean;
-  readonly targets: readonly ResolvedTarget[];
-}): ReadonlySet<string> {
+}
+
+/** How many ready, unleased devices of `spec`'s kind there are: what a target report calls ready. */
+export function readyCount(input: DeviceCounts, spec: DeviceSpec): number {
+  return readyOfKind(input.devices, idlePredicate(input.leases, input.isClaimed), spec).length;
+}
+
+/**
+ * The devices a target keeps: for each target, its ready unleased devices of that kind, oldest
+ * first, up to its count. The one place the pool and the idle shutdown timer agree on which
+ * devices a target counts.
+ */
+export function targetedDevices(
+  input: DeviceCounts & { readonly targets: readonly ResolvedTarget[] },
+): ReadonlySet<string> {
   const isIdle = idlePredicate(input.leases, input.isClaimed);
   return new Set(
     mergeTargets(input.targets).flatMap((target) =>

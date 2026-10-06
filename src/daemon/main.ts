@@ -382,6 +382,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
+    // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
+    beginStop: () => core.closeWarmPool(),
     capacity: core.capacityReader,
     catalog: core.catalog,
     deviceModes: leasing,
@@ -443,7 +445,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await Promise.all([core.doctor.reconcile(), convergeStartup()]);
     },
     settle: async () => {
-      core.closeWarmPool();
       await leasing.settle();
       await core.drain();
     },

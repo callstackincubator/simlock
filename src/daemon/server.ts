@@ -216,6 +216,13 @@ export interface DaemonServerCommonOptions {
    */
   readonly settle?: () => Promise<void>;
   /**
+   * Called synchronously the moment a stop is asked for, before anything is awaited: it closes
+   * to new work whatever `settle` will later wait for (the warm pool), so nothing started in the
+   * window while auxiliary frontends stop is something the drain then waits out (architecture
+   * rule 12).
+   */
+  readonly beginStop?: () => void;
+  /**
    * Releases what the daemon holds beyond its own state on shutdown: timers the lease
    * subsystem armed (quarantine retries), and every driver's own external resources.
    * Awaited, because a driver's release is asynchronous and a stop that returned before it
@@ -607,6 +614,7 @@ export class DaemonServer {
       return this.#stopPromise;
     }
     this.#stopping = true;
+    this.options.beginStop?.();
     this.#stopPromise = this.#stop(reason);
     return this.#stopPromise;
   }
