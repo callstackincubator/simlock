@@ -142,7 +142,12 @@ describe("the warm pool section of a worker's page", () => {
       <WorkerDetail id="wrk_1" workers={[{ ...RUNNING, warmPool: WARM_POOL }]} now={NOW} />,
     );
 
-    for (const header of ["Model", "Runtime", "Mode", "Short"]) {
+    // The devices table carries a Model and a Mode column too, so each is there twice.
+    const occurrences = (text: string): number => html.split(text).length - 1;
+    for (const header of ["Model", "Mode"]) {
+      expect(occurrences(`<th scope="col">${header}</th>`)).toBe(2);
+    }
+    for (const header of ["Runtime", "Short"]) {
       expect(html).toContain(`<th scope="col">${header}</th>`);
     }
     for (const header of ["Wanted", "Ready", "Booting"]) {

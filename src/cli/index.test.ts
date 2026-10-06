@@ -3116,6 +3116,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         "warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0",
         "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
       ]);
+      expect(output.stderr).not.toContain("undefined");
       expect(JSON.parse(output.stdout)).toEqual({ findings });
     });
   });
