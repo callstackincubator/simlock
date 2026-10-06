@@ -563,6 +563,18 @@ describe("startDaemon wires core and leasing together", () => {
     expect(events.find((event) => event.event === "queue.changed")?.module).toBe("wait-queue");
   });
 
+  it("runs doctor's startup pass on the startup read before core's device steps announce the capacity figures", async () => {
+    const { directory } = await start();
+
+    const names = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { readonly event: string }).event);
+
+    expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
+    expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
+  });
+
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
@@ -666,6 +678,60 @@ describe("startDaemon wires core and leasing together", () => {
     // timer is armed by core's convergence, which must not have begun.
     expect(timersWhileLeasingStartupPending).toBe(1);
     expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
+  });
+
+  it("stays starting until leasing has ended the lease whose device is not running, and no longer holds the lease once it is up", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, "state.json");
+    let holdWrites = false;
+    let releaseWrite: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    class HoldingFilesystem extends MemoryFilesystem {
+      async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (holdWrites && arguments_[0] === statePath) await writeHeld;
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const filesystem = new HoldingFilesystem();
+    const options = () =>
+      ({
+        clock,
+        dataDirectory: directory,
+        drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const first = await startDaemon(options());
+    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    await first.stop("test");
+    // The restarted process's driver knows no device, so the leased one is gone from its platform.
+    // Ending that lease writes the registry; hold that write.
+    holdWrites = true;
+
+    let started = false;
+    const starting = startDaemon(options()).then((daemon) => {
+      started = true;
+      return daemon;
+    });
+    await settleRealTime();
+    const startedWhileEndingPending = started;
+    releaseWrite();
+    const daemon = await starting;
+    runningDaemons.push(daemon);
+
+    expect(startedWhileEndingPending).toBe(false);
+    const state = JSON.parse(await filesystem.readFile(statePath)) as {
+      readonly leases: readonly { readonly id: string }[];
+    };
+    expect(state.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
   });
 
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
@@ -818,6 +884,52 @@ describe("startDaemon startup readiness", () => {
     } finally {
       client.socket.end();
     }
+  });
+});
+
+describe("startDaemon stopped while starting", () => {
+  it("arms no timer when the startup read finishes after a stop, so nothing keeps the process alive", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
+    const filesystem = new MemoryFilesystem();
+    const startPromise = startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem,
+      socketPath,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+
+    const client = await connectRetrying(socketPath);
+    try {
+      const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
+      await client.request("hello", {
+        clientVersion: "test",
+        credential: secret,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      expect((await client.request("daemon.stop", {})).ok).toBe(true);
+      // `daemon.stop` answers first and tears down after, so give the teardown real time to begin.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    } finally {
+      client.socket.end();
+    }
+    clock.advance(30_000);
+    await startPromise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    expect(clock.pendingTimerCount).toBe(0);
   });
 });
 

@@ -572,7 +572,9 @@ call `renewLease` with the lease id and you have picked the lease straight
 back up; do nothing and it expires at its deadline like any other. That is
 why `onLeaseLost` no longer fires on connection loss: it reports a lease the
 daemon actually ended (expiry, an operator release, an unrecoverable
-device), and a dropped socket is not one.
+device), and a dropped socket is not one. A daemon that starts again ends
+every lease whose device is not running then, as `device-lost`, so a
+`renewLease` after a restart can fail with `UNKNOWN_LEASE`.
 
 Reconnect policy is deliberately a frontend's own concern, not something
 this client can make a universal decision about:
@@ -775,7 +777,7 @@ answers as a fleet of one:
   handshake means something answered, and launching there risks a second
   daemon instance or masking a real incompatibility).
 - It does not restart the daemon on a protocol version mismatch. Leases
-  survive a restart, but stopping a daemon out from under
+  whose device is still running survive a restart, but stopping a daemon out from under
   its users still kills every queued lease request on the machine and leaves
   every lease it was serving burning TTL with nothing to renew against.
   `PROTOCOL_VERSION_UNSUPPORTED` names the running daemon's version; the fix

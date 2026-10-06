@@ -1441,8 +1441,11 @@ and `message` — details are contract, message text is not.
   connection, in-flight SSE streams included) before tearing down the lease
   engine, so no HTTP request can run against a stopping daemon. Stopping the
   daemon does not release anything: leases persist, and the next daemon
-  restores each one's TTL timer from its deadline. A lease whose deadline
-  passed while no daemon was running expires as soon as one is.
+  restores the TTL timer of each lease whose device is still running, from
+  its deadline. A lease whose device is not running at that start is ended
+  before the daemon serves a request, as `device-lost`; a renew of it answers
+  `404 UNKNOWN_LEASE`. A lease whose deadline passed while no daemon was
+  running expires as soon as one is.
 
 ## Not implemented
 

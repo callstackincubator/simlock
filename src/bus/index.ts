@@ -40,7 +40,7 @@ export interface EventMap {
      * Who ended this lease, and whether its holder asked: `explicit` is a `lease.release` the
      * holder itself sent (including the one a `simlock lease` sends on its way out), `killed`
      * an operator taking it away (`release --all`, `nuke`), `device-lost` crash recovery
-     * giving up. Expiry is not in this union at all -- it has its own event.
+     * giving up, or a daemon start finding the device not running. Expiry is not in this union at all -- it has its own event.
      *
      * ADR 0004's Consequences: `closed` and `orphaned` are gone from it, the same deliberate
      * 0.x exception to events rule 6. Closing a connection is not a release any more (§3), and

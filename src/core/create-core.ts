@@ -30,6 +30,7 @@ import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { readStartup, type StartupRead } from "./startup-read.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 interface CoreOptions {
@@ -134,11 +135,17 @@ export interface Core {
   /** Supplies the ports leasing implements. Call it once, before any request is admitted. */
   connect(ports: CorePorts): void;
   /**
-   * The device steps of startup: quarantine restore, interrupted reclaims, spent devices; then it
-   * starts the capacity observer and the warm pool, so the facts convergence commits trigger no
-   * pass and the first one follows `daemon.started`, where a lowered `maxRunning` is converged.
+   * Startup's one read of the machine: every driver's `listManaged` once, each platform bounded
+   * by a fixed limit. Never throws; a platform that could not be listed is left out of it.
    */
-  converge(): Promise<void>;
+  readStartup(): Promise<StartupRead>;
+  /**
+   * The device steps of startup: quarantine restore, interrupted reclaims, spent devices, none of
+   * them on a platform the read could not list; then it starts the capacity observer and the warm
+   * pool, so the facts convergence commits trigger no pass and the first one follows
+   * `daemon.started`, where a lowered `maxRunning` is converged.
+   */
+  converge(read: StartupRead): Promise<void>;
   /**
    * Runs a warm pool pass now. Leasing calls it once a backgrounded reclaim has given up its
    * claim: `device.reclaimed` fires while that claim is still held, so the pass it triggers sees
@@ -147,7 +154,10 @@ export interface Core {
   passWarmPool(): Promise<void>;
   /** The devices the idle shutdown timer leaves alone: those a warm target keeps. */
   targetedDevices(): Promise<ReadonlySet<string>>;
-  /** Awaits the warm pool's running pass, so a test or a reset sees a settled pool. */
+  /**
+   * Awaits the deferred startup wipes, then the warm pool's running pass, so a graceful shutdown
+   * hands back a settled pool.
+   */
   settle(): Promise<void>;
   /**
    * A graceful stop: the warm pool starts nothing new and finishes what is in flight, so the
@@ -238,10 +248,12 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const reclaim = new ReclaimCoordinator({
+    claims,
     clock: options.clock,
     decisions,
     drivers,
     eventBus: options.eventBus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
     quarantine,
     registry,
@@ -277,9 +289,12 @@ export function createCore(options: CoreOptions): Core {
   const nuke = new NukeService({
     acquisition: {
       // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
-      // already has in flight is waited for, so the reset sees a settled pool.
+      // already has in flight is waited for, so the reset sees a settled pool. A startup wipe still
+      // running is waited for first: its commit can start a pool pass, and the device it holds in
+      // `reclaiming` is one the reset would skip.
       beginMaintenance: async () => {
         await leaseMaintenance.acquisition.beginMaintenance();
+        await reclaim.settle();
         await warmPool.settle();
       },
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
@@ -310,13 +325,12 @@ export function createCore(options: CoreOptions): Core {
   const startup = new StartupConverger({
     claims,
     decisions,
-    drivers,
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
         await reclaim.recoverInterrupted(device.id);
       },
     },
-    quarantineRestore: { restore: () => quarantine.restore() },
+    quarantineRestore: { restore: (include) => quarantine.restore(include) },
     registry,
     spentDeviceDeletion: {
       // A failed delete must not stop the daemon from starting: the device stays `shutdown`
@@ -354,8 +368,10 @@ export function createCore(options: CoreOptions): Core {
     connect(supplied) {
       ports = supplied;
     },
-    async converge() {
-      await startup.converge();
+    readStartup: () =>
+      readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
+    async converge(read) {
+      await startup.converge(read);
       warmPool.start();
       // Every run begins with a step in the figures: what they are now.
       capacityObserver.start();
@@ -373,6 +389,8 @@ export function createCore(options: CoreOptions): Core {
       await warmPool.drain();
     },
     async settle() {
+      // The wipe's commit can start a pool pass, so the wipes are awaited first.
+      await reclaim.settle();
       await warmPool.settle();
     },
     dispose() {

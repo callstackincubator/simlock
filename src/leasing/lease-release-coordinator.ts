@@ -26,8 +26,32 @@ export interface LeaseReleaseMaintenance {
   endMaintenance(): Promise<void>;
 }
 
+/**
+ * What a daemon start does about the device of a lease it ends. `reclaim` wipes it in the
+ * background and returns it to the pool; `wait` leaves it `reclaiming` with no reclaim started, for
+ * a platform that could not be listed; `missing` marks it missing, for a device gone from a platform
+ * that could.
+ */
+export type StartupDeviceOutcome = "reclaim" | "wait" | "missing";
+
+/** How a lease is ended at startup: `expired` for one whose deadline passed, else `device-lost`. */
+export interface StartupEnding {
+  readonly device: StartupDeviceOutcome;
+  readonly reason: "device-lost" | "expired";
+}
+
+/** The release a daemon start performs on a lease whose device is not running. */
+export interface StartupLeaseEnder {
+  endAtStartup(leaseId: string, ending: StartupEnding): Promise<void>;
+}
+
 export interface LeaseReleaseLifecycle {
-  beginRelease(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    reason: LeaseReleaseReason | "expired",
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
+  endForMissingDevice(leaseId: string, reason: "expired" | "device-lost"): Promise<ReleasedLease>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
 }
 
@@ -58,9 +82,11 @@ export interface LeaseReleaseCoordinatorOptions {
  * actually needs, and the purge behind it is the slow part. `await` exists for
  * the one caller that needs the device settled before it continues -- the
  * maintenance-authorized release an operator reset runs (see
- * `releaseAllDuringMaintenance`).
+ * `releaseAllDuringMaintenance`). `none` starts no reclaim at all: the device stays
+ * `reclaiming` for a later start to recover, which is what a lease ended on a platform that
+ * could not be listed needs (see `endAtStartup`).
  */
-type ReclaimMode = "await" | "background";
+type ReclaimMode = "await" | "background" | "none";
 
 /**
  * Coordinates lease-side commands. Lease commits happen in the serialized
@@ -71,7 +97,7 @@ type ReclaimMode = "await" | "background";
  * calls are not idempotent: overlapping snapshots can yield UnknownLeaseError.
  */
 export class LeaseReleaseCoordinator
-  implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance
+  implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance, StartupLeaseEnder
 {
   readonly #activeWorkflows = new Set<Promise<void>>();
   /**
@@ -117,6 +143,33 @@ export class LeaseReleaseCoordinator
         reclaim: "background",
       }),
     );
+  }
+
+  /**
+   * Ends a lease at daemon start, because its device is not running. An ordinary release in every
+   * way but the device: `reclaim` starts the usual background reclaim, `wait` starts none and
+   * takes no claim (a driver that just failed or hung on its listing would likely hang the
+   * reclaim too, and a hung reclaim holds its claim with no end), and `missing` removes the lease
+   * and marks the device missing in one write, with nothing to wipe.
+   */
+  async endAtStartup(leaseId: string, ending: StartupEnding): Promise<void> {
+    await this.#runNormal(async () => {
+      switch (ending.device) {
+        case "missing":
+          await this.options.decisions.run(() =>
+            this.options.lifecycle.endForMissingDevice(leaseId, ending.reason),
+          );
+          return;
+        case "reclaim":
+          await this.#release(leaseId, ending.reason, { reclaim: "background" });
+          return;
+        case "wait":
+          await this.#release(leaseId, ending.reason, { reclaim: "none" });
+          return;
+        default:
+          throw new Error(`Unknown startup ending for ${leaseId}: ${String(ending.device)}`);
+      }
+    });
   }
 
   /**
@@ -185,9 +238,15 @@ export class LeaseReleaseCoordinator
         const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
         if (current?.ttlDeadline !== expectedDeadline) return undefined;
       }
-      return this.options.lifecycle.beginRelease(leaseId, reason);
+      // `none` is a wipe put off, not one given up: the device records it, so a later start
+      // that can read its platform runs the full reclaim (ADR 0019 §2).
+      return this.options.lifecycle.beginRelease(
+        leaseId,
+        reason,
+        options.reclaim === "none" ? { deferReclaim: true } : {},
+      );
     });
-    if (released === undefined) return;
+    if (released === undefined || options.reclaim === "none") return;
     if (options.reclaim === "background") {
       // The registry-only half committed above is the whole of what a releasing
       // caller needs: the lease record is gone, `lease.released` has been emitted,
@@ -199,8 +258,8 @@ export class LeaseReleaseCoordinator
       // releasing through MCP or the CLI, which would otherwise sit on a tool call
       // waiting for a device it has already given up, and for an operator's
       // `release --all` or `nuke`, where N leases would otherwise cost N serial
-      // erases before the command answers (#43). Startup used to be the third such
-      // caller, through an orphan sweep ADR 0004 deleted.
+      // erases before the command answers (#43). Startup is the third such caller, for a
+      // lease it ends because its device is not running (`endAtStartup`, ADR 0019).
       //
       // Kicked off here rather than queued, so every device's reclaim starts
       // immediately (not one-after-another): queuing would let a healthy reclaim sit

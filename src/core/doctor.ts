@@ -11,10 +11,12 @@ import {
   transitionEnteredAt,
 } from "./domain.js";
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
+import type { StartupRead } from "./startup-read.js";
 import type {
   Driver,
   DriverDevice,
   DriverRejection,
+  DriverReality,
   DriverRejectionReason,
   MissingPrerequisite,
   ObservedDevice,
@@ -184,6 +186,14 @@ export interface DoctorOptions {
 export interface DoctorReconcileOptions {
   readonly fix?: boolean;
   /**
+   * The startup read to reconcile against instead of listing every driver again. A platform it
+   * leaves out has no reality to compare, so its devices get no missing-device, orphan or other
+   * drift-against-reality finding. A `stalled-transition` finding is the exception: it reads the
+   * registry and the platform's driver, not the listing, so a platform that has a driver but
+   * whose listing failed still gets it.
+   */
+  readonly read?: StartupRead;
+  /**
    * Destroys the orphans this run finds. Safety rule 1's single opt-in exception, and
    * deliberately not part of `fix`: someone already running `doctor --fix` unattended in
    * CI must not acquire a destructive behaviour by upgrading (ADR 0001, decision 6).
@@ -207,13 +217,13 @@ export class Doctor {
     fix = false,
     purgeOrphans = false,
     prerequisites = false,
+    read,
   }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
     const snapshot = this.options.registry.snapshot;
-    const realities = await Promise.all(
-      this.options.drivers.map(async (driver) => ({ driver, reality: await driver.listManaged() })),
-    );
+    const realities = await this.#realities(read);
     // A platform with no driver has no observable reality: its driver refused to start,
-    // its SDK is missing, or this host has none. "I could not look" is not "the device is
+    // its SDK is missing, or this host has none. The same holds for a platform the startup
+    // read could not list. "I could not look" is not "the device is
     // gone", and reading it as such is destructive -- every registry device of that
     // platform would drift-report as missing and `--fix` would mark the lot `deleted`,
     // stranding tens of gigabytes of simulators in a root with no record left to reach
@@ -221,7 +231,7 @@ export class Doctor {
     // state, provenance and orphans are all reported only for platforms a driver
     // actually observed. What remains reportable is what needs no driver: expired
     // leases, and the `driver-unavailable` finding that says why the platform is dark.
-    const observedPlatforms = new Set(this.options.drivers.map((driver) => driver.platform));
+    const observedPlatforms = new Set(realities.map(({ driver }) => driver.platform));
     const realDeviceKeys = new Set(
       realities.flatMap(({ driver, reality }) =>
         reality.devices.map((device) => key(driver.platform, device.deviceId)),
@@ -302,6 +312,24 @@ export class Doctor {
       "doctor",
     );
     return report;
+  }
+
+  /** Each driver's reality: the startup read's, or a fresh `listManaged` when there is none. */
+  async #realities(
+    read: StartupRead | undefined,
+  ): Promise<readonly { readonly driver: Driver; readonly reality: DriverReality }[]> {
+    if (read === undefined) {
+      return Promise.all(
+        this.options.drivers.map(async (driver) => ({
+          driver,
+          reality: await driver.listManaged(),
+        })),
+      );
+    }
+    return this.options.drivers.flatMap((driver) => {
+      const reality = read.reality(driver.platform);
+      return reality === undefined ? [] : [{ driver, reality }];
+    });
   }
 
   /**

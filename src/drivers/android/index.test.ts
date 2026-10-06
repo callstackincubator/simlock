@@ -1524,6 +1524,20 @@ describe("AndroidDriver", () => {
     expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
   });
 
+  it("listManaged passes a 30-second timeout to adb devices", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await driver.listManaged();
+
+    const listing = runner.calls.find((call) => call.args[0] === "devices");
+    expect(listing?.options.timeoutMs).toBe(30_000);
+  });
+
   it("treats an otherwise-stopped AVD as transitioning when an unattributable transitional serial is present", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);

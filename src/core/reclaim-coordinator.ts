@@ -1,5 +1,6 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
+import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
@@ -42,10 +43,13 @@ export interface ReclaimQuarantine {
 }
 
 export interface ReclaimCoordinatorOptions {
+  /** Marks a background wipe as a live in-process operation, as every release's reclaim is. */
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: ReclaimDriverCatalog;
   readonly eventBus: Pick<EventBus, "emit">;
+  readonly logger?: Logger | undefined;
   readonly notifyAvailability: () => void;
   readonly quarantine: ReclaimQuarantine;
   readonly registry: ReclaimRegistry;
@@ -56,29 +60,42 @@ export interface ReclaimCoordinatorOptions {
  * work remains outside the serialized registry decision sections.
  */
 export class ReclaimCoordinator {
+  /** The deferred wipes `recoverInterrupted` started and has not seen settle. */
+  readonly #backgroundWipes = new Set<Promise<void>>();
+
   constructor(private readonly options: ReclaimCoordinatorOptions) {}
 
-  async reclaim(released: ReleasedLease): Promise<void> {
-    if (!mayBeGranted(released.device)) {
-      await this.#retireSpent(released);
-      return;
+  /** Awaits every deferred wipe running in the background, for a graceful shutdown. */
+  async settle(): Promise<void> {
+    while (this.#backgroundWipes.size > 0) {
+      await Promise.allSettled(this.#backgroundWipes);
     }
-    const driver = this.options.drivers.get(released.device.spec.platform);
+  }
+
+  // Not `async`: returning the inner promise adds no microtask hop to a reclaim's start, and
+  // the tests that step a fake clock count those hops.
+  reclaim(released: ReleasedLease): Promise<void> {
+    if (!mayBeGranted(released.device)) return this.#retireSpent(released);
+    return this.#purge(released.device, released.lease.id);
+  }
+
+  async #purge(device: DeviceRecord, leaseId: string): Promise<void> {
+    const driver = this.options.drivers.get(device.spec.platform);
     const startedAt = this.options.clock.now();
     const attemptedStrategy = driver.reclaimStrategy({ clean: "standard" });
     let result: Awaited<ReturnType<Driver["reclaim"]>>;
     try {
-      result = await driver.reclaim(toDriverDevice(released.device), { clean: "standard" });
+      result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
     } catch (error: unknown) {
-      await this.#recoverPurgeFailure(released, startedAt, attemptedStrategy, error);
+      await this.#recoverPurgeFailure(device.id, leaseId, startedAt, attemptedStrategy, error);
       return;
     }
 
     await this.options.decisions.run(async () => {
-      await this.options.registry.transitionDevice(released.device.id, result.state, {
+      await this.options.registry.transitionDevice(device.id, result.state, {
         event: "device.reclaimed",
         payload: {
-          deviceId: released.device.id,
+          deviceId: device.id,
           duration: this.options.clock.now() - startedAt,
           strategy: result.strategy,
         },
@@ -87,7 +104,16 @@ export class ReclaimCoordinator {
     this.options.notifyAvailability();
   }
 
-  /** Safely finishes an unleased reclaim interrupted before its disposition commit. */
+  /**
+   * Safely finishes an unleased reclaim interrupted before its disposition commit.
+   *
+   * A reusable device whose wipe a daemon start put off (`deferredReclaimLeaseId`, ADR 0019 §2)
+   * gets the full reclaim instead, purge included: it still holds its last holder's data, and a
+   * reusable device never returns to the pool with it. That wipe starts in the background under
+   * a claim, as every release's reclaim does (#43), and this returns once it has started: an
+   * erase runs tens of seconds, and startup waits for none. A spent fresh device, which is never
+   * purged, takes the shutdown path either way.
+   */
   async recoverInterrupted(deviceId: string): Promise<boolean> {
     const device = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.devices.find(
@@ -99,6 +125,10 @@ export class ReclaimCoordinator {
       return current?.state === "reclaiming" && !leased ? current : undefined;
     });
     if (device === undefined) return false;
+
+    if (device.deferredReclaimLeaseId !== undefined && mayBeGranted(device)) {
+      return this.#wipeInBackground(device, device.deferredReclaimLeaseId);
+    }
 
     await this.options.drivers.get(device.spec.platform).shutdown(toDriverDevice(device));
     const recovered = await this.options.decisions.run(async () => {
@@ -119,6 +149,32 @@ export class ReclaimCoordinator {
     });
     if (recovered) this.options.notifyAvailability();
     return recovered;
+  }
+
+  /**
+   * Starts the wipe under a claim and leaves it running. A claim already held means another
+   * operation has the device, so there is nothing to recover. The claim is released, and a
+   * failure logged rather than thrown, once the wipe settles: no caller awaits it. A driver
+   * failure never gets that far, since `#purge` hands it to quarantine.
+   */
+  #wipeInBackground(device: DeviceRecord, leaseId: string): boolean {
+    const claim = this.options.claims.tryClaim(device.id, "reclaim");
+    if (claim === undefined) return false;
+    const wipe = this.#purge(device, leaseId)
+      .catch((error: unknown) => {
+        this.options.logger?.error("deferred wipe failed", {
+          deviceId: device.id,
+          error: error instanceof Error ? error.message : String(error),
+          leaseId,
+        });
+      })
+      .finally(() => {
+        claim.release();
+        this.options.notifyAvailability();
+      });
+    this.#backgroundWipes.add(wipe);
+    void wipe.finally(() => this.#backgroundWipes.delete(wipe));
+    return true;
   }
 
   /**
@@ -147,7 +203,13 @@ export class ReclaimCoordinator {
     try {
       await driver.shutdown(toDriverDevice(released.device));
     } catch (error: unknown) {
-      await this.#recoverPurgeFailure(released, startedAt, "delete", error);
+      await this.#recoverPurgeFailure(
+        released.device.id,
+        released.lease.id,
+        startedAt,
+        "delete",
+        error,
+      );
       return;
     }
     const shutdown = await this.options.decisions.run(() =>
@@ -159,7 +221,13 @@ export class ReclaimCoordinator {
     try {
       await this.#deleteSpent(shutdown);
     } catch (error: unknown) {
-      await this.#recoverPurgeFailure(released, startedAt, "delete", error);
+      await this.#recoverPurgeFailure(
+        released.device.id,
+        released.lease.id,
+        startedAt,
+        "delete",
+        error,
+      );
     }
   }
 
@@ -194,17 +262,18 @@ export class ReclaimCoordinator {
    * be leased, which is exactly the confusing failure mode quarantine replaces.
    */
   async #recoverPurgeFailure(
-    released: ReleasedLease,
+    deviceId: string,
+    leaseId: string,
     startedAt: number,
     attemptedStrategy: QuarantinePurgeFailure["attemptedStrategy"],
     error: unknown,
   ): Promise<void> {
     await this.options.quarantine.enter({
       attemptedStrategy,
-      deviceId: released.device.id,
+      deviceId,
       duration: this.options.clock.now() - startedAt,
       error: stableError(error),
-      leaseId: released.lease.id,
+      leaseId,
     });
   }
 }
