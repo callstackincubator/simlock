@@ -128,9 +128,26 @@ starts for it, whether the platform has no driver or its listing failed.
 A driver that just failed or hung on a listing would likely hang the
 reclaim too, and a hung reclaim holds its device's claim with no end. The
 device waits, unclaimed, until a start whose read of that platform
-succeeds recovers it as an interrupted reclaim. Meanwhile `status` reports
-it stalled once it passes the stalled-transition threshold, and
-`simlock doctor --fix` quarantines it, as for any stalled reclaim.
+succeeds runs its full reclaim: the wipe the ended lease never got, then
+the return to the pool (`ready`, or `shutdown` where the driver returns
+that). It is not recovered as an interrupted reclaim, which only shuts a
+device down: a reusable device never returns to the pool with its last
+holder's data. A device waiting for that wipe carries the id of the lease
+it was ended from, in its record, so recovery can tell it from a reclaim
+a crash interrupted; any transition out of `reclaiming` drops the mark.
+A spent fresh device is never wiped and is shut down and deleted as
+before. Meanwhile `status` reports it stalled once it passes the
+stalled-transition threshold, and `simlock doctor --fix` quarantines it,
+as for any stalled reclaim.
+
+> **Amendment, 2026-10-06 (maintainer decision, review round 1 of
+> [#366](https://github.com/callstackincubator/simlock/issues/366)).**
+> This section used to say the waiting device is recovered "as an
+> interrupted reclaim". That path shuts the device down without a purge,
+> so a reusable device would have returned to the pool with the previous
+> holder's data. The maintainer decided it is wiped by a full reclaim
+> when a later start can read its platform. The status of this ADR is
+> unchanged.
 
 ```mermaid
 stateDiagram-v2
@@ -138,6 +155,7 @@ stateDiagram-v2
   leased --> leased: device running
   leased --> reclaiming: stopped, transitioning, unreadable
   reclaiming --> reclaiming: unreadable, waits for a good read
+  reclaiming --> ready: a later start reads the platform, full reclaim
   leased --> deleted: absent (marked missing)
   reclaiming --> ready: reclaim succeeds
   reclaiming --> quarantined: reclaim fails

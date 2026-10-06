@@ -46,7 +46,11 @@ export interface StartupLeaseEnder {
 }
 
 export interface LeaseReleaseLifecycle {
-  beginRelease(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    reason: LeaseReleaseReason | "expired",
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
   endForMissingDevice(leaseId: string, reason: "expired" | "device-lost"): Promise<ReleasedLease>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
 }
@@ -234,7 +238,13 @@ export class LeaseReleaseCoordinator
         const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
         if (current?.ttlDeadline !== expectedDeadline) return undefined;
       }
-      return this.options.lifecycle.beginRelease(leaseId, reason);
+      // `none` is a wipe put off, not one given up: the device records it, so a later start
+      // that can read its platform runs the full reclaim (ADR 0019 §2).
+      return this.options.lifecycle.beginRelease(
+        leaseId,
+        reason,
+        options.reclaim === "none" ? { deferReclaim: true } : {},
+      );
     });
     if (released === undefined || options.reclaim === "none") return;
     if (options.reclaim === "background") {
@@ -248,8 +258,8 @@ export class LeaseReleaseCoordinator
       // releasing through MCP or the CLI, which would otherwise sit on a tool call
       // waiting for a device it has already given up, and for an operator's
       // `release --all` or `nuke`, where N leases would otherwise cost N serial
-      // erases before the command answers (#43). Startup used to be the third such
-      // caller, through an orphan sweep ADR 0004 deleted.
+      // erases before the command answers (#43). Startup is the third such caller, for a
+      // lease it ends because its device is not running (`endAtStartup`, ADR 0019).
       //
       // Kicked off here rather than queued, so every device's reclaim starts
       // immediately (not one-after-another): queuing would let a healthy reclaim sit

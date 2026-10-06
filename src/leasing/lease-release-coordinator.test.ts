@@ -495,6 +495,7 @@ describe("LeaseReleaseCoordinator", () => {
 
         expect(harness.registry.snapshot.leases).toEqual([]);
         expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+        expect(harness.registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
         expect(harness.reclaims).toMatchObject([{ lease: { id: granted.lease.id } }]);
         expect(harness.claims.isClaimed(granted.device.id)).toBe(true);
         expect(
@@ -522,7 +523,10 @@ describe("LeaseReleaseCoordinator", () => {
       await flush();
 
       expect(harness.registry.snapshot.leases).toEqual([]);
-      expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+      // The device names the lease its wipe was put off for, so a later start runs that wipe.
+      expect(harness.registry.snapshot.devices).toMatchObject([
+        { deferredReclaimLeaseId: granted.lease.id, state: "reclaiming" },
+      ]);
       expect(harness.reclaims).toEqual([]);
       expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
       expect(harness.availability.count).toBe(0);

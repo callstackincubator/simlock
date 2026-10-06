@@ -26,7 +26,10 @@ export interface LeaseLifecycleRegistry {
     };
   }): Promise<LeaseRecord>;
   renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord>;
-  beginRelease(leaseId: string): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
   endLeaseAndMarkDeviceMissing(
     leaseId: string,
     initiator: string,
@@ -137,8 +140,12 @@ export class LeaseLifecycle {
    * with. Neither concept survives -- a closing connection is not a release (§3), and there is
    * no startup sweep left to orphan anything.
    */
-  async beginRelease(leaseId: string, reason: LeaseEndReason): Promise<ReleasedLease> {
-    const released = await this.options.registry.beginRelease(leaseId);
+  async beginRelease(
+    leaseId: string,
+    reason: LeaseEndReason,
+    options: { readonly deferReclaim?: boolean } = {},
+  ): Promise<ReleasedLease> {
+    const released = await this.options.registry.beginRelease(leaseId, options);
     this.#announceEnd(released, reason);
     return released;
   }

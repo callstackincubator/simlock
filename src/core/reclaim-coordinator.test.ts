@@ -226,6 +226,56 @@ describe("ReclaimCoordinator", () => {
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
   });
 
+  describe("a device whose wipe a daemon start put off", () => {
+    async function deferredHarness(options: { readonly fresh?: boolean; readonly fail?: boolean }) {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      if (options.fail === true) driver.failOn("reclaim", 1, new Error("purge exploded"));
+      const driverDevice = await driver.provision(spec);
+      const target: DeviceRecord = {
+        ...device("deferred", "reclaiming", driverDevice.deviceId, spec),
+        deferredReclaimLeaseId: "lease-deferred",
+        ...(options.fresh === true ? { leaseIdentity: "fresh" as const } : {}),
+        lastLeaseEndedAt: 900,
+      };
+      return { ...(await createHarness({ devices: [target], driver })), target };
+    }
+
+    it("is purged by the full reclaim, not only shut down, and returns to the pool ready", async () => {
+      const harness = await deferredHarness({});
+
+      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
+
+      const operations = harness.driver.calls.map((call) => call.operation);
+      expect(operations).toContain("reclaim");
+      expect(operations).not.toContain("shutdown");
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+      expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
+    });
+
+    it("hands a failed purge to quarantine under the lease it was deferred for", async () => {
+      const harness = await deferredHarness({ fail: true });
+
+      await harness.coordinator.recoverInterrupted(harness.target.id);
+
+      expect(harness.quarantined).toMatchObject([
+        { deviceId: harness.target.id, leaseId: "lease-deferred" },
+      ]);
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    });
+
+    it("is only shut down when the device is a spent fresh one, which is never purged", async () => {
+      const harness = await deferredHarness({ fresh: true });
+
+      await harness.coordinator.recoverInterrupted(harness.target.id);
+
+      const operations = harness.driver.calls.map((call) => call.operation);
+      expect(operations).toContain("shutdown");
+      expect(operations).not.toContain("reclaim");
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    });
+  });
+
   describe("a spent fresh device", () => {
     function spent(record: DeviceRecord): DeviceRecord {
       return { ...record, lastLeaseEndedAt: 900, leaseIdentity: "fresh" };

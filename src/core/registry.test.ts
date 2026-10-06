@@ -1274,6 +1274,165 @@ describe("Registry", () => {
     expect(released.device.state).toBe("reclaiming");
   });
 
+  describe("a reclaim put off at a daemon start", () => {
+    async function leased() {
+      const clock = new FakeClock(1_000);
+      const options = {
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "test" },
+        statePath,
+      };
+      const registry = await Registry.load(options);
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver_test",
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      const lease = await registry.createLease({
+        deviceId: device.id,
+        requesterId: "agent-1",
+        ownerId: "agent-1",
+        ttlMs: 60_000,
+        ttlDeadline: 2_000,
+      });
+      return { device, lease, options, registry };
+    }
+
+    it("names the lease on the reclaiming device when the release defers it, and the name survives a reload", async () => {
+      const { lease, options, registry } = await leased();
+
+      const released = await registry.beginRelease(lease.id, { deferReclaim: true });
+
+      expect(released.device).toMatchObject({
+        deferredReclaimLeaseId: lease.id,
+        state: "reclaiming",
+      });
+      expect((await Registry.load(options)).snapshot.devices[0]).toMatchObject({
+        deferredReclaimLeaseId: lease.id,
+      });
+    });
+
+    it("names no lease on a release that does not defer", async () => {
+      const { lease, registry } = await leased();
+
+      const released = await registry.beginRelease(lease.id);
+
+      expect(released.device).not.toHaveProperty("deferredReclaimLeaseId");
+    });
+
+    it("drops the name when the device leaves reclaiming", async () => {
+      const { device, lease, registry } = await leased();
+      await registry.beginRelease(lease.id, { deferReclaim: true });
+
+      await registry.completeReclaimWithoutPurge(device.id);
+
+      expect(registry.snapshot.devices[0]).toMatchObject({ state: "shutdown" });
+      expect(registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
+    });
+
+    it("drops the name when doctor marks the waiting device missing", async () => {
+      const { device, lease, registry } = await leased();
+      await registry.beginRelease(lease.id, { deferReclaim: true });
+
+      await registry.markDeviceMissing(device.id, "doctor");
+
+      expect(registry.snapshot.devices[0]).toMatchObject({ state: "deleted" });
+      expect(registry.snapshot.devices[0]).not.toHaveProperty("deferredReclaimLeaseId");
+    });
+
+    it("rejects a non-string name when loading persisted state", async () => {
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        statePath,
+        JSON.stringify({
+          devices: [
+            {
+              createdAt: 500,
+              deferredReclaimLeaseId: 7,
+              driverData: {},
+              driverDeviceId: "driver_bad",
+              id: "dev_bad",
+              spec,
+              state: "reclaiming",
+            },
+          ],
+          leases: [],
+        }),
+      );
+
+      await expect(
+        Registry.load({
+          clock,
+          eventBus: new EventBus(clock),
+          filesystem,
+          idGenerator: { generate: () => "new" },
+          statePath,
+        }),
+      ).rejects.toThrow("Invalid device record in registry state");
+    });
+  });
+
+  it("writes a device the same way whether it is marked missing alone or together with its lease's end", async () => {
+    const marked = async (viaLease: boolean) => {
+      const clock = new FakeClock(1_000);
+      const registry = await Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "test" },
+        statePath,
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver_test",
+        provisionDuration: 0,
+        spec,
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      await registry.markRecoveryAttempt(device.id, 1_500);
+      if (viaLease) {
+        const lease = await registry.createLease({
+          deviceId: device.id,
+          requesterId: "agent-1",
+          ownerId: "agent-1",
+          ttlMs: 60_000,
+          ttlDeadline: 2_000,
+        });
+        await registry.endLeaseAndMarkDeviceMissing(lease.id, "doctor", () => undefined);
+      } else {
+        await registry.markDeviceMissing(device.id, "doctor");
+      }
+      return registry.snapshot.devices[0];
+    };
+
+    const viaLease = await marked(true);
+    const alone = await marked(false);
+
+    expect(alone).toEqual(viaLease);
+    expect(viaLease).toEqual({
+      createdAt: 1_000,
+      driverData: {},
+      driverDeviceId: "driver_test",
+      id: "dev_test",
+      leaseIdentity: "reusable",
+      mode: "full",
+      spec,
+      state: "deleted",
+    });
+  });
+
   it("loads a lease record written before ownerId existed with ownerId defaulted to requesterId (ADR 0003 §4)", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
