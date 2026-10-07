@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1191,6 +1192,78 @@ describe("startDaemon socket race with HTTP enabled", () => {
     } finally {
       await first.stop("test-cleanup").catch(() => undefined);
     }
+  });
+});
+
+describe("startDaemon gateway uplink when the socket claim fails", () => {
+  // #395: the uplink is dialled from `onSocketClaimed`, so a daemon that loses the claim never
+  // dials its gateway -- it would otherwise join as a worker it is about to stop being.
+  it("never dials the gateway when the worker's socket is already claimed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-uplink-claim-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    const dials: string[] = [];
+    const gateway = createHttpServer();
+    gateway.on("upgrade", (request, socket) => {
+      dials.push(request.url ?? "");
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+    const { port } = gateway.address() as { readonly port: number };
+    const options = (gatewayUrl?: string): StartDaemonOptions =>
+      ({
+        clock: new FakeClock(1_000),
+        ...(gatewayUrl === undefined
+          ? {}
+          : { configOverrides: { gateway: { token: "join-token-395", url: gatewayUrl } } }),
+        dataDirectory: directory,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["26.5"],
+            clock: new FakeClock(1_000),
+            platform: "ios",
+          }),
+        ],
+        filesystem,
+        logger: new JsonLinesLogger({
+          clock: new FakeClock(1_000),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
+        statePath: join(directory, "state.json"),
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+
+    const first = await startDaemon(options());
+    try {
+      const outcome = await startDaemon(options(`ws://127.0.0.1:${port}`)).then(
+        () => "resolved" as const,
+        () => "rejected" as const,
+      );
+      // The dial, were it made, reaches a loopback listener within milliseconds.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect({ dials, outcome }).toEqual({ dials: [], outcome: "rejected" });
+    } finally {
+      await first.stop("test-cleanup").catch(() => undefined);
+      await new Promise<void>((resolve) => gateway.close(() => resolve()));
+    }
+  });
+});
+
+describe("startDaemon with HTTP off", () => {
+  // #395: the socket-claim callback now runs with HTTP off too (it dials the uplink), so it
+  // must still leave the HTTP frontend unstarted.
+  it("starts no HTTP gateway when http.enabled is false", async () => {
+    const { sink } = await start({ configOverrides: { http: { enabled: false } } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Either outcome of a started frontend counts: bound ("listening") or refused ("failed").
+    expect(
+      sink.records
+        .map((record) => record.message)
+        .filter(
+          (message) => message.startsWith("HTTP gateway") || message.startsWith("HTTP frontend"),
+        ),
+    ).toEqual([]);
   });
 });
 
