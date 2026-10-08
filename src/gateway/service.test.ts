@@ -213,6 +213,94 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  // #414, modelled on a real worker: its `events.subscribe` parks until startup ends (only
+  // `status.get` answers while it is `starting`), and it emits `daemon.started` before that parked
+  // call subscribes, so the gateway never hears it. A startup longer than `WORKER_CALL_TIMEOUT_MS`
+  // times the subscription out, and the refresh after it reads a `starting` answer. The clock
+  // stops there, short of the periodic tick.
+  it("builds the full view of a worker that was starting when first read, once its startup ends, before the next tick", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    worker.devices = [deviceFixture("dev_1", "leased")];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => undefined;
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+    const startedAt = harness.clock.now();
+
+    // Startup ends: `status.get` answers in full, and the parked subscription is answered.
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")], queueDepth: 1 });
+    endStartup();
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        capacity: { ios: { limit: 2 } },
+        catalog: [{ models: ["iPhone 17"] }],
+        catalogReadAt: startedAt,
+        devices: [{ id: "dev_1" }],
+        health: "running",
+        leases: [{ id: "lease_1" }],
+        queueDepth: 1,
+      }),
+    );
+    expect(harness.clock.now()).toBe(startedAt);
+
+    await harness.service.stop();
+  });
+
+  it("reads nothing more from a worker whose late subscription answer arrives after the service stopped", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    let unsubscribed = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => {
+        unsubscribed = true;
+      };
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(worker.calls).toContain("status.get"));
+    await harness.service.stop();
+    const callsBefore = [...worker.calls];
+
+    endStartup();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(worker.calls).toEqual(callsBefore);
+    expect(unsubscribed).toBe(false);
+  });
+
   it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
     const harness = fleet();
     await harness.service.start();
