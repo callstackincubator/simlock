@@ -84,7 +84,8 @@ sequenceDiagram
 `lease.request` gains an optional `fleetRequestId`: a string of at most 200
 characters, the same bound as `idempotencyKey`. Only the gateway's own
 uplink session may set it, and any other session that sets it is refused
-with `FORBIDDEN`. Requirement 27a lets any `admin` session set `owner`, but
+with `FORBIDDEN`. A gateway's own `lease.request` handler refuses it from
+every session, because gateways do not chain. Requirement 27a lets any `admin` session set `owner`, but
 the worker already accepts `owner` only on the uplink session. This field
 follows that narrower rule from the start. The field is not part of the MCP
 lease tool's input or the HTTP lease body.
@@ -92,8 +93,9 @@ lease tool's input or the HTTP lease body.
 The gateway sets it to its own request id on every dispatch. A request that
 carries it is a **probe**. A probe must carry `noWait: true`, and one
 without it is refused with `BAD_REQUEST` before it is stored. A probe is
-never queued on the worker: where the worker would queue a request (after a
-second failed provision, for example), it declines a probe instead.
+never queued on the worker. Where the worker would queue a request (after a
+second failed provision, for example), it declines a probe instead, with
+reason `no-wait`, and answers `NO_CAPACITY`.
 
 The RPC answer to a probe is unchanged, so the gateway's walk works as
 today (requirement 11, ADR 0009 §5).
@@ -133,11 +135,16 @@ request a probe served.
 A fleet request ends in exactly one event of the gateway's own, by the
 gateway's clock:
 
-- **`request.granted`** `{ requestId, workerId, leaseId, workerLeaseId }`,
-  emitted when the gateway settles a grant into its lease index. `leaseId`
-  is the gateway lease id and `workerLeaseId` the worker's. A grant the
-  gateway gave back (ADR 0020's mismatched id) is never settled and emits
-  nothing.
+- **`request.granted`** `{ requestId, worker, leaseId, workerLeaseId }`,
+  emitted when the gateway hands the grant to its caller: after the lease
+  index accepted it, and only if the waiter was still open. `leaseId` is the
+  gateway lease id and `workerLeaseId` the worker's.
+
+  A grant that hands nothing to a caller emits nothing:
+  - one given back for ADR 0020's mismatched id;
+  - one the lease index refused, which ends in `lease-id-taken`;
+  - one that lands after the waiter was settled (timeout, cancel, or the
+    gateway stopping).
 - **`lease.rejected`**, for every other ending:
   - the cases it covers today (`timeout`, `cancelled`, `no-wait`,
     `no-worker`, `lease-id-taken`);
@@ -145,8 +152,14 @@ gateway's clock:
     the request had been queued;
   - every other failure on the worker it went to, as the new reason
     `worker-failed`, with `code` (the error code the caller got) and
-    `workerId`. That covers a terminal refusal, a failure after progress,
+    `worker`. That covers a terminal refusal, a failure after progress,
     `WORKER_UNREACHABLE`, `INTERNAL` and a dispatch timeout.
+
+The worker field on these two events is named `worker`, not `workerId`.
+`payload.workerId` is the only mark of a relayed event (ADR 0014 §6), so a
+gateway's own event must not carry it. The worker link refuses a
+`request.granted` pushed by a worker, as it refuses the gateway's other own
+event names.
 
 A gateway that stops or crashes loses its open requests without an event,
 because its queue lives in memory (requirement 30). Usage closes them at the
@@ -158,8 +171,8 @@ This replaces ADR 0016 §6's join and its source for fleet grants.
 
 **Outcome.** A fleet request's outcome is its gateway `request.granted` or
 `lease.rejected`, by request id. A request with neither, followed by a
-later `daemon.started` of the gateway, ended at that start and counts as
-rejected `daemon-restarted`. Any other request with neither is open.
+later `daemon.started` of the gateway itself (not a relayed one), ended at
+that start and counts as rejected `daemon-restarted`. Any other request with neither is open.
 
 **Wait.** A fleet request's wait runs from its `lease.requested` to its
 outcome, both by the gateway's clock.
@@ -173,18 +186,25 @@ lease's relayed release or expiry, all by the worker's clock.
 - Turnaround is wait plus held, so it never subtracts one host's clock from
   another's.
 
-**Per worker.** A grant counts for the `workerId` of its `request.granted`,
-and a `worker-failed` rejection for its own `workerId`. Relayed
+**Per worker.** A grant counts for the `worker` of its `request.granted`,
+and a `worker-failed` rejection for its own `worker`. Relayed
 `lease.declined` events count per worker and per platform (from
 `requestSpec`) under `declined`.
 
 `declined` counts decline events, not requests: one fleet request may be
-declined by several workers, or by one worker more than once. Relayed
-`lease.rejected`, `lease.declined` and `request.dispatched` never decide an
-outcome.
+declined by several workers, or by one worker more than once. A decline
+belongs to the window its `lease.declined` falls in. Relayed
+`lease.granted`, `lease.rejected`, `lease.declined`, `request.dispatched`
+and `daemon.started` never decide a fleet request's outcome.
 
-On a worker, a request that ended in `lease.declined` counts under
-`declined`, not under requests or rejections, and gives no wait sample.
+On a worker, the figures separate the two kinds of request:
+- **`requests`** counts only local requests, those whose `lease.requested`
+  has no `fleetRequestId`.
+- **`probes`** counts the ones that do.
+- **Grants, source and held time** count both kinds, since both use the
+  worker's devices.
+- **`declined`** counts the worker's `lease.declined` events. A probe never
+  gives a wait sample on the worker; its wait is the gateway's.
 
 ### 6. Protocol +1, and an older worker is incompatible
 
@@ -204,13 +224,12 @@ gateway sends a worker (`src/contract/protocol.ts`). There is no shim.
 - A gateway's `simlock events` shows one `request.granted` or one
   `lease.rejected` for every fleet request that ended while it ran.
   `lease.rejected` gains the reason `worker-failed` and the fields `code`
-  and `workerId`. The `workerId` field sits in the payload, as it does on
-  `request.dispatched`; it is not the envelope's relay marker.
+  and `worker`.
 - Fleet figures no longer depend on the worker's event subscription for
   counts and waits, or on the two hosts' clocks agreeing. Only the grant
   source and held time need the relayed events.
-- `usage.get` gains a `declined` count, per platform and per worker, and an
-  `unknown` grant source.
+- `usage.get` gains a `declined` count, per platform and per worker, a
+  `probes` count on a worker, and an `unknown` grant source.
 - A gateway and its workers must upgrade together.
 
 ## Alternatives considered
