@@ -236,6 +236,11 @@ export const leaseRecordSchema = z.object({
   ttlDeadline: z.number(),
   lastRenewedAt: z.number(),
   /**
+   * ADR 0020: whether the requester chose `id` (`lease.request`'s `leaseId`) rather than simlock
+   * generating it. A gateway rebuilding its routing table reads it to name such a lease bare.
+   */
+  idChosenByRequester: z.boolean(),
+  /**
    * ADR 0005 §18: "the lease object gains `worker: { id, label }` (additive) so a client and
    * the console can tell where the device lives. A worker's network address is never exposed."
    * Additive and gateway-only -- a worker granting its own local lease has no second machine to

@@ -23,6 +23,7 @@ function lease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     ownerId: "tok_1",
     requesterId: "tok_1",
     ttlDeadline: NOW + 125_000,
+    idChosenByRequester: false,
     ttlMs: 215_000,
     ...overrides,
   };

@@ -419,9 +419,21 @@ same tag, and a request without `imageTag` only one created for none. On iOS
 worker lists for that API level, an iOS one included, fails at once with
 `422 RUNTIME_MISSING`, with or without `noWait`.
 
+`leaseId` (optional) is the ID you want the granted lease to have, in place of
+one Simlock generates: 1 to 64 ASCII letters, digits, `-` and `_`, starting
+with a letter or digit, case-sensitive (`ad-7f3a` and `Ad-7f3a` are two IDs).
+It has no `.`, so it can never look like a gateway's `<worker>.<lease id>`.
+Everything that names the lease afterwards, `renew`, `release` and the reads,
+uses that ID, on a worker and through a gateway. You promise it is unique for
+all time: it names one lease, and you do not send it again once that lease has
+ended. Simlock refuses an ID an active lease or a waiting request already holds
+with `409 LEASE_ID_TAKEN` (the body carries `leaseId`) and does not remember
+IDs that were used before. A requester that already holds a lease or a waiting
+request gets `409 REQUESTER_ALREADY_LEASED` first, whatever `leaseId` it sends.
+
 The body is strict: a key this route does not know, a `mode` other than
-`"slim"` or `"full"`, or an `imageTag` that is not 1 to 64 letters, digits,
-`_`, `.` or `-`, is `400 BAD_REQUEST`.
+`"slim"` or `"full"`, an `imageTag` that is not 1 to 64 letters, digits,
+`_`, `.` or `-`, or a `leaseId` outside the form above, is `400 BAD_REQUEST`.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this
@@ -440,7 +452,8 @@ changed since — a request that failed with `NO_CAPACITY` stays failed. To
 try again, use a new key. Repeating works across a daemon restart, for
 `lease.requestRetentionMs` after the request finished (see
 [CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
-`platform`, `device`, `os`, `mode`, or `imageTag` is `409 IDEMPOTENCY_CONFLICT`. Keys
+`platform`, `device`, `os`, `mode`, `imageTag`, or `leaseId` (sent on one call and
+not the other counts as different) is `409 IDEMPOTENCY_CONFLICT`. Keys
 belong to your token: another token sending the same key starts a request of
 its own.
 
@@ -492,7 +505,7 @@ On a single host, with `allowDownload: true` the `201` is returned as soon as
 the request is stored — resolving a downloadable runtime can take minutes, so progress and
 any later failure surface on the request resource instead of on the `POST`
 itself. A refusal that comes before the request is stored
-(`409 REQUESTER_ALREADY_LEASED`, `400` for a `ttlMs` above `lease.maxTtlMs`)
+(`409 REQUESTER_ALREADY_LEASED`, `409 LEASE_ID_TAKEN`, `400` for a `ttlMs` above `lease.maxTtlMs`)
 still fails the `POST`. Through a gateway the flag changes nothing about the
 `POST`: it never downloads, so a request no worker can serve fails it as
 above.
@@ -589,14 +602,17 @@ show it. `label` is display-only. A worker's network address is deliberately
 never here: clients reach the device through the gateway, with
 [`POST /v1/leases/{id}/exec`](#post-v1leasesidexec).
 
-The lease `id` names its worker (`<workerId>.<worker's own lease id>`, split
-on the **first** `.`), which is how a gateway routes renew, release, and
-reads with no state of its own to lose across a restart. A worker id is a
-UUID, so a real id reads
-`3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples here and
-elsewhere in these docs abbreviate it to its first segment for legibility.
-**Treat the whole id as opaque** — pass it back verbatim in paths and bodies,
-and read `worker.id` when you want the machine.
+A lease whose ID Simlock generated has an `id` that names its worker
+(`<workerId>.<worker's own lease id>`, split on the **first** `.`). A worker id is a UUID, so a
+real id reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples
+here and elsewhere in these docs abbreviate it to its first segment for
+legibility. A lease whose requester chose the ID (`leaseId` on
+[`POST /v1/lease-requests`](#post-v1lease-requests)) keeps exactly that ID,
+with no worker in front of it. A gateway routes every lease, generated or
+chosen, from a table it keeps in memory and rebuilds from its workers after a
+restart, so for a moment after a restart, renew and release of any lease can
+answer `404 UNKNOWN_LEASE` until its worker has reported. **Treat the whole id as opaque** — pass it back
+verbatim in paths and bodies, and read `worker.id` when you want the machine.
 
 `dataPlane` is **reserved** and always `null` in this version: streaming a
 device's screen, forwarding a port, or opening an interactive TTY is a
@@ -1358,7 +1374,7 @@ Every failure is the same shape the daemon protocol uses:
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
-| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
+| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `LEASE_ID_TAKEN` (a `leaseId` an active lease or a waiting request holds; body carries `leaseId`; on a gateway, one of the gateway's own leases or requests, or a worker that refused it), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device or `leaseId`), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
 | 503 | `NO_CAPACITY` (with `noWait: true`, or, on a gateway, when no worker that takes requests can serve the request; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |

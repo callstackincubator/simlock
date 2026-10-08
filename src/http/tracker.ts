@@ -26,6 +26,8 @@ export interface LeaseRequestInput {
    * -- an identity named and answered as though it had not been is the kind of silence that
    * reads like authorization). */
   readonly owner?: string;
+  /** ADR 0020: the lease ID the requester chooses, sent on as `lease.request`'s `leaseId`. */
+  readonly leaseId?: string;
 }
 
 /** Matches the issue's lease object exactly; `dataPlane` is reserved and always `null` in v1. */
@@ -120,6 +122,7 @@ function requestOptions(body: LeaseRequestInput) {
     // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
     // `lease.request` handler is what rejects a non-admin token naming this.
     ...(body.owner === undefined ? {} : { owner: body.owner }),
+    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
   };
 }
 

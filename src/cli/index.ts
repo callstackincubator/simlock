@@ -943,6 +943,7 @@ async function runLease(
     "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
+    "lease-id": { type: "string" },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -954,7 +955,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );
@@ -1113,6 +1114,9 @@ async function runLease(
         // Sent as typed too: the contract bounds it, and the platform's driver decides whether
         // the platform has image tags at all.
         ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
+        // Sent as typed as well: the contract bounds what an ID may look like (`BAD_REQUEST`), and
+        // the daemon refuses one already in use (`LEASE_ID_TAKEN`, exit 13).
+        ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),
       },

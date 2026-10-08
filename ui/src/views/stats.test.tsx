@@ -57,6 +57,7 @@ function lease(id: string, requesterId: string, ttlDeadline: number): LeaseRecor
     ownerId: requesterId,
     requesterId,
     ttlDeadline,
+    idChosenByRequester: false,
     ttlMs: 15 * MINUTE,
   };
 }

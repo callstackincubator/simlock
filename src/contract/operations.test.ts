@@ -233,6 +233,56 @@ describe("lease.request osVersion", () => {
   );
 });
 
+describe("lease.request leaseId", () => {
+  const parse = (leaseId: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({ leaseId, model: "iPhone 17", platform: "ios" });
+
+  it.each([
+    ["a plain ID", "myid"],
+    ["a case-sensitive one", "MyID"],
+    ["one with a hyphen and an underscore inside", "ad-7f3a_01"],
+    ["one that looks like a generated ID", "lse_123"],
+    ["a single character", "a"],
+    ["a digit first", "7"],
+    ["64 characters", "a".repeat(64)],
+  ])("accepts %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["65 characters", "a".repeat(65)],
+    ["a dot, kept for gateway IDs", "w1.myid"],
+    ["a space", "my id"],
+    ["a hyphen first", "-s"],
+    ["an option", "--help"],
+    ["an underscore first", "_x"],
+    ["a character outside ASCII", "ząb"],
+    ["a trailing newline", "myid\n"],
+    ["a fullwidth digit", "\uFF11abc"],
+    ["a number", 7],
+    ["null", null],
+  ])("refuses %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(false);
+  });
+
+  it("is optional, and an input without it parses to one without it", () => {
+    expect(
+      OPERATIONS["lease.request"].input.parse({ model: "iPhone 17", platform: "ios" }),
+    ).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+
+  it("is not part of the device the request names", () => {
+    const input = OPERATIONS["lease.request"].input.parse({
+      leaseId: "myid",
+      model: "iPhone 17",
+      platform: "ios",
+    });
+
+    expect(requestedDevice(input)).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
@@ -314,6 +364,7 @@ describe("operation input/output round trips", () => {
         ownerId: "req_1",
         grantedAt: 1,
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ttlMs: 1,
         ttlDeadline: 2,
       },
@@ -616,6 +667,7 @@ describe("operation input/output round trips", () => {
       ttlMs: 2,
       ttlDeadline: 3,
       lastRenewedAt: 1,
+      idChosenByRequester: false,
       workerId: "wrk_1",
     };
     const parsed = OPERATIONS["status.get"].output.parse({

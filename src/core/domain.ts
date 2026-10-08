@@ -281,6 +281,12 @@ export interface LeaseRecord {
    * shared one backstop width. A record written before ADR 0004 loads with `grantedAt` here.
    */
   readonly lastRenewedAt: number;
+  /**
+   * Whether the requester chose `id` (`lease.request`'s `leaseId`, ADR 0020) rather than simlock
+   * generating it. Written at grant. A record written before this field existed loads with
+   * `false`: every ID then was generated.
+   */
+  readonly idChosenByRequester: boolean;
 }
 
 export interface LeaseTiming {
@@ -332,6 +338,12 @@ export interface LeaseRequestRecord<Grant = LeaseGrant> {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly idempotencyKey?: string;
+  /**
+   * The lease ID the requester chose (ADR 0020), kept beside the request, not in it, so the
+   * request stays the device it names. While the record is `open` it holds that ID: nothing else
+   * is granted it.
+   */
+  readonly leaseId?: string;
   readonly request: DeviceRequest;
   readonly createdAt: number;
   readonly state: LeaseRequestState;

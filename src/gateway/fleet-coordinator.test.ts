@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap } from "../bus/index.js";
-import { SimlockError } from "../contract/index.js";
+import type { LeaseRecord } from "../admin/index.js";
+import { fromWireError, SimlockError } from "../contract/index.js";
 import { QueueTimeoutError } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import { FleetLeaseIndex } from "./lease-index.js";
+import { FleetLeaseIndex, type WorkerReportedLease } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
 import { createRoutingPolicy, type RoutingPolicy } from "./routing.js";
 import {
@@ -3141,6 +3142,19 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { requesterId: "agent-1" });
       return { fleet, requester: "agent-1" };
     },
+    "lease-id-taken": async () => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: { ...grantFixture().lease, id: "myid" } }),
+        kind: "grant",
+      });
+      await fleet.coordinator.request(REQUEST, requestOptions({ leaseId: "myid" }));
+      await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
+      return { fleet, requester: "agent-2" };
+    },
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
@@ -3439,6 +3453,7 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
     grantedAt: 1,
     id: "lse_1",
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "agent-9",
     requesterId: `${GATEWAY_PREFIX}agent-9`,
     ttlDeadline: 900_001,
@@ -3573,5 +3588,311 @@ describe("FleetLeaseCoordinator: a worker that is still starting", () => {
     });
 
     expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
+  /** A worker's grant of `leaseId`, flagged as named by its requester. */
+  function chosenGrant(leaseId: string) {
+    return grantFixture({
+      lease: { ...grantFixture().lease, id: leaseId, idChosenByRequester: true } as LeaseRecord,
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  function forwardedLeaseId(client: ScriptedWorkerClient): unknown {
+    return (client.lastRequestLeaseInput as Record<string, unknown> | undefined)?.leaseId;
+  }
+
+  /** A new answer from the worker `oneWorker` connected, as a periodic refresh brings one. */
+  function refreshWorker(workers: WorkerRegistry, capacity: ReturnType<typeof roomierIos>): void {
+    workers.refresh("wrk_a", {
+      capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      downloads: { policy: "on-request" },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+  }
+
+  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
+    const fleet = harness(overrides);
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    connectWorker(fleet.workers, "wrk_a");
+    return { ...fleet, client };
+  }
+
+  /** `leaseId` rides beside the other request options. */
+  function chosen(leaseId: string, overrides: Parameters<typeof requestOptions>[0] = {}) {
+    return { ...requestOptions(overrides), leaseId } as ReturnType<typeof requestOptions>;
+  }
+
+  it("through a gateway, a caller-chosen ID comes back with no worker prefix", async () => {
+    const { client, coordinator, leaseIndex } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("ad-7f3a"), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, chosen("ad-7f3a"));
+
+    expect(forwardedLeaseId(client)).toBe("ad-7f3a");
+    expect(grant.lease.id).toBe("ad-7f3a");
+    expect(leaseIndex.resolve("ad-7f3a")).toMatchObject({
+      gatewayLeaseId: "ad-7f3a",
+      workerId: "wrk_a",
+      workerLeaseId: "ad-7f3a",
+    });
+  });
+
+  it("through a gateway, a request without leaseId gets <worker>.lse_ as today", async () => {
+    const { client, coordinator } = oneWorker();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, requestOptions());
+
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("leaseId");
+    expect(grant.lease.id).toBe("wrk_a.lse_1");
+  });
+
+  it("through a gateway, renew and release by a caller-chosen ID reach the right worker", async () => {
+    const { coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    // wrk_b has more free slots, so the request goes there and not to the first worker.
+    connectWorker(workers, "wrk_b", { capacity: roomierIos() });
+    clientB.requestLeaseQueue.push({ grant: chosenGrant("ad-7f3a"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("ad-7f3a"));
+    expect(leaseIndex.resolve("ad-7f3a")).toMatchObject({ workerId: "wrk_b" });
+
+    await coordinator.renew("ad-7f3a", undefined);
+    await coordinator.release("ad-7f3a");
+
+    expect(clientB.calls).toEqual(
+      expect.arrayContaining(["lease.renew:ad-7f3a", "lease.release:ad-7f3a"]),
+    );
+    expect(clientA.calls.filter((call) => /^lease\.(renew|release)/.test(call))).toEqual([]);
+    expect(leaseIndex.resolve("ad-7f3a")).toBeUndefined();
+  });
+
+  it("when two workers report the same caller-chosen ID on rebuild, renew of that ID reaches the first worker", async () => {
+    const { coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    const reported = (ownerId: string) => ({
+      grantedAt: 1,
+      id: "myid",
+      idChosenByRequester: true,
+      ownerId,
+      requesterId: `${GATEWAY_PREFIX}${ownerId}`,
+    });
+
+    leaseIndex.rebuildFromWorker("wrk_a", [reported("agent-1")]);
+    leaseIndex.rebuildFromWorker("wrk_b", [reported("agent-2")]);
+    await coordinator.renew("myid", undefined);
+
+    expect(clientA.calls).toContain("lease.renew:myid");
+    expect(clientB.calls.filter((call) => call.startsWith("lease.renew"))).toEqual([]);
+  });
+
+  it("through a gateway, a request whose requester already holds a lease fails with REQUESTER_ALREADY_LEASED, not LEASE_ID_TAKEN, when it names that lease's own ID", async () => {
+    const { client, coordinator } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("myid"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("myid"));
+
+    const refusal = await coordinator.request(REQUEST, chosen("myid")).catch((e: unknown) => e);
+
+    expect(refusal).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((refusal as RequesterAlreadyLeasedError).existingLeaseId).toBe("myid");
+  });
+
+  it("through a gateway, a second request for an ID held by a gateway lease fails with LEASE_ID_TAKEN, emits lease.rejected with reason lease-id-taken, and is not forwarded", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("myid"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("myid"));
+    const rejected: unknown[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    const second = coordinator.request(
+      REQUEST,
+      chosen("myid", { ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    const secondState = promiseState(second);
+    const refusal = second.catch((error: unknown) => error);
+    await tick();
+
+    expect(secondState.state).toBe("rejected");
+    expect(await refusal).toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "myid" },
+      message: "lease ID myid is already in use",
+    });
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "lease-id-taken", requester: "agent-2" }),
+    ]);
+    expect(leaseRequests(client)).toHaveLength(1);
+  });
+
+  it("through a gateway, a second request for an ID held by a waiting gateway request fails with LEASE_ID_TAKEN and is not forwarded", async () => {
+    const { client, coordinator, directory, workers } = oneWorker();
+    // The only worker is full, so the first request waits in the gateway queue.
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    directory.add("wrk_a", client);
+    void coordinator.request(REQUEST, chosen("myid")).catch(() => undefined);
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    const second = coordinator.request(
+      REQUEST,
+      chosen("myid", { ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    const secondState = promiseState(second);
+    const refusal = second.catch((error: unknown) => error);
+    await tick();
+
+    expect(secondState.state).toBe("rejected");
+    expect(await refusal).toMatchObject({ code: "LEASE_ID_TAKEN" });
+    expect(leaseRequests(client)).toEqual([]);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("through a gateway, a worker's LEASE_ID_TAKEN is passed to the caller and no other worker is tried", async () => {
+    const { client, coordinator, directory, workers } = oneWorker();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_b", other);
+    connectWorker(workers, "wrk_b");
+    // Both workers are free. Each one refuses once and would grant on a second ask.
+    const taken = fromWireError("LEASE_ID_TAKEN", "lease ID myid is already in use", {
+      leaseId: "myid",
+    });
+    for (const scripted of [client, other]) {
+      scripted.requestLeaseQueue.push(
+        { error: taken, kind: "error" },
+        { grant: chosenGrant("myid"), kind: "grant" },
+      );
+    }
+
+    await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "myid" },
+    });
+
+    expect(leaseRequests(client).length + leaseRequests(other).length).toBe(1);
+  });
+
+  it("a worker grant whose lease ID differs from the forwarded leaseId is released on the worker, never enters the gateway index, and the request is queued again", async () => {
+    const logger = new RecordingLogger();
+    const { client, coordinator, leaseIndex } = oneWorker({ logger });
+    client.requestLeaseQueue.push({ grant: chosenGrant("not-what-was-sent"), kind: "grant" });
+    const outcome = promiseState(coordinator.request(REQUEST, chosen("myid")));
+    await tick();
+
+    expect(client.calls).toContain("lease.release:not-what-was-sent");
+    expect(leaseIndex.all()).toEqual([]);
+    expect(outcome.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(JSON.stringify(logger.warnings)).toContain("wrk_a");
+  });
+
+  it("a worker that answered a grant under another ID is not asked again until its view changes, then is, and the right grant settles the request", async () => {
+    const { client, coordinator, workers } = oneWorker();
+    client.requestLeaseQueue.push(
+      { grant: chosenGrant("not-what-was-sent"), kind: "grant" },
+      { grant: chosenGrant("myid"), kind: "grant" },
+    );
+    const request = coordinator.request(REQUEST, chosen("myid"));
+    const outcome = promiseState(request);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    // The same view again: nothing changed, so the worker is left alone.
+    refreshWorker(workers, statusFixture().capacity);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    // A changed view: it is asked again, and this time answers with the ID it was given.
+    refreshWorker(workers, roomierIos());
+    await tick();
+    expect(outcome.state).toBe("fulfilled");
+    await expect(request).resolves.toMatchObject({ lease: { id: "myid" } });
+    expect(leaseRequests(client)).toHaveLength(2);
+  });
+
+  it("the gateway answers UNKNOWN_LEASE for a renew of an ID missing from its index", async () => {
+    const { coordinator } = oneWorker();
+
+    await expect(coordinator.renew("myid", undefined)).rejects.toMatchObject({
+      code: "UNKNOWN_LEASE",
+      details: { leaseId: "myid" },
+    });
+  });
+
+  describe("a grant for a bare ID the index maps to another worker", () => {
+    /** wrk_a's grant of `myid` is on its way when wrk_b reports a lease with the same ID. */
+    function grantRacingAReport(overrides: Parameters<typeof harness>[0] = {}) {
+      const fleet = oneWorker(overrides);
+      fleet.client.requestLeaseQueue.push({
+        beforeGrant: () => {
+          fleet.leaseIndex.rebuildFromWorker("wrk_b", [
+            {
+              grantedAt: 1,
+              id: "myid",
+              idChosenByRequester: true,
+              ownerId: "agent-9",
+              requesterId: `${GATEWAY_PREFIX}agent-9`,
+            } as WorkerReportedLease,
+          ]);
+        },
+        grant: chosenGrant("myid"),
+        kind: "grant",
+      });
+      return fleet;
+    }
+
+    it("is released on the new worker and answers LEASE_ID_TAKEN, and the first entry stays routed", async () => {
+      const { client, coordinator, eventBus, leaseIndex } = grantRacingAReport();
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+        details: { leaseId: "myid" },
+      });
+
+      expect(client.calls).toContain("lease.release:myid");
+      expect(leaseIndex.resolve("myid")).toMatchObject({ workerId: "wrk_b" });
+      expect(rejected).toEqual([
+        expect.objectContaining({ reason: "lease-id-taken", requester: "agent-1" }),
+      ]);
+    });
+
+    it("logs a release the worker refuses, naming the worker and the lease, and still answers LEASE_ID_TAKEN", async () => {
+      const logger = new RecordingLogger();
+      const { client, coordinator } = grantRacingAReport({ logger });
+      client.releaseLeaseQueue.push({ error: new Error("worker said no"), kind: "error" });
+
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+      });
+      await tick();
+
+      expect(logger.warnings).toEqual([
+        expect.objectContaining({
+          fields: expect.objectContaining({ workerId: "wrk_a", workerLeaseId: "myid" }),
+          message: "Failed to release a lease the gateway will not route",
+        }),
+      ]);
+    });
   });
 });

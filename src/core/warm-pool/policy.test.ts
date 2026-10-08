@@ -61,6 +61,7 @@ function leaseOn(target: DeviceRecord): LeaseRecord {
     grantedAt: 1,
     id: `lease-${target.id}`,
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "holder",
     requesterId: "holder",
     ttlDeadline: now + minute,

@@ -26,7 +26,12 @@ import {
   type CatalogReader,
   type PassthroughResolver,
 } from "../core/index.js";
-import { type DeviceModeReader, type LeaseCommands, type QueueControl } from "../leasing/index.js";
+import {
+  type DeviceModeReader,
+  LeaseIdTakenError,
+  type LeaseCommands,
+  type QueueControl,
+} from "../leasing/index.js";
 import type {
   Clock,
   Logger,
@@ -396,10 +401,15 @@ export class Dispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });
     } catch (error: unknown) {
+      // The refusal carries the ID in `details` on every transport (`ErrorDetailsMap`).
+      if (error instanceof LeaseIdTakenError) {
+        throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
       // The lease path only ever sees the clamped-to-false permission, so it cannot itself
       // tell the caller that config, not missing consent, is what stood between this request
       // and success. Recover that distinction here, the one place that saw both sides. Moved

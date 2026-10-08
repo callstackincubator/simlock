@@ -734,4 +734,60 @@ describe("gateway fleet", () => {
 
     expect(await listWorkers(gateway)).toEqual([]);
   });
+
+  it("through a gateway, a caller-chosen lease ID comes back with no worker prefix, renews and releases by that ID, and a second request for it is LEASE_ID_TAKEN", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const { secret } = (await gateway.cli(["token", "create", "--role", "worker"])).json as {
+      secret: string;
+    };
+    await withDaemon({
+      configOverrides: {
+        gateway: { label: "worker", token: secret, url: `ws://127.0.0.1:${port}` },
+      },
+      driverScript: { ios: { availableOsVersions: ["26.0"], knownModels: ["iPhone 16 Pro"] } },
+    });
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 1 && views[0]?.connection === "connected" && views[0].catalog.length > 0,
+      "the worker connected with its catalog",
+    );
+    const lease = (agentId: string, extra: readonly string[]) =>
+      gateway.cli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16 Pro",
+          "--agent-id",
+          agentId,
+          "--detach",
+          ...extra,
+        ],
+        {
+          timeout: 30_000,
+        },
+      );
+
+    const chosen = await lease("agent-a", ["--lease-id", "ad-7f3a"]);
+    expect(chosen.code, chosen.stderr).toBe(0);
+    expect((chosen.json as { lease: { id: string } }).lease.id).toBe("ad-7f3a");
+
+    const clash = await lease("agent-b", ["--lease-id", "ad-7f3a"]);
+    expect(clash.code).toBe(13);
+    expect(clash.error).toMatchObject({ code: "LEASE_ID_TAKEN" });
+
+    const renewed = await gateway.cli(["lease", "renew", "ad-7f3a"], { timeout: 30_000 });
+    expect(renewed.code, renewed.stderr).toBe(0);
+    expect((await gateway.cli(["release", "ad-7f3a"], { timeout: 30_000 })).code).toBe(0);
+
+    const generated = await lease("agent-a", []);
+    expect(generated.code, generated.stderr).toBe(0);
+    expect((generated.json as { lease: { id: string } }).lease.id).toMatch(/^[^.]+\.lse_/);
+  });
 });

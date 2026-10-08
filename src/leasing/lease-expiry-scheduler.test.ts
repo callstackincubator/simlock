@@ -8,6 +8,7 @@ const lease = (id: string, ttlDeadline: number) => ({
   grantedAt: 0,
   id,
   lastRenewedAt: 0,
+  idChosenByRequester: false,
   requesterId: "agent",
   ownerId: "agent",
   ttlMs: ttlDeadline,

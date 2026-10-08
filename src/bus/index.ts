@@ -59,9 +59,10 @@ export interface EventMap {
     readonly ownerId: string;
   };
   "lease.rejected": {
-    /** The request's id. A request refused at admission (`killed`, `already-leased`) was never
+    /** The request's id. A request refused at admission (`killed`, `already-leased`, `lease-id-taken`) was never
      * stored and has no `lease.requested`, but it carries the id it would have been stored
-     * under. */
+     * under. A gateway's `lease-id-taken` can also follow a grant (a worker's lease whose ID the
+     * gateway already routes elsewhere): that request was stored and has its `lease.requested`. */
     readonly requestId: string;
     readonly requester: string;
     /** The request as it arrived, as on `lease.requested`: `class` when it named one, `model`
@@ -74,6 +75,8 @@ export interface EventMap {
       /** A gateway's request that no worker taking requests can serve (ADR 0009 §4). */
       | "no-worker"
       | "already-leased"
+      /** The request named a lease ID an active lease or a waiting request holds (ADR 0020). */
+      | "lease-id-taken"
       | "boot-timeout"
       | "killed"
       | "cancelled"

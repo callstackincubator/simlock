@@ -69,6 +69,67 @@ describe("contention & queueing", () => {
     waiterE.kill("SIGTERM");
     await waiterE.waitForExit(15_000);
   });
+
+  it("the CLI --lease-id flag names the lease, and exits 13 with LEASE_ID_TAKEN for an ID an active lease or a waiting request holds", async () => {
+    const env = await withDaemon({
+      configOverrides: { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+
+    const held = await env.cli([
+      ...LEASE_ARGS,
+      "--agent-id",
+      "agent-a",
+      "--lease-id",
+      "ad-7f3a",
+      "--detach",
+    ]);
+    expect(held.code).toBe(0);
+    expect((held.json as { lease: { id: string } }).lease.id).toBe("ad-7f3a");
+
+    // The ID of an active lease is taken.
+    const clash = await env.cli([
+      ...LEASE_ARGS,
+      "--agent-id",
+      "agent-b",
+      "--lease-id",
+      "ad-7f3a",
+      "--detach",
+    ]);
+    expect(clash.code).toBe(13);
+    expect(clash.error).toMatchObject({ code: "LEASE_ID_TAKEN" });
+    expect(clash.error?.message).toContain("ad-7f3a");
+
+    // A request waiting for the one device holds its ID too.
+    const waiter = env.cliBackground([
+      ...LEASE_ARGS,
+      "--agent-id",
+      "agent-c",
+      "--lease-id",
+      "waits-1",
+    ]);
+    await waitFor(() => waiter.progressEvents().some((event) => isQueuedAt(event, 1)), {
+      label: "agent-c queued at position 1",
+    });
+    const waitingClash = await env.cli([
+      ...LEASE_ARGS,
+      "--agent-id",
+      "agent-d",
+      "--lease-id",
+      "waits-1",
+      "--detach",
+    ]);
+    expect(waitingClash.code).toBe(13);
+    expect(waitingClash.error).toMatchObject({ code: "LEASE_ID_TAKEN" });
+
+    expect((await env.cli(["release", "ad-7f3a"])).code).toBe(0);
+    const granted = JSON.parse(await waiter.firstStdoutLine(15_000)) as { lease: { id: string } };
+    expect(granted.lease.id).toBe("waits-1");
+    waiter.kill("SIGTERM");
+    await waiter.waitForExit(15_000);
+  });
 });
 
 function isQueuedAt(event: unknown, position: number): boolean {

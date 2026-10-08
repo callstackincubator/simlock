@@ -88,6 +88,7 @@ export function leaseFixture(id: string, deviceId: string) {
     grantedAt: 1,
     id,
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "agent-1",
     requesterId: "agent-1",
     ttlDeadline: 900_001,
@@ -172,6 +173,9 @@ export type RequestLeaseOutcome =
       readonly kind: "grant";
       readonly grant: LeaseGrant;
       readonly progress?: readonly LeaseProgressLike[];
+      /** Runs after the worker has decided to grant and before the answer reaches the gateway:
+       * what lands on the gateway while the grant is on its way. */
+      readonly beforeGrant?: () => void;
     }
   | {
       readonly kind: "error";
@@ -387,6 +391,7 @@ export class ScriptedWorkerClient {
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
+    outcome.beforeGrant?.();
     return outcome.grant;
   }
 

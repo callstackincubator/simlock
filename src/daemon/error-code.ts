@@ -37,6 +37,7 @@ import {
 } from "../core/index.js";
 import {
   IdempotencyConflictError,
+  LeaseIdTakenError,
   LeaseRequestForbiddenError,
   NoCapacityError,
   QueueTimeoutError,
@@ -93,6 +94,9 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof IdempotencyConflictError) {
     return "IDEMPOTENCY_CONFLICT";
+  }
+  if (error instanceof LeaseIdTakenError) {
+    return "LEASE_ID_TAKEN";
   }
   if (error instanceof LeaseRequestForbiddenError) {
     return "FORBIDDEN";

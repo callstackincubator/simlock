@@ -99,14 +99,14 @@ function waitingRequest(
   };
 }
 
-/** The same `(requesterId, idempotencyKey)` arrived again naming a different device. */
+/** The same `(requesterId, idempotencyKey)` arrived again naming a different device or lease ID. */
 export class IdempotencyConflictError extends Error {
   constructor(
     readonly requesterId: string,
     readonly idempotencyKey: string,
   ) {
     super(
-      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request`,
+      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID`,
     );
     this.name = "IdempotencyConflictError";
   }
@@ -171,8 +171,9 @@ interface OpenRequest<Grant> {
  * - a request is stored before anything queues it (`admit`);
  * - a repeat under the same `(requesterId, idempotencyKey)` returns the stored result, or attaches
  *   to the wait that is still open, and never starts a second one (`replay`);
- * - the same key naming a different device is `IdempotencyConflictError`, and a repeat from
- *   another principal is `LeaseRequestForbiddenError`;
+ * - the same key naming a different device or a different `leaseId` (one side having none counts
+ *   as different) is `IdempotencyConflictError`, and a repeat from another principal is
+ *   `LeaseRequestForbiddenError`;
  * - a request's result is written once and never re-evaluated: when its own promise settles, or,
  *   for a daemon's grant, already in the commit that added the lease (`Registry.createLease`),
  *   in which case the settle that follows finds it granted and writes nothing.
@@ -224,7 +225,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       );
     if (record === undefined) return undefined;
     if (record.ownerId !== options.ownerId) throw new LeaseRequestForbiddenError(record.id);
-    if (!sameDeviceRequest(record.request, request)) {
+    if (!sameDeviceRequest(record.request, request) || record.leaseId !== options.leaseId) {
       throw new IdempotencyConflictError(options.requesterId, key);
     }
     return record;
@@ -247,6 +248,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     const record = await this.options.store.createLeaseRequest({
       id,
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+      ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
       ownerId: options.ownerId,
       request,
       requesterId: options.requesterId,
@@ -318,6 +320,17 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       const place = byId.get(record.id);
       return place === undefined ? [] : [waitingRequest(record, place)];
     });
+  }
+
+  /**
+   * Whether a request still open holds `leaseId`: one that chose it and has no result yet (ADR
+   * 0020). Call it inside the owner's serialized admission section, beside the owner's check of
+   * its own leases: the two together are the one clash check.
+   */
+  holdsLeaseId(leaseId: string): boolean {
+    return this.options.store
+      .leaseRequests()
+      .some((record) => record.leaseId === leaseId && !isSettled(record));
   }
 
   /** The id of the stored request that was granted `leaseId`, while that record is retained. */

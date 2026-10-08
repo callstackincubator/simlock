@@ -137,6 +137,7 @@ function released(device: DeviceRecord): ReleasedLease {
       requesterId: "agent",
       ownerId: "agent",
       lastRenewedAt: 1,
+      idChosenByRequester: false,
       ttlMs: 60_000,
       ttlDeadline: 100,
     },

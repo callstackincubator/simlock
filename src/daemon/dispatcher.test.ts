@@ -447,6 +447,20 @@ describe("Dispatcher: parsing", () => {
     ]);
   });
 
+  it("grants lease.request's leaseId as the lease ID, and answers an ID that is in use with LEASE_ID_TAKEN carrying it in details", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const input = { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" } as const;
+
+    const first = await dispatcher.dispatch("lease.request", input, session());
+    const clash = dispatcher.dispatch("lease.request", input, session({ principal: "other" }));
+
+    expect(first.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
+    await expect(clash).rejects.toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "ad-7f3a" },
+    });
+  });
+
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
     const { dispatcher } = await buildDispatcher();
     // "daemon.stop" is ADR §6's frozen exception -- `DaemonServer#dispatchLine` intercepts it

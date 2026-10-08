@@ -274,8 +274,8 @@ event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
 required capacity field, taking it to 11, and ADR 0015 §3 makes
 `modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
 `classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15), and `config.get`'s required `warmPool.reserveRunning` takes it to 17, and a starting daemon's `status.get`, which
-answers `daemon` and `host` only, takes it to 18, and `config.get`'s required `warmPool.targets` and `warmPool.maxConcurrentBoots` take it to 19, and `status.get`'s `warmPool` block takes it to 20. So the range both
-sides advertise is `{min: 20, max: 20}`, an older client and a current daemon simply
+answers `daemon` and `host` only, takes it to 18, and `config.get`'s required `warmPool.targets` and `warmPool.maxConcurrentBoots` take it to 19, and `status.get`'s `warmPool` block takes it to 20, and a lease request's optional `leaseId` takes it to 21. So the range both
+sides advertise is `{min: 21, max: 21}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -758,14 +758,27 @@ state at all. `lease.renew`, `lease.release`, and single-lease reads are
 worker's own. There is nothing to emulate and no timer to run: a client that
 stops renewing loses its lease on the worker's clock, gateway or no gateway.
 
-- **The lease id names its worker.** A gateway lease id is the owning
-  worker's id, then a `.`, then the worker's own lease id — so renew,
-  release, and reads route by splitting on the **first** `.` rather than by
-  consulting state a restart could lose. A worker id is its instance
-  identity, a UUID, so a real one reads
-  `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in these
-  docs abbreviates it to its first segment for legibility. Clients treat the
-  whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A generated lease id names its worker.** A gateway lease id for a lease
+  simlock generated is the owning worker's id, then a `.`, then the worker's
+  own lease id. A worker id is its instance identity, a UUID, so a real one
+  reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in
+  these docs abbreviates it to its first segment for legibility. Clients treat
+  the whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A caller-chosen lease id crosses the gateway bare** (ADR 0020). A
+  requester that sent `leaseId` gets a lease with exactly that id, with no
+  worker prefix, because an id the caller made up cannot carry one. The
+  gateway routes renew, release and reads for it from its lease index, an
+  in-memory map it rebuilds from what workers report (a lease flagged
+  `idChosenByRequester` whose id matches the `leaseId` pattern is named
+  bare), so a gateway restart loses bare routes until each worker has
+  reported; a renew in that window is `UNKNOWN_LEASE`, and the gateway never
+  asks a worker on a miss. The gateway takes the id from what it forwarded,
+  never from the worker's echo; a grant that differs is released on the worker
+  and the request waits again. It refuses an id its own leases or its own
+  waiting requests hold, and passes a worker's `LEASE_ID_TAKEN` on without
+  trying another worker. If two workers ever report the same bare id, the
+  first stays routed and the other lease expires at its TTL (reviewed in
+  #412).
 - **The lease object gains `worker: { id, label }`** (additive) so a client
   and the console can say *where* the device lives. A worker's network
   address is never on it: clients reach devices through the gateway.
@@ -942,7 +955,7 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
   ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
   ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
-  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is, then to `{min: 17, max: 17}`, because `config.get`'s `warmPool.reserveRunning` is, and a starting `status.get` to `{min: 18, max: 18}`, because its `devices`, `leases`, `capacity` and `queueDepth` are optional, then to `{min: 19, max: 19}`, because `config.get`'s `warmPool.targets` and `warmPool.maxConcurrentBoots` are required, and to `{min: 20, max: 20}`, because `status.get` gains `warmPool`; a
+  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is, then to `{min: 17, max: 17}`, because `config.get`'s `warmPool.reserveRunning` is, and a starting `status.get` to `{min: 18, max: 18}`, because its `devices`, `leases`, `capacity` and `queueDepth` are optional, then to `{min: 19, max: 19}`, because `config.get`'s `warmPool.targets` and `warmPool.maxConcurrentBoots` are required, and to `{min: 20, max: 20}`, because `status.get` gains `warmPool`, and to `{min: 21, max: 21}`, because a lease request may carry `leaseId`; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
