@@ -78,6 +78,7 @@ describe("MCP contracts", () => {
         grantedAt: 0,
         id: "lease-1",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ownerId: "mcp:1",
         requesterId: "mcp:1",
         ttlMs: 60_000,

@@ -43,8 +43,13 @@ export interface ErrorDetailsMap {
   QUEUE_TIMEOUT: { readonly requestId: string };
   REQUESTER_ALREADY_LEASED: { readonly requesterId: string; readonly existingLeaseId?: string };
   /** `lease.request` repeated an `idempotencyKey` its requester already used for a different
-   * device. The stored request is untouched; a new request needs a new key. */
+   * device or a different `leaseId` (a missing one on either side counts as different). The
+   * stored request is untouched; a new request needs a new key. */
   IDEMPOTENCY_CONFLICT: Record<string, never>;
+  /** `lease.request` named a `leaseId` an active lease or a waiting request already holds
+   * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
+   * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
+  LEASE_ID_TAKEN: { readonly leaseId: string };
   NO_DRIVER: { readonly platform: Platform };
   RUNTIME_MISSING: {
     readonly platform: Platform;
@@ -194,6 +199,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   PROTOCOL_VERSION_UNSUPPORTED: true,
   QUEUE_TIMEOUT: true,
   REQUESTER_ALREADY_LEASED: true,
+  LEASE_ID_TAKEN: true,
   NO_DRIVER: true,
   RUNTIME_MISSING: true,
   UNKNOWN_MODEL: true,
@@ -282,6 +288,14 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     code: "IDEMPOTENCY_CONFLICT",
     kind: "domain",
     cliExitCode: 2,
+    httpStatus: 409,
+  },
+  // 409 and exit 13 like `REQUESTER_ALREADY_LEASED`, its neighbour: the request clashes with a
+  // lease or request that is already there.
+  LEASE_ID_TAKEN: {
+    code: "LEASE_ID_TAKEN",
+    kind: "domain",
+    cliExitCode: 13,
     httpStatus: 409,
   },
   NO_DRIVER: { code: "NO_DRIVER", kind: "domain", cliExitCode: 12, httpStatus: 422 },

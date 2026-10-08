@@ -15,7 +15,7 @@
  * see `DaemonServer`'s output parsing -- not a silent drift.
  *
  * This module must never import from src/core, src/daemon, src/drivers, src/http, src/cli,
- * src/mcp, or src/ports -- enforced by a test, see `boundary.test.ts`.
+ * src/mcp, or src/ports -- enforced by `pnpm lint` (`.oxlintrc.json`).
  */
 import { z } from "zod";
 
@@ -76,7 +76,8 @@ const deviceSpecSchema = z.object({
   imageTag: imageTagSchema.optional(),
 });
 
-/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
+/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, except `deferredReclaimLeaseId`,
+ * which is internal bookkeeping a response never carries, plus the `status`/`list`
  * decoration's derived `transitionAgeMs` (see `DaemonServer#decorateDevice`). */
 export const deviceRecordSchema = z.object({
   id: z.string(),
@@ -235,6 +236,11 @@ export const leaseRecordSchema = z.object({
   ttlDeadline: z.number(),
   lastRenewedAt: z.number(),
   /**
+   * ADR 0020: whether the requester chose `id` (`lease.request`'s `leaseId`) rather than simlock
+   * generating it. A gateway rebuilding its routing table reads it to name such a lease bare.
+   */
+  idChosenByRequester: z.boolean(),
+  /**
    * ADR 0005 §18: "the lease object gains `worker: { id, label }` (additive) so a client and
    * the console can tell where the device lives. A worker's network address is never exposed."
    * Additive and gateway-only -- a worker granting its own local lease has no second machine to
@@ -380,6 +386,46 @@ export const statusCapacitySchema = z.object({
       overLimit: z.boolean(),
     })
     .optional(),
+});
+
+/** Bounds on the warm pool block: a gateway parses it off the wire from every worker. */
+/** The most targets the block carries, and the longest model or OS version it names. The config load enforces the same. */
+export const WARM_POOL_TARGETS_MAX = 256;
+export const WARM_POOL_NAME_MAX = 256;
+
+/** Why a warm target is short, in the order the first that applies is the one reported. */
+const warmPoolShortSchema = z.enum([
+  "disabled",
+  "no-driver",
+  "runtime-missing",
+  "unknown-model",
+  "unresolvable",
+  "boot-failed",
+  "device-limit",
+  "running-limit",
+  "reserve",
+  "ram-budget",
+]);
+
+const warmPoolTargetSchema = z.object({
+  platform: platformSchema,
+  model: z.string().max(WARM_POOL_NAME_MAX),
+  osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
+  mode: z.enum(["slim", "full"]),
+  count: z.number().int().nonnegative(),
+  ready: z.number().int().nonnegative(),
+  booting: z.number().int().nonnegative(),
+  short: warmPoolShortSchema.optional(),
+});
+
+/** The warm pool as `status.get` and a worker's view report it. */
+export const statusWarmPoolSchema = z.object({
+  enabled: z.boolean(),
+  reserveRunning: z.object({
+    ios: z.number().int().nonnegative(),
+    android: z.number().int().nonnegative(),
+  }),
+  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_TARGETS_MAX),
 });
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
@@ -644,6 +690,14 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     message: z.string(),
     remedy: z.string(),
   }),
+  z.object({
+    kind: z.literal("warm-pool-target-unreachable"),
+    platform: platformSchema.optional(),
+    target: z.string(),
+    reason: z.enum(["runtime-missing", "unknown-model", "over-limit"]),
+    message: z.string(),
+    remedy: z.string(),
+  }),
 ]);
 
 export const doctorReportSchema = z.object({ findings: z.array(doctorFindingSchema) });
@@ -744,6 +798,18 @@ export const configSchema = z.object({
     deleteAfterMs: z.number(),
   }),
   warmPool: z.object({
+    enabled: z.boolean(),
+    reserveRunning: z.object({ ios: z.number(), android: z.number() }),
+    maxConcurrentBoots: z.number(),
+    targets: z.array(
+      z.object({
+        platform: z.enum(["ios", "android"]),
+        model: z.string(),
+        osVersion: z.string().optional(),
+        mode: z.enum(["slim", "full"]).optional(),
+        count: z.number(),
+      }),
+    ),
     quarantine: z.object({
       maxRetries: z.number(),
       retryBackoffMs: z.number(),
@@ -938,6 +1004,10 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
  * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
  * different facts, and a console that dims one must not read the other as a full machine.
+ * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
+ * and `host` only, so its view has `health` and `host` and none of `capacity`, `catalog`,
+ * `devices`, `installs`, `leases`, `queueDepth` or `waiting` -- never empty ones, which would
+ * read as "nothing is leased" about a registry nobody has checked yet.
  *
  * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
@@ -964,6 +1034,8 @@ export const workerViewSchema = z.object({
     .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
     .optional(),
   capacity: statusCapacitySchema.optional(),
+  /** The worker's warm pool as its last `status.get` read it; absent until one was read. */
+  warmPool: statusWarmPoolSchema.optional(),
   /**
    * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
    * connects. Display only: routing counts installed runtimes and never reads it, and the
@@ -994,13 +1066,13 @@ export const workerViewSchema = z.object({
   /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
    * is reported separately by `status.get` and arrives with #118. */
   queueDepth: z.number().optional(),
-  leases: z.array(leaseRecordSchema),
-  devices: z.array(statusDeviceSchema),
-  catalog: z.array(platformCatalogSchema),
+  leases: z.array(leaseRecordSchema).optional(),
+  devices: z.array(statusDeviceSchema).optional(),
+  catalog: z.array(platformCatalogSchema).optional(),
   /**
    * ADR 0009 §4: when the gateway last read `catalog` from this worker in its current session.
    * Cleared when the worker connects and set again by the first refresh that reads a catalog, so
-   * a worker that has just connected has none: its `catalog` is the last session's, or empty.
+   * a worker that has just connected has none: its `catalog` is the last session's, or absent.
    * It is what tells a catalog read and found empty from one that has not arrived. Absent on a
    * view no gateway built.
    */

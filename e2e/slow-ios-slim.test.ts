@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-import { SLIM_CATEGORIES, labelsFor } from "../src/drivers/ios/slim-labels.js";
+import { SLIM_CATEGORIES, labelsFor } from "../src/drivers/ios/index.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import {

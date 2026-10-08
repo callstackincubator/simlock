@@ -137,7 +137,7 @@ rather than assume continuity.
 
 ## Warm-pool purge failures (resolved: quarantine, #21)
 
-Before a released device enters the warm pool, Simlock attempts to purge the
+Before a released device is grantable again, Simlock attempts to purge the
 previous lease's state. A successful purge produces a clean, ready device.
 
 **The original pitfall:** the first warm-pool version emitted
@@ -147,10 +147,12 @@ state left by the previous lease — indistinguishable from the app itself
 misbehaving.
 
 **Fix (#21):** a failed purge now commits the device to `quarantined` instead
-of readiness-checking it back into circulation. `quarantined` is a shared
+of readiness-checking it back into circulation. The reclaim coordinator
+(`ReclaimCoordinator`), which runs the purge after a release, hands the
+failed device to quarantine with the strategy it attempted. `quarantined` is a shared
 "present in the registry, counts against running capacity, not grantable"
 disposition (see `docs/internal/ARCHITECTURE.md`, "Quarantine: present but not
-grantable") — `AcquisitionPlanner` and the warm-pool eviction helpers select
+grantable") — `AcquisitionPlanner` and the idle-order eviction helpers select
 targets by exact state, so a quarantined device is simply invisible to every
 grant path with no special-casing required. `QuarantineCoordinator` retries
 the purge on a `Clock`-driven backoff (`warmPool.quarantine.{maxRetries,
@@ -524,24 +526,6 @@ for the requests it holds for the gateway. That needs a worker operation that
 lists stored requests, and the gateway forwarding a key the worker can store
 the request under.
 
-## A restart between a grant and its record write reports the request as failed
-
-A request's result is written once its wait settles, a step after the lease
-itself is committed (`LeaseRequestBook#settle` runs after the grant resolves,
-not inside the same `state.json` write as `Registry.createLease`).
-
-**The pitfall:** a daemon that stops in that window leaves a lease on disk
-and its request still `open`. The next start settles the request as `failed`
-(daemon restarted), so a repeat under the same key answers with that failure
-even though the lease exists. Nothing is lost: the requester still holds the
-lease, and a request under a new key answers `REQUESTER_ALREADY_LEASED`
-naming it.
-
-**Status:** known; the window is one serialized registry write long.
-
-**Planned fix:** write the request's result in the same commit as the lease
-it was granted, by passing the request id into `Registry.createLease`.
-
 ## HTTP single-lease reads answer 404, not 403, for an unowned lease
 
 `GET /v1/leases/:id` and `GET /v1/leases/:id/events` resolve their lease
@@ -854,8 +838,11 @@ even though the daemon completes it. Simlock relays boot progress as MCP
 progress notifications precisely so clients can pass
 `resetTimeoutOnProgress: true` (or a longer timeout) on `lease_simulator`,
 as in `client.callTool(request, undefined, { resetTimeoutOnProgress: true,
-timeout: 600_000 })`. The warm pool hides this for every lease after the
-first.
+timeout: 600_000 })`. Nothing hides this: a released iOS simulator is shut
+down after its erase, and the warm pool boots it back only when the running
+limit has room, so a slim lease that arrives before that boot starts, or when
+there is no room, pays the cold boot; one that arrives while it runs waits for
+it and pays what is left of it.
 
 **`launchctl disable` accepts labels that do not exist.** Verified on iOS
 26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
@@ -1150,3 +1137,20 @@ costs the boot a hit would have saved. The maintainer accepted this on
 Closing the first two needs the mode of the request that created each device stored on
 the device (ADR 0009, Alternatives considered), which no one has asked for yet.
 Closing the third needs `warm-hit` to know which runtimes cannot be slimmed.
+
+## A warm target under `lease.identity` `fresh` costs one create per lease
+
+A `warmPool.targets` entry keeps `count` ready devices of its kind. Under
+`lease.identity.ios: fresh` a device serves one lease and is deleted, so each
+lease takes a ready device and the pool creates the next one, a full create
+and boot per lease, started when the lease is granted so it runs while the
+agent works. Accepted: it moves the cost off the lease's critical path, and it
+is what a target of `fresh` devices means. It is not free: the new device
+holds a running slot and its RAM while it waits for a lease, and a burst of
+leases larger than `count` still pays the boot for the ones beyond it.
+
+**A failing target boots again and again, slowly.** A target whose devices
+never boot is retried after 1, 2, 4 and so on minutes, at most 10 apart, for
+as long as the daemon runs. There is no attempt limit; each try boots the
+target's shut-down device of that kind, or, when it has none, creates a device
+and deletes it again. `retry.ts` is the one place to add a limit.

@@ -107,6 +107,83 @@ describe("ManagedDeviceLifecycle", () => {
     expect(handoff?.device.driverDeviceId).toBe(ready.driverDeviceId);
   });
 
+  it("bootWarm makes a shut-down device ready and ends the boot claim, where bootForLease keeps it", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const shutdown = await shutdownDevice(harness, ready);
+    const leaseClaim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (leaseClaim === undefined) throw new Error("expected boot claim");
+
+    const handoff = await harness.lifecycle.bootForLease(shutdown, leaseClaim);
+
+    expect(handoff?.device.state).toBe("ready");
+    expect(harness.claims.isClaimed(shutdown.id)).toBe(true);
+    handoff?.claim.release();
+    const again = await shutdownDevice(harness, handoff?.device ?? ready);
+    const warmClaim = harness.claims.tryClaim(again.id, "boot");
+    if (warmClaim === undefined) throw new Error("expected boot claim");
+
+    const booted = await harness.lifecycle.bootWarm(again, warmClaim);
+
+    expect(booted).toMatchObject({ id: shutdown.id, state: "ready" });
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.claims.isClaimed(shutdown.id)).toBe(false);
+  });
+
+  it("stamps readyAt with the moment a device becomes ready, on a boot for a lease and on a warm boot", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const shutdown = await shutdownDevice(harness, ready);
+    harness.clock.advance(5_000);
+    const leaseClaim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (leaseClaim === undefined) throw new Error("expected boot claim");
+
+    const handoff = await harness.lifecycle.bootForLease(shutdown, leaseClaim);
+    handoff?.claim.release();
+
+    expect(handoff?.device.readyAt).toBe(6_000);
+    expect(harness.registry.snapshot.devices[0]?.readyAt).toBe(6_000);
+
+    const again = await shutdownDevice(harness, handoff?.device ?? ready);
+    harness.clock.advance(7_000);
+    const warmClaim = harness.claims.tryClaim(again.id, "boot");
+    if (warmClaim === undefined) throw new Error("expected boot claim");
+
+    await harness.lifecycle.bootWarm(again, warmClaim);
+
+    expect(harness.registry.snapshot.devices[0]?.readyAt).toBe(13_000);
+  });
+
+  it("bootWarm ends the boot claim and leaves the device shut down when the boot fails", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const shutdown = await shutdownDevice(harness, ready);
+    const claim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (claim === undefined) throw new Error("expected boot claim");
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("emulator would not start"));
+
+    await expect(harness.lifecycle.bootWarm(shutdown, claim)).rejects.toThrow(
+      "emulator would not start",
+    );
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    expect(harness.claims.isClaimed(shutdown.id)).toBe(false);
+  });
+
+  it("bootWarm does nothing for a device that is no longer shut down", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const claim = harness.claims.tryClaim(ready.id, "boot");
+    if (claim === undefined) throw new Error("expected boot claim");
+    const makeReadyCalls = harness.driver.calls.filter((call) => call.operation === "makeReady");
+
+    await expect(harness.lifecycle.bootWarm(ready, claim)).resolves.toBeUndefined();
+
+    expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toEqual(
+      makeReadyCalls,
+    );
+  });
+
   it("shuts down and destroys only registry-owned, unleased devices in expected states", async () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);

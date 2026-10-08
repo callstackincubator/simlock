@@ -6,6 +6,9 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
   const connection = connectionStatus(worker.connection);
   const counts = deviceCounts(worker);
   const capacity = capacityByPlatform(worker);
+  // A starting worker has reported no devices or capacity yet: its card leaves those rows out,
+  // where "Not reported" would suggest it is a worker that cannot report them.
+  const starting = worker.health === "starting";
   return (
     <dl className="facts">
       <div>
@@ -34,27 +37,31 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
         <dt>Version</dt>
         <dd className="mono">{worker.version ?? "Not reported"}</dd>
       </div>
-      <div>
-        <dt>Devices</dt>
-        <dd>
-          {counts === undefined
-            ? "Not reported"
-            : `${counts.running} running, ${counts.leased} leased`}
-        </dd>
-      </div>
-      <div>
-        <dt>Capacity</dt>
-        <dd>
-          {capacity.length === 0
-            ? "Not reported"
-            : capacity
-                .map(
-                  (entry) =>
-                    `${platformName(entry.platform)} ${entry.running} of ${entry.limit} running`,
-                )
-                .join(", ")}
-        </dd>
-      </div>
+      {starting ? null : (
+        <>
+          <div>
+            <dt>Devices</dt>
+            <dd>
+              {counts === undefined
+                ? "Not reported"
+                : `${counts.running} running, ${counts.leased} leased`}
+            </dd>
+          </div>
+          <div>
+            <dt>Capacity</dt>
+            <dd>
+              {capacity.length === 0
+                ? "Not reported"
+                : capacity
+                    .map(
+                      (entry) =>
+                        `${platformName(entry.platform)} ${entry.running} of ${entry.limit} running`,
+                    )
+                    .join(", ")}
+            </dd>
+          </div>
+        </>
+      )}
     </dl>
   );
 }

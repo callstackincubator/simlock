@@ -38,8 +38,56 @@ jobs:
       - name: Quality checks
         run: pnpm check
 
+  # Decides whether the Console job has work to do. A workflow-level `paths` filter would leave
+  # the required Console check pending forever on a PR it skips; a job skipped by `if` reports
+  # success instead. Pushes to main always run the console lane.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      console: ${{ steps.filter.outputs.console }}
+      browsers: ${{ steps.filter.outputs.browsers }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull_request run checks out the merge commit; its first parent is the base.
+          fetch-depth: 2
+      - name: Files the console lane depends on
+        id: filter
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "console=true" >>"$GITHUB_OUTPUT"
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The daemon and the CLI the console fixtures start reach almost all of src/, so any
+          # source file counts; so do the UI, the console specs, their helpers and the build
+          # config. Unit tests, docs, agent config and the other e2e files do not.
+          # --no-renames lists a moved file's old path too.
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          if printf '%s\n' "$changed" | grep -v -E '^(src|ui)/.*\.test\.tsx?$' | grep -q -E \
+            '^(src/|ui/|e2e/(console|fake-driver|helpers)/|playwright\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig[^/]*\.json$|\.github/workflows/ci\.yml$)'; then
+            echo "console=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "console=false" >>"$GITHUB_OUTPUT"
+          fi
+          # Most console failures are Firefox- or WebKit-only, so a change to the UI or its
+          # specs runs every browser; any other change runs Chromium.
+          if printf '%s\n' "$changed" | grep -q -E '^(ui/|e2e/console/|playwright\.config\.ts$)'; then
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
+          else
+            echo "browsers=chromium" >>"$GITHUB_OUTPUT"
+          fi
+
   console:
     name: Console
+    needs: changes
+    # Runs unless Changes said there is nothing to test, so a broken Changes job runs the lane.
+    if: ${{ !cancelled() && needs.changes.outputs.console != 'false' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -58,9 +106,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium firefox webkit
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
+        run: |
+          if [ "$BROWSERS" = chromium ]; then
+            pnpm exec playwright install --with-deps chromium
+          else
+            pnpm exec playwright install --with-deps chromium firefox webkit
+          fi
       - name: Browser lane
-        run: pnpm test:console
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
+        run: |
+          if [ "$BROWSERS" = chromium ]; then
+            pnpm test:console --project=chromium
+          else
+            pnpm test:console
+          fi
 
   fallow:
     name: Fallow

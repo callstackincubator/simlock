@@ -165,6 +165,142 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("builds a starting worker's view from health and host alone, asks it for nothing else, and builds the full view once it answers running", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    // A starting worker answers `status.get` with `daemon` and `host` only.
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture({ arch: "x64" }),
+    };
+    worker.devices = [deviceFixture("dev_1", "leased")];
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+
+    const view = harness.service.workers.view("wrk_1");
+    expect(view?.host).toEqual(hostFixture({ arch: "x64" }));
+    for (const field of [
+      "capacity",
+      "catalog",
+      "devices",
+      "installs",
+      "leases",
+      "queueDepth",
+      "waiting",
+    ]) {
+      expect(Object.keys(view ?? {})).not.toContain(field);
+    }
+    // Nothing but the status read, and the event subscription, was asked of it.
+    expect(
+      worker.calls.filter((call) => !["status.get", "events.subscribe"].includes(call)),
+    ).toEqual([]);
+
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")] });
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    worker.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("running"));
+
+    // The refresh a lease event asks for reads no catalog of its own, but the starting answer
+    // dropped the last one, so this refresh reads it: the worker takes requests again at once.
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      catalog: [],
+      catalogReadAt: harness.clock.now(),
+      devices: [{ id: "dev_1" }],
+      leases: [{ id: "lease_1" }],
+    });
+    await harness.service.stop();
+  });
+
+  // #414, modelled on a real worker: its `events.subscribe` parks until startup ends (only
+  // `status.get` answers while it is `starting`), and it emits `daemon.started` before that parked
+  // call subscribes, so the gateway never hears it. A startup longer than `WORKER_CALL_TIMEOUT_MS`
+  // times the subscription out, and the refresh after it reads a `starting` answer. The clock
+  // stops there, short of the periodic tick.
+  it("builds the full view of a worker that was starting when first read, once its startup ends, before the next tick", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    worker.devices = [deviceFixture("dev_1", "leased")];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => undefined;
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+    const startedAt = harness.clock.now();
+
+    // Startup ends: `status.get` answers in full, and the parked subscription is answered.
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")], queueDepth: 1 });
+    endStartup();
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        capacity: { ios: { limit: 2 } },
+        catalog: [{ models: ["iPhone 17"] }],
+        catalogReadAt: startedAt,
+        devices: [{ id: "dev_1" }],
+        health: "running",
+        leases: [{ id: "lease_1" }],
+        queueDepth: 1,
+      }),
+    );
+    expect(harness.clock.now()).toBe(startedAt);
+
+    await harness.service.stop();
+  });
+
+  it("reads nothing more from a worker whose late subscription answer arrives after the service stopped", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    let unsubscribed = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => {
+        unsubscribed = true;
+      };
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(worker.calls).toContain("status.get"));
+    await harness.service.stop();
+    const callsBefore = [...worker.calls];
+
+    endStartup();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(worker.calls).toEqual(callsBefore);
+    expect(unsubscribed).toBe(false);
+  });
+
   it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -220,7 +356,7 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "starting", mode: "worker" },
+      daemon: { health: "failed", mode: "worker" },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -249,7 +385,7 @@ describe("GatewayService", () => {
       devices: [deviceFixture("dev_1", "leased")],
       downloads: { policy: "always", timeoutMs: 45 * 60_000 },
       drained: false,
-      health: "starting",
+      health: "failed",
       host: hostFixture({ arch: "x64" }),
       id: "wrk_1",
       installs: [install],
@@ -281,7 +417,7 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(1));
 
-    const device = harness.service.workers.view("wrk_1")?.devices[0];
+    const device = harness.service.workers.view("wrk_1")?.devices?.[0];
     expect(device).toMatchObject({ id: "dev_1", state: "ready" });
     expect(device).not.toHaveProperty("driverData");
     expect(device).not.toHaveProperty("driverDeviceId");
@@ -335,7 +471,7 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
 
     expect(
-      harness.service.workers.view("wrk_1")?.devices.map(({ id, mode }) => ({ id, mode })),
+      harness.service.workers.view("wrk_1")?.devices?.map(({ id, mode }) => ({ id, mode })),
     ).toEqual([
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
@@ -387,7 +523,7 @@ describe("GatewayService", () => {
     const republished = harness.events.find((event) => event.event === "lease.granted");
     expect(republished).toMatchObject({
       // The name and the emitting module travel unchanged -- the fact happened in that
-      // worker's lease engine, and `workerId` is what says which machine.
+      // worker's leasing module, and `workerId` is what says which machine.
       module: "lease-engine",
       payload: { deviceId: "dev_1", leaseId: "lease_1", workerId: "wrk_1" },
     });
@@ -560,7 +696,7 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.models).toEqual([
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.models).toEqual([
         "iPhone 17",
         "iPad Pro",
       ]),
@@ -583,7 +719,7 @@ describe("GatewayService", () => {
     ]);
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["26.0"],
       }),
     );
@@ -600,7 +736,7 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["25.4", "26.0"],
       }),
     );
@@ -743,7 +879,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "component.installed" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),
@@ -768,7 +904,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "lease.released" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),
@@ -894,6 +1030,21 @@ describe("GatewayService", () => {
 
       await harness.service.stop();
     });
+  });
+
+  it("puts the warm pool block a worker's status read carries on its view", async () => {
+    const warmPool = { enabled: true, reserveRunning: { android: 0, ios: 2 }, targets: [] };
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ warmPool });
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.warmPool).toEqual(warmPool),
+    );
+
+    await harness.service.stop();
   });
 
   it("marks a worker that speaks only the previous protocol version incompatible with both ranges, and asks it nothing else", async () => {
@@ -1123,6 +1274,38 @@ describe("GatewayService", () => {
 
     expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9");
 
+    await harness.service.stop();
+  });
+
+  // H2's case again, for the answer a starting worker gives: a replaced link's late `starting`
+  // must not strip the successor's view of its devices and leases.
+  it("does not let a stale link's late starting answer overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const clientA = new ScriptedWorkerClient("admin", "0.1.0");
+    await harness.join("wrk_1", clientA);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("0.1.0"));
+    const release = clientA.holdStatus();
+    clientA.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(clientA.calls.at(-1)).toBe("status.get"));
+    const clientB = new ScriptedWorkerClient("admin", "9.9.9");
+    clientB.devices = [deviceFixture("dev_b", "ready")];
+    await harness.join("wrk_1", clientB);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+
+    // A's held `status.get` now answers `starting`, after B built the current view.
+    clientA.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      devices: [{ id: "dev_b" }],
+      health: "running",
+      version: "9.9.9",
+    });
     await harness.service.stop();
   });
 

@@ -130,6 +130,25 @@ installer printed one. A request that joins a download already running hears
 that download's latest progress at once. A request that needs no download
 never hears this stage.
 
+**Choosing the lease ID.** Pass `leaseId` when you already have your own ID
+for the lease and want Simlock to use it, so there is nothing to map:
+
+```ts
+const grant = await client.requestLease({ platform: "ios", leaseId: "ad-7f3a" });
+grant.lease.id; // "ad-7f3a"
+grant.lease.idChosenByRequester; // true
+```
+
+The ID is 1 to 64 ASCII letters, digits, `-` and `_`, starts with a letter or
+digit, and is case-sensitive; anything else is a `BAD_REQUEST`. `renewLease`,
+`releaseLease` and the lease lists then name the lease by that ID, against a
+gateway too, where it comes back with no worker in front of it. You keep the
+ID unique for all time: it names one lease, and you do not send it again once
+that lease has ended. Simlock refuses one an active lease or a waiting request
+holds with `LEASE_ID_TAKEN` (`details.leaseId`), after the
+`REQUESTER_ALREADY_LEASED` check, and keeps no record of IDs already used.
+Without `leaseId` a request gets an ID from Simlock, as before.
+
 **Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
@@ -161,7 +180,8 @@ the request is still waiting you join that wait, and once it has a result
 you get that result. Either way it never grants you a second lease. A result
 is never worked out again: a request that failed stays failed under its key,
 so use a new key to try again. Keys last for `lease.requestRetentionMs` after
-the request finishes. The same key with a different device is
+the request finishes. The same key with a different device, or a different
+`leaseId` (sent on one call and not the other counts as different), is
 `IDEMPOTENCY_CONFLICT`. Keys belong to a requester id, and a repeat must come
 from the same connection principal that sent the request: the same key and
 requester id from a different principal is `FORBIDDEN`. A request still waiting when the daemon restarts
@@ -489,6 +509,25 @@ const { host } = await client.getStatus();
   drivers. Each worker's `host` is on its entry in `workers`, and on
   `listWorkers()` from the admin client.
 
+## A daemon that is still starting: `getStatus()`
+
+While a daemon is starting (`daemon.health` is `"starting"`), `getStatus()`
+returns `daemon` and `host` and nothing else. `devices`, `leases`, `capacity`,
+`warmPool`, `queueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
+because the daemon has not yet checked what it holds. The same is true of a
+worker's entry in `workers` and in `listWorkers()`: a worker that is starting has
+`health` and `host` and none of `devices`, `leases`, `capacity`, `warmPool`, `queueDepth`,
+`catalog`, `installs` or `waiting`. Check `daemon.health` before reading them:
+
+```ts
+const status = await client.getStatus();
+if (status.daemon.health === "starting") {
+  // Only `status.daemon` and `status.host` are there yet.
+} else {
+  console.log(status.devices?.length);
+}
+```
+
 ## What is installing: `getStatus().installs`
 
 `getStatus()` lists the component installs waiting or running on the
@@ -583,7 +622,9 @@ call `renewLease` with the lease id and you have picked the lease straight
 back up; do nothing and it expires at its deadline like any other. That is
 why `onLeaseLost` no longer fires on connection loss: it reports a lease the
 daemon actually ended (expiry, an operator release, an unrecoverable
-device), and a dropped socket is not one.
+device), and a dropped socket is not one. A daemon that starts again ends
+every lease whose device is not running then, as `device-lost`, so a
+`renewLease` after a restart can fail with `UNKNOWN_LEASE`.
 
 Reconnect policy is deliberately a frontend's own concern, not something
 this client can make a universal decision about:
@@ -746,7 +787,7 @@ difference, and neither does code written against it.
 mode (`"slim" | "full"`). Everything else you might reach for is a leaky
 inference rather than an answer: a lease from a gateway carries an additive
 `worker: { id, label }` block, but so might a future single-machine daemon's;
-a lease id from a gateway names its worker, but ids are opaque and parsing
+a lease id from a gateway can name its worker, but ids are opaque and parsing
 one is a bug waiting to happen.
 
 Two behaviours worth knowing when the daemon on the other end is a gateway,
@@ -786,7 +827,7 @@ answers as a fleet of one:
   handshake means something answered, and launching there risks a second
   daemon instance or masking a real incompatibility).
 - It does not restart the daemon on a protocol version mismatch. Leases
-  survive a restart, but stopping a daemon out from under
+  whose device is still running survive a restart, but stopping a daemon out from under
   its users still kills every queued lease request on the machine and leaves
   every lease it was serving burning TTL with nothing to renew against.
   `PROTOCOL_VERSION_UNSUPPORTED` names the running daemon's version; the fix

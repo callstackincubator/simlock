@@ -302,4 +302,100 @@ describe("FleetLeaseIndex", () => {
       });
     });
   });
+
+  describe("caller-chosen lease IDs", () => {
+    /** A lease a worker reports as named by its requester. */
+    function chosen(id: string, overrides: Partial<WorkerReportedLease> = {}): WorkerReportedLease {
+      return { ...reported(id, overrides), idChosenByRequester: true } as WorkerReportedLease;
+    }
+
+    it("after a gateway restart, a caller-chosen lease is rebuilt under its bare ID", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+
+      index.rebuildFromWorker("wrk_1", [chosen("ad-7f3a"), reported("lse_9")]);
+
+      expect(index.resolve("ad-7f3a")).toEqual({
+        gatewayLeaseId: "ad-7f3a",
+        grantedAt: 1,
+        ownerId: "alice-principal",
+        requesterId: "alice",
+        workerId: "wrk_1",
+        workerLeaseId: "ad-7f3a",
+      });
+      expect(index.resolve("wrk_1.lse_9")).toMatchObject({ workerLeaseId: "lse_9" });
+      expect(index.resolve("wrk_1.ad-7f3a")).toBeUndefined();
+    });
+
+    it("a rebuilt lease flagged idChosenByRequester whose ID does not match the leaseId pattern is prefixed and logged", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+
+      expect(index.resolve("wrk_1.not.a-valid id")).toMatchObject({ workerId: "wrk_1" });
+      expect(index.resolve("not.a-valid id")).toBeUndefined();
+      expect(logger.warnings).toEqual([
+        expect.objectContaining({ fields: expect.objectContaining({ workerId: "wrk_1" }) }),
+      ]);
+    });
+
+    it("logs a flagged lease with an invalid ID once, not on every snapshot that repeats it", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+      index.rebuildFromWorker("wrk_1", [chosen("not.a-valid id")]);
+
+      expect(logger.warnings).toHaveLength(1);
+      expect(index.all()).toHaveLength(1);
+    });
+
+    it("when two workers report the same caller-chosen ID on rebuild, the first stays routed and a warning names both workers", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+
+      index.rebuildFromWorker("wrk_1", [chosen("myid")]);
+      index.rebuildFromWorker("wrk_2", [chosen("myid", { ownerId: "bob-principal" })]);
+
+      expect(index.resolve("myid")).toMatchObject({
+        ownerId: "alice-principal",
+        workerId: "wrk_1",
+      });
+      expect(index.findByWorkerLease("wrk_2", "myid")).toBeUndefined();
+      expect(index.all()).toHaveLength(1);
+      expect(logger.warnings).toHaveLength(1);
+      expect(JSON.stringify(logger.warnings[0]?.fields)).toContain("wrk_1");
+      expect(JSON.stringify(logger.warnings[0]?.fields)).toContain("wrk_2");
+    });
+
+    it("add never overwrites a bare entry that belongs to another worker, and says it did not add", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      const first = entry({ gatewayLeaseId: "myid", workerId: "wrk_1", workerLeaseId: "myid" });
+      expect(index.add(first)).toBe(true);
+
+      const added = index.add(
+        entry({ gatewayLeaseId: "myid", workerId: "wrk_2", workerLeaseId: "myid" }),
+      );
+
+      expect(added).toBe(false);
+      expect(index.resolve("myid")).toEqual(first);
+      expect(index.findByWorkerLease("wrk_2", "myid")).toBeUndefined();
+    });
+
+    it("a second worker reporting the same bare ID does not reset the first entry's missing count", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      index.rebuildFromWorker("wrk_1", [chosen("myid")]);
+      // wrk_1 stops reporting it: missing once.
+      index.rebuildFromWorker("wrk_1", []);
+      expect(index.resolve("myid")).toBeDefined();
+
+      // wrk_2 reports the same ID: that is not a report from wrk_1.
+      index.rebuildFromWorker("wrk_2", [chosen("myid")]);
+      // wrk_1 omits it a second time in a row: gone.
+      index.rebuildFromWorker("wrk_1", []);
+
+      expect(index.resolve("myid")).toBeUndefined();
+    });
+  });
 });

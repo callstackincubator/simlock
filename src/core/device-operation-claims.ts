@@ -14,6 +14,12 @@ export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke" | "recove
 export interface DeviceOperationClaim {
   readonly deviceId: string;
   readonly operation: DeviceOperation;
+  /**
+   * The waiter this claim was taken for, absent when none was: the only ownerless `boot` claim is
+   * the warm pool's (a failed boot's destroy takes `cleanup`, a fence takes its waiter's id). A
+   * request waits only for a `boot` nobody owns, never for the one another request is making.
+   */
+  readonly owner?: string | undefined;
   release(): void;
 }
 
@@ -24,13 +30,18 @@ export interface DeviceOperationClaim {
 export class DeviceOperationClaims {
   readonly #claims = new Map<string, DeviceOperationClaim>();
 
-  tryClaim(deviceId: string, operation: DeviceOperation): DeviceOperationClaim | undefined {
+  tryClaim(
+    deviceId: string,
+    operation: DeviceOperation,
+    owner?: string,
+  ): DeviceOperationClaim | undefined {
     if (this.#claims.has(deviceId)) return undefined;
 
     let released = false;
     const claim: DeviceOperationClaim = {
       deviceId,
       operation,
+      owner,
       release: () => {
         if (released) return;
         released = true;
@@ -39,6 +50,13 @@ export class DeviceOperationClaims {
     };
     this.#claims.set(deviceId, claim);
     return claim;
+  }
+
+  /** What holds `deviceId` and for whom; `undefined` when nothing does. */
+  claim(deviceId: string): { readonly kind: DeviceOperation; readonly owner?: string } | undefined {
+    const held = this.#claims.get(deviceId);
+    if (held === undefined) return undefined;
+    return { kind: held.operation, ...(held.owner === undefined ? {} : { owner: held.owner }) };
   }
 
   operationFor(deviceId: string): DeviceOperation | undefined {

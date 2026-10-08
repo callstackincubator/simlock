@@ -14,6 +14,7 @@ import {
 import { MemoryDrainStore } from "./drain-store.js";
 import { GatewayService } from "./service.js";
 import { catalogFixture, protocolMismatchError, ScriptedWorkerClient } from "./test-support.js";
+import type { WorkerView } from "./worker-registry.js";
 
 /** A real `GatewayService` with scripted workers behind its uplinks: the relay reads the same
  * views and drives the same links a gateway daemon does. */
@@ -99,6 +100,11 @@ function deferredInstall() {
 
 function installed(version = "35"): ComponentInstallOutput {
   return { component: version, outcome: "installed", platform: "android", version };
+}
+
+/** The runtimes a worker's view lists for Android; none for a worker with no catalog read yet. */
+function androidRuntimes(view: WorkerView | undefined) {
+  return view?.catalog?.find((entry) => entry.platform === "android")?.runtimes;
 }
 
 function installCalls(client: ScriptedWorkerClient): string[] {
@@ -346,10 +352,7 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
     back.catalog = catalogFixture([{ models: ["Pixel 9"], platform: "android", runtimes: ["35"] }]);
     await harness.dial("wrk_b", back);
     await vi.waitFor(() =>
-      expect(
-        harness.service.workers.view("wrk_b")?.catalog.find((entry) => entry.platform === "android")
-          ?.runtimes,
-      ).toEqual(["35"]),
+      expect(androidRuntimes(harness.service.workers.view("wrk_b"))).toEqual(["35"]),
     );
     await harness.service.stop();
   });
@@ -573,10 +576,7 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
 
     await harness.install(["wrk_a"]);
 
-    expect(
-      harness.service.workers.view("wrk_a")?.catalog.find((entry) => entry.platform === "android")
-        ?.runtimes,
-    ).toEqual(["34", "35"]);
+    expect(androidRuntimes(harness.service.workers.view("wrk_a"))).toEqual(["34", "35"]);
     await harness.service.stop();
   });
 
@@ -600,9 +600,7 @@ describe("relayComponentInstall (ADR 0010 §7)", () => {
       worker.pushEvent({ event: "device.state-changed" });
       return installed(input.version);
     };
-    const runtimesNow = () =>
-      harness.service.workers.view("wrk_a")?.catalog.find((entry) => entry.platform === "android")
-        ?.runtimes;
+    const runtimesNow = () => androidRuntimes(harness.service.workers.view("wrk_a"));
 
     const runtimesWhenAnswered = harness.install(["wrk_a"]).then(runtimesNow);
     await vi.waitFor(() => expect(release).toBeDefined());

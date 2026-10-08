@@ -59,6 +59,21 @@ describe("SimlockError", () => {
     },
   );
 
+  it("narrows LEASE_ID_TAKEN's details to the ID, and answers it with exit 13 and HTTP 409 as a domain error", () => {
+    const error = fromWireError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+      leaseId: "ad-7f3a",
+    });
+    if (error.code !== "LEASE_ID_TAKEN") throw new Error("expected LEASE_ID_TAKEN");
+
+    expect(error.details.leaseId).toBe("ad-7f3a");
+    expect(ERROR_TABLE.LEASE_ID_TAKEN).toEqual({
+      cliExitCode: 13,
+      code: "LEASE_ID_TAKEN",
+      httpStatus: 409,
+      kind: "domain",
+    });
+  });
+
   it("isSimlockError rejects a plain Error", () => {
     expect(isSimlockError(new Error("boom"))).toBe(false);
   });

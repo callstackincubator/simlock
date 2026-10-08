@@ -60,6 +60,7 @@ const EVENT_NAMES: Record<EventName, true> = {
   "worker.drain-started": true,
   "worker.drain-ended": true,
   "request.dispatched": true,
+  "warm-pool.target-missed": true,
 };
 
 /** The first-column `` `subject.fact` `` of every catalog table row in an EVENTS.md, sorted. */

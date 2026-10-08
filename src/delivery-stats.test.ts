@@ -81,6 +81,20 @@ const input = {
       body: review("Spec review: 1 blocking, 0 fixed, 2 notes. Code review: skipped."),
     },
     {
+      number: 19,
+      title: "this week, only the claims review led to a fix",
+      mergedAt: "2026-10-02T14:00:00Z",
+      body: review(
+        [
+          "Spec review: 1 blocking, 0 fixed, 0 notes. Code review: 0 blocking, 0 fixed, 0 notes. Claims review: 3 blocking, 2 fixed, 1 note.",
+          "",
+          "Rejected:",
+          "",
+          "- claims: a stale claim — the doc is right",
+        ].join("\n"),
+      ),
+    },
+    {
       number: 16,
       title: "this week, a Review heading with no counts",
       mergedAt: "2026-10-02T11:00:00Z",
@@ -145,16 +159,18 @@ describe("delivery-stats.mjs", () => {
   it("counts each week's merged PRs, their review findings, fixes, notes, second rounds, alive mutants and handoffs", () => {
     const output = run(["--weeks", "2"]);
 
-    // Week from | Merged | Reviewed | Spec review | Code review | Notes | No fix | Round 2 | Mutants alive | Handoffs
-    // #16's Review heading has no counts line, so it is merged but not reviewed; #15 had a code fix.
-    // #10, #11 and #15 count every finding they raised; #17 and #18 their blocking ones, and notes.
+    // Week from | Merged | Reviewed | Spec review | Code review | Claims review | Notes | No fix | Round 2 | Mutants alive | Handoffs
+    // #16's Review heading has no counts line, so it is merged but not reviewed; #15 had a code fix
+    // and #19 a claims fix, so neither is "No fix". #10, #11 and #15 count every finding they
+    // raised; #17, #18 and #19 their blocking ones, and notes.
     expect(row(output, "2026-09-27")).toEqual([
       "2026-09-27",
-      "7",
-      "5",
-      "2/9 (22%)",
-      "4/4 (100%)",
+      "8",
       "6",
+      "2/10 (20%)",
+      "4/4 (100%)",
+      "2/3 (67%)",
+      "7",
       "2",
       "1",
       "1/12",
@@ -166,6 +182,7 @@ describe("delivery-stats.mjs", () => {
       "1",
       "1/1 (100%)",
       "1/3 (33%)",
+      "0/0",
       "0",
       "0",
       "0",
@@ -185,6 +202,7 @@ describe("delivery-stats.mjs", () => {
       "- #17 a blocking spec claim — not blocking: nothing breaks",
     ]);
     expect(section(output, "### code")).toEqual(["- #10 a code claim — its reason"]);
+    expect(section(output, "### claims")).toEqual(["- #19 a stale claim — the doc is right"]);
     expect(section(output, "### untagged")).toEqual(["- #10 an untagged claim — its reason"]);
   });
 

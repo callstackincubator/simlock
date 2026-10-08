@@ -1,4 +1,4 @@
-import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/driver.js";
+import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 import { adbPath, emulatorPath, locateSdk, sdkToolBin } from "./sdk-paths.js";
 

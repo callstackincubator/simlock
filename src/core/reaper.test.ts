@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "./test-wiring.js";
+import { testComponentWiring } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -15,15 +15,15 @@ import {
   CleanupReaper,
   type CleanupRule,
   type Config,
-  FakeDriver,
-  LeaseEngine,
   Registry,
 } from "./index.js";
+import { FakeDriver } from "./fake-driver.js";
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
@@ -105,6 +105,10 @@ function config(): Config {
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -122,8 +126,9 @@ async function createHarness(
     readonly cleanupConfig?: Config;
     readonly filesystem?: MemoryFilesystem;
     readonly logger?: Logger;
+    readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
     readonly tickMs?: number;
-    readonly useLeaseEngineExecutor?: boolean;
+    readonly useEngineExecutor?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -144,7 +149,7 @@ async function createHarness(
     statePath,
   });
   const cleanupConfig = options.cleanupConfig ?? config();
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...testComponentWiring({
       clock: clock,
       drivers: [driver],
@@ -162,7 +167,10 @@ async function createHarness(
       totalRamBytes: 32 * gibibyte,
     }),
   });
-  const executor = options.useLeaseEngineExecutor
+  // These tests seed released and shut-down devices by hand and drive the reaper over them; the
+  // engine's warm pool would boot a device it just saw released back before the reaper looks.
+  engine.dispose();
+  const executor = options.useEngineExecutor
     ? engine.cleanup
     : (() => {
         const claims = new DeviceOperationClaims();
@@ -184,6 +192,7 @@ async function createHarness(
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     rules,
+    ...(options.targetedDevices === undefined ? {} : { targetedDevices: options.targetedDevices }),
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
   });
 
@@ -324,6 +333,26 @@ describe("CleanupReaper", () => {
     ]);
     expect(harness.driver.calls).toHaveLength(callsBefore);
     expect(harness.registry.snapshot).toEqual(before);
+  });
+
+  it("does not propose a shutdown for a targeted device idle past T1, and does for one that is not targeted", async () => {
+    let targeted: ReadonlySet<string> = new Set();
+    const harness = await createHarness(
+      automaticCleanupRules,
+      {},
+      { targetedDevices: async () => targeted },
+    );
+    const kept = await seedReleased(harness, "ready");
+    harness.clock.advance(11_000);
+    targeted = new Set([kept.id]);
+
+    await expect(harness.reaper.run({ dryRun: true })).resolves.toEqual([]);
+
+    targeted = new Set();
+    await expect(harness.reaper.run({ dryRun: true })).resolves.toEqual([
+      expect.objectContaining({ action: "shutdown", rule: "idle-shutdown", target: kept.id }),
+    ]);
+    harness.reaper.dispose();
   });
 
   it("runs only the rule --rule names, and no rule at all for a name that is not registered", async () => {
@@ -526,14 +555,14 @@ describe("CleanupReaper", () => {
     harness.reaper.dispose();
   });
 
-  it("prevents the lease engine from granting a device while cleanup is shutting it down", async () => {
+  it("prevents leasing from granting a device while cleanup is shutting it down", async () => {
     const rule: CleanupRule = {
       evaluate: () => [
         { action: "shutdown", reason: "test cleanup", rule: "test-rule", target: "dev_1" },
       ],
       name: "test-rule",
     };
-    const harness = await createHarness([rule], { shutdown: 10 }, { useLeaseEngineExecutor: true });
+    const harness = await createHarness([rule], { shutdown: 10 }, { useEngineExecutor: true });
     await seedReady(harness);
 
     const cleanup = harness.reaper.run();

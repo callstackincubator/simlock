@@ -68,7 +68,7 @@ command starts it again) to bring the platform up.
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
 | 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
 | 2 | `UNKNOWN_PASSTHROUGH_TOOL` | a passthrough tool simlock does not wrap |
-| 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device; use a new key |
+| 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device or `--lease-id`; use a new key |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
 | 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
 | 10 | `DOWNLOAD_TIMEOUT` | a runtime download, including the time spent waiting for another download on the same platform, outlived `downloads.timeoutMs` |
@@ -85,6 +85,7 @@ command starts it again) to bring the platform up.
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
 | 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
+| 13 | `LEASE_ID_TAKEN` | `lease --lease-id` named an ID an active lease or a waiting request already holds |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 | 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
 
@@ -177,7 +178,7 @@ a timer and releasing it when it exits.
 ```
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
-              [--timeout <duration>]
+              [--timeout <duration>] [--lease-id <id>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
 ```
@@ -210,6 +211,15 @@ granted.
   [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
   agent tool's session id, then a pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
+- `--lease-id <id>` — the ID the granted lease gets, in place of one Simlock
+  generates, for a caller that already has its own ID for the lease. 1 to 64
+  ASCII letters, digits, `-` and `_`, starting with a letter or digit, and
+  case-sensitive; anything else is a `BAD_REQUEST` (exit 2). The ID is yours
+  to keep unique for all time: use it for one lease and do not send it again
+  once that lease has ended. An ID an active lease or a waiting request
+  already holds is `LEASE_ID_TAKEN` (exit 13); a requester that already holds
+  a lease gets `REQUESTER_ALREADY_LEASED` first. `renew`, `release` and
+  `list` then name the lease by this ID, through a gateway too.
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
@@ -356,7 +366,10 @@ admin credential (see [Admin credential
 resolution](#admin-credential-resolution)), since the lease's owner is the
 session that was granted it. This is not exit `14`: `14` means the
 daemon ended the lease while the connection was alive, which is a different
-thing to have to handle.
+thing to have to handle. The lease stands only while its device does: a lease
+whose device is not running when a daemon starts again is ended at that start,
+with the reason `device-lost`, and a `renew` of it then fails with
+`UNKNOWN_LEASE`.
 
 `device` is a **projection** of the registry's device record — `id`,
 `driverDeviceId`, `spec`, `address?`, `mode` — not the full
@@ -440,7 +453,10 @@ a signal, and it does not try to release a lease the daemon has already taken
 back. `lease-lost` is a push from a live daemon connection — a connection
 that simply died is exit `1` and a `DAEMON_CONNECTION_LOST` line instead, and
 leaves the lease standing. The `reason` is whatever ended it — `device-lost`
-here, but equally `expired` or `killed`. A reboot cannot bring back
+here, but equally `expired` or `killed`. (A lease whose device was not running
+at a daemon start is ended with `device-lost` too, but no push reaches its
+holder: a connection to that daemon did not survive the stop. It finds the lease
+gone the next time it renews.) A reboot cannot bring back
 anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
@@ -455,8 +471,9 @@ A lease names its device in one of three ways:
 - With neither, the lease asks for a `phone`.
 
 A class lease is served by the first of these that applies: an idle device
-that is already running and fits, then an idle device that is shut down and
-fits (it is booted), then a new device. A device fits when its platform,
+that is already running and fits, then (unless `--no-wait`) a device the warm
+pool is already booting that fits, which it waits for, then an idle device that
+is shut down and fits (it is booted), then a new device. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
 lease fits a device on any installed runtime, with `--os` a device whose OS
 satisfies it, `--mode full` and `--image-tag`
@@ -674,9 +691,12 @@ device it has already given up.
 
 What that means for the next command: the device is `reclaiming` for a moment
 after `release` returns, so it still counts as running capacity and is not
-grantable yet. A `lease` request that wants it simply queues and is granted the
-instant the purge finishes; nothing is lost, but `status` right after a release
-will show `reclaiming` rather than `ready`. `simlock daemon stop` waits for
+grantable yet. A `lease` request that wants it simply queues; nothing is lost,
+but `status` right after a release will show `reclaiming` rather than `ready`.
+An Android emulator comes back `ready` after a snapshot restore, so the waiting
+request is granted the instant the purge finishes; when it falls back to a wipe
+it comes back `shutdown` and the request waits for a boot, like iOS. An iOS simulator comes back `shutdown` after its
+erase, so the waiting request then waits for a full boot as well. `simlock daemon stop` waits for
 in-flight purges before exiting, so a graceful shutdown still leaves the pool
 settled; a daemon killed mid-purge leaves its devices `reclaiming` for the next
 startup to recover.
@@ -747,8 +767,10 @@ rules, so the grant names what you got.
 ### A request no worker can serve
 
 A lease through a gateway never waits for something that cannot arrive. A
-worker *takes requests* when it is connected, not drained, and the gateway has
-read its catalog since it connected. The gateway *knows* a worker once it has
+worker *takes requests* when it is connected, not drained, and either it has
+reported its capacity and the gateway has read its catalog since it connected,
+or it answers that it is still starting and the gateway holds a catalog for it
+from an earlier read. The gateway *knows* a worker once it has
 read a catalog from it and the worker is not `incompatible`: a drained or
 disconnected worker stays known, and a worker that reconnects stays known from
 its last catalog. A worker that has just connected for the first time, whose
@@ -756,7 +778,8 @@ catalog has not arrived, is neither.
 
 | Situation | Result |
 | --- | --- |
-| No worker takes requests | `NO_CAPACITY` (exit 11) at once |
+| No worker takes requests, including a worker that is still starting and that the gateway has never read a catalog from (for example after the gateway and its workers restart together) | `NO_CAPACITY` (exit 11) at once |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Waits in the queue until the worker is ready |
 | At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
 | ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
 | ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
@@ -777,9 +800,13 @@ The grant carries one additional block so you can see where it landed:
 {"lease":{"id":"3f81a2c4.lse_9f2c","worker":{"id":"3f81a2c4","label":"mac-studio-2"}}}
 ```
 
-The lease id names its worker (that is how renew, release, and reads route
-with no gateway-side state to lose), but it is **opaque** — do not parse it.
-`worker.label` is display-only.
+A lease Simlock named has an id that names its worker, but it is **opaque**
+— do not parse it. A lease you named with `--lease-id` keeps exactly that ID
+through a gateway, with no worker in front of it. The gateway finds the
+worker of every lease, either kind, from a table it keeps in memory and
+rebuilds from its workers after a restart, so a renew or release in the
+moment after a restart can answer `UNKNOWN_LEASE` until the worker has
+reported. `worker.label` is display-only.
 
 **`lease renew`, `release`, and lease reads are forwarded** to the worker
 that owns the lease, and the `ttlDeadline` you see is that worker's own.
@@ -1167,6 +1194,31 @@ schema's source of truth.
 
 ## `simlock status`
 
+Below the capacity lines, `status` prints the warm pool: whether it is on, the
+running slots it holds back per platform, and a line for each kind of device the
+targets name, with how many devices it wants, how many are ready and how many
+are booting or being created. Entries that resolve to the same device are one
+line, their counts added. An entry the last pass could not resolve is a line of
+its own, and so is every entry while the pool is off or before its first pass. A target the last pass could do nothing for ends with the reason:
+
+```
+warm pool: enabled, reserve ios 1 android 0
+  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1
+  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing
+```
+
+`short` is one of `disabled` (the pool is off: every target shows it in `status`),
+`no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`,
+`device-limit`, `running-limit`, `reserve` or `ram-budget`; when several apply,
+the first of that list is shown. A target that is filling, held back by
+`warmPool.maxConcurrentBoots` or waiting behind a queued request is not short.
+In `--json` the block is `warmPool`: `enabled`, `reserveRunning` (`ios`,
+`android`) and `targets`, each with `platform`, `model`, `osVersion` (the one
+the target resolved to, or the one it names when it did not resolve; absent
+when it names none and did not resolve), `mode`, `count`, `ready`, `booting` and `short` when it is short.
+A gateway prints no such block of its own; with `--json` each worker's is on its
+entry in `workers`.
+
 Human and JSON status include derived warm counts globally and per platform.
 `ready` devices contribute to those counts; `reclaiming` and `quarantined`
 devices remain visible as busy running capacity and never contribute to warm
@@ -1187,6 +1239,21 @@ and `list --devices` well before it crosses the threshold that would make
 and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
+
+While the daemon is starting, `simlock status` prints the daemon and host
+lines and one more line in place of everything else, because the daemon has not
+yet checked what it holds:
+
+```
+Daemon: starting (worker)
+Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Devices, leases and capacity appear once startup finishes.
+```
+
+`--json` prints the answer as the daemon sent it, with `devices`, `leases`,
+`capacity` and `queueDepth` absent. On a gateway, a worker that is still starting
+shows `starting` after its connection state and `leases unknown` in place of a
+lease count, in the same way.
 
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
@@ -1791,6 +1858,29 @@ findings say so; once everything it needs is present, it gets one
 tell — a command that times out, say — reports nothing. These findings never
 change the exit code, and `--fix` never installs anything.
 
+`doctor` also reports a `warm-pool-target-unreachable` finding for a
+[`warmPool.targets`](CONFIGURATION.md) entry that cannot be met as configured:
+one whose runtime is not installed (`reason` `runtime-missing`, with the
+`simlock component install` command that adds it, or, for an `osVersion` that is
+a range, the command that lists the versions to install one from) or whose model does not exist
+(`unknown-model`), and, with `reason` `over-limit`, one finding for each platform
+whose targets add up to more than its running limit leaves after
+`warmPool.reserveRunning`, and one when all targets together add up to more than
+the machine's running limit leaves after both reserves. An over-limit finding
+names the sum the targets want, the running limit, the reserve held back and the
+room left. A target that is short
+only because the machine is full, out of RAM or retrying a failed boot is not
+reported: that passes, or is a choice of limit. The finding carries `target`,
+`reason`, `message` and `remedy` (and `platform`, except for the sum over every
+platform), and is printed to stderr as one line:
+
+```text
+warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0
+```
+
+It never changes the exit code, and `--fix` never acts on it. With
+`warmPool.enabled` `false` there is none.
+
 ## `simlock nuke [--delete-devices] [--yes]`
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
@@ -1970,7 +2060,16 @@ exists for operators and debugging. `start` starts whichever mode
 as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
 print the web console's address on a `Console:` line (see
 [CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
-and the next daemon restores each one's TTL timer from its deadline. What a
+and the next daemon restores each one's TTL timer from its deadline, for every
+lease whose device is still running. A lease whose device is not running at a
+daemon start — shut down, still booting, gone, or on a platform the daemon
+could not list — is ended before the daemon serves a request, with the reason
+`device-lost`; its holder finds the lease gone when it renews, as for any
+`device-lost`. The device of an ended lease is wiped and returned to the pool
+(a `fresh` device is shut down and deleted instead), or marked missing if it is
+gone; on a platform the daemon could not list it waits, and the first start that
+can list the platform wipes it and returns it to the pool, in the background (a `fresh` one is shut
+down and deleted instead). What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is

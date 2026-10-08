@@ -5,13 +5,15 @@
  */
 import { requestedClass } from "../../contract/index.js";
 import { type OsConstraint, parseOsConstraint, satisfies } from "../../contract/os-range.js";
-import { findCatalogModel, modelClass, pairedRuntimes } from "../../core/catalog-match.js";
 import {
+  findCatalogModel,
+  modelClass,
+  pairedRuntimes,
   type DeviceClass,
   type DeviceRequirement,
   type DeviceSpec,
   fits,
-} from "../../core/domain.js";
+} from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 
@@ -147,8 +149,8 @@ export function listsModel(worker: WorkerView, request: RoutableRequest): boolea
   return catalog !== undefined && candidates(catalog, request).length > 0;
 }
 
-type PlatformEntry = WorkerView["catalog"][number];
+type PlatformEntry = NonNullable<WorkerView["catalog"]>[number];
 
 function catalogOf(worker: WorkerView, request: RoutableRequest): PlatformEntry | undefined {
-  return worker.catalog.find((entry) => entry.platform === request.platform);
+  return worker.catalog?.find((entry) => entry.platform === request.platform);
 }

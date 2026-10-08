@@ -55,7 +55,7 @@ export interface QuarantineCoordinatorOptions {
  * stalled-transition timeout via `enterFromStalledTransition()`), retry, and give-up.
  * `quarantined` is the shared "present in the registry, counts against running
  * capacity, but not grantable" disposition (see domain.ts): AcquisitionPlanner and
- * the warm-pool eviction helpers already select targets by exact state, so a
+ * the idle-order eviction helpers already select targets by exact state, so a
  * quarantined device is invisible to every one of them with no special-casing
  * required.
  *
@@ -85,7 +85,7 @@ export class QuarantineCoordinator {
    * count as running -- so no queued waiter can be satisfied by this alone
    * and `notifyAvailability` is not called.
    */
-  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's quarantine port.
+  // fallow-ignore-next-line unused-class-member -- called through ReclaimCoordinator's quarantine port.
   async enter(failure: QuarantinePurgeFailure): Promise<void> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     await this.options.decisions.run(async () => {
@@ -135,11 +135,13 @@ export class QuarantineCoordinator {
   /**
    * Re-arms retry timers for devices still `quarantined` after a daemon
    * restart, using the persisted `quarantineNextRetryAt` (a retry already due
-   * fires immediately, same as `LeaseExpiryScheduler.restore`).
+   * fires immediately, same as `LeaseExpiryScheduler.restore`). `include` leaves out the devices
+   * a daemon start must not act on: a retry that is due drives the driver at once, and startup
+   * does not drive a platform it could not read (ADR 0019 §1 step 5).
    */
-  restore(): void {
+  restore(include: (device: DeviceRecord) => boolean = () => true): void {
     for (const device of this.options.registry.snapshot.devices) {
-      if (device.state !== "quarantined") continue;
+      if (device.state !== "quarantined" || !include(device)) continue;
       this.#arm(device.id, device.quarantineNextRetryAt ?? this.options.clock.now());
     }
   }

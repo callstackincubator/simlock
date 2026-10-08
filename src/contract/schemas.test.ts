@@ -43,7 +43,7 @@ describe("leaseGrantSchema's device projection", () => {
   ] as const;
 
   /** A device shaped like a full core `DeviceRecord` mid-quarantine, exactly the kind of
-   * payload a real `LeaseGrant` from `core`'s lease engine would carry into `#parseOutput`. */
+   * payload a real `LeaseGrant` would carry into `#parseOutput`. */
   function fullCoreShapedDevice(): Record<string, unknown> {
     return {
       id: "device-1",
@@ -78,6 +78,7 @@ describe("leaseGrantSchema's device projection", () => {
         ownerId: "req",
         grantedAt: 0,
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 1000,
         ttlDeadline: 1000,
       },

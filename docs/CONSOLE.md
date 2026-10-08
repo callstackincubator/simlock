@@ -131,7 +131,10 @@ Each worker shows:
 | Capacity | Devices running out of the limit, per platform |
 
 A worker the gateway could not read from yet says "Not reported" where it
-has nothing to show.
+has nothing to show. A worker that is still starting shows its health as
+`starting`, and leaves out its devices and capacity: they appear once it has
+finished starting. Its page shows the status and the host, and says that devices,
+leases and capacity appear once startup finishes.
 
 Above the workers, **Leases, last hour** charts how many leases were held at
 the end of each minute. It starts from the leases held now and counts back
@@ -154,6 +157,13 @@ Select a worker to open its page. It adds:
   each platform tool, such as Xcode or the Android emulator.
 - **Catalog**: the models and runtimes the worker can lease. It is read again
   straight after a component is installed, and otherwise every 30 seconds.
+- **Warm pool**: whether the worker keeps devices warm, the running slots it
+  holds back per platform, and a row for each kind of device the targets name
+  (targets that resolve to the same device are one row, their counts added)
+  with the model, runtime and mode it keeps ready, how many it wants, how many are ready and how many are booting.
+  A target the worker could do nothing for shows the reason, such as
+  `runtime-missing`, in the last column, and `—` when it has none. It says "Not
+  reported" for a worker that has not sent it.
 - **Installs in progress**: each runtime or system image being downloaded or
   waiting to, how long it has been going, and how many requests wait on it.
 

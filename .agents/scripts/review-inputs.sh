@@ -1,12 +1,16 @@
 #!/usr/bin/env sh
-# Builds the blind inputs for the two pre-merge reviews of a PR (delivery rule 14) and prints
-# the directory's path as the last line on stdout.
+# Builds the blind inputs for the pre-merge reviews of a PR (delivery rule 14) and prints the
+# directory's path as the last line on stdout.
 #
-#   .agents/scripts/review-inputs.sh <pr>
+#   .agents/scripts/review-inputs.sh <pr> [<previous commit>]
 #
 # The directory holds, when each exists:
 #
 #   diff.patch             the PR's diff against its base, as GitHub shows it
+#   commit                 the PR head the directory was built from
+#   fix.patch              with a previous commit: the diff from it to the head
+#   stale-refs.txt         what .agents/scripts/stale-refs.sh finds for the PR: lines anywhere in
+#                          the repo that still name something the diff removed
 #   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch,
 #                          else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line
@@ -26,9 +30,10 @@
 set -eu
 
 pr=${1:-}
+previous=${2:-}
 case $pr in
   '' | *[!0-9]*)
-    echo "usage: review-inputs.sh <pr number>" >&2
+    echo "usage: review-inputs.sh <pr number> [<previous commit>]" >&2
     exit 64
     ;;
 esac
@@ -49,10 +54,21 @@ base="origin/$base_ref"
 fork=$(git merge-base "$base" "$head")
 
 tmp=${TMPDIR:-/tmp}
-out=$(mktemp -d "${tmp%/}/simlock-review-$pr.XXXXXX")
+out=$(mktemp -d "${tmp%/}/review-$pr.XXXXXX")
 mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"
+echo "$head" >"$out/commit"
+if [ -n "$previous" ]; then
+  if git cat-file -e "$previous^{commit}" 2>/dev/null; then
+    git diff "$previous" "$head" >"$out/fix.patch"
+  else
+    say "previous commit $previous is not in this clone; no fix.patch"
+  fi
+fi
+"$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
+# Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
+[ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 
 for f in $(git ls-tree --name-only "$base" docs/internal/agent-rules/); do
   git show "$base:$f" >"$out/rules/$(basename "$f")"

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { NoCapacityError } from "../core/lease-acquisition-coordinator.js";
-import { capacityChangedPayload } from "../core/capacity/observer.js";
-import { testComponentWiring } from "../core/test-wiring.js";
+import {
+  capacityChangedPayload,
+  FakeDriver,
+  testComponentWiring,
+  type FakeDriverOptions,
+} from "../core/testing.js";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
@@ -11,24 +14,23 @@ import {
   DiskSpaceGuard,
   Doctor,
   DriverCatalog,
-  FakeDriver,
   type HostFacts,
   HostFactsReader,
-  LeaseEngine,
   Nuke,
   PassthroughRefusedError,
   Registry,
   SerializedDecision,
   RuntimeMissingError,
+  type CatalogReader,
+  type PassthroughResolver,
 } from "../core/index.js";
+import { NoCapacityError } from "../leasing/index.js";
 import {
   OPERATIONS,
   statusDeviceSchema,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
 } from "../contract/index.js";
-import type { FakeDriverOptions } from "../core/fake-driver.js";
-import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
   ExecOutputDeliveryStalledError,
@@ -44,6 +46,7 @@ import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
+import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
@@ -52,7 +55,7 @@ const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
  * ADR 0003 §12: "full contract coverage at the dispatcher: one suite ... against a fake driver
  * and a scripted session, covering parsing, role rejection, ownership, and error codes." This
  * suite drives `Dispatcher` directly -- no socket, no `DaemonServer` -- against a real
- * `LeaseEngine`/`Registry`/`CleanupReaper` backed by `FakeDriver`, the same harness style
+ * `createCore`/`createLeasing`/`Registry`/`CleanupReaper` backed by `FakeDriver`, the same harness style
  * `server.test.ts` uses for its own socket-level tests. It deliberately does not re-walk every
  * operation the way `server.test.ts` already does at the framing/connection level (ADR §12:
  * "re-walking every operation through each transport would test nothing new") -- this suite is
@@ -65,7 +68,7 @@ const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
  * that cannot get any more complicated, not to the 130-line one already carrying a dozen of
  * these. */
 function resolvePassthroughOverride(
-  engine: LeaseEngine,
+  engine: TestEngine,
   override: PassthroughResolver | undefined,
 ): PassthroughResolver {
   return override ?? engine;
@@ -75,7 +78,7 @@ function resolvePassthroughOverride(
  * other platforms' a test lists. Pulled out of `buildDispatcher` for the same reason as
  * `resolvePassthroughOverride`. */
 function stallOptions(
-  engine: LeaseEngine,
+  engine: TestEngine,
   driver: FakeDriver,
   overrides: {
     readonly claims?: { isClaimed(deviceId: string): boolean };
@@ -194,6 +197,8 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
     readonly capacity?: Config["capacity"];
+    /** Changes keys of the `warmPool` block, for a test about its targets or its switch. */
+    readonly warmPool?: Partial<Config["warmPool"]>;
     /** Stands in for the component installer: a test that needs to see whether it was reached,
      * or one that reads `status.get`'s installs from an installer of its own. */
     readonly components?: Pick<
@@ -202,6 +207,8 @@ async function buildDispatcher(
     >;
     /** Leaves the token store out, as a daemon started without one is. */
     readonly withoutTokens?: boolean;
+    /** The daemon's health, as `status.get` reports it; `running` by default. */
+    readonly health?: "starting" | "running" | "failed";
     /** `gateway.label` in this daemon's config; unset by default. */
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
@@ -210,8 +217,8 @@ async function buildDispatcher(
     readonly claims?: { isClaimed(deviceId: string): boolean };
     /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
     readonly otherStallDrivers?: readonly FakeDriver[];
-    /** Extra lease engine options, such as `defaultModes` (a platform's default device mode). */
-    readonly engine?: Pick<ConstructorParameters<typeof LeaseEngine>[0], "defaultModes">;
+    /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
+    readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -231,7 +238,7 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = withHttp(
+  const baseConfig = withHttp(
     withGatewayLabel(
       testConfig(
         overrides.downloadsPolicy,
@@ -243,6 +250,10 @@ async function buildDispatcher(
     ),
     overrides.http,
   );
+  const config: Config = {
+    ...baseConfig,
+    warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+  };
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
@@ -250,7 +261,7 @@ async function buildDispatcher(
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -279,7 +290,7 @@ async function buildDispatcher(
     drivers: [driver],
     eventBus,
     leaseExpirer: engine,
-    quarantine: engine,
+    quarantine: engine.core.quarantine,
     registry,
   });
   const tokens = new TokenStore({
@@ -292,6 +303,8 @@ async function buildDispatcher(
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
     capacity: engine,
+    warmPool: engine,
+    deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
     components: wiring.components,
@@ -299,7 +312,7 @@ async function buildDispatcher(
     doctor,
     eventBus,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
-    health: () => "running",
+    health: () => overrides.health ?? "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     instanceId: "instance-1",
     leases: engine,
@@ -441,6 +454,20 @@ describe("Dispatcher: parsing", () => {
     ]);
   });
 
+  it("grants lease.request's leaseId as the lease ID, and answers an ID that is in use with LEASE_ID_TAKEN carrying it in details", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const input = { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" } as const;
+
+    const first = await dispatcher.dispatch("lease.request", input, session());
+    const clash = dispatcher.dispatch("lease.request", input, session({ principal: "other" }));
+
+    expect(first.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
+    await expect(clash).rejects.toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "ad-7f3a" },
+    });
+  });
+
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
     const { dispatcher } = await buildDispatcher();
     // "daemon.stop" is ADR §6's frozen exception -- `DaemonServer#dispatchLine` intercepts it
@@ -558,7 +585,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
   it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const runtimes = async () =>
-      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog?.flatMap(
         (entry) => entry.runtimes,
       );
     expect(await runtimes()).toEqual(["26.5"]);
@@ -597,7 +624,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
 
     expect(calls).toBe(2);
-    expect(workers[0]?.catalog.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+    expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
@@ -630,8 +657,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(status.leases).toHaveLength(1);
     expect(status.installs).toHaveLength(1);
     expect(status.host.tools).toHaveLength(1);
+    expect(status.warmPool).toBeDefined();
     expect(catalog.platforms[0]?.models).toEqual(["iPhone 17 Pro"]);
     expect(workers[0]).toMatchObject({
+      warmPool: status.warmPool,
       capacity: status.capacity,
       catalog: catalog.platforms,
       devices: statusDeviceSchema.array().parse(devices),
@@ -644,7 +673,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       queueDepth: status.queueDepth,
     });
     expect(workers[0]?.devices).toHaveLength(1);
-    expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
+    expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
   it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
@@ -1355,8 +1384,80 @@ describe("Dispatcher: device mode on every surface", () => {
       .replay()
       .filter((event) => event.event === "capacity.changed")
       .at(-1);
-    expect(last?.payload).toEqual(capacityChangedPayload(status.capacity));
-    expect(status.capacity.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+    const capacity = status.capacity as NonNullable<typeof status.capacity>;
+    expect(last?.payload).toEqual(capacityChangedPayload(capacity));
+    expect(status.capacity?.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+  });
+
+  it("status.get carries the warm pool's figures: the reserve, and a target the pass could not meet with its reason", async () => {
+    const { dispatcher, engine } = await buildDispatcher({
+      warmPool: {
+        reserveRunning: { android: 0, ios: 1 },
+        targets: [{ count: 1, model: "iPhone 17", osVersion: "27.0", platform: "ios" }],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    await engine.core.passWarmPool();
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    });
+  });
+
+  it("status.get on a daemon whose pool is off carries enabled false, the reserve and every configured target with ready 0, booting 0 and short disabled", async () => {
+    const { dispatcher } = await buildDispatcher({
+      warmPool: {
+        enabled: false,
+        reserveRunning: { android: 1, ios: 0 },
+        targets: [
+          { count: 2, model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+          { count: 1, mode: "slim", model: "Pixel 8", platform: "android" },
+        ],
+      },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 1, ios: 0 },
+      targets: [
+        {
+          booting: 0,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.5",
+          platform: "ios",
+          ready: 0,
+          short: "disabled",
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "slim",
+          model: "Pixel 8",
+          platform: "android",
+          ready: 0,
+          short: "disabled",
+        },
+      ],
+    });
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
@@ -1380,7 +1481,7 @@ describe("Dispatcher: device mode on every surface", () => {
       { id: granted.device.id, mode: "slim" },
       { id: provisioning.id, mode: "full" },
     ];
-    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
       expected,
     );
@@ -1423,7 +1524,7 @@ describe("Dispatcher: device mode on every surface", () => {
       ];
       const project = (devices: readonly { id: string; servesDefaultMode?: boolean }[]) =>
         devices.map(({ id, servesDefaultMode }) => ({ id, servesDefaultMode }));
-      expect(project(status.devices)).toEqual(expected);
+      expect(project(status.devices ?? [])).toEqual(expected);
       expect(project(list as { id: string; servesDefaultMode?: boolean }[])).toEqual(expected);
     },
   );
@@ -1457,7 +1558,7 @@ describe("Dispatcher: device mode on every surface", () => {
     );
 
     for (const devices of [status.devices, list, workers[0]?.devices ?? []]) {
-      const byId = new Map(devices.map((device) => [device.id, device]));
+      const byId = new Map(devices?.map((device) => [device.id, device]));
       expect(byId.get(stuck.id)?.stalled).toBe(true);
       expect(byId.get(fresh.id)).toBeDefined();
       expect(byId.get(fresh.id)).not.toHaveProperty("stalled");
@@ -1480,7 +1581,7 @@ describe("Dispatcher: device mode on every surface", () => {
     });
     clock.advance(60_001);
     const stalled = async () =>
-      (await dispatcher.dispatch("status.get", {}, session())).devices.find(
+      (await dispatcher.dispatch("status.get", {}, session())).devices?.find(
         (entry) => entry.id === device.id,
       )?.stalled;
 
@@ -1508,7 +1609,7 @@ describe("Dispatcher: device mode on every surface", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(status.devices.find((entry) => entry.id === device.id)?.stalled).toBe(true);
+    expect(status.devices?.find((entry) => entry.id === device.id)?.stalled).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
@@ -2482,19 +2583,19 @@ describe("Dispatcher: status.get RAM budget", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    const listed = status.devices
+    const listed = (status.devices ?? [])
       .filter((device) => device.state !== "deleted")
       .map((device) =>
         device.mode === "slim" ? sizes.iosSlimBytesPerDevice : sizes.iosBytesPerDevice,
       );
     // The provisioning device is listed `full` until its slim pass, and counts at that size.
-    expect(status.devices.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
-    expect(status.capacity.ramBudget).toEqual({
+    expect(status.devices?.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
+    expect(status.capacity?.ramBudget).toEqual({
       limitBytes: 28 * gibibyte,
       overLimit: false,
       usedBytes: listed.reduce((total, bytes) => total + bytes, 0),
     });
-    expect(status.capacity.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
+    expect(status.capacity?.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
   });
 
   describe("atRamBudget", () => {
@@ -2529,8 +2630,8 @@ describe("Dispatcher: status.get RAM budget", () => {
       // 13 devices use 26 of 28 GiB: one more iOS device fits, an Android one does not.
       const roomy = await withIosDevices(13);
       const roomyStatus = await roomy.dispatcher.dispatch("status.get", {}, session());
-      expect(roomyStatus.capacity.ios.atRamBudget).toBe(false);
-      expect(roomyStatus.capacity.android.atRamBudget).toBe(true);
+      expect(roomyStatus.capacity?.ios.atRamBudget).toBe(false);
+      expect(roomyStatus.capacity?.android.atRamBudget).toBe(true);
       await expect(
         roomy.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).resolves.toBeDefined();
@@ -2538,7 +2639,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       // 14 devices use all 28 GiB: not even one more iOS device fits.
       const full = await withIosDevices(14);
       const fullStatus = await full.dispatcher.dispatch("status.get", {}, session());
-      expect(fullStatus.capacity.ios.atRamBudget).toBe(true);
+      expect(fullStatus.capacity?.ios.atRamBudget).toBe(true);
       await expect(
         full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).rejects.toBeInstanceOf(NoCapacityError);
@@ -2551,8 +2652,8 @@ describe("Dispatcher: status.get RAM budget", () => {
 
       const status = await dispatcher.dispatch("status.get", {}, session());
 
-      expect(status.capacity.ios.atRamBudget).toBe(false);
-      expect(status.capacity.android.atRamBudget).toBe(false);
+      expect(status.capacity?.ios.atRamBudget).toBe(false);
+      expect(status.capacity?.android.atRamBudget).toBe(false);
     });
   });
 
@@ -3194,6 +3295,10 @@ function testConfig(
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -3372,4 +3477,51 @@ describe("Dispatcher: component.remove", () => {
     driver.releaseRemovals();
     await expect(removal).resolves.toMatchObject({ outcome: "removed" });
   });
+});
+
+describe("Dispatcher: status.get while the daemon is starting", () => {
+  it("status.get on a worker whose health is starting returns daemon and host and no other field", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
+    await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-unchecked",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
+  });
+
+  it.each(["running", "failed"] as const)(
+    "status.get on a %s daemon returns every field it returns today",
+    async (health) => {
+      const { dispatcher, registry } = await buildDispatcher({ health });
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver-known",
+        provisionDuration: 0,
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect(Object.keys(status).sort()).toEqual([
+        "capacity",
+        "daemon",
+        "devices",
+        "host",
+        "installs",
+        "leases",
+        "queueDepth",
+        "waiting",
+        "warmPool",
+      ]);
+      expect(status.daemon.health).toBe(health);
+      expect(status.devices).toHaveLength(1);
+    },
+  );
 });

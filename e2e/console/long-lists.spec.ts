@@ -139,6 +139,7 @@ function leases(count: number): unknown[] {
     grantedAt: now - 3_600_000 + index * 1_000,
     id: `lse_${pad(index + 1)}`,
     lastRenewedAt: now - 60_000,
+    idChosenByRequester: false,
     ownerId: "tok_load",
     requesterId: "tok_load",
     ttlDeadline: now + 600_000,

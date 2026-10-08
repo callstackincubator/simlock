@@ -22,7 +22,7 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
-import type { SimlockAdminClient } from "../admin/index.js";
+import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -250,24 +250,35 @@ export class WorkerLink {
     // refresh is in flight then queues another one, instead of falling in a gap between the
     // two calls. It costs one extra `status.get` per connect, which is the cheapest call the
     // worker has.
+    const subscription = client.subscribeEvents((push) => {
+      this.#onWorkerEvent(push.event);
+    });
     try {
-      this.#unsubscribeEvents = await this.#withTimeout(
-        client.subscribeEvents((push) => {
-          this.#onWorkerEvent(push.event);
-        }),
-        "events.subscribe",
-      );
+      this.#unsubscribeEvents = await this.#withTimeout(subscription, "events.subscribe");
     } catch (error: unknown) {
       // H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
       // said no, its answer just did not arrive within `WORKER_CALL_TIMEOUT_MS`. Logging it as
       // "refused" asserts something this code cannot know: the RPC may yet land, or may already
       // have subscribed the worker on its end with no unsubscribe handle this link ever
       // receives -- there is no way to unsubscribe that short of closing the whole link.
-      // Distinguishing the two in the log is this method's job even though neither path can (or
-      // needs to, for `refresh` below) retry the subscription itself; the tick still covers it.
+      // Distinguishing the two in the log is this method's job even though neither path retries
+      // the subscription itself; a refused one is covered by the tick, a late one by below.
       if (error instanceof WorkerCallTimeoutError) {
+        // #414: a worker still `starting` parks `events.subscribe` until its startup ends, and
+        // sends `daemon.started` before that parked call subscribes, so nothing else tells this
+        // link the worker is ready. The late answer is that signal: keep the handle it carries
+        // and read the worker in full, instead of leaving the `starting` view until a lease,
+        // device or install event or the tick. `refresh` drops itself on a closed or replaced
+        // link, so the late answer needs no guard of its own.
+        void subscription.then(
+          (unsubscribe) => {
+            this.#unsubscribeEvents = unsubscribe;
+            void this.refresh();
+          },
+          () => undefined,
+        );
         this.#logger.warn(
-          "Worker did not answer an event subscription in time; falling back to the tick",
+          "Worker did not answer an event subscription in time; reading it again when it answers",
           { workerId: this.workerId },
         );
       } else {
@@ -356,7 +367,26 @@ export class WorkerLink {
   async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
     this.#consecutiveRefreshTimeouts = 0;
+    // A starting worker answers `status.get` with its health and host only, and everything else
+    // it would say is unchecked. Nothing more is asked of it, and its view is built from those
+    // two facts; the next refresh reads it in full once it answers `running`.
+    if (status.daemon.health === "starting") {
+      this.#refreshStarting(client, status);
+      return;
+    }
+    // A starting answer dropped the view's catalog, and a refresh that does not read one would
+    // leave the worker without it (and so not taking requests) until the next periodic read.
+    const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
+    await this.#refreshRunning(client, status, includeCatalog || !catalogKnown);
+  }
 
+  /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
+   * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
+  async #refreshRunning(
+    client: SimlockAdminClient,
+    status: StatusGetOutput,
+    includeCatalog: boolean,
+  ): Promise<void> {
     const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
@@ -372,7 +402,7 @@ export class WorkerLink {
     // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
-    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    if (this.#superseded()) return;
     // The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
@@ -388,6 +418,23 @@ export class WorkerLink {
         ...(config === undefined ? {} : { config }),
       }),
       grantedDevices: grantedDevices(devices),
+      version: client.daemonVersion,
+    });
+  }
+
+  /** Whether this link has been closed or replaced by a newer one for the same worker, so what
+   * it read must not be written (H2). The one place that asks. */
+  #superseded(): boolean {
+    return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
+  }
+
+  /** A starting worker's view: its health and host, which `workerViewFields` builds from the
+   * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
+   * write is (H2). */
+  #refreshStarting(client: SimlockAdminClient, status: StatusGetOutput): void {
+    if (this.#superseded()) return;
+    this.options.registry.refresh(this.workerId, {
+      ...workerViewFields({ status }),
       version: client.daemonVersion,
     });
   }
@@ -459,7 +506,7 @@ export class WorkerLink {
    * `workerId` added, so they land in its ring buffer and `simlock events --follow` against a
    * gateway shows the fleet. The name, the emitting module, the `id` and the `timestamp` travel
    * unchanged (ADR 0014 §2: one fact, one id, and the time it happened) -- the fact came
-   * from that worker's reaper or lease engine, and rewriting either would make the audit trail
+   * from that worker's reaper or its leasing module, and rewriting either would make the audit trail
    * lie about where it happened; `workerId` is what says which machine.
    *
    * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends

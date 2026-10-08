@@ -9,9 +9,9 @@ import type { WorkerView } from "../worker-registry.js";
 export function viewLoadKey(view: WorkerView): string {
   return canonicalJson({
     capacity: view.capacity,
-    devices: view.devices.map(({ transitionAgeMs: _transitionAgeMs, ...device }) => device),
+    devices: (view.devices ?? []).map(({ transitionAgeMs: _transitionAgeMs, ...device }) => device),
     health: view.health,
-    leases: view.leases.map((lease) => lease.id),
+    leases: (view.leases ?? []).map((lease) => lease.id),
     queueDepth: view.queueDepth,
   });
 }

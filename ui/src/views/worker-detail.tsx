@@ -10,6 +10,8 @@ import {
   stateEnteredAt,
   type WorkerCatalogEntry,
   type WorkerDevice,
+  type WarmPoolRow,
+  warmPoolRows,
   type WorkerView,
   workerName,
 } from "./workers-model";
@@ -52,28 +54,57 @@ export function WorkerDetail(props: {
           <Panel title="Status" description="The worker's connection, health and capacity.">
             <WorkerFacts worker={worker} />
           </Panel>
-          <Panel title="Devices" description="Every device on this worker, and its state.">
-            <DeviceTable worker={worker} now={now} />
-          </Panel>
-          <Panel title="Leases" description="The leases on this worker's devices.">
-            <WorkerLeases worker={worker} workers={workers} now={now} />
-          </Panel>
-          <div className="panel-row panel-row-even">
-            <Panel title="Host" description="The machine the worker runs on.">
-              <HostFacts worker={worker} />
-            </Panel>
-            <Panel title="Catalog" description="The models and runtimes it can lease.">
-              <Catalog catalog={worker.catalog} />
-            </Panel>
-          </div>
-          <Panel
-            title="Installs in progress"
-            description="Runtimes and system images being downloaded, or waiting to be."
-          >
-            <Installs worker={worker} now={now} />
-          </Panel>
+          {worker.health === "starting" ? (
+            <>
+              <Panel title="Host" description="The machine the worker runs on.">
+                <HostFacts worker={worker} />
+              </Panel>
+              <p className="muted">Devices, leases and capacity appear once startup finishes.</p>
+            </>
+          ) : (
+            <WorkerReads worker={worker} workers={workers} now={now} />
+          )}
         </>
       )}
+    </>
+  );
+}
+
+/** What a worker that has finished starting reports: its devices, leases, host, catalog and installs. */
+function WorkerReads(props: {
+  readonly worker: WorkerView;
+  readonly workers: readonly WorkerView[];
+  readonly now: number;
+}) {
+  const { now, worker, workers } = props;
+  return (
+    <>
+      <Panel title="Devices" description="Every device on this worker, and its state.">
+        <DeviceTable worker={worker} now={now} />
+      </Panel>
+      <Panel title="Leases" description="The leases on this worker's devices.">
+        <WorkerLeases worker={worker} workers={workers} now={now} />
+      </Panel>
+      <div className="panel-row panel-row-even">
+        <Panel title="Host" description="The machine the worker runs on.">
+          <HostFacts worker={worker} />
+        </Panel>
+        <Panel title="Catalog" description="The models and runtimes it can lease.">
+          <Catalog catalog={worker.catalog ?? []} />
+        </Panel>
+      </div>
+      <Panel
+        title="Warm pool"
+        description="The devices the worker keeps booted ahead of demand, and why a target is short."
+      >
+        <WarmPool worker={worker} />
+      </Panel>
+      <Panel
+        title="Installs in progress"
+        description="Runtimes and system images being downloaded, or waiting to be."
+      >
+        <Installs worker={worker} now={now} />
+      </Panel>
     </>
   );
 }
@@ -124,7 +155,7 @@ export function DeviceTable({
     <DataTable
       label="Devices"
       name="devices"
-      rows={worker.devices}
+      rows={worker.devices ?? []}
       columns={columns}
       rowId={(device) => device.id}
       empty="No devices."
@@ -199,6 +230,50 @@ function Catalog({ catalog }: { readonly catalog: readonly WorkerCatalogEntry[] 
         </div>
       ))}
     </dl>
+  );
+}
+
+/**
+ * The worker's warm pool: whether it is on, the slots it holds back, and a row for each kind of
+ * device the pool keeps (targets naming one device are one row) with the four numbers and the
+ * reason it is short, as the worker sent them.
+ */
+function WarmPool({ worker }: { readonly worker: WorkerView }) {
+  const { warmPool } = worker;
+  if (warmPool === undefined) return <p className="muted">Not reported.</p>;
+  const columns: Column<WarmPoolRow>[] = [
+    { cell: (target) => target.model, header: "Model" },
+    { cell: (target) => target.osVersion ?? "—", header: "Runtime", mono: true },
+    { cell: (target) => target.mode, header: "Mode" },
+    { cell: (target) => target.count, header: "Wanted", numeric: true },
+    { cell: (target) => target.ready, header: "Ready", numeric: true },
+    { cell: (target) => target.booting, header: "Booting", numeric: true },
+    { cell: (target) => target.short ?? "—", header: "Short", mono: true },
+  ];
+  return (
+    <>
+      <dl className="facts">
+        <div>
+          <dt>Pool</dt>
+          <dd>{warmPool.enabled ? "On" : "Off"}</dd>
+        </div>
+        <div>
+          <dt>Reserved running slots</dt>
+          <dd>
+            iOS {warmPool.reserveRunning.ios}, Android {warmPool.reserveRunning.android}
+          </dd>
+        </div>
+      </dl>
+      <DataTable
+        label="Warm pool"
+        name="warm-pool"
+        rows={warmPoolRows(warmPool.targets)}
+        columns={columns}
+        rowId={(row) => row.key}
+        empty="No targets."
+        wide
+      />
+    </>
   );
 }
 

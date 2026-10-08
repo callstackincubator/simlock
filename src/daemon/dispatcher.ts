@@ -21,15 +21,19 @@ import {
   RuntimeMissingError,
   transitionEnteredAt,
   UnknownLeaseError,
+  tokenLabelMap,
+  UsageReader,
+  type CapacityReader,
+  type WarmPoolReader,
+  type CatalogReader,
+  type PassthroughResolver,
 } from "../core/index.js";
-import type {
-  CapacityReader,
-  DeviceModeReader,
-  CatalogReader,
-  LeaseCommands,
-  PassthroughResolver,
-  QueueControl,
-} from "../core/lease-ports.js";
+import {
+  type DeviceModeReader,
+  LeaseIdTakenError,
+  type LeaseCommands,
+  type QueueControl,
+} from "../leasing/index.js";
 import type {
   Clock,
   Logger,
@@ -57,7 +61,6 @@ import {
   type ErasedHandler,
   usageAnswer,
 } from "./dispatch.js";
-import { tokenLabelMap, UsageReader } from "../core/usage/index.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
@@ -94,7 +97,9 @@ export class NukeUnavailableError extends Error {
 }
 
 export interface DispatcherOptions {
-  readonly capacity: CapacityReader & DeviceModeReader;
+  readonly capacity: CapacityReader;
+  /** The warm pool as its last pass left it, for `status.get`. */
+  readonly warmPool: WarmPoolReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
@@ -107,6 +112,8 @@ export interface DispatcherOptions {
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
   readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
+  /** Answers whether a device's pool is the one a request naming no mode draws from. */
+  readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
   /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
@@ -341,24 +348,30 @@ export class Dispatcher {
   });
 
   #statusGet: Handler<"status.get"> = () => {
+    // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
+    // config rather than being assumed, because it is what tells a client whether the device
+    // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
+    // #117 is what makes `gateway` mean something beyond this field.
+    const daemon = {
+      health: this.options.health(),
+      mode: this.options.config.mode,
+      ...consoleUrlField(this.options.config.http),
+    };
+    const host = this.options.hostFacts();
+    // While starting, the registry has not been checked against the machine: what it holds is
+    // a claim nobody has looked at, so the answer is the daemon and its host and nothing else.
+    if (daemon.health === "starting") return { daemon, host };
     const snapshot = this.options.registry.snapshot;
     return {
       capacity: buildCapacityFigures(snapshot.devices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
-      // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
-      // config rather than being assumed, because it is what tells a client whether the device
-      // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
-      // #117 is what makes `gateway` mean something beyond this field.
-      daemon: {
-        health: this.options.health(),
-        mode: this.options.config.mode,
-        ...consoleUrlField(this.options.config.http),
-      },
-      host: this.options.hostFacts(),
+      daemon,
+      host,
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
       waiting: [...this.options.queue.waitingRequests()],
+      warmPool: this.options.warmPool.figures(),
     };
   };
 
@@ -399,10 +412,15 @@ export class Dispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });
     } catch (error: unknown) {
+      // The refusal carries the ID in `details` on every transport (`ErrorDetailsMap`).
+      if (error instanceof LeaseIdTakenError) {
+        throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
       // The lease path only ever sees the clamped-to-false permission, so it cannot itself
       // tell the caller that config, not missing consent, is what stood between this request
       // and success. Recover that distinction here, the one place that saw both sides. Moved
@@ -822,7 +840,7 @@ export class Dispatcher {
     readonly transitionAgeMs?: number;
     readonly stalled?: true;
   } {
-    const servesDefaultMode = this.options.capacity.servesDefaultMode(device.spec);
+    const servesDefaultMode = this.options.deviceModes.servesDefaultMode(device.spec);
     const enteredAt = transitionEnteredAt(device);
     if (enteredAt === undefined) return { ...device, servesDefaultMode };
     const now = this.options.clock.now();

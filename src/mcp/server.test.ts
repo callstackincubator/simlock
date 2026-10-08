@@ -51,6 +51,7 @@ describe("MCP server (smoke)", () => {
                 ownerId: grant.lease.ownerId,
                 requesterId: grant.lease.requesterId,
                 lastRenewedAt: grant.lease.grantedAt,
+                idChosenByRequester: false,
                 ttlMs: 60_000,
                 ttlDeadline: grant.lease.ttlDeadline,
               },
@@ -115,6 +116,31 @@ describe("MCP server (smoke)", () => {
 
       const afterRelease = await call(mcpClient, "lease_status", {});
       expect(afterRelease.structuredContent).toEqual({ held: false });
+    } finally {
+      await close();
+    }
+  });
+
+  it("the MCP lease tool passes leaseId through", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "ad-7f3a" }));
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("leaseId");
+
+      const lease = await call(mcpClient, "lease_simulator", {
+        leaseId: "ad-7f3a",
+        model: "iPhone 17 Pro",
+        platform: "ios",
+      });
+
+      expect(lease.isError).not.toBe(true);
+      expect(client.calls[0]).toMatchObject({
+        input: { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" },
+        method: "requestLease",
+      });
     } finally {
       await close();
     }

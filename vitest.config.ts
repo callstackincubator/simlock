@@ -19,10 +19,11 @@ export default defineConfig({
           name: "e2e",
           include: ["e2e/**/*.test.ts"],
           setupFiles: ["e2e/helpers/setup.ts"],
-          // The daemon owns real OS resources (sockets, spawned processes); running
-          // flows concurrently would make failures nondeterministic and hard to
-          // attribute to the right flow.
-          fileParallelism: false,
+          // Each flow gets its own temp SIMLOCK_HOME, so its config, state, socket and log
+          // are its own and files can run side by side. Four workers keep a CI runner's
+          // cores free for the daemons each flow spawns.
+          fileParallelism: true,
+          maxWorkers: 4,
           // Individual slow real-SDK flows (tagged "slow") set their own longer
           // per-test timeout -- a hang in the fast fake-driver lane should fail in
           // ~2 minutes, not stall CI for ten.

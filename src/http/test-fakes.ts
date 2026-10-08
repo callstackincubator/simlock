@@ -1,7 +1,15 @@
-import type { Config, DeviceRecord, LeaseRecord } from "../core/index.js";
-import { InMemoryLeaseRequestStore, LeaseRequestBook } from "../core/lease-request-book.js";
-import { SerializedDecision } from "../core/serialized-decision.js";
-import type { LeaseGrant, LeaseRequestOptions } from "../core/wait-queue.js";
+import {
+  type Config,
+  type DeviceRecord,
+  type LeaseRecord,
+  SerializedDecision,
+  type LeaseGrant,
+} from "../core/index.js";
+import {
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  type LeaseRequestOptions,
+} from "../leasing/index.js";
 import {
   describeSchemaIssues,
   OPERATIONS,
@@ -76,6 +84,10 @@ export function testConfig(
     },
     stalledTransition: { minimumThresholdMs: 60_000, thresholdMultiplier: 3 },
     warmPool: {
+      enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -117,6 +129,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     ownerId: "tok_agent",
     requesterId: "tok_agent",
     lastRenewedAt: 1_000,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 1_000 + 900_000,
     ...overrides,
@@ -162,7 +175,7 @@ export interface FakeDispatchCall {
  * parking -- those are covered against the real thing in `daemon/dispatcher.test.ts` and
  * `daemon/server.test.ts`. This fake exists to let HTTP's own routing/serialization tests
  * (`app.test.ts`, `tracker.test.ts`) script an operation's answer without standing up a full
- * `LeaseEngine`/`Registry`/`CleanupReaper`.
+ * `createLeasing`/`Registry`/`CleanupReaper`.
  *
  * Two ways to script an answer: register a synchronous `handlers[operation]` for the common
  * "this call always answers the same way" case, or -- for `lease.request`'s progress-then-grant

@@ -4,7 +4,7 @@ import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { catalogFixture, hostFixture, leaseFixture } from "./test-support.js";
+import { catalogFixture, hostFixture, leaseFixture, statusFixture } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
@@ -75,20 +75,17 @@ function names(events: readonly EventEnvelope[]): string[] {
 }
 
 describe("WorkerRegistry", () => {
-  it("builds a view on connect and emits the fact", () => {
+  it("builds a view on connect, with nothing a worker reports until it reports it, and emits the fact", () => {
     const { events, workers } = registry();
 
     const view = workers.connected("wrk_1", "mac-mini-1", "0.3.0");
 
-    expect(view).toMatchObject({
-      catalog: [],
+    expect(view).toEqual({
       connection: "connected",
-      devices: [],
       drained: false,
       id: "wrk_1",
       label: "mac-mini-1",
       lastSeenAt: 1_000,
-      leases: [],
       version: "0.3.0",
     });
     expect(events).toHaveLength(1);
@@ -423,6 +420,50 @@ describe("WorkerRegistry", () => {
     expect(workers.view("wrk_2")?.installs).toBeUndefined();
   });
 
+  describe("a worker's warm pool block", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [],
+    };
+
+    it("is on the view after a refresh, and stays on a disconnected worker's view as it was last read", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      workers.refresh("wrk_1", { warmPool });
+      workers.disconnected("wrk_1");
+
+      expect(workers.view("wrk_1")?.warmPool).toEqual(warmPool);
+    });
+
+    it("is absent for a worker whose status was never read", () => {
+      const { workers } = registry();
+
+      expect(workers.connected("wrk_1", undefined, "0.3.0").warmPool).toBeUndefined();
+    });
+
+    it("is dropped from the view when the worker turns incompatible or starts over", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.connected("wrk_2", undefined, "0.3.0");
+      workers.refresh("wrk_1", { warmPool });
+      workers.refresh("wrk_2", { warmPool });
+
+      const incompatible = workers.incompatible(
+        "wrk_1",
+        undefined,
+        { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+        "0.2.0",
+      );
+      workers.refresh("wrk_2", { health: "starting" });
+
+      expect(incompatible.warmPool).toBeUndefined();
+      expect(workers.view("wrk_1")?.warmPool).toBeUndefined();
+      expect(workers.view("wrk_2")?.warmPool).toBeUndefined();
+    });
+  });
+
   it("drops a worker's waiting requests from its view when it disconnects or turns incompatible", () => {
     const { workers } = registry();
     const waiting = [
@@ -473,6 +514,111 @@ describe("WorkerRegistry", () => {
     });
   });
 
+  it("reports no leases for a worker that disconnects while starting when none was ever read from it, and lists none on its view", () => {
+    const { events, workers } = registry();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+    workers.disconnected("wrk_1");
+
+    expect(events.at(-1)).toMatchObject({
+      event: "worker.disconnected",
+      payload: { leaseCount: 0, workerId: "wrk_1" },
+    });
+    expect(Object.keys(workers.view("wrk_1") ?? {})).not.toContain("leases");
+  });
+
+  it("reports the leases last read for a worker that disconnects while starting, though its view lists none", () => {
+    const { events, workers } = registry();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", {
+      leases: [leaseFixture("lease_1", "dev_1"), leaseFixture("lease_2", "dev_2")],
+    });
+    workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+    workers.disconnected("wrk_1");
+
+    expect(events.at(-1)).toMatchObject({
+      event: "worker.disconnected",
+      payload: { leaseCount: 2, workerId: "wrk_1" },
+    });
+    expect(Object.keys(workers.view("wrk_1") ?? {})).not.toContain("leases");
+  });
+
+  describe("a starting refresh", () => {
+    const running = {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      health: "running" as const,
+      host: hostFixture(),
+      installs: [],
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 0,
+      waiting: [],
+    };
+
+    it("drops capacity, catalog, catalogReadAt, devices, installs, leases, queueDepth and waiting a running read filled in, on a worker that stays connected", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", running);
+      workers.refresh("wrk_1", { catalog: running.catalog });
+
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+      expect(Object.keys(workers.view("wrk_1") ?? {}).sort()).toEqual([
+        "connection",
+        "drained",
+        "health",
+        "host",
+        "id",
+        "lastSeenAt",
+      ]);
+    });
+
+    it("keeps the last catalog for routing while the view leaves it out", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", running);
+
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+      expect(workers.view("wrk_1")?.catalog).toBeUndefined();
+      expect(workers.routingViews()[0]?.catalog).toEqual(running.catalog);
+      expect(workers.routingViews()[0]?.catalogReadAt).toBeUndefined();
+    });
+
+    it("has no catalog for routing from a worker whose catalog was never read", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+      expect(Object.keys(workers.routingViews()[0] ?? {})).not.toContain("catalog");
+    });
+
+    it("forgets the last catalog and leases with the view, so a worker that comes back starting is unknown", async () => {
+      const { clock, events, workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", running);
+      workers.disconnected("wrk_1");
+      clock.advance(RETENTION_MS);
+      await workers.pruneExpired();
+      expect(workers.view("wrk_1")).toBeUndefined();
+
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+
+      expect(workers.routingViews()[0]?.catalog).toBeUndefined();
+      workers.disconnected("wrk_1");
+      expect(events.at(-1)).toMatchObject({
+        event: "worker.disconnected",
+        payload: { leaseCount: 0 },
+      });
+    });
+  });
+
   it("says nothing when a view that is already disconnected disconnects again", () => {
     const { events, workers } = registry();
     workers.connected("wrk_1", undefined, undefined);
@@ -502,6 +648,37 @@ describe("WorkerRegistry", () => {
         event: "worker.removed",
         payload: { reason: "retention", workerId: "wrk_1" },
       });
+    });
+
+    it("forgets a worker that disconnected while starting, when no lease was ever read from it, once the retention window passes", async () => {
+      const { clock, workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+      workers.disconnected("wrk_1");
+
+      clock.advance(RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeUndefined();
+    });
+
+    it("never forgets a worker that disconnected while starting, whose last-read gateway-issued leases are still live", async () => {
+      const { clock, workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      const lease = { ...gatewayLeaseFixture("lease_1", "dev_1"), ttlDeadline: 10 * RETENTION_MS };
+      workers.refresh("wrk_1", { leases: [lease] });
+      workers.refresh("wrk_1", { health: "starting", host: hostFixture() });
+      workers.disconnected("wrk_1");
+
+      clock.advance(5 * RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeDefined();
+
+      clock.advance(5 * RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeUndefined();
     });
 
     it("never forgets a worker whose gateway-issued leases are still live, however long it has been gone", async () => {

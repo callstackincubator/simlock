@@ -17,15 +17,19 @@ export const idleDestroyRule: CleanupRule = {
       : view.config.idle.deleteAfterMs;
 
     return view.devices.flatMap((device) => {
+      // A device that never served a lease has no end of one: it is timed from when it was shut
+      // down, so one the pool created and later shut down is deleted too. A record shut down
+      // before `shutdownAt` existed has neither, and is left alone.
+      const idleSince = device.lastLeaseEndedAt ?? device.shutdownAt;
       if (
         device.state !== "shutdown" ||
-        device.lastLeaseEndedAt === undefined ||
+        idleSince === undefined ||
         hasActiveLease(view, device.id)
       ) {
         return [];
       }
 
-      const idleMs = view.now - device.lastLeaseEndedAt;
+      const idleMs = view.now - idleSince;
       if (idleMs <= threshold) {
         return [];
       }

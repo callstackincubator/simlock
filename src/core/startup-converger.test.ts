@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RunningCapacity } from "./capacity/index.js";
-import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import type { DeviceRecord, DeviceState, LeaseRecord, Platform } from "./domain.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { StartupRead } from "./startup-read.js";
 
 function device(
   id: string,
@@ -24,62 +23,29 @@ function device(
   };
 }
 
-function capacity(
-  devices: readonly DeviceRecord[],
-  limits: { readonly global: number; readonly ios: number; readonly android: number },
-): RunningCapacity {
-  const running = (platform?: Platform) =>
-    devices.filter(
-      (item) =>
-        (item.state === "ready" || item.state === "leased" || item.state === "reclaiming") &&
-        (platform === undefined || item.spec.platform === platform),
-    ).length;
-  const entry = (platform: Platform | undefined, maxRunning: number) => ({
-    maxRunning,
-    overLimit: running(platform) > maxRunning,
-    reserved: 0,
-    running: running(platform),
-  });
-  return {
-    android: entry("android", limits.android),
-    global: entry(undefined, limits.global),
-    ios: entry("ios", limits.ios),
-  };
-}
-
 function createHarness(
   devices: DeviceRecord[],
   leases: LeaseRecord[] = [],
-  limits = { android: 3, global: 3, ios: 3 },
   darkPlatforms: ReadonlySet<Platform> = new Set(),
 ) {
   const order: string[] = [];
   const claimed = new Set<string>();
-  const cleanupCalls: string[] = [];
-  let leaseIdsAtTimerRestore: string[] | undefined;
-  const timers = {
-    restoreExpiryTimers: vi.fn(async () => {
-      order.push("timers");
-      leaseIdsAtTimerRestore = leases.map((lease) => lease.id);
-    }),
-  };
   const recovery = {
     recoverInterruptedReclaim: vi.fn(async (target: DeviceRecord) => {
       order.push(`recover:${target.id}`);
       updateState(target.id, "shutdown");
     }),
   };
-  const cleanup: CleanupActionExecutor = {
-    execute: vi.fn(async (proposal) => {
-      order.push(`cleanup:${proposal.target}`);
-      cleanupCalls.push(proposal.target);
-      const current = devices.find((item) => item.id === proposal.target);
-      if (current === undefined || current.state !== "ready") return false;
-      updateState(current.id, "shutdown");
-      return true;
+  const quarantined = new Set<string>();
+  const restored: string[] = [];
+  const quarantineRestore = {
+    restore: vi.fn((include: (target: DeviceRecord) => boolean) => {
+      order.push("quarantine-restore");
+      for (const target of devices) {
+        if (quarantined.has(target.id) && include(target)) restored.push(target.id);
+      }
     }),
   };
-  const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
   const spentDeviceDeletion = {
     deleteSpent: vi.fn(async (target: DeviceRecord) => {
       order.push(`delete-spent:${target.id}`);
@@ -87,29 +53,16 @@ function createHarness(
     }),
   };
   const converger = new StartupConverger({
-    capacity: {
-      atRamBudget: () => false,
-      deviceLimit: () => limits.ios + limits.android,
-      ramBudget: undefined,
-      get runningCapacity() {
-        return capacity(devices, limits);
-      },
-    },
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
-    cleanup,
     decisions: new SerializedDecision(),
-    drivers: { has: (platform) => !darkPlatforms.has(platform) },
-    eventBus: { emit: vi.fn() as never },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {
-      failOpenLeaseRequests: async () => [],
       get snapshot() {
         return { devices, leases };
       },
     },
     spentDeviceDeletion,
-    timers,
   });
 
   function updateState(deviceId: string, state: DeviceState): void {
@@ -118,72 +71,59 @@ function createHarness(
     if (current !== undefined) devices[index] = { ...current, state };
   }
 
+  const read = new StartupRead(
+    new Map(
+      (["ios", "android"] as const)
+        .filter((platform) => !darkPlatforms.has(platform))
+        .map((platform) => [platform, { devices: [], processes: [] }] as const),
+    ),
+  );
+
   return {
     claimed,
-    cleanup,
-    cleanupCalls,
     converger,
+    read,
     devices,
-    get leaseIdsAtTimerRestore() {
-      return leaseIdsAtTimerRestore;
-    },
     leases,
     order,
+    quarantined,
     quarantineRestore,
     recovery,
+    restored,
     spentDeviceDeletion,
-    timers,
   };
 }
 
 describe("StartupConverger", () => {
-  it("restores timers before recovering interrupted reclaims and converging capacity", async () => {
+  it("restores quarantine timers before recovering interrupted reclaims", async () => {
     const harness = createHarness(
       [device("reclaiming", "ios", "reclaiming", 1), device("ready", "ios", "ready", 2)],
       [],
-      { android: 1, global: 0, ios: 1 },
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
-    expect(harness.order).toEqual([
-      "timers",
-      "quarantine-restore",
-      "recover:reclaiming",
-      "cleanup:ready",
-    ]);
-    expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledOnce();
+    expect(harness.order).toEqual(["quarantine-restore", "recover:reclaiming"]);
     expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
   });
 
-  it("chooses the least recently used unleased device for global excess", async () => {
+  it("leaves every ready device ready at startup", async () => {
     const older = device("older", "ios", "ready", 1);
     const newer = device("newer", "android", "ready", 2);
-    const harness = createHarness([newer, older], [], { android: 2, global: 1, ios: 2 });
+    const harness = createHarness([newer, older], []);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
-    expect(harness.cleanupCalls).toEqual(["older"]);
+    expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "newer", state: "ready" },
+      { id: "older", state: "ready" },
+    ]);
+    expect(harness.recovery.recoverInterruptedReclaim).not.toHaveBeenCalled();
+    expect(harness.spentDeviceDeletion.deleteSpent).not.toHaveBeenCalled();
   });
 
-  it("selects only an over-limit platform when global capacity remains within limit", async () => {
-    const iosOlder = device("ios-older", "ios", "ready", 1);
-    const iosNewer = device("ios-newer", "ios", "ready", 2);
-    const android = device("android", "android", "ready", 0);
-    const harness = createHarness([iosNewer, android, iosOlder], [], {
-      android: 2,
-      global: 3,
-      ios: 1,
-    });
-
-    await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual(["ios-older"]);
-    expect(android.state).toBe("ready");
-  });
-
-  it("leaves unavoidable leased overage untouched", async () => {
+  it("leaves every leased device leased at startup", async () => {
     const first = device("first", "ios", "leased", 1);
     const second = device("second", "ios", "leased", 2);
     const leases = [
@@ -194,6 +134,7 @@ describe("StartupConverger", () => {
         requesterId: "a",
         ownerId: "a",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 10,
       },
@@ -204,75 +145,71 @@ describe("StartupConverger", () => {
         requesterId: "b",
         ownerId: "b",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 10,
       },
     ];
-    const harness = createHarness([first, second], leases, { android: 1, global: 1, ios: 1 });
+    const harness = createHarness([first, second], leases);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
-    expect(harness.cleanupCalls).toEqual([]);
-    expect(first.state).toBe("leased");
-    expect(second.state).toBe("leased");
+    expect(harness.devices.map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "first", state: "leased" },
+      { id: "second", state: "leased" },
+    ]);
+    expect(harness.recovery.recoverInterruptedReclaim).not.toHaveBeenCalled();
+    expect(harness.spentDeviceDeletion.deleteSpent).not.toHaveBeenCalled();
   });
 
-  it("skips claimed targets and terminates after executor refusal", async () => {
-    const claimed = device("claimed", "ios", "ready", 1);
-    const refused = device("refused", "ios", "ready", 2);
-    const harness = createHarness([claimed, refused], [], { android: 1, global: 0, ios: 0 });
-    harness.claimed.add(claimed.id);
-    vi.mocked(harness.cleanup.execute).mockResolvedValue(false);
-
-    await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
-    expect(harness.cleanup.execute).toHaveBeenCalledTimes(1);
-    expect(harness.cleanup.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ target: refused.id }),
-    );
-  });
-
-  it("leaves a platform without a driver untouched instead of failing convergence", async () => {
+  it("leaves a platform the startup read could not list (no driver, or a listing that failed or hung) untouched instead of failing convergence", async () => {
     const interrupted = device("ios-reclaiming", "ios", "reclaiming", 1);
     const excess = device("ios-ready", "ios", "ready", 2);
     const androidInterrupted = device("android-reclaiming", "android", "reclaiming", 3);
     const harness = createHarness(
       [interrupted, excess, androidInterrupted],
       [],
-      { android: 1, global: 1, ios: 0 },
       new Set<Platform>(["ios"]),
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledWith(
       expect.objectContaining({ id: androidInterrupted.id }),
     );
-    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.devices.find((item) => item.id === interrupted.id)?.state).toBe("reclaiming");
     expect(harness.devices.find((item) => item.id === excess.id)?.state).toBe("ready");
   });
 
-  it("is idempotent after recovery and successful convergence", async () => {
+  it("re-arms the retry of a quarantined device on a platform the read listed and none on a platform it could not list", async () => {
+    const listed = device("android-quarantined", "android", "quarantined", 1);
+    const unlisted = device("ios-quarantined", "ios", "quarantined", 2);
+    const harness = createHarness([listed, unlisted], [], new Set<Platform>(["ios"]));
+    harness.quarantined.add(listed.id).add(unlisted.id);
+
+    await harness.converger.converge(harness.read);
+
+    expect(harness.restored).toEqual(["android-quarantined"]);
+  });
+
+  it("is idempotent after recovery", async () => {
     const recovering = device("recovering", "ios", "reclaiming", 1);
     const ready = device("ready", "ios", "ready", 2);
-    const harness = createHarness([recovering, ready], [], { android: 1, global: 0, ios: 1 });
+    const harness = createHarness([recovering, ready], []);
 
-    await harness.converger.converge();
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
+    await harness.converger.converge(harness.read);
 
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
-    expect(harness.cleanupCalls).toEqual(["ready"]);
-    expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledTimes(2);
+    expect(harness.quarantineRestore.restore).toHaveBeenCalledTimes(2);
   });
 
-  it("restores the timer of every lease it finds, sweeping none (ADR 0004)", async () => {
-    // Pre-ADR-0004 this device's lease would have been released as orphaned before timers
-    // were restored, on the theory that a restart proves its holder is dead. It proves
-    // nothing of the sort: the lease is TTL-bound, its holder may reconnect and renew it,
-    // and if nobody does it expires on its own deadline through the restored timer.
+  it("sweeps no lease: a leased device keeps its lease across startup (ADR 0004)", async () => {
+    // Pre-ADR-0004 this device's lease would have been released as orphaned, on the theory that a
+    // restart proves its holder is dead. It proves nothing of the sort: the lease is TTL-bound,
+    // its holder may reconnect and renew it, and if nobody does it expires on its own deadline
+    // through the timer leasing restores.
     const leasedDevice = device("leased-device", "ios", "leased", 1);
     const leases = [
       {
@@ -282,42 +219,16 @@ describe("StartupConverger", () => {
         requesterId: "a",
         ownerId: "a",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 1000,
       },
     ];
-    const harness = createHarness([leasedDevice], leases, { android: 1, global: 1, ios: 1 });
+    const harness = createHarness([leasedDevice], leases);
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
-    expect(harness.leaseIdsAtTimerRestore).toEqual(["lease-1"]);
     expect(harness.leases).toHaveLength(1);
-    expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
-    expect(harness.cleanupCalls).toEqual([]);
-  });
-
-  it("leaves a leased device leased even when the running limit is now zero", async () => {
-    // The device the lease holds is over the (lowered) limit, and stays exactly where it is:
-    // there is no sweep left that could free it, and the capacity pass never touches a
-    // leased device. It goes back to the pool when the lease expires or is released.
-    const leasedDevice = device("leased-device", "ios", "leased", 1);
-    const leases = [
-      {
-        deviceId: leasedDevice.id,
-        grantedAt: 0,
-        id: "lease-1",
-        requesterId: "a",
-        ownerId: "a",
-        lastRenewedAt: 0,
-        ttlMs: 60_000,
-        ttlDeadline: 1000,
-      },
-    ];
-    const harness = createHarness([leasedDevice], leases, { android: 1, global: 0, ios: 0 });
-
-    await harness.converger.converge();
-
-    expect(harness.cleanupCalls).toEqual([]);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
   });
 
@@ -334,13 +245,11 @@ describe("StartupConverger", () => {
         reusableShutdown,
       ],
       [],
-      { android: 3, global: 3, ios: 3 },
     );
 
-    await harness.converger.converge();
+    await harness.converger.converge(harness.read);
 
     expect(harness.order).toEqual([
-      "timers",
       "quarantine-restore",
       "recover:spent-reclaiming",
       "delete-spent:spent-reclaiming",

@@ -19,16 +19,20 @@ though the suite is green — being green is exactly the failure mode.
    timing out pins the schedule rather than the behaviour, and will keep
    passing when the behaviour is wrong but fast. This is the single most
    repeated defect in this repo's review history: assertions that hold
-   equally against the correct and the broken implementation.
+   equally against the correct and the broken implementation. An assertion
+   on an exact count of things the test does not own (pending timers, calls,
+   events) fails the day unrelated code adds one, and fails only under some
+   schedules: assert on what the title names.
 
 3. **Production code that can be deleted with a green suite is untested.**
    For a new code path, try deleting it and run the suite. If nothing goes
    red, whatever you believed covered it stops short of the part that
    matters — usually because the test exercises an internal callback rather
    than the observable output the path exists to produce. Write the test that
-   goes red, then restore the code. `pnpm mutate` does this mechanically
-   for every line a branch changed and prints each mutant the suite let
-   live; run it before review.
+   goes red, then restore the code. Mutation testing does this mechanically
+   for every line a branch changed ([toolchain.md](toolchain.md) says where
+   it runs); every mutant it leaves alive is killed by a test or explained
+   in the PR body.
 
 4. **A test that enforces a rule must see everything the rule covers.** A
    boundary or invariant test enforces its rule only where it happens to

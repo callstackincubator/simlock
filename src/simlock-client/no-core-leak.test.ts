@@ -6,8 +6,8 @@
  * import closure gets emitted -- not a shelled-out `pnpm run build` of the whole package, and
  * not dependent on one having already run) and asserts none of the emitted `.d.ts` files ever
  * import from `src/core`, `src/daemon`, `src/drivers`, `src/http`, `src/cli`, or `src/mcp`.
- * Mirrors `src/contract/boundary.test.ts`'s source-text approach, but checked at the compiled
- * public-surface boundary instead of the contract module's own imports -- the actual guarantee
+ * Lint checks each contract file's own imports (`.oxlintrc.json`); this checks the compiled
+ * public-surface boundary instead -- the actual guarantee
  * this test exists to prove is about what a *consumer* of the published package sees, which is
  * the emitted declarations, not the source.
  */

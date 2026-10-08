@@ -1,19 +1,16 @@
 # Agent rules: delivery
 
-Rules for how work enters and leaves this repo. GitHub Issues is both the
+How work enters and leaves this repo. GitHub Issues is both the
 specification and the queue: an issue's body is the spec an agent builds
-against, and its label is the only signal that tells an agent whether it may
-act. These rules are binding in the same way the other files here are — an
-agent that picks up an issue it was not entitled to, or that implements from
-a comment thread instead of the body, has made an error even if the code is
-good.
+against, and its label alone tells an agent whether it may act. Picking up
+an issue you were not entitled to, or building from a comment thread instead
+of the body, is an error even when the code is good.
 
 ## Kinds and labels
 
-Every issue carries exactly one label of the form `<kind>:<state>`. The
-prefix is the kind; there is no separate kind label. An issue with zero or
-two such labels is in an invalid state and must be corrected before anything
-else happens to it.
+Every issue carries exactly one label of the form `<kind>:<state>`; the
+prefix is the kind. An issue with zero or two such labels is invalid: correct
+it before anything else happens to it.
 
 | Label              | Set by                              | Meaning                                                   |
 | ------------------ | ----------------------------------- | --------------------------------------------------------- |
@@ -33,8 +30,8 @@ else happens to it.
 
 Two labels sit outside that scheme. `flaky-test` marks a bug that names a
 test failing without a code change (testing rule 5). `needs-hardware` marks
-a pull request parked because a Done when line needs a real simulator or
-emulator run that has not happened (rule 16).
+a pull request parked because a Done when line needs a slow-lane run that
+has not happened (rule 16).
 
 Transitions per kind:
 
@@ -57,23 +54,20 @@ is open, done means closed as completed.
 ## Rules
 
 1. **An agent acts only on `bug:triage`, `bug:ready`, `feature:ready`, and
-   `task:ready`.** Nothing else is work. A `request:new` or `bug:new` issue
-   is a claim from outside that a maintainer has not yet looked at; a
-   `feature:spec` or `task:draft` issue is a spec that is not finished. Agents
-   do not label their way into work: only a maintainer, or the automation a
-   maintainer configured, moves an issue to a state an agent may act on.
-   One delegation follows from `feature:ready`: the maintainer has accepted
-   the business sections and every ADR the feature links, and that is the
-   approval for the rest. An agent delivering it may write the feature's
-   task specs, split it, and tick each task's approval box, then deliver
-   the tasks as they turn ready. A new decision that needs an ADR, or a
-   comment that would change the spec, is not covered: the agent stops and
-   hands off.
+   `task:ready`.** Nothing else is work. Agents never label their way into
+   work: only a maintainer, or automation a maintainer configured, moves an
+   issue to a state an agent may act on.
+   `feature:ready` delegates one thing: the maintainer accepted the business
+   sections and every ADR the feature links, and that approves the rest. An
+   agent delivering it may write the task specs, split the feature, tick
+   each task's approval box, and deliver the tasks as they turn ready. A new
+   decision that needs an ADR, or a comment that would change the spec, is
+   not covered: the agent stops and hands off.
 
 2. **The assignee is the claim, and a handoff is how a claim is released.**
    Before doing anything on an issue an agent assigns itself, and it never
-   touches an issue that already has an assignee. This is the one
-   cross-agent lock in the model; there is no other. An agent that stops
+   touches an issue that already has an assignee. This is the only
+   cross-agent lock. An agent that stops
    before the PR is merged unassigns itself and leaves exactly one comment
    headed `## Handoff` with four sections: *Done* (what is on the branch and
    how it was verified), *Not done* (what remains, in the spec's own terms),
@@ -91,8 +85,8 @@ is open, done means closed as completed.
 3. **The body is the spec. Comments are discussion. Assumptions are
    proposals.** Whoever implements an issue reads its body, the documents it
    links, [always-in-scope.md](always-in-scope.md), the latest `## Handoff`
-   comment if there is one, and for a bug the triage report — never the rest
-   of the comment thread.
+   comment if there is one, and for a bug the triage report and any
+   `## Decision` comment — never the rest of the comment thread.
    A comment changes nothing until a spec session folds it into the body. The
    body is cumulative: sections are added and amended in place, never
    restated in comments, and GitHub's edit history is the record of what
@@ -105,7 +99,11 @@ is open, done means closed as completed.
    maintainer may reject, never a change to the spec: the body stays the
    spec. Delivery stops for a person only when building would contradict the
    body, a rule or an accepted ADR, or would change behaviour a user sees in
-   a way nobody decided.
+   a way nobody decided. The agent that asked folds the person's answer in
+   before work resumes, so every later agent reads it as spec: into a task
+   or feature body, as a line in the section it settles and a Tests line
+   that pins it; for a bug, whose body stays the reporter's (rule 5), as
+   one comment headed `## Decision`, read with the triage report.
 
 4. **Every spec session starts by reconciling.** Before writing anything, the
    session fetches every comment created after the body's `lastEditedAt`, on
@@ -147,8 +145,8 @@ is open, done means closed as completed.
    these sections: *Reproduction*, *Root cause* (with file and line),
    *Simplest fix*, *Alternatives rejected* (at most three, one line each),
    *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
-   (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
-   something is missing); for a gap the test's expectation is a proposal
+   (the code does the wrong thing) or a gap (nothing is wrong and something
+   is missing); for a gap the test's expectation is a proposal
    and the report says so; `bug:ready` on a gap accepts that proposal. A
    separate problem found on the way is opened as
    its own `bug:new` issue and listed under Side findings, not described in
@@ -179,10 +177,8 @@ is open, done means closed as completed.
 11. **The branch is named from the issue, and only from the issue.** Work on
     issue `<n>` of kind `<kind>` happens on `<kind>/<n>` — `task/118`,
     `bug/79`, `feature/88` — and a bug's reproduction lives on
-    `bug/<n>-repro`. No slug, no author prefix, no date. Given an issue you
-    can name its branch without looking; given a branch you can name its
-    issue by reading the second path segment. A PR from such a branch must
-    close that issue and no other.
+    `bug/<n>-repro`. No slug, no author prefix, no date. A PR from such a
+    branch closes that issue and no other.
 
 12. **Everything an agent writes on an issue or a PR is short and plain.**
     Lead with the conclusion. Short sentences, common words, no filler, no
@@ -207,85 +203,110 @@ is open, done means closed as completed.
     `origin/<branch>` rather than switching to it. Nothing depends on which
     worktree a branch was made in.
 
-14. **A PR is marked ready only after two reviews, and every blocking
-    finding is answered.** Review is part of delivery in the same way
-    verification is (rule 9). The PR opens as a draft as soon as the spec's
-    tests are committed red, so CI runs from the first push and the PR body
-    can carry the work's status. It leaves draft only after two reviews of
-    the diff against `main`, each by a fresh sub-agent defined in
-    `.claude/agents/`, whose frontmatter pins the model and effort (never a
-    smaller model chosen for speed), and each blind to the implementer and
-    to the other reviewer. `.agents/scripts/review-inputs.sh` builds what each
-    one reads.
-    The *spec review* gets the issue body, its parent feature, the ADRs it
-    names, the files under Rules in play, `always-in-scope.md`, a bug's
-    triage report, the PR body's `Assumption:` lines, the diff, and every
-    change made to the spec's tests since they were committed red — nothing
-    else, and never the rest of the PR body. It answers: is every line of
-    Scope and Done when delivered, does the diff do anything the spec did not
-    ask for (what `always-in-scope.md` lists counts as asked for), does every
-    test title state a claim the spec made, does any change after red leave
-    a line of the spec unproven, and is every assumption conservative and
-    consistent with the spec. It reads; it does not run anything. A diff
-    that only adds or changes ADRs gets this review alone, judged as a design
-    record rather than against Completion conditions.
-    The *code review* gets every file under this directory, the ADR index,
-    and the diff — never the issue. It answers, in this order: for each
-    changed function, what input, state, or interleaving makes it wrong; and
-    does the diff break a rule in this directory. It works in its own
-    worktree and proves a claim with the affected test file only. It may
-    break code to see what stays green (testing rules 2 and 3) at most three
-    times, on its riskiest claims, and restores the tree afterwards. It does
-    not run `pnpm check`, `pnpm mutate`, the whole fast e2e suite, the
-    console lane or the slow lane: the implementer and CI run those.
-    Each review returns findings, one per defect: a claim, the evidence as
+14. **A PR is marked ready only after review, and every blocking finding
+    is answered.** The PR opens as a draft once the spec's tests are
+    committed red, so CI runs from the first push and the PR body carries
+    the work's status. It leaves draft only after the reviews below. Each
+    reviewer is a fresh sub-agent defined in `.claude/agents/`, whose
+    frontmatter pins the model and effort (never a smaller model chosen for
+    speed), blind to the implementer and to the other reviewers.
+    `.agents/scripts/review-inputs.sh` builds what each one reads.
+    - The *spec review* gets the issue body, its parent feature, the ADRs it
+      names, the files under Rules in play, `always-in-scope.md`, a bug's
+      triage report, the PR body's `Assumption:` lines, the diff, and every
+      change made to the spec's tests since they were committed red; never
+      the rest of the PR body. It answers: is every line of Scope and Done
+      when delivered as written; does the diff do anything the spec did not ask for
+      (what `always-in-scope.md` lists counts as asked for); does every test
+      title state a claim the spec made; does any change after red leave a
+      line of the spec unproven; is every assumption conservative and
+      consistent with the spec. It reads; it runs nothing. A diff that only
+      adds or changes ADRs gets this review alone, judged as a design record
+      rather than against Completion conditions.
+    - The *code review* gets every file in this directory, the ADR index and
+      the diff; never the issue. It runs as two reviewers, each with one
+      lens. *Behaviour*: for each changed function, what input, state or
+      interleaving makes it wrong, and what other code acting on the same
+      state conflicts with it. *Tests and rules*: which test cannot fail for
+      the reason its title gives, and which rule the diff breaks. Each works
+      in its own worktree, proves a claim with the affected test file only,
+      and may break code to see what stays green (testing rules 2 and 3), at
+      most three times for behaviour and six for tests, restoring the tree
+      afterwards. Neither runs the checks [toolchain.md](toolchain.md)
+      leaves to the hooks and CI, nor the slow lane.
+    - The *claims review* gets the diff, this directory, and the output of
+      `.agents/scripts/stale-refs.sh` (lines anywhere in the repo that still
+      name what the diff removed); never the issue. It checks that every
+      comment, doc line, test title, help text and error message the diff
+      touches, the sweep finds, or the docs say about what the diff changed,
+      is true of the code.
+    Each review lists what it checked and returns every finding, one per
+    defect: a claim, its class (the general rule it breaks), the evidence as
     `file:line` or a command and its output, and *blocking* or *note*. A
-    finding is blocking when it breaks behaviour, leaves wrong state, or
-    breaches a rule, an accepted ADR or the spec; anything else is a note. A
-    finding needs a concrete failure or a named cost and who pays it; a diff
-    touching a file the spec did not list is a note unless a user would see
-    the difference. Whether CI is green is never a finding: CI proves it, and
-    the gate checks it (rule 15).
+    finding is blocking when it breaks behaviour, leaves wrong state, states
+    something false, or breaches a rule, an accepted ADR or the spec;
+    anything else is a note. A finding needs a concrete failure or a named
+    cost and who pays it; a diff touching a file the spec did not list is a
+    note unless a user would see the difference. Whether CI is green is
+    never a finding: CI proves it, and the gate checks it (rule 15).
     A blocking finding is a claim, not a fact: it is verified against the
-    code before anyone acts on it. A confirmed one is fixed and the review
-    that raised it runs again on the new diff; a rejected one is listed in
-    the PR body under `## Review`, one line each, tagged `spec:` or `code:`
-    for the review that raised it, with the reason, so the maintainer sees
-    what was overruled and by whom. Accepted findings are not narrated.
+    code before anyone acts on it. A confirmed one is fixed, together with
+    every other instance of its class. A rejected one is listed in the PR
+    body under `## Review`, one line each, tagged `spec:`, `code:` or
+    `claims:` with the reason, so the maintainer sees what was overruled.
+    Accepted findings are not narrated.
+    Round 1 reviews the whole diff. A later round reviews only the fix: the
+    reviews that raised confirmed findings run again, and check that each
+    is resolved, that the diff since the last reviewed commit adds no
+    defect, and that no other instance of each fixed class is left. What a
+    later round finds outside that is a note; a confirmed defect among those
+    notes becomes a `bug:new` issue and does not block the PR. The claims
+    review runs every round. A commit pushed after a round that passed (a
+    merge of the base branch, a fix the gate needed) gets the code and
+    claims reviews of that fix alone, outside the count below: a confirmed
+    finding there gets one fix run and one more such review, and one still
+    confirmed after it stops delivery.
+    A confirmed finding whose fix changes only a comment or a doc is a
+    claims finding, whichever review raised it. A test title or a printed
+    message is not: its fix gets the review that raised it.
+    Rounds run while they converge: round 2 runs after any confirmed spec or
+    code finding, and each later round only when the one before confirmed
+    fewer spec and code findings than the round before it, up to five
+    rounds. A spec or code finding still confirmed when the count stops
+    falling, or after round five, means the agent stops and hands off with
+    the finding under Findings (rule 2), leaving the PR in draft. Claims
+    findings never stop delivery and never count: when only claims findings
+    are left, their fix is checked by the claims review alone, once, and
+    what that check still confirms is fixed in one last run that edits
+    comments and docs only, with no review, listed in the PR body's
+    `## Review` section as fixed unreviewed.
     Notes are not verified and never start a round: after the last round
     they go out once, as one comment on the PR, or as a `bug:new` issue when
-    one is a separate piece of work. Two rounds, and a third only when every
-    blocking finding still confirmed after the second is a test that cannot
-    fail for the reason its title gives, or a stale doc or comment: those
-    have one obvious fix and need no person to decide. Any other blocking
-    finding still confirmed after round 2, or any after round 3, means the
-    agent stops and hands off with the finding under Findings (rule 2),
-    leaving the PR in draft. A
-    PR from a person gets the same two reviews when the maintainer asks for
-    them.
+    one is a separate piece of work. A PR from a person gets the same
+    reviews when the maintainer asks for them.
 
 15. **An agent merges only through the gate.** `.agents/scripts/merge-pr.sh`
     is the one place a delivery PR is merged from; agents may not run
     `gh pr merge` themselves. The script merges only a ready PR with no
     `needs-hardware` label, a `## Review` section and no "spec needs" line,
     green CI, and no conflict. Before calling it the agent also checks what
-    the script cannot read: no blocking finding is open, and every mutant
-    `pnpm mutate` left alive is explained in the PR body. Anything short of
-    that parks the issue with a handoff and leaves the PR for the
-    maintainer.
+    the script cannot read: no blocking finding is open, and every surviving
+    mutant is explained in the PR body. A conflict, or red CI, gets one fix
+    run and the gate again. Anything else short of that parks the issue with
+    a handoff and leaves the PR for the maintainer.
 
-16. **Real devices run one lane at a time, through the script.** The slow
-    e2e lane starts real simulators and emulators on a shared machine, and
-    two lanes at once produce timeouts that look like bugs. Agents run it
-    only through `scripts/slow-e2e.sh`, which holds a machine-wide lock,
-    runs detached so no tool time limit kills it halfway, and logs to a
-    file. It runs once per PR, on the commit the last review round passed
+16. **The slow lane runs one at a time, through its script.** The slow
+    lane is the set of tests that need real hardware on a shared machine;
+    two runs at once produce timeouts that look like bugs. Agents run it
+    only through the script [toolchain.md](toolchain.md) names, which holds
+    a machine-wide lock, runs detached so no tool time limit kills it
+    halfway, and logs to a file. It runs once per PR, on the commit the last review round passed
     (no blocking finding open), so review fixes do not each cost a lane run.
     A failure gets one fix run, then the lane and the code review run again
     on the new commit. With a person present the agent asks once per
     delivery run, before the first lane, and that answer covers every PR in
     the run. Unattended, it runs when the lock is free; when
-    the lock stays busy or the machine has no devices, the PR gets
+    the lock stays busy or the machine cannot run it, the PR gets
     `needs-hardware` and waits for the maintainer.
 
 ## Procedures
@@ -317,10 +338,10 @@ gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 
 The repo's own skills encode these procedures; use them rather than
 retyping the steps. `deliver` is the orchestrator: it claims, then hands
-each stage to a forked skill — `implement`, `review`, `verify-hardware` —
-that runs on the model its frontmatter pins and returns a fixed report.
+each stage to a background agent — `implementer`, `reviewer`,
+`hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
 `spec-session` and `triage-bug` cover the rest; `spec-session` ends its
-technical and split modes with the forked `check-spec` (rule 7).
+technical and split modes with the `spec-checker` agent (rule 7).
 
 ## Automation
 

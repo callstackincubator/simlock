@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { NoCapacityError, RequesterAlreadyLeasedError, UnknownLeaseError } from "../core/index.js";
+import { UnknownLeaseError, Registry, SerializedDecision } from "../core/index.js";
+import {
+  NoCapacityError,
+  RequesterAlreadyLeasedError,
+  LeaseRequestBook,
+  RequestCancelledError,
+} from "../leasing/index.js";
 import { runDispatch } from "../daemon/dispatch.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
-import { LeaseRequestBook } from "../core/lease-request-book.js";
-import { Registry } from "../core/registry.js";
-import { SerializedDecision } from "../core/serialized-decision.js";
-import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
@@ -638,6 +640,56 @@ describe("POST /v1/lease-requests", () => {
     call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
     await responsePromise;
     expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
+  });
+});
+
+describe("POST /v1/lease-requests leaseId", () => {
+  it("passes a caller-chosen leaseId onto the dispatch input as sent, and no leaseId key when the body names none", async () => {
+    const { app, dispatcher } = buildHarness();
+    const withId = postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ leaseId: "ad-7f3a" });
+    call.resolve(makeGrant({ lease: { id: "ad-7f3a" } }));
+    await withId;
+
+    const withoutId = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("leaseId");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    await withoutId;
+  });
+
+  it("answers 400 BAD_REQUEST for a leaseId outside the pattern, without dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    // A handler takes the call without the fake's own input parse, so only the route's schema
+    // can keep a bad ID from reaching the dispatcher.
+    dispatcher.handlers["lease.request"] = () => makeGrant({ lease: { id: "w1.myid" } });
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "w1.myid" });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toEqual([]);
+  });
+
+  it("answers 409 LEASE_ID_TAKEN with the ID in the body when the dispatcher refuses it", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+        leaseId: "ad-7f3a",
+      });
+    };
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "LEASE_ID_TAKEN",
+        leaseId: "ad-7f3a",
+        message: "lease ID ad-7f3a is already in use",
+      },
+    });
   });
 });
 

@@ -3,13 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { Driver } from "../../core/driver.js";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
+  type Driver,
 } from "../../core/index.js";
 import {
   FakeClock,
@@ -1171,8 +1171,8 @@ describe("AndroidDriver", () => {
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
     // Both measured on an M3 Pro / Pixel 8 / API 35. The gap is real: a `wipe` reclaim defers
-    // the wipe to the next `makeReady`, but the warm-pool disposition runs that boot before the
-    // device leaves `reclaiming`, so the window is a cold wipe boot rather than a shutdown.
+    // the wipe to the next `makeReady`; a reclaim that also boots the device back to warm
+    // spends a cold wipe boot in `reclaiming` rather than a shutdown.
     expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(6_000);
     expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(32_000);
   });
@@ -1522,6 +1522,20 @@ describe("AndroidDriver", () => {
       { deviceId: "simlock_stopped", runState: "stopped" },
     ]);
     expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
+  });
+
+  it("listManaged passes a 30-second timeout to adb devices", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await driver.listManaged();
+
+    const listing = runner.calls.find((call) => call.args[0] === "devices");
+    expect(listing?.options.timeoutMs).toBe(30_000);
   });
 
   it("treats an otherwise-stopped AVD as transitioning when an unattributable transitional serial is present", async () => {

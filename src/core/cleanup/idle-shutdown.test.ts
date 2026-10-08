@@ -33,6 +33,10 @@ const config: Config = {
   },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
+    enabled: true,
+    maxConcurrentBoots: 1,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -66,7 +70,7 @@ const config: Config = {
   },
 };
 
-function view(now: number): RegistryView {
+function view(now: number, targeted: readonly string[] = []): RegistryView {
   return {
     config,
     devices: [
@@ -84,6 +88,7 @@ function view(now: number): RegistryView {
     diskFreeBytes: 100,
     leases: [],
     now,
+    targeted: new Set(targeted),
   };
 }
 
@@ -94,6 +99,18 @@ describe("idleShutdownRule", () => {
       {
         action: "shutdown",
         reason: "idle 10s > T1=10s",
+        rule: "idle-shutdown",
+        target: "dev_1",
+      },
+    ]);
+  });
+
+  it("leaves a targeted device idle past T1 alone, and still proposes the same device once it is not targeted", () => {
+    expect(idleShutdownRule.evaluate(view(60_000, ["dev_1"]))).toEqual([]);
+    expect(idleShutdownRule.evaluate(view(60_000, ["dev_other"]))).toEqual([
+      {
+        action: "shutdown",
+        reason: "idle 1m > T1=10s",
         rule: "idle-shutdown",
         target: "dev_1",
       },

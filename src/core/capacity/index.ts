@@ -1,9 +1,10 @@
 export { CapacityCoordinator } from "./coordinator.js";
-export type { CapacityReservation, CapacityReservationAttempt } from "./coordinator.js";
+export type { CapacityReservation } from "./coordinator.js";
 export { buildCapacityFigures } from "./figures.js";
-export { CapacityObserver } from "./observer.js";
+export { CapacityObserver, capacityChangedPayload } from "./observer.js";
 export { capacityDevice, capacityDevices, plannedCapacityDevice } from "./devices.js";
 export type { CapacityLimits } from "./limits.js";
+export { resourceOptionValidators } from "./strategies/resource/index.js";
 export {
   capacityStrategyNames,
   capacityStrategyValidator,
@@ -16,10 +17,8 @@ export {
   type ResourceStrategyOptions,
 } from "./strategies/index.js";
 export type {
-  CapacityDecision,
-  CapacityDevice,
   CapacityPlatform,
+  CapacityRefusalReason,
   RamBudget,
-  RegisteredCapacityDevice,
   RunningCapacity,
 } from "./strategy.js";

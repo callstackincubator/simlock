@@ -55,6 +55,16 @@ export function positiveInteger(value: unknown, path: string): number {
   return value;
 }
 
+export function nonNegativeInteger(value: unknown, path: string): number {
+  // `Number.isInteger` is false for anything that is not a number.
+  const number = value as number;
+  if (!Number.isInteger(number) || number < 0) {
+    throw invalidValue(path, "a non-negative integer");
+  }
+
+  return number;
+}
+
 export function nonNegativeNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw invalidValue(path, "a non-negative number");

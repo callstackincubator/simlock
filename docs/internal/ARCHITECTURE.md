@@ -22,8 +22,8 @@ remote agent ──token auth──> HTTP frontend ─same role interfaces──
                                                                      │ state machine ·│
                                                                      │ reaper · health│
                                                                      │ monitor · event│
-                                                                     │ bus · warm-pool│
-                                                                     │ policy         │
+                                                                     │ bus · reclaim  │
+                                                                     │ coordinator    │
                                                                      └─┬─────────┬────┘
                                                                        │ driver  │ driver
                                                                        ▼ interface ▼ interface
@@ -169,7 +169,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
 - **A gateway is a second implementation of the contract's handlers, not a
   second contract** (`src/gateway/`). Same dispatch pipeline, same operation
   declarations, same role checks; the handlers read *worker views* instead of a
-  registry and a lease engine. Every frontend — CLI, MCP, HTTP,
+  registry and leasing. Every frontend — CLI, MCP, HTTP,
   `simlock/client` — works against a gateway unchanged, because they only ever
   see the contract.
 - **A worker view** is what the gateway knows about one worker: id (the
@@ -228,7 +228,7 @@ Every daemon operation is declared exactly once, in `src/contract/`: a name
 output schema, and an optional `authorize` hook. Public TypeScript types are
 inferred from those schemas, never hand-written a second time. The contract
 module imports nothing from `core`, `daemon`, or `drivers` (enforced by
-`src/contract/boundary.test.ts`) — core's own domain records
+`pnpm lint`, `.oxlintrc.json`) — core's own domain records
 (`DeviceRecord`, `LeaseRecord`, `LeaseGrant`) stay private, and the daemon
 maps them onto the contract's shapes in exactly one place
 (`src/daemon/dispatcher.ts`'s handlers). If a core type's shape changes
@@ -273,8 +273,9 @@ relays that operation to workers, so a worker without it must be
 event envelope an `id`, taking it to 10, and ADR 0009 makes `atRamBudget` a
 required capacity field, taking it to 11, and ADR 0015 §3 makes
 `modelClasses` a required catalog field, taking it to 12, and ADR 0015 §4 makes
-`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15). So the range both
-sides advertise is `{min: 16, max: 16}`, an older client and a current daemon simply
+`classDefaults` one too, taking it to 13, and a device's `servesDefaultMode`, required too, takes it to 16 (ADR 0015 §1 and §2 took it to 14 and 15), and `config.get`'s required `warmPool.reserveRunning` takes it to 17, and a starting daemon's `status.get`, which
+answers `daemon` and `host` only, takes it to 18, and `config.get`'s required `warmPool.targets` and `warmPool.maxConcurrentBoots` take it to 19, and `status.get`'s `warmPool` block takes it to 20, and a lease request's optional `leaseId` takes it to 21. So the range both
+sides advertise is `{min: 21, max: 21}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than this shows up in a gateway's views as `incompatible`
@@ -654,8 +655,9 @@ lists are code, and no config key lists or orders stages.
 The v1 policy (`warm-then-free`) is eight stages:
 
 1. `takes-requests` (filter): drop workers that are disconnected,
-   incompatible, drained, or whose capacity or catalog has not been read
-   since they connected;
+   incompatible, drained, or, unless they answer `starting` while the gateway
+   holds a catalog for them (`routingViews`), whose capacity or catalog has not
+   been read since they connected;
 2. `can-serve` (filter): drop workers whose catalog cannot serve the request
    (ADR 0009 §3, `routing/request-match.ts`). The model is the first entry of
    the worker's `models` whose name or `modelAliases` entry equals the
@@ -728,12 +730,17 @@ constraint as typed, `"default"` for an unnamed runtime (the
 last three with reason `unresolvable-spec`); a known worker can serve it but
 none that takes requests can, `NO_CAPACITY` (`no-worker`); otherwise route or
 wait. A worker *takes requests* when it passes `takes-requests`; the gateway
-*knows* a worker when its view holds a catalog and it is not
-`incompatible`. The view's `catalogReadAt` is set by a refresh that carries a
-catalog and cleared when the worker connects, so a reconnecting worker is
-known from its last catalog but takes requests only once the new one arrives,
-and a first-time worker with no catalog yet is neither (its catalog is empty,
-so it says nothing about any platform or model). `WorkerLink` coalesces refreshes and keeps
+*knows* a worker when it is not `incompatible` and the gateway holds a catalog
+for it: its view's, or, for a worker that answered `starting` (whose view holds
+none), the last one read, which `routingViews` supplies. The view's
+`catalogReadAt` is set by a refresh that carries a catalog and cleared when the
+worker connects, so a reconnecting worker is known from its last catalog; it
+takes requests from that catalog while it answers `starting` (the `healthy`
+stage makes them wait), and once it is running only when the new catalog
+arrives. A first-time worker never read has no catalog (absent, so it says
+nothing about any platform or model): it is neither known nor taking requests,
+so a request whose only candidate is such a starting worker fails at once with
+`NO_CAPACITY`. `WorkerLink` coalesces refreshes and keeps
 `includeCatalog` on a queued follow-up, so a catalog refresh that arrives
 during another refresh is still read.
 
@@ -751,14 +758,27 @@ state at all. `lease.renew`, `lease.release`, and single-lease reads are
 worker's own. There is nothing to emulate and no timer to run: a client that
 stops renewing loses its lease on the worker's clock, gateway or no gateway.
 
-- **The lease id names its worker.** A gateway lease id is the owning
-  worker's id, then a `.`, then the worker's own lease id — so renew,
-  release, and reads route by splitting on the **first** `.` rather than by
-  consulting state a restart could lose. A worker id is its instance
-  identity, a UUID, so a real one reads
-  `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in these
-  docs abbreviates it to its first segment for legibility. Clients treat the
-  whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A generated lease id names its worker.** A gateway lease id for a lease
+  simlock generated is the owning worker's id, then a `.`, then the worker's
+  own lease id. A worker id is its instance identity, a UUID, so a real one
+  reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in
+  these docs abbreviates it to its first segment for legibility. Clients treat
+  the whole thing as opaque, exactly as they already treat `lse_9f2c`.
+- **A caller-chosen lease id crosses the gateway bare** (ADR 0020). A
+  requester that sent `leaseId` gets a lease with exactly that id, with no
+  worker prefix, because an id the caller made up cannot carry one. The
+  gateway routes renew, release and reads for it from its lease index, an
+  in-memory map it rebuilds from what workers report (a lease flagged
+  `idChosenByRequester` whose id matches the `leaseId` pattern is named
+  bare), so a gateway restart loses bare routes until each worker has
+  reported; a renew in that window is `UNKNOWN_LEASE`, and the gateway never
+  asks a worker on a miss. The gateway takes the id from what it forwarded,
+  never from the worker's echo; a grant that differs is released on the worker
+  and the request waits again. It refuses an id its own leases or its own
+  waiting requests hold, and passes a worker's `LEASE_ID_TAKEN` on without
+  trying another worker. If two workers ever report the same bare id, the
+  first stays routed and the other lease expires at its TTL (reviewed in
+  #412).
 - **The lease object gains `worker: { id, label }`** (additive) so a client
   and the console can say *where* the device lives. A worker's network
   address is never on it: clients reach devices through the gateway.
@@ -935,7 +955,7 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   ADR 0014 to `{min: 10, max: 10}`, because every event envelope has an `id`, and
   ADR 0009 to `{min: 11, max: 11}`, because `atRamBudget` is required, and
   ADR 0015 to `{min: 12, max: 12}`, because the catalog's `modelClasses` is required, then
-  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is; a
+  to `{min: 13, max: 13}`, because its `classDefaults` is, and ADR 0009 to `{min: 16, max: 16}`, because a device's `servesDefaultMode` is, then to `{min: 17, max: 17}`, because `config.get`'s `warmPool.reserveRunning` is, and a starting `status.get` to `{min: 18, max: 18}`, because its `devices`, `leases`, `capacity` and `queueDepth` are optional, then to `{min: 19, max: 19}`, because `config.get`'s `warmPool.targets` and `warmPool.maxConcurrentBoots` are required, and to `{min: 20, max: 20}`, because `status.get` gains `warmPool`, and to `{min: 21, max: 21}`, because a lease request may carry `leaseId`; a
   worker on an older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
@@ -969,10 +989,12 @@ handlers read worker views and forward over uplinks instead of calling
 unchanged.
 
 `src/gateway/` **imports nothing from `drivers`** — it has no concept of a
-UDID, an AVD, a snapshot, or an adb port — and from `core` only the
-platform-agnostic queue and bus modules it reuses, never the registry,
-capacity, or lifecycle modules. A boundary test in the same shape as
-`src/contract/boundary.test.ts` enforces it. The rule is not stylistic: a
+UDID, an AVD, a snapshot, or an adb port — and from `leasing` only the request
+book, the in-memory store, the wait queue, their errors and their types, never
+`createLeasing`, the acquisition coordinator or the lifecycle; from `core` only
+the shapes those are typed against and catalog matching, never the registry,
+capacity, or lifecycle modules. `pnpm lint` enforces it (`.oxlintrc.json`: the gateway
+override allows only the core and leasing names its allow-lists give). The rule is not stylistic: a
 gateway that could reach a registry module is a gateway that could grow a
 device-state opinion, and the safety argument above rests on it having none.
 
@@ -983,7 +1005,7 @@ managed-device registry, capacity accounting behind a pluggable strategy
 (the default derives limits from the machine and treats RAM as the binding
 constraint for Android emulators), the device state machine, the
 cleanup reaper, the leased-device health monitor, the event bus, and
-warm-pool *policy*.
+idle-device ordering.
 
 Platform mechanisms live behind a narrow driver interface:
 
@@ -1117,9 +1139,8 @@ mode (a slim size left unset falls back to the full one) and uses one sum
 and one limit for `canProvision`, `canBoot` and `status.get`'s
 `capacity.ramBudget`. `canBoot` refuses with `ram-budget` when the boot's
 extra size (full minus the device's own size) does not fit. The
-coordinator's boot reservation, taken by the planner for a shut-down device
-and by the warm pool for a reclaimed device it boots back to warm, counts
-that device as `full` in every decision until released; status leaves every
+coordinator's boot reservation, taken by the planner for a shut-down device,
+counts that device as `full` in every decision until released; status leaves every
 reservation out. A boot refused for RAM evicts nothing and waits. Running
 slots ignore mode. A recovery reboot is not checked and boots full while the
 record keeps its mode (KNOWN-PITFALLS). A restart with larger sizes can
@@ -1127,37 +1148,102 @@ leave the budget over its limit; the strategy then refuses every
 new device and every boot that adds RAM, and the core stops or reclaims nothing for
 it. `fixed` ignores mode, never refuses a boot, and reports no budget.
 
-At startup, `StartupConverger` restores the persisted TTL timer of **every**
-lease it finds, and re-arms retry timers for devices still `quarantined` (see
-below) from their persisted next-retry deadline. A lease survives a daemon
+The **warm pool** (`core/warm-pool/`) is the one place that decides what stays
+warm against those limits (ADR 0017). Its budget is the running limit minus
+every slot a leased, reclaiming, quarantined or reserved device holds, per
+platform and globally. `WarmPool` subscribes to the bus (`daemon.started`,
+`device.reclaimed`, `lease.granted`, `capacity.changed` and the other
+facts that change the budget) and to a 30 s tick, runs one pass at a time, and
+acts by direct calls: the pure `policy.ts` returns shutdown, boot and creation
+proposals, and each is revalidated (no lease, no operation claim) before
+`ManagedDeviceLifecycle` (or, for a creation, `DeviceProvisioner`) runs it. A boot holds a boot reservation, which counts
+as one running slot, until its `ready` commit. A pass proposes no budget
+shutdown while a booted device is on its way to a lease, because that device
+counts as running and as reserved until the grant, holds back the free slots a
+waiting request no idle device serves is about to take, and does nothing while
+an operator reset (`nuke`) holds acquisition closed, after which a device the reset left shut down is not booted back as recently released.
+
+**Warm targets** (`warmPool.targets`, ADR 0017) are what the pool keeps ready
+ahead of demand. Each pass the converger resolves every target through
+`LeaseAcquisitionCoordinator#resolve`, the one place a request becomes a spec,
+with downloads off, so a target and a request cannot disagree and a missing
+runtime or unlisted model is a reported shortfall, never an install. Targets
+that resolve to one spec merge into one with the summed count. For each, the
+policy counts the ready, unleased devices of that kind (`sameSpec`, not a spent
+`fresh` device) and the boots and creations of the kind already running, and
+proposes a boot of a shut-down device of the kind, else a creation, until the
+count is met: never while a request is queued on its platform, never past the
+running slots (with `reserveRunning`), the device limit or RAM, never past
+`maxConcurrentBoots` pool boots at once, and never by shutting a device down.
+A boot or creation for a target runs beside the pass and asks for the next one
+when it ends; a creation takes a provisioning reservation and an ownerless
+`boot` claim, which it gives up once the device is ready, so a request that
+serves it may wait for it. `retry.ts` is the one place a target's failed boot or
+creation is remembered, by resolved spec: one minute, doubling, at most ten (a
+keep boot or a shutdown that failed gets a 30 s pause of its own per device in
+the converger; a target's boot does not).
+A graceful stop drains the pool (`WarmPool#drain`): it finishes the pass and the boots
+and creations already running and starts nothing new, so a stop never creates the
+missing devices of a target. The reaper's first run after a start asks the pool
+for the targeted set, which resolves the targets itself when no pass has yet.
+A target whose resolution fails as `unresolvable` keeps the spec it last resolved
+to, so one failed read does not make its devices unwanted. With the pool off no
+target is resolved, reported or spared.
+The pool reports a target's shortfall (`runtime-missing`, `unknown-model`,
+`no-driver`, `unresolvable`, `boot-failed`, `running-limit`, `reserve`,
+`device-limit`, `ram-budget`) in its log and through `WarmPool#targets`. `WarmPool#figures`
+turns those reports into the one block `status.get` serves (`WarmPoolReader`, beside
+`CapacityReader`): the switch, the reserve, and per kind of device (targets that resolve to one spec are one) the kind, count, ready,
+booting and the first reason that applies (`disabled` first, with the pool off and
+every configured target listed). The reason is recorded where the target is seen: in
+`policy.ts` for one that resolved (the capacity reasons and `boot-failed`), in
+`converger.ts` for one the resolver refused (`no-driver`, `runtime-missing`,
+`unknown-model`, `unresolvable`) and for `disabled`, which `figures` alone reports;
+a target the pass could do nothing for has one, and a target filling, held by `maxConcurrentBoots`
+or waiting behind a queued request has none. The doctor reads the same figures for
+`warm-pool-target-unreachable`, and the converger emits `warm-pool.target-missed`
+once the pass's actions have run, for each report that is short now and whose
+configured targets have not missed since they were last met (their ready devices
+reaching their count). Targets that resolve to one spec are one report and emit one
+event between them; each target the resolver refuses is its own report. A gateway keeps each worker's block on its worker view, from
+the same `status.get` read, and has an empty one of its own.
+A device that never served a lease has no `lastLeaseEndedAt`, which the
+reaper's idle-shutdown rule times from (idle-destroy times it from `shutdownAt`), so the policy itself shuts down a ready,
+unleased, never-leased device that no target keeps once it has been ready
+(`DeviceRecord.readyAt`, `createdAt` for an older record) longer than
+`idle.shutdownAfterMs`, with initiator `warm-pool`.
+
+At startup, leasing's reconciler first ends every lease whose device the startup
+read says is not running (ADR 0019), `LeaseStartup` restores the persisted TTL timer
+of each lease that is left, and core's `StartupConverger` re-arms retry timers for devices
+still `quarantined` (see below) from their persisted next-retry deadline. A lease survives a daemon
 restart because a lease's liveness was never the daemon connection to begin
 with (ADR 0004). The *holder* does not survive it in the same way: the typed
 client never reconnects (ADR 0003 §10), so a running `simlock lease` exits `1`
 when the old daemon goes away and something has to renew the lease from a new
 invocation before its deadline. What the restart no longer does is decide the
 question for you by releasing the lease outright. There is no orphan sweep at
-startup — nothing about a restart proves a holder is dead, so nothing is
-released on the strength of it. A lease whose deadline already passed while no
+startup — nothing about a restart proves a holder is dead, so a lease is not
+released on the strength of it, only because its device is not running. A lease whose deadline already passed while no
 daemon was running expires as soon as one is, through the ordinary expiry path.
 `StartupConverger` then recovers unleased interrupted reclaims through the
-warm-pool recovery port — a backgrounded reclaim marks its device with a
+reclaim coordinator's recovery port (the full reclaim, started in the background
+under a claim, for a device whose wipe a start put off; a shutdown for any other) — a backgrounded reclaim marks its device with a
 `reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
-never survive a restart) rather than cutting it short — and finally
-deterministically shuts down excess unleased, unclaimed `ready` registry
-devices through `CleanupActionExecutor`. Leased devices are never touched by
-any of this, so a lowered limit may remain visibly over-limit until leases
-expire or are released.
+never survive a restart) rather than cutting it short — and
+deletes spent `fresh` devices. It shuts nothing down for being over a running
+limit: the warm pool, started once that sequence has finished, does that in
+the pass `daemon.started` triggers, so a lowered limit leaves `ready` devices running only until that pass
+shuts the least recently used idle ones down. Leased devices are never
+touched by any of this.
 
-The capacity sweep's view of what's `ready` is only ever a snapshot, and a
-background reclaim in flight makes it more so: `reclaiming` already counts
-toward the running total (see above), but a device mid-reclaim cannot be a
-shutdown *candidate* until it settles. The sweep does not wait for that or
-re-run afterward — it tolerates the transient view, because a completed
-reclaim (`WarmPoolCoordinator#reclaim`) makes its own capacity-aware
-keep-or-shutdown decision when it settles, serialized against everything
-else touching the registry, so the pool can never end up over limit even
-though the sweep that ran at startup couldn't see the reclaim coming.
+A completed reclaim (`ReclaimCoordinator#reclaim`) commits exactly the state
+the driver's reclaim returned: `shutdown` on iOS; on Android `ready` after a
+snapshot restore, or `shutdown` when the driver falls back to a wipe. It makes
+no keep-or-shutdown decision and boots nothing; the warm pool decides that in
+a pass of its own (below), so an Android device released over the running
+limit is `ready` for the moment between the commit and that pass.
 
 ## Device state machine
 
@@ -1183,17 +1269,25 @@ iOS and Android because of this.
 
 A warm device is derived inventory, not a state: any registry-managed,
 unleased `ready` device is warm. Release always purges while the device is
-`reclaiming`; it returns to `ready` when capacity permits, otherwise it is
-shut down, or, if the purge itself failed, `quarantined`. Active demand may
-evict deterministic LRU warm inventory before starting requested work,
-without bypassing the FIFO head.
+`reclaiming`; the purge commits what the driver returns (`ready` or
+`shutdown`), or, if it failed, `quarantined`. What stays warm is the warm
+pool's call, made in a pass after the commit: it shuts idle devices down when
+the running count is over its budget, least recently used first and never one
+that serves a waiting request, and boots a shut-down device back when it
+serves a waiting request or was released a moment ago and there is room.
+`warmPool.reserveRunning` takes running slots per platform (and their sum from
+the global count) off that room for idle devices only: a request is never held
+back by it.
+`warmPool.enabled: false` keeps nothing warm. Active demand may still evict
+deterministic LRU warm inventory before starting requested work, without
+bypassing the FIFO head.
 
 ### Quarantine: present but not grantable
 
-`quarantined` is the shared disposition for a device the core cannot vouch
+`quarantined` is the shared state for a device the core cannot vouch
 for right now: it stays in the registry and keeps counting against running
 capacity (so it is not silently over-provisioned away), but it is invisible
-to every grant path, because `AcquisitionPlanner` and the warm-pool eviction
+to every grant path, because `AcquisitionPlanner` and its eviction
 helpers select targets by exact state (`state === "ready"`), never by
 excluding known-bad states. Anything that needs "in the registry, counts
 against capacity, not grantable" is expressed by adding its own entry into
@@ -1284,9 +1378,11 @@ There is **one kind of lease**, on every transport ([ADR
   declare, and no second deadline behind the first.
 - **Connection close means nothing to a lease.** The daemon keeps no
   per-connection lease state and releases nothing when a connection closes, on
-  any transport. Nothing is swept at daemon startup either — a restart does not
-  prove a holder is dead. So a gateway hop, a suspended laptop, or a daemon
-  upgrade costs a client its stream and not its device. It can still cost the
+  any transport. Startup does not sweep leases by their holders either — a
+  restart does not prove a holder is dead. It ends only a lease whose device is
+  not running (ADR 0019), because that device is what the restart says
+  something about. So a gateway hop, a suspended laptop, or a daemon upgrade
+  costs a client its stream and, while the device keeps running, not its device. It can still cost the
   client: the typed client does not reconnect (ADR 0003 §10), so a `simlock
   lease` holder exits `1` on a dead connection and something has to renew that
   still-standing lease from a new connection before its deadline. The lease
@@ -1324,7 +1420,7 @@ commit inside the serialized decision section: the lease record is gone,
 driver-side purge — an iOS `simctl erase` runs tens of seconds, an Android
 snapshot restore comparably — and it carries no information the releasing
 caller can act on. So `LeaseReleaseCoordinator` commits the first half, hands
-the second to `WarmPoolCoordinator` without awaiting it, and returns. An agent
+the second to `ReclaimCoordinator` without awaiting it, and returns. An agent
 releasing over MCP or the CLI gets its turn back immediately instead of
 blocking on a device it has already given up, and an expiry frees its device
 the same way.
@@ -1335,20 +1431,24 @@ still counts as running capacity and is invisible to every grant path
 `reclaim` operation claim for its whole duration — which is how
 `StartupConverger#recoverInterruptedReclaims` and `simlock doctor`'s
 stalled-transition finding both tell a live purge from an abandoned one. A
-waiter queued for exactly that device is granted the moment the purge settles:
-the coordinator re-notifies acquisition *after* releasing the claim, because
-the warm pool's own notification fires while the device is still claimed and
-therefore still unselectable.
+waiter queued for exactly that device is planned again the moment the purge
+settles: the coordinator re-notifies acquisition *after* releasing the claim,
+because the reclaim coordinator's own notification fires while the device is
+still claimed and therefore still unselectable. On Android the reclaim commits
+`ready`, so that waiter is granted at once; on iOS it commits `shutdown`, so
+the waiter gets a `boot-shutdown` plan and waits a full boot after the erase.
 
 Three things still wait for the purge, deliberately:
 
 - **An operator reset.** `NukeService` only acts on `ready`/`shutdown`
   records, so a device left mid-reclaim would be skipped by the very reset
   meant to take it down. `beginMaintenance` drains in-flight background
-  reclaims, and the maintenance-authorized release awaits its own inline.
+  reclaims and the deferred wipes a start left running, and the
+  maintenance-authorized release awaits its own inline.
 - **A graceful `simlock daemon stop`.** It drains the in-flight reclaims
-  (before disposing timers, so a purge that settles into quarantine still gets
-  its retry cancelled), leaving the pool in the same settled shape an inline
+  and deferred startup wipes, wipes first because their commit can start a pool
+  pass (before disposing timers, so a purge that settles into quarantine still
+  gets its retry cancelled), leaving the pool in the same settled shape an inline
   reclaim used to.
 - **The next start, if the daemon died instead.** Interrupted reclaims are
   recovered from the registry as before.
@@ -1361,24 +1461,36 @@ beyond that is logged by the coordinator rather than left unhandled.
 
 ### Lease subsystem boundaries and wiring
 
-The lease subsystem is assembled from focused modules. `LeaseEngine` is the
-composition root and compatibility facade: it wires one shared
-`SerializedDecision`, `DeviceOperationClaims`, `DriverCatalog`, registry, and
-capacity coordinator into these direct transactional call chains:
+The lease subsystem is its own module, `src/leasing/`, entered only through
+`src/leasing/index.ts` (ADR 0018). Device management stays in `src/core/`, and
+core never imports leasing. `createCore` wires one shared `SerializedDecision`,
+`DeviceOperationClaims`, `DriverCatalog`, registry, and capacity coordinator and
+returns them with a `connect` step; `createLeasing({ core, ... })` builds leasing
+on top of them, and `daemon/main.ts` calls both. Where core must act on a lease
+it declares a port (nuke's release-all during maintenance, the lease expiry doctor uses on a
+lapsed lease, the kick it gives acquisition once a device is back),
+leasing implements it, and the daemon hands it over through `core.connect`; a
+core service called before `connect` fails with an error naming the missing
+port. The health monitor is optional: no other leasing part imports it, and
+`createLeasing` wires it or leaves it out. The direct transactional call chains
+are:
 
 - `LeaseRequestBook` stores every lease request in the registry before the
   queue sees it, answers a repeat under the same `(requesterId,
   idempotencyKey)` with the stored result or the wait still open, and writes
-  the result once that wait settles. The HTTP request resource reads requests
-  through it; a gateway's `FleetLeaseCoordinator` runs the same book over an
-  in-memory store.
+  the result once that wait settles. On the daemon a grant is the exception:
+  `Registry.createLease` writes the granted result in the lease's own commit, and the
+  book's later settle writes nothing. A gateway's `FleetLeaseCoordinator` runs the same
+  book over an in-memory store, where no `createLease` runs, so the book's settle writes
+  the grant through `InMemoryLeaseRequestStore.settleLeaseRequest`. The HTTP request
+  resource reads requests through it.
 - `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
   `AcquisitionPlanner` makes read-only grant/provision/boot/eviction plans;
   `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver
   work and registry transitions.
 - `LeaseLifecycle` owns grant, renewal, release commits, and expiry scheduling.
-  A release passes its committed result directly to `WarmPoolCoordinator`,
-  which performs reclaim and warm-pool disposition — without the releasing
+  A release passes its committed result directly to `ReclaimCoordinator`,
+  which performs the reclaim and commits what the driver returns — without the releasing
   caller waiting on it (see "Release hands the purge off").
 - `CapacityCoordinator` owns provisioning and running reservations while the
   configured `CapacityStrategy` decides the limits. `DeviceOperationClaims` excludes
@@ -1387,11 +1499,15 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` settles every lease request the previous process left
-  open as failed, then runs TTL-timer restoration, interrupted-reclaim
-  recovery, and running-capacity convergence in that order. `NukeService`
-  coordinates lease release, pending-request cancellation, and
-  registry-scoped reset operations.
+- Startup runs one step after another (ADR 0019 §1). Leasing settles every
+  lease request the previous process left open as failed. Core reads each
+  platform once (`StartupRead`) and doctor's startup pass uses that read.
+  Leasing's reconciler then ends every lease whose device the read says is not
+  running, and restores the expiry timers of the leases left. `StartupConverger`
+  in core then re-arms quarantine retries, recovers interrupted reclaims,
+  and deletes spent devices, all on the platforms
+  the read could list. `NukeService` coordinates lease release, pending-request
+  cancellation, and registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
 Driver work remains outside it. One `state.json` write does sit inside it: a
@@ -1469,7 +1585,9 @@ reboot attempts have already failed. All three emit `device.recovery-failed`
 (with the reason) and then route through the same `DeviceLostReleaser`, so
 the lease-release path — and its `lease.released { reason: "device-lost" }`
 fact — stays the single place a lease ends, regardless of who decided it
-should.
+should. A daemon start is the other place a lease ends as `device-lost`, decided
+at once from one read instead of over several rounds: "Startup ends every lease
+whose device is not running" below.
 
 None of this is silent. A reboot resumes the lease, but it cannot resume
 whatever the agent had running *inside* the device when it died — a launched
@@ -1509,8 +1627,10 @@ shared managed-device lifecycle.
 
 v1 rules — the tiered cleanup:
 
-1. idle > T1 → `shutdown` (reclaim RAM)
-2. idle > T2 → `destroy` (reclaim disk); under disk pressure (free space
+1. idle > T1 → `shutdown` (reclaim RAM); a device a warm target keeps (the
+   view's `targeted` set, read from the pool at each run) is never proposed
+2. idle > T2 → `destroy` (reclaim disk), idle counted from the last lease's end,
+   or from `shutdownAt` for a device that never served one; under disk pressure (free space
    below `diskPressure.freeBytesThreshold`) `idle-destroy` uses T1 instead of
    T2, so a full disk shortens the wait to reclaim it — the rule reads
    `diskFreeBytes` off the view itself rather than depending on the
@@ -1530,8 +1650,8 @@ proposals.
 
 An in-process, typed event bus carries **past-tense business facts**
 (`device.reclaimed`, `lease.expired`). Observers — cleanup triggers,
-logging/metrics, `simlock events --follow` — subscribe to it. Warm-pool
-reclaim/disposition, cleanup execution, startup convergence, eviction, and
+logging/metrics, `simlock events --follow` — subscribe to it. Reclaim
+commit, cleanup execution, startup convergence, eviction, and
 nuke remain explicit direct component call chains.
 
 The bright line: **events for reactions, direct calls for transactions.** The
@@ -1581,7 +1701,7 @@ Android. One function per driver builds it.
 `ComponentInstaller` (`src/core/component-installer.ts`) is the only caller of
 `installComponent`. `src/daemon/main.ts` builds one with the drivers, a
 `DiskSpaceGuard`, the registry, the bus, the shared `SerializedDecision` and
-`downloads.timeoutMs`, hands it to the lease engine and to the `Dispatcher`
+`downloads.timeoutMs`, hands it to core, leasing and the `Dispatcher`
 (through `DaemonServer`), and closes it on dispose before the drivers are
 disposed. A call for a platform with no driver, or after `close()`, is refused
 at the door; any other call is admitted synchronously (`onAdmitted`) before it
@@ -1619,7 +1739,8 @@ lease-progress stage, sent through the wait queue like every other stage:
 `waiting` becomes `waiting: true`, the install's own reports `waiting: false`
 with the percentage rounded down, and a report equal to the last one sent is
 skipped. Without `allowDownload` the first error stands. Warm-pool
-re-readiness and startup convergence never reach the installer (safety rule 4).
+re-readiness, a warm target's resolution (`resolve` runs the same steps with
+downloads off) and startup convergence never reach the installer (safety rule 4).
 
 The operator path is `component.install` (ADR 0010 §6), an admin operation
 with input `{ platform, version }`; `version` is bounded by the contract
@@ -1827,26 +1948,33 @@ policies replaceable without introducing an ambient dependency container.
 
 Reachability does not depend on startup recovery work. `DaemonServer#start`
 claims the socket (`DaemonEndpointHost#start`) before running `startDaemon`'s
-`converge` callback, which runs `doctor.reconcile()` and
-`leaseEngine.convergeRunningCapacity()` concurrently rather than one after the
-other: `doctor.reconcile()` is pure reconnaissance that already runs
-interleaved with live lease/reclaim activity whenever a client issues
-`doctor.run` mid-session (it shells out per driver/device, then at most flags
-drift for a later `--fix`), so overlapping it with startup's own registry
-work introduces nothing this codebase doesn't already do elsewhere. Neither
-call awaits a device reclaim inline any more (#43) — a release's reclaim runs
-in the background once the release commits — so what's left on this path is
-comparatively fast: per-driver/device reconnaissance plus whatever unleased
-interrupted-reclaim recovery and capacity-sweep shutdowns
-convergence itself still performs inline. Two consequences follow from
+`converge` callback, which runs ADR 0019 §1's steps one after another while
+health is `starting`: leasing settles the lease requests the last process left
+open; core reads each platform once (`readStartup`: one `listManaged` per
+driver, all platforms side by side, each bounded by a fixed 60-second limit on
+the daemon's clock, so a driver that throws or hangs makes its platform
+*unreadable* instead of failing startup, as does a platform with no driver);
+doctor's startup pass reconciles against that read instead of listing again;
+leasing's reconciler checks every lease against the same read; the leases that
+remain get their expiry timers back; and core's device convergence runs last,
+skipping every device on an unreadable platform. They no longer overlap: the
+reconciler needs the read, and convergence must not pick a device the
+reconciler is about to release. Neither leasing nor convergence awaits a device
+reclaim inline (#43) — a release's reclaim runs in the background once the
+release commits, and so does the wipe convergence starts for a device a
+previous start put off (ADR 0019 §2), under a device claim — so what is left
+on this path is the read, the registry writes, and the spent-device
+deletes convergence itself still performs inline. The reconciler's rules are
+the next section's. Two consequences follow from
 claiming first:
 
 - A second daemon racing to start now discovers `DaemonAlreadyRunningError`
   from the claim itself, before it does any device work — not after, as when
   convergence ran first.
 - `hello` and `status.get` answer immediately, `status.get` reporting
-  `health: "starting"` while convergence is in flight and `"running"` once it
-  resolves. Every other request type parks on the same readiness promise
+  `health: "starting"` while convergence is in flight, with `daemon` and `host`
+  only, since the registry has not been checked yet, and `"running"`, with
+  everything, once it resolves. Every other request type parks on the same readiness promise
   `#awaitReady` awaits, and proceeds normally once convergence completes; no
   request can observe half-converged state, and in particular no lease is
   granted before convergence finishes. A slow startup becomes a slow response
@@ -1856,18 +1984,49 @@ claiming first:
 If convergence itself throws, `start()` stops the daemon (closing the
 listener and any connections that raced in during convergence) rather than
 leaving it accepting connections it can never serve; parked requests reject
-with `DAEMON_STARTUP_FAILED` instead of hanging. Because the two converge
-calls run concurrently, one throwing does not cancel the other — `Promise.all`
-still attaches a handler to both, so neither can produce an unhandled
-rejection, but a straggling `convergeRunningCapacity()` step can keep running
-briefly after `stop()` has begun. Nothing it can still do (registry-only
-destruction, never touching a leased device) is unsafe to have in flight
-during shutdown; it just means "stopped" is not instantaneous relative to the
-failure being reported. `health` itself does not grow a third state for this:
+with `DAEMON_STARTUP_FAILED` instead of hanging. A background reclaim the
+reconciler started can keep running briefly after `stop()` has begun; nothing
+it can still do (registry-only destruction, never touching a leased device) is
+unsafe to have in flight during shutdown, it just means "stopped" is not
+instantaneous relative to the failure being reported. `health` itself does not grow a third state for this:
 `running` means convergence finished, not that every backgrounded reclaim it
 kicked off has settled — `simlock status` already reports each device's own
 state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
+
+### Startup ends every lease whose device is not running
+
+A restart says something about a leased device that nothing used to read: after a
+reboot a leased simulator is shut down, still booting, or gone, and the
+health monitor above would only get to it after startup, rebooting a stopped one
+and giving up on a missing one after `health.stableObservations` rounds while its
+slot sat taken. So startup judges every lease on disk, expired ones included,
+against the one read it took (`LeaseReconciler`, `src/leasing/lease-reconciler.ts`),
+by the device's registry `driverDeviceId` on its own platform:
+
+| Device in the read | Lease | Device |
+|---|---|---|
+| `running` | kept, and its timer restored; one whose deadline passed expires through the ordinary expiry path | unchanged, or reclaimed after an expiry |
+| `stopped`, or `transitioning` (booting, shutting down, or an Android emulator `adb` cannot attribute this read) | ended | wiped by the ordinary background reclaim and returned to the pool |
+| absent from a readable platform | ended | marked missing in the same write (`device.deleted`, initiator `doctor`); no reclaim, nothing to wipe |
+| on an unreadable platform | ended | `reclaiming`, with no reclaim started and no claim taken |
+
+A lease ends as the ordinary release with reason `device-lost`
+(`lease.released`, after its commit), or as `lease.expired` when its deadline
+passed while no daemon ran; no reason and no event is new. "I could not look" is
+not "the device is gone", so an unreadable platform ends leases but never marks a
+device missing, and starts no reclaim: a driver that just failed or hung on its
+listing would likely hang the reclaim too, and a hung reclaim holds its device's
+claim with no end. The device waits in `reclaiming`, carrying the id of the lease
+it was ended from (`deferredReclaimLeaseId`), until a start whose read of that
+platform succeeds runs its full reclaim in the background, purge included, so a reusable device
+never returns to the pool with its last holder's data (a reclaim a crash
+interrupted is only shut down, as before). Meanwhile `status` and
+`simlock doctor --fix` treat it as any stalled reclaim. Android's
+`adb devices` has a 30-second command timeout of its own, below the startup limit.
+The maintainer accepted one cost: Android reports `transitioning` also for an
+emulator it cannot tell apart from another serial, so a restart during an adb
+hiccup can end a lease on an emulator that is in use.
 
 Operational logging is a separate concern from the event bus (ADR 0006): two
 records, and no fact is copied from one into the other. `simlock events`
@@ -1890,7 +2049,7 @@ do and what went wrong. The log records:
   record; `daemon.stop` and `hello` are answered by the socket server and keep
   their own lines.
 - **One line per handled background failure** — a boot, an eviction, a
-  quarantine retry, a warm-pool disposition, a scheduled cleanup run, a lease
+  quarantine retry, a scheduled cleanup run, a lease
   expiry — from the core module that caught it (`logger.child("<module>")`,
   `NoopLogger` by default), with `deviceId`, `step`, `error`, and the lease or
   requester where the site knows one. A failure whose error already travels on
@@ -1974,8 +2133,13 @@ lists, classes alike, and pairs with an installed runtime, of the requested
 image tag if one is named) and a `DeviceRequirement` kept on the waiter
 beside its spec. `fits` in `domain.ts` is the one place a requirement meets
 a device (platform, model or class, OS, image tag); the planner adds the
-pool-mode comparison and looks for a `ready` device that fits, then a
-`shutdown` one, then provisions the create spec. `sameSpec` is untouched and
+pool-mode comparison and looks for a `ready` device that fits, then, unless the
+request is `noWait`, for a fitting device already on its way (`shutdown` under a
+`boot` claim no request owns: the warm pool's own boot; a `provisioning` device
+under such a claim counts the same, for the creations the pool will make) and
+waits for it, then a `shutdown` one, then provisions the create spec. A claim
+carries its `owner`, the waiter id, only when a request took it, so a device
+another request is booting or creating for itself is never waited for. `sameSpec` is untouched and
 still names pool identity for the warm pool, reclaim and the idempotency
 check. A class is read from the catalog entry (`modelClasses`) at the moment
 a fit is decided; a device record stores none.
@@ -2016,9 +2180,10 @@ forbids installs outright, even over an explicit `--allow-download` /
 `allowDownload`; `"always"` grants it to every explicit lease request
 without the caller having to ask; `"on-request"` (the default) defers to
 the request's own flag, which is today's behavior byte-for-byte. Only an
-explicit lease request (`LeaseEngine#request`) carries download permission,
+explicit lease request (`createLeasing`'s `request`) carries download permission,
 and the acquisition coordinator, not a driver, acts on it by calling the
 component installer (see "Components: one installer in the core"); no
-`resolveSpec` downloads anything. Warm-pool provisioning and startup
-convergence reuse specs already committed to the registry and never reach
-the installer, so neither can trigger a download regardless of policy.
+`resolveSpec` downloads anything. Warm-pool re-readiness and startup
+convergence reuse specs already committed to the registry, and a warm target
+creates a device only from a spec resolved with downloads off, so none of them
+reaches the installer or can trigger a download regardless of policy.

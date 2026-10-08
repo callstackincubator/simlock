@@ -74,9 +74,29 @@ export class ManagedDeviceLifecycle {
     return this.#makeReadyForLease(target, "shutdown", claim);
   }
 
+  /**
+   * Boots a shut-down device back to warm under the `boot` claim the caller took, and ends the
+   * claim once the `ready` commit is made or has failed. Where `bootForLease` keeps the claim for
+   * a handoff to a lease, nothing follows this boot, so the device is released the moment it is
+   * ready. `undefined` when the device is no longer a shut-down, unleased one.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's lifecycle port.
+  async bootWarm(
+    target: DeviceRecord,
+    claim: DeviceOperationClaim,
+  ): Promise<DeviceRecord | undefined> {
+    const handoff = await this.#makeReadyForLease(target, "shutdown", claim);
+    if (handoff === undefined) return undefined;
+    await this.#release({ claim, device: handoff.device, release: claim.release });
+    return handoff.device;
+  }
+
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
-  async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning");
+  async readyProvisionedForLease(
+    target: DeviceRecord,
+    claim?: DeviceOperationClaim,
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    return this.#makeReadyForLease(target, "provisioning", claim);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by cleanup, acquisition and nuke.

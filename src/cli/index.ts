@@ -946,6 +946,7 @@ async function runLease(
     "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
+    "lease-id": { type: "string" },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -957,7 +958,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );
@@ -1116,6 +1117,9 @@ async function runLease(
         // Sent as typed too: the contract bounds it, and the platform's driver decides whether
         // the platform has image tags at all.
         ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
+        // Sent as typed as well: the contract bounds what an ID may look like (`BAD_REQUEST`), and
+        // the daemon refuses one already in use (`LEASE_ID_TAKEN`, exit 13).
+        ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),
       },
@@ -1443,6 +1447,7 @@ async function runDoctor(
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
     writeMissingPrerequisites(environment, response);
+    writeUnreachableWarmTargets(environment, response);
     writeResult(environment, response);
     return 0;
   } finally {
@@ -1475,6 +1480,20 @@ function writeMissingPrerequisites(environment: CliEnvironment, report: DoctorRe
     if (finding.kind !== "prerequisite-missing") continue;
     environment.stderr.write(
       `Missing [${finding.platform}] ${finding.prerequisite}: ${finding.message} ${finding.remedy}\n`,
+    );
+  }
+}
+
+/**
+ * `warm-pool-target-unreachable` findings, one stderr line each: the target, what is wrong with
+ * it and what to do, so a human sees it without reading the JSON, which stdout still carries
+ * whole. Not a failure either -- the exit code stays 0.
+ */
+function writeUnreachableWarmTargets(environment: CliEnvironment, report: DoctorReport): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "warm-pool-target-unreachable") continue;
+    environment.stderr.write(
+      `${finding.kind}  ${finding.target}: ${finding.message}; ${finding.remedy}\n`,
     );
   }
 }
@@ -2207,7 +2226,7 @@ function formatWorkers(
               .map((install) => `\n  ${formatInstall(install, installsAt)}`)
               .join("");
       const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
-      const state = worker.drained ? `${worker.connection}, drained` : worker.connection;
+      const state = workerState(worker);
       const capacity =
         worker.capacity === undefined
           ? "capacity unknown"
@@ -2219,9 +2238,24 @@ function formatWorkers(
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
       const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
-      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}${host}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${installs}`;
     })
     .join("\n");
+}
+
+/** A worker's state words: its connection, then `starting` while it has not finished starting, then `drained`. */
+function workerState(worker: WorkerView): string {
+  return [
+    worker.connection,
+    ...(worker.health === "starting" ? ["starting"] : []),
+    ...(worker.drained ? ["drained"] : []),
+  ].join(", ");
+}
+
+/** How many leases a worker holds, or that they are unknown: a starting worker has not been read. */
+function leaseCount(worker: WorkerView): string {
+  if (worker.leases === undefined) return "leases unknown";
+  return `${String(worker.leases.length)} lease(s)`;
 }
 
 /** `Install ios 26.4: downloading for 42s, 2 waiters` -- platform, component, state, age, waiters. */
@@ -2372,6 +2406,22 @@ function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
+  // A starting daemon answers with `daemon` and `host` only: the registry has not been checked,
+  // so there is nothing to show about devices, leases or capacity, and saying nothing about them
+  // would read as an empty fleet.
+  if (
+    capacity === undefined ||
+    devices === undefined ||
+    leases === undefined ||
+    queueDepth === undefined
+  ) {
+    return [
+      `Daemon: ${daemon.health} (${daemon.mode})`,
+      ...consoleLines(daemon),
+      `Host: ${formatHost(host)}`,
+      "Devices, leases and capacity appear once startup finishes.",
+    ].join("\n");
+  }
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -2389,6 +2439,11 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   // exactly the output it has always been.
   const workerLines =
     workers === undefined ? [] : [formatWorkers(workers), ""].filter((line) => line !== "");
+  // A gateway keeps no pool of its own: each worker's is on its entry in the JSON.
+  const warmPoolLines =
+    status.warmPool === undefined || daemon.mode === "gateway"
+      ? []
+      : formatWarmPool(status.warmPool);
   const deviceLines = devices.map((device) => {
     const markers = [
       device.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
@@ -2416,6 +2471,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     globalLine,
     ...capacityLines,
     ...ramLines,
+    ...warmPoolLines,
     ...workerLines,
     ...deviceLines,
     ...leaseLines,
@@ -2424,8 +2480,23 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   ].join("\n");
 }
 
+/** The warm pool as `status` prints it: the switch and reserve, then a line per target. */
+function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): string[] {
+  const { enabled, reserveRunning, targets } = warmPool;
+  return [
+    `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
+    ...targets.map((target) => {
+      const name = [target.model, target.osVersion, target.mode]
+        .filter((part) => part !== undefined)
+        .join(" / ");
+      const short = target.short === undefined ? "" : `  short: ${target.short}`;
+      return `  ${name}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+    }),
+  ];
+}
+
 /** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */
-function quarantineMarker(device: StatusGetOutput["devices"][number]): string {
+function quarantineMarker(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   const attempts = device.quarantineAttempts ?? 0;
   const nextRetryAt =
     device.quarantineNextRetryAt === undefined

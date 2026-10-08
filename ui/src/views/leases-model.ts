@@ -100,7 +100,7 @@ export function deviceOfLease(
   lease: LeaseRecord,
   workers: readonly WorkerView[],
 ): WorkerDevice | undefined {
-  return workerOfLease(lease, workers)?.devices.find((device) => device.id === lease.deviceId);
+  return workerOfLease(lease, workers)?.devices?.find((device) => device.id === lease.deviceId);
 }
 
 /** The name of the worker a lease lives on: its label, else its id, else `undefined`. */

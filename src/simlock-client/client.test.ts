@@ -27,6 +27,7 @@ function sampleGrant(
       grantedAt: 0,
       id: leaseId,
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "agent-1",
       requesterId: "agent-1",
       ttlMs: 1_000,

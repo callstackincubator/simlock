@@ -18,9 +18,8 @@ import {
   DEVICE_CLASSES,
   DiskSpaceGuard,
   DriverCatalog,
-  Doctor,
   HostFactsReader,
-  LeaseEngine,
+  createCore,
   loadConfig,
   loadInstanceId,
   OwnedRootError,
@@ -28,6 +27,7 @@ import {
   Nuke,
   SerializedDecision,
 } from "../core/index.js";
+import { createLeasing } from "../leasing/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
@@ -35,10 +35,14 @@ import {
   hostAbiFor,
   SdkMissingError,
   type AndroidEmulatorLaunchOptions,
+  androidPrerequisites,
 } from "../drivers/android/index.js";
-import { androidPrerequisites } from "../drivers/android/prerequisites.js";
-import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
-import { iosPrerequisites } from "../drivers/ios/prerequisites.js";
+import {
+  IOS_PASSTHROUGH_TOOL,
+  IosSimctlDriver,
+  type SlimmedFact,
+  iosPrerequisites,
+} from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
@@ -246,7 +250,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
-  // One gate for every registry write: the lease engine's and the installer's records.
+  // One gate for every registry write: leasing's, core's and the installer's records.
   const decisions = new SerializedDecision();
   // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
   // one, so an iOS and an Android install see each other's reservations.
@@ -261,49 +265,49 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     timeoutMs: config.downloads.timeoutMs,
   });
-  const leaseEngine = new LeaseEngine({
+  const modelPreferences = modelPreferenceWiring(config, drivers);
+  const core = createCore({
     clock,
     components,
     config,
     decisions,
-    defaultModes: deviceModeWiring(config).defaultModes,
-    modelPreferences: modelPreferenceWiring(config, drivers),
-    describeFailure: describeLeaseRequestFailure,
     drivers,
+    driverRejections: rejections,
     eventBus,
-    idGenerator,
     logger,
+    modelPreferences,
+    prerequisiteChecks,
     registry,
     systemStats,
   });
+  // Builds leasing on top of core (ADR 0018 §2).
+  const leasing = createLeasing({
+    clock,
+    components,
+    config,
+    core,
+    defaultModes: deviceModeWiring(config).defaultModes,
+    describeFailure: describeLeaseRequestFailure,
+    eventBus,
+    idGenerator,
+    logger,
+    modelPreferences,
+  });
+  // Core declared ports only leasing can implement; this is the one place they are handed over,
+  // before any request is admitted (ADR 0018 §2).
+  core.connect(leasing.corePorts);
   const reaper = new CleanupReaper({
     clock,
     config,
     eventBus,
-    executor: leaseEngine.cleanup,
+    executor: core.cleanup,
     filesystem,
     logger,
     registry,
     diskPath: dataDirectory,
+    targetedDevices: () => core.targetedDevices(),
   });
-  const doctor = new Doctor({
-    // Without this, a backgrounded reclaim -- which holds its device in `reclaiming`
-    // for a full erase, and is now how every release purges -- reads as a stalled
-    // transition.
-    claims: leaseEngine.claimReader,
-    clock,
-    config,
-    drivers,
-    driverRejections: rejections,
-    eventBus,
-    leaseExpirer: leaseEngine,
-    logger,
-    prerequisiteChecks,
-    quarantine: leaseEngine,
-    registry,
-    runningPlatforms: () => drivers.map((driver) => driver.platform),
-  });
-  const nuke = new Nuke({ executor: leaseEngine, registry });
+  const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
   // token is a socket-hello credential too, so the daemon must be able to verify one against
   // the token store regardless of whether the HTTP gateway is running. Previously this was
@@ -370,19 +374,46 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         rejectGatewayStarted = reject;
       })
     : Promise.resolve();
+  // ADR 0019 §1, in this order: settle the open requests, read each platform once, doctor's
+  // startup pass on that read, end every lease whose device is not running and restore the
+  // timers of the rest, then core's device convergence, then the queue's first depth, which every
+  // run begins with. One after another: the reconciler needs the read, and convergence must not
+  // pick a device the reconciler is about to release.
+  // Set once a stop begins. A `daemon.stop` is accepted while startup runs, and the read takes up
+  // to a minute: every step after it would arm timers (expiry, quarantine retry, warm pool tick)
+  // on a daemon whose disposal has already run, and nothing would cancel them.
+  let stopping = false;
+  const convergeStartup = async (): Promise<void> => {
+    await leasing.settleRequests();
+    const read = await core.readStartup();
+    const steps = [
+      () => core.doctor.reconcile({ read }),
+      () => leasing.reconcile(read),
+      () => core.converge(read),
+    ];
+    for (const step of steps) {
+      if (stopping) return;
+      await step();
+    }
+    leasing.announceQueueDepth();
+  };
   const daemon = new DaemonServer({
-    capacity: leaseEngine,
-    catalog: leaseEngine,
+    // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
+    beginStop: () => core.closeWarmPool(),
+    capacity: core.capacityReader,
+    warmPool: core.warmPoolReader,
+    catalog: core.catalog,
+    deviceModes: leasing,
     clock,
     components,
     config,
-    doctor,
+    doctor: core.doctor,
     driverRejections: rejections,
     defaultRequesterId:
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
     eventHistory,
-    healthMonitor: leaseEngine.healthMonitor,
+    healthMonitor: leasing.healthMonitor,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     // ADR 0012 §1: `worker.list` answers with this host under the id it presents to a gateway.
     instanceId,
@@ -393,9 +424,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       listenerFactory: ipc,
       logger: logger.child("connection-host"),
     }),
-    leases: leaseEngine,
+    leases: leasing,
     logger: logger.child("server"),
-    passthrough: leaseEngine,
+    passthrough: core.catalog,
     // ADR 0005 §19a: `device.exec` runs its command here, on the machine that owns the device.
     // The runner is the same port every driver already shells out through, and `execEnv` is the
     // daemon's own environment -- read here, in the composition root, because that is the only
@@ -403,41 +434,35 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // layered over it per command.
     processRunner,
     execEnv: process.env,
-    queue: leaseEngine,
+    queue: leasing,
     reaper,
     nuke,
     registry,
     // `status.get` and `list.get` flag a stalled device by the rule `doctor` reports, so they
     // need what `doctor` has: the drivers, and the claims that keep a live reclaim from reading
     // as a stall.
-    stalls: { claims: leaseEngine.claimReader, drivers },
+    stalls: { claims: core.claimReader, drivers },
     resolveRole,
     adminSecret,
     tokens,
     version: options.version ?? "1.0.0",
     // Runs after the socket is claimed (see DaemonServer#start): reachability no
     // longer depends on doctor reconciliation or running-capacity convergence.
-    // Requests other than hello/status.get park until this resolves, so the two are
-    // run concurrently rather than doctor-then-capacity: doctor.reconcile() is pure
-    // reconnaissance (it shells out per driver/device, then at most flags drift --
-    // see doctor.ts) that already runs interleaved with live lease/reclaim activity
-    // whenever a client issues `doctor.run` mid-session, so running it alongside
-    // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeRunningCapacity() releases no leases at all any more (ADR 0004 removed the
-    // orphan sweep), so the only device work left on this path is interrupted-reclaim
-    // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
-    // left in flight is finished off in the background, off this critical path (#43).
-    converge: async () => {
-      await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
+    // Requests other than hello/status.get park until this resolves.
+    converge: convergeStartup,
+    settle: async () => {
+      stopping = true;
+      await leasing.settle();
+      await core.drain();
     },
-    settle: async () => leaseEngine.settle(),
     // Drivers are disposed after the lease subsystem, and every one of them is tried even
     // when another throws: Android's disposal is the only thing that can stop the adb
     // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a
     // shutdown that abandoned it would leave a server nothing can reap holding the port
     // the next daemon needs.
     dispose: async () => {
-      leaseEngine.dispose();
+      core.dispose();
+      leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
@@ -477,27 +502,26 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // rather than acted on immediately here -- see the bottom of this function for why: calling
     // `daemon.stop()` right away, while `daemon.start()` may still be awaiting convergence, is
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
-    ...(config.http.enabled
-      ? {
-          onSocketClaimed: () => {
-            socketClaimed = true;
-            void startHttpGateway().then(
-              () => resolveGatewayStarted?.(),
-              (error: unknown) => {
-                logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
-                rejectGatewayStarted?.(error);
-              },
-            );
-          },
-        }
-      : {}),
+    onSocketClaimed: () => {
+      socketClaimed = true;
+      // Dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
+      // `status.get` never parks (it still answers `starting` during convergence), but its
+      // `events.subscribe` does park on startup readiness, so the refresh that follows the
+      // subscribe reads `running` instead of keeping `starting`. A daemon that fails its
+      // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
+      // uplink: a worker whose gateway is down must still come up and serve its local agents
+      // (`GatewayUplink` retries on its own backoff).
+      gatewayUplink?.start();
+      if (!config.http.enabled) return;
+      void startHttpGateway().then(
+        () => resolveGatewayStarted?.(),
+        (error: unknown) => {
+          logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
+          rejectGatewayStarted?.(error);
+        },
+      );
+    },
   });
-
-  // Dialled once the socket is claimed and the dispatcher can answer -- the gateway's first
-  // `status.get` then parks on startup readiness exactly like any other request, instead of
-  // racing convergence. Nothing awaits it: a worker whose gateway is down must still come up
-  // and serve its local agents (`GatewayUplink` retries on its own backoff).
-  gatewayUplink?.start();
 
   async function startHttpGateway(): Promise<void> {
     const httpLogger = logger.child("http");
@@ -507,7 +531,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
-      leaseRequests: leaseEngine.requests,
+      leaseRequests: leasing.requests,
       logger: httpLogger,
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
@@ -1116,7 +1140,7 @@ async function loadDriversModule(
 
 /**
  * What the config says about device modes, in the two shapes the composition root hands out
- * (ADR 0007 §2, §14): the worker's default mode per platform for the lease engine, and whether
+ * (ADR 0007 §2, §14): the worker's default mode per platform for leasing, and whether
  * the iOS default is slim for the iOS driver's advisory. Android has no key until Android slim
  * lands, so it is left out and falls to the core's own `"full"`.
  */

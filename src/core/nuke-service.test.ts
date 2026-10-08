@@ -143,6 +143,7 @@ describe("NukeService", () => {
         requesterId: "agent",
         ownerId: "agent",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 1,
       },

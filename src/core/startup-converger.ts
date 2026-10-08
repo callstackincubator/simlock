@@ -1,38 +1,12 @@
-import type { EventBus } from "../bus/index.js";
-import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import {
-  type DeviceRecord,
-  type LeaseRecord,
-  type LeaseRequestFailure,
-  type LeaseRequestRecord,
-  mayBeGranted,
-  type Platform,
-} from "./domain.js";
-import type { CapacityReader } from "./lease-ports.js";
+import { type DeviceRecord, type LeaseRecord, mayBeGranted } from "./domain.js";
 import type { SerializedDecision } from "./serialized-decision.js";
-import { compareLeastRecentlyUsed } from "./warm-pool.js";
+import type { StartupRead } from "./startup-read.js";
 
 export interface StartupRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
   };
-  failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
-}
-
-/**
- * What a request still open at a restart is settled with. `INTERNAL` rather than a transport
- * code: the request is finished, and a client that retried a transport error under the same key
- * would only ever get this answer back.
- */
-const DAEMON_RESTARTED: LeaseRequestFailure = {
-  code: "INTERNAL",
-  message: "The daemon restarted before this lease request settled; send it again with a new key",
-};
-
-/** Restores every persisted lease's TTL timer before any startup device work begins. */
-export interface LeaseTimerRestorer {
-  restoreExpiryTimers(): Promise<void>;
 }
 
 /** Safely completes a reclaim operation interrupted by daemon shutdown. */
@@ -47,7 +21,7 @@ export interface SpentDeviceDeletion {
 
 /** Re-arms retry timers for devices still `quarantined` at startup, from persisted state. */
 export interface QuarantineRestorer {
-  restore(): void;
+  restore(include: (device: DeviceRecord) => boolean): void;
 }
 
 /** Read-only operation claim view used to avoid an in-flight device operation. */
@@ -55,147 +29,80 @@ export interface DeviceClaimReader {
   isClaimed(deviceId: string): boolean;
 }
 
-/** Which platforms have a driver this daemon can drive devices through. */
-export interface StartupDriverAvailability {
-  has(platform: Platform): boolean;
-}
-
 export interface StartupConvergerOptions {
-  readonly capacity: CapacityReader;
   readonly claims: DeviceClaimReader;
-  readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
-  readonly drivers: StartupDriverAvailability;
-  readonly eventBus: Pick<EventBus, "emit">;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
   readonly spentDeviceDeletion: SpentDeviceDeletion;
-  readonly timers: LeaseTimerRestorer;
 }
 
 /**
  * Directly coordinates the required startup recovery sequence. It emits no
  * events itself; recovery and cleanup own their post-commit lifecycle facts.
  *
- * Convergence never calls a driver that was refused at discovery. Recovering or shutting a
+ * Convergence never acts on a platform the startup read could not list: a platform whose driver
+ * was refused at discovery, or whose listing failed or hung. Recovering or shutting a
  * device down needs a driver call there is no driver for, and a `NoDriverError` out of
  * convergence stops the whole daemon -- costing the healthy platform for a root the other one
  * rejected, which is the opposite of the per-platform fail-closed behaviour discovery
  * promises. `simlock doctor` reports the rejection; the inventory waits for the driver to
- * come back.
+ * come back. That includes a quarantined device's retry timer: a retry already due would drive
+ * a driver the read just found failing or hung.
  *
- * Two limits on that, both deliberate and neither silent. `#releaseOrphanedHeldLeases` runs
- * first and unguarded: a held lease cannot have a live holder across a restart, so it is
- * released whatever its platform, which moves the device to `reclaiming` and leaves the
- * background reclaim to fail into its own catch. The device is then stuck in `reclaiming`
- * until its driver returns -- worse than untouched, better than a phantom lease pinning a
- * device nobody holds. And a dark platform's devices still count toward capacity (see
- * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
- * over budget; excess selection below excludes them from the candidates, not from the count.
+ * A device a daemon start left `reclaiming` with its wipe put off, because it could not read the
+ * device's platform (ADR 0019 §2), has its full reclaim started here once a start reads that
+ * platform, in the background under a claim: startup does not wait for the erase. Any other
+ * interrupted reclaim is only shut down.
+ *
+ * Only the device steps live here. Settling the requests a restart left open, ending the leases
+ * whose device is not running and restoring the expiry timers of the leases left are leasing's,
+ * and the daemon runs them first (ADR 0018 §1, ADR 0019 §1).
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
-  async converge(): Promise<void> {
-    // First, and before admission opens (the dispatcher parks every request until this
-    // resolves): no wait from the previous process survived it, so every request it left open
-    // is settled now rather than left open with nothing to drive it.
-    await this.#settleOpenLeaseRequests();
-    // ADR 0004: every lease's timer is restored from its own persisted deadline, and nothing
-    // is swept -- a restart does not prove a holder is dead, so no lease is released on the
-    // strength of one. A lease whose deadline already passed while no daemon was running
-    // expires here, through the ordinary expiry path `restore` drives.
-    await this.options.timers.restoreExpiryTimers();
-    // Independent of lease/reclaim recovery above: a `quarantined` device already
-    // finished its release-time reclaim, so re-arming its retry timer never races
-    // either step.
-    this.options.quarantineRestore.restore();
-    await this.#recoverInterruptedReclaims();
+  async converge(read: StartupRead): Promise<void> {
+    // A `quarantined` device already finished its release-time reclaim, so re-arming its retry
+    // timer never races the reclaim recovery below. A device on a platform the read could not
+    // list is skipped: a retry that is already due would drive that platform's driver now.
+    this.options.quarantineRestore.restore((device) => read.isReadable(device.spec.platform));
+    await this.#recoverInterruptedReclaims(read);
     // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
     // down there, and is deleted here along with any the previous process left `shutdown`.
-    await this.#deleteSpentDevices();
-
-    const refused = new Set<string>();
-    for (;;) {
-      const candidate = await this.options.decisions.run(() => this.#nextExcessCandidate(refused));
-      if (candidate === undefined) return;
-
-      const executed = await this.options.cleanup.execute({
-        action: "shutdown",
-        reason: "running capacity exceeds configured maxRunning",
-        rule: "startup-max-running",
-        target: candidate.id,
-      });
-      if (!executed) refused.add(candidate.id);
-    }
+    await this.#deleteSpentDevices(read);
   }
 
-  async #settleOpenLeaseRequests(): Promise<void> {
-    const settled = await this.options.decisions.run(() =>
-      this.options.registry.failOpenLeaseRequests(DAEMON_RESTARTED),
-    );
-    for (const record of settled) {
-      this.options.eventBus.emit(
-        "lease.rejected",
-        {
-          requestId: record.id,
-          requester: record.requesterId,
-          requestSpec: record.request,
-          reason: "daemon-restarted",
-        },
-        "startup-converger",
-      );
-    }
-  }
-
-  async #recoverInterruptedReclaims(): Promise<void> {
+  async #recoverInterruptedReclaims(read: StartupRead): Promise<void> {
     const interrupted = await this.options.decisions.run(() =>
-      this.#actionableDevices("reclaiming"),
+      this.#actionableDevices("reclaiming", read),
     );
     for (const device of interrupted) {
       await this.options.interruptedReclaimRecovery.recoverInterruptedReclaim(device);
     }
   }
 
-  async #deleteSpentDevices(): Promise<void> {
+  async #deleteSpentDevices(read: StartupRead): Promise<void> {
     const spent = await this.options.decisions.run(() =>
-      this.#actionableDevices("shutdown").filter((device) => !mayBeGranted(device)),
+      this.#actionableDevices("shutdown", read).filter((device) => !mayBeGranted(device)),
     );
     for (const device of spent) {
       await this.options.spentDeviceDeletion.deleteSpent(device);
     }
   }
 
-  #nextExcessCandidate(refused: ReadonlySet<string>): DeviceRecord | undefined {
-    const capacity = this.options.capacity.runningCapacity;
-    const overPlatforms = (["ios", "android"] as const).filter(
-      (platform) => capacity[platform].running > capacity[platform].maxRunning,
-    );
-    if (capacity.global.running <= capacity.global.maxRunning && overPlatforms.length === 0) {
-      return undefined;
-    }
-
-    return this.#actionableDevices("ready")
-      .filter(
-        (device) =>
-          !refused.has(device.id) &&
-          (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
-      )
-      .sort(compareLeastRecentlyUsed)[0];
-  }
-
   /**
-   * Devices in `state` that startup may act on: their platform has a driver, no lease holds
+   * Devices in `state` that startup may act on: their platform was read, no lease holds
    * them, and no in-process operation has claimed them. Read inside a decision section.
    */
-  #actionableDevices(state: DeviceRecord["state"]): DeviceRecord[] {
+  #actionableDevices(state: DeviceRecord["state"], read: StartupRead): DeviceRecord[] {
     const snapshot = this.options.registry.snapshot;
     const leasedDeviceIds = new Set(snapshot.leases.map((lease) => lease.deviceId));
     return snapshot.devices.filter(
       (device) =>
         device.state === state &&
-        this.options.drivers.has(device.spec.platform) &&
+        read.isReadable(device.spec.platform) &&
         !leasedDeviceIds.has(device.id) &&
         !this.options.claims.isClaimed(device.id),
     );

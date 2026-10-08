@@ -1,7 +1,12 @@
 import { dirname, isAbsolute, join } from "node:path";
 
-import type { DeviceClass, DeviceSpec } from "../../core/domain.js";
 import {
+  ensureOwnedRoot,
+  type EnsureOwnedRootOptions,
+  type LegacyDevice,
+  OwnedRootError,
+  type DeviceClass,
+  type DeviceSpec,
   BootTimeoutError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
@@ -29,12 +34,6 @@ import {
   removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
-} from "../../core/driver.js";
-import {
-  ensureOwnedRoot,
-  type EnsureOwnedRootOptions,
-  type LegacyDevice,
-  OwnedRootError,
 } from "../../core/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
@@ -83,6 +82,12 @@ const COLD_BOOT_ESTIMATE_MS = 70_000;
 const PORT_MAX = 5682;
 const PORT_MIN = 5586;
 const PORT_POLL_INTERVAL_MS = 2_000;
+/**
+ * The command timeout on the `adb devices` that `listManaged` runs. It sits below the 60-second
+ * limit the daemon's startup read puts on a whole platform, so a hung adb server ends this call
+ * first and the read reports the platform's failure rather than its own timeout.
+ */
+const ADB_DEVICES_TIMEOUT_MS = 30_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
@@ -112,11 +117,11 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
 // 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
 // only shut the emulator down and defer the wipe to the next `makeReady`; what it does not do
-// is end the device's time in `reclaiming`. `WarmPoolCoordinator#disposition` re-readies a
-// device the pool wants to keep warm before committing the transition, so the wipe boot and the
-// baseline re-capture land inside the same window -- and that window, not the driver call, is
-// what both consumers of this number measure: a waiting requester's ETA, and the state age
-// `Doctor` compares against. A device the pool does not keep warm settles in seconds instead.
+// is end the device's time in `reclaiming`. `ReclaimCoordinator` commits what `reclaim` returns,
+// so the window is the driver call alone; the figure below still prices the wipe boot a
+// kept-warm reclaim used to land inside it, and is kept high. That window, not the driver call,
+// is what both consumers of this number measure: a waiting requester's ETA, and the state age
+// `Doctor` compares against.
 // The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
 // look stalled, while over-quoting only delays a finding.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
@@ -721,7 +726,7 @@ export class AndroidDriver implements Driver {
    * An emulator announces itself exactly once, at its own startup, to the server that
    * existed then. A clean `daemon stop` reaps that server, and with `ADB_EMU=0` the next one
    * has no scanner to rediscover anything -- so every emulator that survived the restart
-   * (which is by design: releasing a lease hands a device to the warm pool) would be
+   * (which is by design: a released device may stay running, kept by the warm pool) would be
    * invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
    * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently.
    *
@@ -1063,7 +1068,9 @@ export class AndroidDriver implements Driver {
     readonly settledSerials: readonly string[];
     readonly unattributableTransitionalSerial: boolean;
   }> {
-    const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"]);
+    const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"], {
+      timeoutMs: ADB_DEVICES_TIMEOUT_MS,
+    });
     const settledSerials: string[] = [];
     let unattributableTransitionalSerial = false;
     for (const match of attached.stdout.matchAll(/^((?:emulator)-\d+)\s+(\S+)$/gm)) {
@@ -2453,3 +2460,4 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   allocationsByRunner.set(processRunner, allocator);
   return allocator;
 }
+export { androidPrerequisites } from "./prerequisites.js";

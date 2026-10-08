@@ -42,6 +42,18 @@ export interface DeviceSpec {
   readonly imageTag?: string;
 }
 
+/**
+ * Why a warm target did not resolve to a spec: the platform has no driver on this machine, its
+ * runtime is not installed (and a target never downloads), its model is not listed, or the driver
+ * refused it some other way.
+ */
+export type TargetRefusal = "no-driver" | "runtime-missing" | "unknown-model" | "unresolvable";
+
+/** What the request resolver answers for a request that is not going to be granted a lease. */
+export type TargetResolution =
+  | { readonly spec: DeviceSpec }
+  | { readonly refusal: TargetRefusal; readonly message: string };
+
 /** The mode a spec plans: `"slim"` when it says so, `"full"` otherwise. */
 export function specMode(spec: DeviceSpec): DeviceMode {
   return spec.mode ?? "full";
@@ -83,6 +95,21 @@ export interface DeviceRequirement {
     | { readonly kind: "class"; readonly class: DeviceClass };
   readonly osVersion: OsRequirement;
   readonly imageTag: string | undefined;
+}
+
+/**
+ * A lease request that has no device yet, reduced to what decides whether a device serves it: its
+ * platform, what a device must satisfy, and the pool mode its spec resolved to. `classOf` is the
+ * catalog's model-to-class lookup the requirement may need. `inFlight` is a request whose device
+ * work has begun (a provision, boot or eviction): it is being served, not waiting, but it still
+ * has a slot coming that is not yet reserved.
+ */
+export interface WaitingDemand {
+  readonly inFlight: boolean;
+  readonly platform: Platform;
+  readonly requirement: DeviceRequirement;
+  readonly mode: DeviceMode;
+  readonly classOf: (model: string) => DeviceClass | undefined;
 }
 
 /** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
@@ -158,10 +185,29 @@ export interface DeviceRecord {
   readonly driverData: unknown;
   readonly createdAt: number;
   readonly lastLeaseEndedAt?: number;
+  /**
+   * When the device last became `ready`: the registry stamps it on every move into `ready`. A record written
+   * before this field existed loads without it and counts as ready since `createdAt`
+   * (`readySince`).
+   */
+  readonly readyAt?: number;
+  /**
+   * When the device last moved into `shutdown`, stamped by the registry on every such move. A
+   * record shut down before this field existed has none.
+   */
+  readonly shutdownAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
   readonly recoveringSince?: number;
   readonly recoveryAttempts?: number;
+  /**
+   * Set while a device sits `reclaiming` with its wipe not yet started, because the daemon start
+   * that ended its lease could not read its platform (ADR 0019 §2). It names that lease. A later
+   * start that can read the platform runs the full reclaim, purge included, for a device that
+   * carries it, instead of the shutdown-only recovery of a reclaim a crash interrupted. Any
+   * transition drops it.
+   */
+  readonly deferredReclaimLeaseId?: string;
   /** Set on entry to `quarantined`; the wall-clock moment the first purge failed. */
   readonly quarantinedAt?: number;
   /** Failed retry count since entering quarantine (the triggering failure itself is not a retry). */
@@ -189,6 +235,11 @@ export interface DeviceRecord {
    * as `reusable`; absent reads the same way.
    */
   readonly leaseIdentity?: LeaseIdentity;
+}
+
+/** When a ready device became ready: `readyAt`, or `createdAt` for a record that has none. */
+export function readySince(device: DeviceRecord): number {
+  return device.readyAt ?? device.createdAt;
 }
 
 /**
@@ -230,6 +281,12 @@ export interface LeaseRecord {
    * shared one backstop width. A record written before ADR 0004 loads with `grantedAt` here.
    */
   readonly lastRenewedAt: number;
+  /**
+   * Whether the requester chose `id` (`lease.request`'s `leaseId`, ADR 0020) rather than simlock
+   * generating it. Written at grant. A record written before this field existed loads with
+   * `false`: every ID then was generated.
+   */
+  readonly idChosenByRequester: boolean;
 }
 
 export interface LeaseTiming {
@@ -281,6 +338,12 @@ export interface LeaseRequestRecord<Grant = LeaseGrant> {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly idempotencyKey?: string;
+  /**
+   * The lease ID the requester chose (ADR 0020), kept beside the request, not in it, so the
+   * request stays the device it names. While the record is `open` it holds that ID: nothing else
+   * is granted it.
+   */
+  readonly leaseId?: string;
   readonly request: DeviceRequest;
   readonly createdAt: number;
   readonly state: LeaseRequestState;
@@ -302,7 +365,7 @@ export function isSettled(record: Pick<LeaseRequestRecord<unknown>, "state">): b
  * capacity, but not grantable" disposition: a device the core cannot vouch for
  * right now, sitting outside the `ready`/`shutdown` states every grant and
  * eviction path already selects on. `reclaiming -> quarantined` is its release-time
- * purge-failure entry (see WarmPoolCoordinator); `provisioning -> quarantined` is its
+ * purge-failure entry (see ReclaimCoordinator); `provisioning -> quarantined` is its
  * stalled-transition entry (Doctor, for a `provisioning` that never finished);
  * `shutdown -> quarantined` is a spent fresh device whose delete failed after its
  * lease-end shutdown committed -- each its own entry into the same state rather than a
@@ -332,18 +395,25 @@ export class IllegalTransition extends Error {
 /** Fields a driver call resolved alongside a transition -- currently a fresh `makeReady` address. */
 export interface DeviceTransitionUpdate {
   readonly address?: string;
+  /** Stamped by the registry on every move into `ready`; callers do not pass it. */
+  readonly readyAt?: number;
+  /** Stamped by the registry on every move into `shutdown`; callers do not pass it. */
+  readonly shutdownAt?: number;
   readonly driverData?: unknown;
   readonly mode?: DeviceMode;
 }
 
 export function transition(
-  record: DeviceRecord,
+  current: DeviceRecord,
   to: DeviceState,
   update?: DeviceTransitionUpdate,
 ): DeviceRecord {
-  if (!legalTransitions[record.state].includes(to)) {
-    throw new IllegalTransition(record.state, to);
+  if (!legalTransitions[current.state].includes(to)) {
+    throw new IllegalTransition(current.state, to);
   }
+
+  // A deferred reclaim (ADR 0019 §2) ends with any transition out of `reclaiming`.
+  const { deferredReclaimLeaseId: _deferred, ...record } = current;
 
   if (to === "shutdown") {
     // Nothing is listening at the old address once the device stops, and the next
@@ -387,3 +457,21 @@ export function transitionEnteredAt(record: DeviceRecord): number | undefined {
       return undefined;
   }
 }
+
+/** Request-scoped progress for the lease action currently being performed. */
+export type LeaseProgress =
+  | { readonly stage: "queued"; readonly queuePosition: number }
+  /**
+   * The request waits on a component download (ADR 0010 §3). `component` is the string the
+   * driver named, carried unread. `waiting` is true while another install on the platform runs
+   * ahead of it. `percent`, a whole number from 0 to 100, is there when the installer printed one.
+   */
+  | {
+      readonly stage: "downloading";
+      readonly component: string;
+      readonly waiting: boolean;
+      readonly percent?: number | undefined;
+    }
+  | { readonly stage: "provisioning"; readonly etaMs: number }
+  | { readonly stage: "booting"; readonly etaMs: number }
+  | { readonly stage: "reclaiming"; readonly etaMs: number };

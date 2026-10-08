@@ -8,7 +8,7 @@
  * of calling `core`. Both implementations are reached by the same transports (the socket
  * server, the HTTP app), so both need this vocabulary, and the gateway must be able to import
  * it without importing `src/core` through the back door -- which is exactly what importing
- * `dispatcher.ts` would do (see `src/gateway/boundary.test.ts`).
+ * `dispatcher.ts` would do (`src/gateway/boundary.test.ts` proves it stays core-free).
  *
  * Nothing here imports from `src/core`, `src/drivers`, or `src/http`; the contract module, its
  * zod-inferred types, and the `Clock`/`Logger` port types are the whole dependency surface.
@@ -32,7 +32,7 @@ import {
 
 /**
  * Request-scoped progress, as the contract declares it. Structurally identical to `core`'s own
- * `LeaseProgress` (src/core/wait-queue.ts) -- the worker's dispatcher passes one straight
+ * `LeaseProgress` (src/core/domain.ts) -- the worker's dispatcher passes one straight
  * through to the other -- but named from the contract here so this module stays core-free.
  */
 export type DispatchProgress = z.infer<typeof leaseProgressSchema>;

@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testComponentWiring } from "../core/test-wiring.js";
+import { testComponentWiring } from "../core/testing.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
-import { CleanupReaper, type Config, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import { CleanupReaper, type Config, Registry } from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -28,7 +29,12 @@ import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { AdminSecretManager } from "../daemon/admin-secret.js";
 import { createCredentialRoleResolver } from "../daemon/session.js";
-import { SimlockError, type AnySimlockError, type UsageOutput } from "../contract/index.js";
+import {
+  fromWireError,
+  SimlockError,
+  type AnySimlockError,
+  type UsageOutput,
+} from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -55,6 +61,7 @@ import {
   type CliEnvironment,
   type CliEnvironmentPorts,
 } from "./index.js";
+import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -80,6 +87,7 @@ const detachedGrant: LeaseGrant = {
     ownerId: "test-requester",
     grantedAt: 0,
     lastRenewedAt: 0,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 61_000,
   },
@@ -389,6 +397,7 @@ describe("CLI: exit codes", () => {
       grantedAt: 0,
       id: "lse_mine",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "some-other-principal",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -2582,6 +2591,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
         grantedAt: 1,
         id: "lease_1",
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ownerId: "agent-1",
         requesterId: "agent-1",
         ttlDeadline: 2,
@@ -2599,8 +2609,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
-    expect(output.stdout).toContain("ios 1/2");
+    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected -- ios 1/2");
     // No host facts on this view yet, so the line ends at the lease count.
     expect(output.stdout).toContain("1 lease(s)\n");
   });
@@ -2634,6 +2643,33 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain(
       "1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9",
+    );
+  });
+
+  it("prints a starting worker as starting, with its leases unknown rather than none", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  connection: "connected" as const,
+                  drained: true,
+                  health: "starting" as const,
+                  id: "wrk_1",
+                  lastSeenAt: 1,
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toBe(
+      "wrk_1: connected, starting, drained -- capacity unknown, leases unknown\n",
     );
   });
 
@@ -2858,6 +2894,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           grantedAt: 1,
           id: "lease_1",
           lastRenewedAt: 1,
+          idChosenByRequester: false,
           ownerId: "agent-1",
           requesterId: "agent-1",
           ttlDeadline: 2,
@@ -2893,6 +2930,260 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       "Device dev_1 on wrk_1: leased, mode full, serves default mode: yes",
     );
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
+  });
+
+  describe("the warm pool block", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios" as const,
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios" as const,
+          ready: 0,
+          short: "runtime-missing" as const,
+        },
+      ],
+    };
+    const statusWith = (block: StatusGetOutput["warmPool"]) =>
+      fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
+
+    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 1 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+      );
+    });
+
+    it("simlock status leaves the runtime out of a target that names none", async () => {
+      const output = outputCapture();
+      const unversioned = {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [
+          {
+            booting: 0,
+            count: 1,
+            mode: "slim" as const,
+            model: "iPhone 17",
+            platform: "ios" as const,
+            ready: 0,
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(unversioned) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+      );
+    });
+
+    it("simlock status prints a pool that is off as disabled, with every target short disabled", async () => {
+      const output = outputCapture();
+      const off = {
+        enabled: false,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: warmPool.targets.slice(0, 1).map((target) => ({
+          ...target,
+          booting: 0,
+          ready: 0,
+          short: "disabled" as const,
+        })),
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(off) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: disabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for an answer without the block", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(undefined) }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for a gateway, whose own block is empty", async () => {
+      const output = outputCapture();
+      const empty = { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  daemon: { health: "running" as const, mode: "gateway" as const },
+                  warmPool: empty,
+                }),
+            }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (gateway)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it("simlock status --json carries the block as the daemon sent it", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
+    });
+
+    it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
+      const output = outputCapture();
+      const findings = [
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "iOS 27.0 is not installed",
+          platform: "ios" as const,
+          reason: "runtime-missing" as const,
+          remedy: "run simlock component install ios 27.0",
+          target: "iPhone 17 / 27.0 / full",
+        },
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "the targets want 4 running devices, and the running limit leaves room for 3",
+          reason: "over-limit" as const,
+          remedy: "lower the counts of the warmPool.targets, or raise the running limit",
+          target: "all targets",
+        },
+        { deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" },
+      ];
+
+      await expect(
+        runCli(
+          ["doctor"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(
+        output.stderr
+          .split("\n")
+          .filter((line) => line.includes("warm-pool-target-unreachable") || line.includes("d-1")),
+      ).toEqual([
+        "warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0",
+        "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
+      ]);
+      expect(output.stderr).not.toContain("undefined");
+      expect(JSON.parse(output.stdout)).toEqual({ findings });
+    });
+  });
+
+  describe("against a starting daemon", () => {
+    // A starting daemon answers `status.get` with `daemon` and `host` only.
+    const STARTING: StatusGetOutput = {
+      daemon: { health: "starting", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    };
+
+    it("simlock status prints the starting line and no device, lease or capacity line", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+    });
+
+    it.each(["capacity", "devices", "leases", "queueDepth"] as const)(
+      "simlock status prints the starting line for an answer with no %s, though the rest is there",
+      async (missing) => {
+        const output = outputCapture();
+        const { [missing]: _left, ...answer } = EMPTY_STATUS;
+        await runCli(
+          ["status"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(answer as StatusGetOutput) }),
+          }),
+        );
+
+        expect(output.stdout).toContain(
+          "Devices, leases and capacity appear once startup finishes.\n",
+        );
+        expect(output.stdout).not.toContain("Queue depth");
+      },
+    );
+
+    it("simlock status --json prints the answer with those fields absent", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+    });
   });
 
   it("prints the host line", async () => {
@@ -3075,7 +3366,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
   });
 
   it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
-    const statusWith = (ramBudget?: NonNullable<StatusGetOutput["capacity"]["ramBudget"]>) => {
+    type RamBudget = NonNullable<NonNullable<StatusGetOutput["capacity"]>["ramBudget"]>;
+    const statusWith = (ramBudget?: RamBudget) => {
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
         capacity: { ...EMPTY_STATUS.capacity, ...(ramBudget === undefined ? {} : { ramBudget }) },
@@ -3260,6 +3552,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3315,6 +3608,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3365,6 +3659,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3427,6 +3722,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3472,6 +3768,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 30_000,
         });
@@ -3575,6 +3872,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: clock.now(),
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         }),
@@ -3688,6 +3986,40 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
     // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
     expect(requested).toEqual([30 * 60_000, undefined]);
+  });
+
+  it("the CLI --lease-id flag sends leaseId and exits 13 on LEASE_ID_TAKEN", async () => {
+    const output = outputCapture();
+    const requested: unknown[] = [];
+    let answer: "grant" | "taken" = "grant";
+    const environment = output.environmentWith({
+      clock: new FakeClock(0),
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push("leaseId" in input ? input.leaseId : "absent");
+            return answer === "grant"
+              ? Promise.resolve(detachedGrant)
+              : Promise.reject(
+                  fromWireError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+                    leaseId: "ad-7f3a",
+                  }),
+                );
+          },
+        }),
+    });
+    const lease = ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"];
+
+    await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+    await runCli(lease, environment);
+    answer = "taken";
+    const exitCode = await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+
+    // The flag's value goes out as typed and an omitted flag sends none: the contract decides
+    // what an ID may look like.
+    expect(requested).toEqual(["ad-7f3a", "absent", "ad-7f3a"]);
+    expect(exitCode).toBe(13);
+    expect(output.stderr).toContain('"code":"LEASE_ID_TAKEN"');
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(
@@ -3928,6 +4260,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3998,6 +4331,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         });
@@ -4466,7 +4800,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
       statusOut.environmentWith({ connectAdmin: environment.connectAdmin }),
     );
     const status = JSON.parse(statusOut.stdout) as StatusGetOutput;
-    expect(status.leases.map((lease) => lease.id)).toContain(grant.lease.id);
+    expect(status.leases?.map((lease) => lease.id)).toContain(grant.lease.id);
 
     const releaseOut = outputCapture();
     const releaseExit = await runCli(
@@ -4670,7 +5004,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
 
 /** Hoisted out of `fakeClient` so a test can hand back the same status with a different
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
-const EMPTY_STATUS: StatusGetOutput = {
+const EMPTY_STATUS = {
   devices: [],
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
@@ -4699,7 +5033,7 @@ const EMPTY_STATUS: StatusGetOutput = {
   },
   daemon: { health: "running", mode: "worker" },
   queueDepth: 0,
-};
+} satisfies StatusGetOutput;
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
@@ -4722,6 +5056,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       ownerId: "test-requester",
       grantedAt: 0,
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ttlMs: 60_000,
       ttlDeadline: 60_000,
     },
@@ -4884,7 +5219,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -4914,6 +5249,8 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    warmPool: engine,
+    deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
     clock,
@@ -4997,7 +5334,7 @@ async function startInMemoryDaemon(options: {
     eventBus: eventBus,
     registry: registry,
   });
-  const engine = new LeaseEngine({
+  const engine = createTestEngine({
     ...wiring,
     clock,
     config,
@@ -5037,6 +5374,8 @@ async function startInMemoryDaemon(options: {
   const daemon = new DaemonServer({
     adminSecret,
     capacity: engine,
+    warmPool: engine,
+    deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
     clock,
@@ -5125,6 +5464,10 @@ function testConfig(): Config {
       maxBytes: 256 * 1024 * 1024,
     },
     warmPool: {
+      enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -5225,6 +5568,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
       grantedAt: 0,
       id: "lse_1",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "test-requester",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -5283,7 +5627,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );

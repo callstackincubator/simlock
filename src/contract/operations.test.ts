@@ -235,6 +235,56 @@ describe("lease.request osVersion", () => {
   );
 });
 
+describe("lease.request leaseId", () => {
+  const parse = (leaseId: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({ leaseId, model: "iPhone 17", platform: "ios" });
+
+  it.each([
+    ["a plain ID", "myid"],
+    ["a case-sensitive one", "MyID"],
+    ["one with a hyphen and an underscore inside", "ad-7f3a_01"],
+    ["one that looks like a generated ID", "lse_123"],
+    ["a single character", "a"],
+    ["a digit first", "7"],
+    ["64 characters", "a".repeat(64)],
+  ])("accepts %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["65 characters", "a".repeat(65)],
+    ["a dot, kept for gateway IDs", "w1.myid"],
+    ["a space", "my id"],
+    ["a hyphen first", "-s"],
+    ["an option", "--help"],
+    ["an underscore first", "_x"],
+    ["a character outside ASCII", "ząb"],
+    ["a trailing newline", "myid\n"],
+    ["a fullwidth digit", "\uFF11abc"],
+    ["a number", 7],
+    ["null", null],
+  ])("refuses %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(false);
+  });
+
+  it("is optional, and an input without it parses to one without it", () => {
+    expect(
+      OPERATIONS["lease.request"].input.parse({ model: "iPhone 17", platform: "ios" }),
+    ).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+
+  it("is not part of the device the request names", () => {
+    const input = OPERATIONS["lease.request"].input.parse({
+      leaseId: "myid",
+      model: "iPhone 17",
+      platform: "ios",
+    });
+
+    expect(requestedDevice(input)).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
@@ -316,6 +366,7 @@ describe("operation input/output round trips", () => {
         ownerId: "req_1",
         grantedAt: 1,
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ttlMs: 1,
         ttlDeadline: 2,
       },
@@ -390,8 +441,155 @@ describe("operation input/output round trips", () => {
         tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" }],
       },
       queueDepth: 0,
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 1 }, targets: [] },
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
+  });
+
+  describe("status.get warmPool", () => {
+    const host = { os: "macOS", osVersion: "15.5", arch: "arm64", tools: [] };
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    };
+    const capacityEntry = {
+      atRamBudget: false,
+      limit: 1,
+      maxRunning: 1,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    };
+    const running = {
+      capacity: {
+        android: capacityEntry,
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: capacityEntry,
+      },
+      daemon: { health: "running", mode: "worker" },
+      devices: [],
+      host,
+      leases: [],
+      queueDepth: 0,
+    };
+
+    it("round-trips the block field for field", () => {
+      expect(OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool).toEqual(
+        warmPool,
+      );
+    });
+
+    it("parses a starting daemon's answer without it, and a running one that carries it", () => {
+      expect(
+        OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool,
+      ).toBeDefined();
+      expect(
+        OPERATIONS["status.get"].output.parse({
+          daemon: { health: "starting", mode: "worker" },
+          host,
+        }),
+      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+    });
+
+    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+      const target = warmPool.targets[0];
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: [{ ...target, short: "tired" }] },
+        }),
+      ).toThrow();
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+        }),
+      ).toThrow();
+    });
+  });
+
+  it.each([
+    "disabled",
+    "no-driver",
+    "runtime-missing",
+    "unknown-model",
+    "unresolvable",
+    "boot-failed",
+    "device-limit",
+    "running-limit",
+    "reserve",
+    "ram-budget",
+  ])("status.get: accepts the warm pool reason %s", (short) => {
+    const target = {
+      booting: 0,
+      count: 1,
+      mode: "full",
+      model: "iPhone 17",
+      platform: "ios",
+      ready: 0,
+      short,
+    };
+    const status = {
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
+    };
+
+    expect(OPERATIONS["status.get"].output.parse(status).warmPool?.targets[0]?.short).toBe(short);
+  });
+
+  it.each(["runtime-missing", "unknown-model", "over-limit"])(
+    "doctor.run: accepts a warm-pool-target-unreachable finding with reason %s",
+    (reason) => {
+      const finding = {
+        kind: "warm-pool-target-unreachable",
+        message: "m",
+        reason,
+        remedy: "r",
+        target: "t",
+      };
+
+      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
+        finding,
+      ]);
+    },
+  );
+
+  it("doctor.run: round-trips a warm-pool-target-unreachable finding field for field", () => {
+    const finding = {
+      kind: "warm-pool-target-unreachable",
+      message: "iOS 27.0 is not installed",
+      platform: "ios",
+      reason: "runtime-missing",
+      remedy: "run simlock component install ios 27.0",
+      target: "iPhone 17 / 27.0 / full",
+    };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+      findings: [finding],
+    });
   });
 
   it("status.get: cuts installs to their first 16 and each component to 64 characters, on the status and on a worker view", () => {
@@ -471,6 +669,7 @@ describe("operation input/output round trips", () => {
       ttlMs: 2,
       ttlDeadline: 3,
       lastRenewedAt: 1,
+      idChosenByRequester: false,
       workerId: "wrk_1",
     };
     const parsed = OPERATIONS["status.get"].output.parse({
@@ -534,8 +733,8 @@ describe("operation input/output round trips", () => {
     });
     expect(parsed.workers?.[1]?.protocol?.worker).toEqual({ min: 3, max: 3 });
     expect(parsed.workers?.[0]?.host?.tools[0]?.name).toBe("emulator");
-    expect(parsed.devices[0]?.workerId).toBe("wrk_1");
-    expect(parsed.leases[0]?.workerId).toBe("wrk_1");
+    expect(parsed.devices?.[0]?.workerId).toBe("wrk_1");
+    expect(parsed.leases?.[0]?.workerId).toBe("wrk_1");
   });
 
   it("catalog.get: round-trips a gateway's per-entry worker annotations (ADR 0005 §21)", () => {
@@ -807,6 +1006,10 @@ describe("operation input/output round trips", () => {
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       warmPool: {
+        enabled: true,
+        maxConcurrentBoots: 1,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [],
         quarantine: {
           maxRetries: 1,
           retryBackoffMs: 1,
@@ -844,8 +1047,79 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
   });
 
+  it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
+    const targets = [
+      { count: 2, mode: "slim", model: "iPhone 17", osVersion: ">=18", platform: "ios" },
+      { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
+    ];
+    const warmPool = { targets, maxConcurrentBoots: 3 };
+    const output = OPERATIONS["config.get"].output;
+    const base = {
+      mode: "worker",
+      gateway: {
+        disconnectedRetentionMs: 1,
+        execTimeoutMs: 1,
+        leaseRequestTimeoutMs: 1,
+        routing: "warm-then-free",
+      },
+      capacity: { strategy: "fixed", config: { maxRunning: 4 } },
+      downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
+      idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      lease: {
+        defaultTtlMs: 1,
+        maxTtlMs: 1,
+        identity: { ios: "fresh", android: "reusable" },
+        requestRetentionMs: 1,
+        maxRequestRecords: 1,
+      },
+      exec: { timeoutMs: 1 },
+      diskPressure: { freeBytesThreshold: 1 },
+      eventBuffer: { capacity: 1 },
+      log: { level: "info", rotateBytes: 1 },
+      http: { enabled: false, host: "127.0.0.1", port: 4700 },
+      health: {
+        enabled: true,
+        probeIntervalMs: 1,
+        stableObservations: 1,
+        maxRecoveryAttempts: 1,
+        recoveryBackoffMs: 1,
+        maxConcurrentRecoveries: 1,
+      },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      android: {
+        defaultModels: {},
+        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
+      },
+      stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
+    };
+    const config = (pool: object) => ({
+      ...base,
+      warmPool: {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        quarantine: {
+          maxRetries: 1,
+          retryBackoffMs: 1,
+          retryBackoffMultiplier: 1,
+          maxRetryBackoffMs: 1,
+        },
+        ...pool,
+      },
+    });
+
+    expect(output.parse(config(warmPool)).warmPool).toMatchObject(warmPool);
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], platform: "tvos" }] })),
+    ).toThrow();
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], mode: "lean" }] })),
+    ).toThrow();
+    expect(() => output.parse(config({ maxConcurrentBoots: 1 }))).toThrow();
+    expect(() => output.parse(config({ targets: [] }))).toThrow();
+  });
+
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {
-    const shape = OPERATIONS["status.get"].output.shape.capacity.shape.ramBudget;
+    const shape = OPERATIONS["status.get"].output.shape.capacity.unwrap().shape.ramBudget;
     const budget = { limitBytes: 8, overLimit: false, usedBytes: 1 };
 
     expect(shape.parse(budget)).toEqual(budget);

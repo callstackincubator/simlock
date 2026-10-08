@@ -32,6 +32,7 @@ import {
   platformSchema,
   proposalSchema,
   statusCapacitySchema,
+  statusWarmPoolSchema,
   statusDeviceSchema,
   statusInstallsSchema,
   statusLeaseSchema,
@@ -98,9 +99,19 @@ export const statusGet = defineOperation({
     // the caller leases. `statusDeviceSchema`, not `deviceRecordSchema`, is what keeps
     // `driverData` and reclamation/recovery bookkeeping off this response; see its doc comment
     // in schemas.ts. `list.get` (admin-only) is the operation that returns the full record.
-    devices: z.array(statusDeviceSchema),
-    leases: z.array(statusLeaseSchema),
-    capacity: statusCapacitySchema,
+    //
+    // `devices`, `leases`, `capacity` and `queueDepth` are absent while `daemon.health` is
+    // `starting`: the registry has not been checked yet, so a reader sees a daemon that says
+    // it is starting and what host it runs on, and nothing it could mistake for an empty fleet.
+    devices: z.array(statusDeviceSchema).optional(),
+    leases: z.array(statusLeaseSchema).optional(),
+    capacity: statusCapacitySchema.optional(),
+    /**
+     * The warm pool as its last pass left it: whether it is on, the reserve, and each kind of device
+     * the targets name with how many are ready and booting and why it is short. Absent only while `daemon.health`
+     * is `starting`, like the fields above: a started worker and a gateway always send it.
+     */
+    warmPool: statusWarmPoolSchema.optional(),
     /**
      * What this daemon *is*, as opposed to what it currently holds: its health, and its run
      * mode (ADR 0005 §1). `mode` is the one field that tells a client which kind of daemon
@@ -123,7 +134,7 @@ export const statusGet = defineOperation({
      * never makes `status.get` wait.
      */
     host: hostFactsSchema,
-    queueDepth: z.number(),
+    queueDepth: z.number().optional(),
     /**
      * ADR 0010 §3: the component installs waiting or running, the oldest first. A worker always
      * sends it, empty when nothing is installing; a gateway lists its connected workers'
@@ -159,6 +170,17 @@ export const statusGet = defineOperation({
  * `imageTag` names the type of installed image the device is created from, as the catalog lists
  * it; a request that names one never downloads, and a platform without image types refuses it.
  */
+/**
+ * The lease ID a requester may choose (ADR 0020 §1): ASCII, 1 to 64 characters, starting with a
+ * letter or digit, then letters, digits, `-` and `_`, case-sensitive. It has no `.`, so it can
+ * never look like a gateway's `<worker>.<lease ID>`. The one definition: a gateway reads it too,
+ * to decide which reported lease it names bare.
+ */
+export const LEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/** `leaseId` on the wire: a string of that shape, for every transport that takes one. */
+export const leaseIdSchema = z.string().regex(LEASE_ID_PATTERN);
+
 const leaseRequestBaseSchema = z
   .object({
     /**
@@ -185,7 +207,7 @@ const leaseRequestBaseSchema = z
      * `BAD_REQUEST` for a held lease). Omitting it means `lease.defaultTtlMs`; a value above
      * `lease.maxTtlMs` is `BAD_REQUEST`, enforced by the dispatcher's handler rather than here
      * because the cap is a daemon config value this module deliberately cannot see. Wired
-     * through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by that same handler.
+     * through to `LeaseRequestOptions.ttlMs` (src/leasing/wait-queue.ts) by that same handler.
      */
     ttlMs: z.number().finite().positive().optional(),
     /**
@@ -204,11 +226,20 @@ const leaseRequestBaseSchema = z
      * Makes this request repeatable: the daemon stores it under `(requesterId, idempotencyKey)`,
      * and the same request sent again returns the stored result instead of a second lease --
      * the way a client that lost its answer, to a disconnect or a daemon restart, gets it back.
-     * The same key naming a different device is `IDEMPOTENCY_CONFLICT`; a repeat from another
+     * The same key naming a different device, or a different `leaseId` (a missing one on either
+     * side counts as different), is `IDEMPOTENCY_CONFLICT`; a repeat from another
      * principal is `FORBIDDEN`. Optional: a request without one is still stored, it just cannot
      * be repeated. Bounded because the daemon stores it.
      */
     idempotencyKey: z.string().min(1).max(200).optional(),
+    /**
+     * ADR 0020: the ID the granted lease gets, instead of one simlock generates. The requester
+     * guarantees it is unique for all time; simlock refuses one an active lease or a waiting
+     * request holds (`LEASE_ID_TAKEN`) and keeps no record of IDs already used. A request
+     * without one works as before. Like `idempotencyKey` it is an option of the request, not
+     * part of the device it names. Anything outside the pattern is `BAD_REQUEST`.
+     */
+    leaseId: leaseIdSchema.optional(),
   })
   .strict();
 
@@ -235,7 +266,7 @@ export function refuseModelWithClass(
 }
 
 /** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
-export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {

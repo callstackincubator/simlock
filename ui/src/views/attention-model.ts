@@ -57,7 +57,7 @@ function workerItems(worker: WorkerView): AttentionItem[] {
 }
 
 function deviceItems(worker: WorkerView): AttentionItem[] {
-  return worker.devices.flatMap((device): AttentionItem[] => {
+  return (worker.devices ?? []).flatMap((device): AttentionItem[] => {
     const key = (condition: string) => `${worker.id}/${device.id}/${condition}`;
     if (device.state === "quarantined") {
       return [{ condition: "quarantined", device, key: key("quarantined"), worker }];
