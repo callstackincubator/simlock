@@ -922,8 +922,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       let destroyed = true;
       try {
-        destroyed =
-          (await this.options.lifecycle.destroy(device, "lease-engine", "cleanup")) !== undefined;
+        // `undefined` means the device is no longer this waiter's (another boot claimed it, or it
+        // was deleted or leased), so its reservation is free to go. Only a throw keeps it.
+        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         this.#logFailure(
           "destroying a device that failed to boot failed",

@@ -13,6 +13,8 @@ import { promiseState } from "../test-support/promise-state.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import {
   CapacityCoordinator,
+  capacityDevice,
+  capacityDevices,
   type Config,
   DeviceOperationClaims,
   DeviceProvisioner,
@@ -35,7 +37,11 @@ import {
 } from "../core/index.js";
 import { createCapacityStrategy, readyTransitionUpdate } from "../core/testing.js";
 import { FakeDriver } from "../core/testing.js";
-import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
+import {
+  LeaseAcquisitionCoordinator,
+  type LeaseAcquisitionCoordinatorOptions,
+  NoCapacityError,
+} from "./lease-acquisition-coordinator.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import {
   IdempotencyConflictError,
@@ -127,6 +133,15 @@ async function createHarness(
     readonly drivers?: readonly Driver[];
     /** Free disk the installer sees; unlimited unless a test says otherwise. */
     readonly freeDiskBytes?: number;
+    /** Stands between the coordinator and the real lifecycle, when a test interleaves other work. */
+    readonly lifecycle?: (
+      lifecycle: ManagedDeviceLifecycle,
+      collaborators: {
+        readonly capacity: CapacityCoordinator;
+        readonly claims: DeviceOperationClaims;
+        readonly registry: Registry;
+      },
+    ) => LeaseAcquisitionCoordinatorOptions["lifecycle"];
     readonly logger?: Logger;
     readonly maxDevices?: number;
     readonly maxRunning?: number;
@@ -231,7 +246,7 @@ async function createHarness(
     eventBus: bus,
     idGenerator,
     leases,
-    lifecycle,
+    lifecycle: options.lifecycle?.(lifecycle, { capacity, claims, registry }) ?? lifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     modelPreferences: options.preferences ?? {},
     planner: new AcquisitionPlanner(capacity, claims),
@@ -1546,7 +1561,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
   });
 
-  it("A failed boot whose device the destroy can no longer claim leaves that device fenced under its waiter.", async () => {
+  it("A failed boot whose device the destroy can no longer claim frees the waiter's running slot and leaves no fence.", async () => {
     const harness = await createHarness();
     const shutdown = await seedShutdown(harness);
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
@@ -1567,10 +1582,31 @@ describe("LeaseAcquisitionCoordinator", () => {
       harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
 
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+  });
+
+  it("A failed boot whose destroy throws keeps the waiter's running slot and fences the device under its waiter.", async () => {
+    const harness = await createHarness({
+      lifecycle: (lifecycle) => ({
+        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        dispose: (...args) => lifecycle.dispose(...args),
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
+      }),
+    });
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
     expect(harness.claims.claim(shutdown.id)).toEqual({
       kind: "boot",
       owner: expect.stringMatching(/^req_/),
     });
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(1);
   });
 
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
@@ -1595,6 +1631,55 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
+  });
+  it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
+    // The warm pool's boot reserves its own slot and claims the device in one decision. Here it
+    // lands after the failed boot has released its claim and before the destroy claims the device.
+    let raced = false;
+    let warmBoot: { release(): void } | undefined;
+    const harness = await createHarness({
+      maxRunning: 2,
+      lifecycle: (lifecycle, { capacity, claims, registry }) => ({
+        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        dispose: (...args) => lifecycle.dispose(...args),
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: (device, initiator, operation, claim) => {
+          const reservation = capacity.tryReserveBoot(
+            capacityDevice(device),
+            capacityDevices(registry.snapshot.devices),
+          );
+          const warmClaim = claims.tryClaim(device.id, "boot");
+          raced = reservation.ok && warmClaim !== undefined;
+          warmBoot = {
+            release: () => {
+              warmClaim?.release();
+              if (reservation.ok) reservation.reservation.release();
+            },
+          };
+          return lifecycle.destroy(device, initiator, operation, claim);
+        },
+      }),
+    });
+    await seedShutdown(harness);
+    // Call 1 is seedShutdown's own boot; call 2 is the waiter's.
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+    expect(raced).toBe(true);
+
+    // The warm pool's boot ends and gives back its own claim and slot.
+    warmBoot?.release();
+    await settle();
+
+    const running = harness.capacity.runningCapacity(
+      capacityDevices(harness.registry.snapshot.devices),
+    );
+    expect({ global: running.global.reserved, ios: running.ios.reserved }).toEqual({
+      global: 0,
+      ios: 0,
+    });
   });
 });
 
