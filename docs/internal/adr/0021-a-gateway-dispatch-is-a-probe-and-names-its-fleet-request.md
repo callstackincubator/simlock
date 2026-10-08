@@ -13,7 +13,12 @@
     failed on its worker".
 
   The rest of §6 stands: request facts come from the gateway's own events,
-  device facts from relayed ones.
+  device facts from relayed ones. It also narrows [ADR
+  0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) §6's
+  "A worker's own events carry no marker ... its `simlock events` shows
+  what it always showed". A probe's events on a worker carry
+  `fleetRequestId`, and a refused probe shows as `lease.declined`. A
+  worker's events for its local requests are unchanged.
 - **Depends on:** [ADR 0005](0005-gateway-and-worker-modes.md) requirements
   11, 12, 27a and 30, [ADR
   0009](0009-gateway-routing-is-a-list-of-stages.md) §5, [ADR
@@ -91,14 +96,19 @@ follows that narrower rule from the start. The field is not part of the MCP
 lease tool's input or the HTTP lease body.
 
 The gateway sets it to its own request id on every dispatch. A request that
-carries it is a **probe**. A probe must carry `noWait: true`, and one
-without it is refused with `BAD_REQUEST` before it is stored. A probe is
+carries it is a **probe**. A probe must carry `noWait: true`. The checks run
+in the handler, in this order, before anything is stored:
+1. the session check, which answers `FORBIDDEN`;
+2. the `noWait` check, which answers `BAD_REQUEST`.
+
+So a caller that may not send the field always gets `FORBIDDEN`. A probe is
 never queued on the worker. Where the worker would queue a request (after a
 second failed provision, for example), it declines a probe instead, with
 reason `no-wait`, and answers `NO_CAPACITY`.
 
-The RPC answer to a probe is unchanged, so the gateway's walk works as
-today (requirement 11, ADR 0009 §5).
+Apart from that second-failure case, which today queues and answers
+nothing, the RPC answer to a probe is unchanged. So the gateway's walk works
+as today (requirement 11, ADR 0009 §5).
 
 ### 2. A worker declines a probe, and never rejects one
 
@@ -204,8 +214,21 @@ On a worker, the figures separate the two kinds of request:
 - **`probes`** counts the ones that do.
 - **Grants, source and held time** count both kinds, since both use the
   worker's devices.
-- **`declined`** counts the worker's `lease.declined` events. A probe never
-  gives a wait sample on the worker; its wait is the gateway's.
+- **`declined`** counts the worker's `lease.declined` events.
+- **Wait and turnaround.** A probe gives no sample of either on the worker:
+  both belong to the gateway's request.
+- **Requester rows.** A probe counts under its namespaced `gw:` requester in
+  `granted` and held time, never in `requests` or `rejected`.
+
+**On a gateway, per worker.** A worker's entry has its device facts:
+provisioning, boots, capacity and incidents. It also covers the fleet
+requests that ended on it, with their waits and turnarounds:
+- those its `request.granted` names;
+- its `worker-failed` rejections.
+
+It has its `declined` events too. A fleet request that ended any other way
+(a gateway-reason rejection, `daemon-restarted`, or still open) counts in
+the totals and per platform, under no worker.
 
 ### 6. Protocol +1, and an older worker is incompatible
 
