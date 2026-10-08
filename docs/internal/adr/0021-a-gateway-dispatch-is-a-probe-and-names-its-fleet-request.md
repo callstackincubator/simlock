@@ -177,9 +177,10 @@ that start and counts as rejected `daemon-restarted`. Any other request with nei
 **Wait.** A fleet request's wait runs from its `lease.requested` to its
 outcome, both by the gateway's clock.
 
-**Device facts.** These come from the relayed `lease.granted` with that
-`workerId` and `workerLeaseId`: the grant source, and held time to that
-lease's relayed release or expiry, all by the worker's clock.
+**Device facts.** These come from the relayed `lease.granted` whose
+`workerId` is the `request.granted`'s `worker` and whose `leaseId` is its
+`workerLeaseId`. They are the grant source, and held time to that lease's
+relayed release or expiry, all by the worker's clock.
 
 - If the relayed grant is missing, the grant still counts, with source
   `unknown`, and gives no held sample.
