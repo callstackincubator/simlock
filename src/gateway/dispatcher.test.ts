@@ -778,20 +778,6 @@ describe("GatewayDispatcher", () => {
       },
       "gateway",
     );
-    eventBus.emit(
-      "request.dispatched",
-      {
-        model: "m",
-        platform: "ios",
-        queuedMs: 0,
-        reason: "warm-hit",
-        requestId: "req_1",
-        requesterId: "agent-1",
-        stage: "warm-hit",
-        workerId: "wrk_1",
-      },
-      "gateway",
-    );
     eventBus.republish({
       event: "lease.granted",
       id: "evt_worker_1",
@@ -807,9 +793,15 @@ describe("GatewayDispatcher", () => {
       timestamp: 1_000,
     });
 
+    eventBus.emit(
+      "request.granted",
+      { leaseId: "gwl_1", requestId: "req_1", worker: "wrk_1", workerLeaseId: "l1" },
+      "gateway",
+    );
+
     const usage = await dispatcher.dispatch("usage.get", { from: 0, to: 600_000 }, session());
 
-    expect(usage.totals).toMatchObject({ granted: 1, requests: 1 });
+    expect(usage.totals).toMatchObject({ bySource: { warm: 1 }, granted: 1, requests: 1 });
     expect(usage.workers).toMatchObject([{ granted: 1, id: "wrk_1", label: "mac-mini-1" }]);
   });
 
