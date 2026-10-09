@@ -3971,6 +3971,26 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
     });
   });
 
+  it("declines, rather than rejects, a request carrying fleetRequestId whose wait in the queue times out", async () => {
+    // The dispatcher only lets a probe in with noWait, so none is ever queued; this reaches the
+    // queue's timeout site directly, which applies the same rule as every other.
+    const harness = await createHarness();
+    await harness.engine.request(request, holder);
+    const waiting = harness.engine.request(request, {
+      ...probeOf("gw:late", { noWait: false }),
+      timeoutMs: 10,
+    });
+    await flush();
+    harness.clock.advance(10);
+
+    expect(await settledOrPending(waiting)).toBeInstanceOf(QueueTimeoutError);
+
+    expect(payloads(harness, "lease.declined")).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "timeout" }),
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
   describe("a provision that fails twice", () => {
     function failingTwice() {
       const driver = new FakeDriver({
