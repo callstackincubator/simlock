@@ -1054,7 +1054,8 @@ export class FleetLeaseCoordinator {
    *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
    *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
    * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
-   *   `SimlockError`, since it never reached the worker at all -- forwarded as-is;
+   *   `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
+   *   answer (the request itself did reach the worker and keeps running there) -- forwarded as-is;
    * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
    *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
    *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
