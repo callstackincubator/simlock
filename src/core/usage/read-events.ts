@@ -293,7 +293,6 @@ class Reader {
   /** A worker's `lease.declined`, or one a gateway's worker relayed: an event, never a request. */
   #declined(seen: Seen): void {
     if (!seen.within || seen.worker === undefined) return;
-    if (this.options.fleet && seen.own) return;
     this.#declines.push({ platform: requestPlatform(seen.payload), worker: seen.worker });
     this.#workers.add(seen.worker);
   }
