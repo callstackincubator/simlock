@@ -379,6 +379,7 @@ export class ScriptedWorkerClient {
 
   /** #118: `FleetLeaseCoordinator#attempt` forwards every dispatch through this, always with
    * `noWait: true` (ADR §12) -- scripted per `requestLeaseQueue`/`requestLeaseDefault` above. */
+  // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real lease.request.
   async requestLease(
     input: LeaseRequestInput,
     options: RequestLeaseOptions = {},

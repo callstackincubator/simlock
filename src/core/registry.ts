@@ -1251,6 +1251,7 @@ function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
 }
 
 /** The fields every lease-request record has, whatever its state. */
+// fallow-ignore-next-line complexity -- one type guard, one check per field of the record.
 function hasLeaseRequestFields(value: unknown): value is Record<string, unknown> & {
   readonly createdAt: number;
   readonly fleetRequestId?: string;
