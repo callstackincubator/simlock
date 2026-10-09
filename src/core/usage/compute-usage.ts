@@ -304,14 +304,15 @@ type Requester = UsageOutput["requesters"][number];
 /** `entry` with `fact` counted in it: a request made, a grant and the time it was held, a rejection.
  * A probe counts only as a grant and its held time. */
 function countRequest(entry: Requester, fact: RequestFact): Requester {
-  const { outcome } = fact;
   const probe = fact.probe === true;
+  const kind = fact.outcome?.kind;
   return {
     ...entry,
-    granted: entry.granted + (outcome?.kind === "granted" ? 1 : 0),
-    heldTotalMs: entry.heldTotalMs + (outcome?.kind === "granted" ? (fact.heldMs ?? 0) : 0),
-    rejected: entry.rejected + (outcome?.kind === "rejected" && !probe ? 1 : 0),
-    requests: entry.requests + (fact.requestedAt === undefined || probe ? 0 : 1),
+    granted: entry.granted + Number(kind === "granted"),
+    // Only a granted request has a held time.
+    heldTotalMs: entry.heldTotalMs + (fact.heldMs ?? 0),
+    rejected: entry.rejected + Number(kind === "rejected" && !probe),
+    requests: entry.requests + Number(fact.requestedAt !== undefined && !probe),
   };
 }
 
