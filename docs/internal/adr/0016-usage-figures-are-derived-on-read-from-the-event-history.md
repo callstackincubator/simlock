@@ -140,18 +140,19 @@ grants, held time, provisioning, boots, capacity and device incidents, each
 attributed to its worker. A relayed `lease.requested`, `lease.queued` or
 `queue.changed` is not counted; the gateway forwards every request as
 `noWait`, so a worker's queue never holds a fleet request. A relayed
-`lease.rejected` counts only when it settles a request by the rule below. The
-gateway emits no rejection of its own for a request that failed on its worker.
+`lease.rejected` counts only when it settles a dispatched request: it comes
+from the worker that request went to, for its namespaced requester, at or
+after the dispatch, and carries the worker's reason. The gateway emits no
+rejection of its own for a request that failed on its worker.
 
-A fleet request's outcome is the first relayed `lease.granted` or
-`lease.rejected` for its namespaced requester at or after the gateway's own
-`lease.requested` for it and before the gateway's next `lease.requested` for
-that requester. `request.dispatched` names the worker when it exists, and
-otherwise the relayed event's `workerId` does. A rejection carries the
-worker's reason. The grant may arrive before `request.dispatched`: a warm
-device is granted before the dispatch answer reaches the gateway. The core
-allows one open request per requester, so within those bounds the match is
-unique, and a request with no outcome in them is open.
+A fleet request is joined to its outcome through `request.dispatched`: the
+gateway's request id names the worker and the requester, and the first
+relayed `lease.granted` or `lease.rejected` from that worker for the
+namespaced requester at or after the dispatch, and before the gateway's
+next `request.dispatched` or `lease.requested` for the same requester, is
+that request's outcome. The core allows one open request per requester, so
+within those bounds the match is unique, and a request with no outcome in
+them is open.
 
 The answer has fleet totals and one entry per worker. A worker answers the
 same shape as a fleet of one (ADR 0012): totals, and one entry for itself.
