@@ -802,14 +802,15 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(requestState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
-    expect(events).toEqual([]);
+    // The timeout is the request's end, so the gateway records it (ADR 0021 §4) -- and only it.
+    expect(events).toEqual(["lease.rejected"]);
 
     // The worker, unaware this gateway already gave up, pushes progress on the RPC it still
     // thinks is live -- exactly as `client.exec`'s own late `onOutput` chunk does in H4's test.
     client.lastRequestLeaseOptions?.onProgress?.({ etaMs: 5_000, stage: "provisioning" });
     await tick();
 
-    expect(events).toEqual([]);
+    expect(events).toEqual(["lease.rejected"]);
   });
 
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {

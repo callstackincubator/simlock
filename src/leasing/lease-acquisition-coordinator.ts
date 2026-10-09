@@ -52,6 +52,7 @@ import {
   type WaitingDemand,
 } from "../core/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
+import { emitLeaseRefusal } from "./lease-refusal.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import {
@@ -235,13 +236,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         if (replay !== undefined) return { replay };
         const requestId = newLeaseRequestId(this.options.idGenerator);
         if (this.#admissionClosed) {
-          this.options.eventBus.emit(
-            "lease.rejected",
+          emitLeaseRefusal(
+            this.options.eventBus,
             {
               requestId,
               requester: options.requesterId,
               requestSpec: request,
               reason: "killed",
+              fleetRequestId: options.fleetRequestId,
             },
             "lease-acquisition-coordinator",
           );
@@ -254,13 +256,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           activeLease !== undefined ||
           this.options.queue.hasPendingRequester(options.requesterId)
         ) {
-          this.options.eventBus.emit(
-            "lease.rejected",
+          emitLeaseRefusal(
+            this.options.eventBus,
             {
               requestId,
               requester: options.requesterId,
               requestSpec: request,
               reason: "already-leased",
+              fleetRequestId: options.fleetRequestId,
             },
             "lease-acquisition-coordinator",
           );
@@ -280,6 +283,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
             requestSpec: request,
             requester: options.requesterId,
             waitPolicy: options.noWait ? "no-wait" : "wait",
+            ...(options.fleetRequestId === undefined
+              ? {}
+              : { fleetRequestId: options.fleetRequestId }),
           },
           "lease-acquisition-coordinator",
         );
@@ -313,13 +319,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     ) {
       return;
     }
-    this.options.eventBus.emit(
-      "lease.rejected",
+    emitLeaseRefusal(
+      this.options.eventBus,
       {
         requestId,
         requester: options.requesterId,
         requestSpec: request,
         reason: "lease-id-taken",
+        fleetRequestId: options.fleetRequestId,
       },
       "lease-acquisition-coordinator",
     );
@@ -332,13 +339,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#maintenanceDepth += 1;
       this.#admissionClosed = true;
       for (const waiter of this.options.queue.cancelAll(() => new NukeCancelledError())) {
-        this.options.eventBus.emit(
-          "lease.rejected",
+        emitLeaseRefusal(
+          this.options.eventBus,
           {
             requestId: waiter.id,
             requester: waiter.options.requesterId,
             requestSpec: waiter.request,
             reason: "killed",
+            fleetRequestId: waiter.options.fleetRequestId,
           },
           "lease-acquisition-coordinator",
         );
@@ -725,19 +733,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      const retry = await this.options.decisions.run(async () => {
-        if (waiter.state === "rejected") return false;
+      const next = await this.options.decisions.run(async () => {
+        if (waiter.state === "rejected") return "done";
         waiter.failures += 1;
         if (waiter.failures === 1) {
           this.options.queue.markNew(waiter);
-          return true;
+          return "retry";
+        }
+        // ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
+        // caller (the gateway) walks on to another worker.
+        if (waiter.options.fleetRequestId !== undefined) {
+          this.#reject(waiter, new NoCapacityError(), "no-wait");
+          return "declined";
         }
         this.#enqueue(waiter);
-        return false;
+        return "done";
       });
-      if (retry) {
+      if (next === "retry") {
         this.#driving.delete(waiter);
         await this.#drive(waiter);
+      } else if (next === "declined") {
+        this.#wakeQueue();
       }
       return;
     }
@@ -808,6 +824,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
       ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
+      ...(waiter.options.fleetRequestId === undefined
+        ? {}
+        : { fleetRequestId: waiter.options.fleetRequestId }),
     });
     this.options.queue.resolve(waiter, granted);
   }
@@ -1029,13 +1048,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       | "cancelled",
   ): void {
     if (this.options.queue.reject(waiter, error)) {
-      this.options.eventBus.emit(
-        "lease.rejected",
+      emitLeaseRefusal(
+        this.options.eventBus,
         {
           requestId: waiter.id,
           requester: waiter.options.requesterId,
           requestSpec: waiter.request,
           reason,
+          fleetRequestId: waiter.options.fleetRequestId,
         },
         "lease-acquisition-coordinator",
       );

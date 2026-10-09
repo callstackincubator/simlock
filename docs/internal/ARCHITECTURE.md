@@ -591,7 +591,11 @@ mean exactly what they mean on a worker.
 
 **Dispatch** runs whenever the queue or any worker view changes. For each
 queued request, oldest first, the routing policy picks a worker and the
-gateway sends it `lease.request` with **`noWait: true`**:
+gateway sends it `lease.request` with **`noWait: true`** and its own request id
+as **`fleetRequestId`**, which makes the dispatch a probe (ADR 0021 §1): the
+worker declines a probe it refuses (`lease.declined`) rather than rejecting
+it, never queues it, and names the id on its lease events. Only the gateway's
+uplink may send the field:
 
 - the request becomes `dispatched` on either of two signals from that
   worker: the grant itself, or the first `progress` push for it
@@ -616,11 +620,18 @@ gateway sends it `lease.request` with **`noWait: true`**:
   changes), re-reads its catalog, and returns the request to the walk. The
   queue deadline is not reset. When the table over the remaining views no
   longer says route or wait, the request is rejected with the last such
-  refusal, the worker's own code and message. The worker already emitted its
-  own `lease.rejected`, so the gateway emits none, unless the request had
-  entered the gateway queue: its `lease.queued` needs a terminal fact, so the
-  gateway emits `lease.rejected` with reason `unresolvable-spec`. After a progress push, and for any other
-  code, a failure is final (ADR 0009 §5);
+  refusal, the worker's own code and message. The worker only declined the
+  dispatch (`lease.declined`), so the gateway emits `lease.rejected` with
+  reason `unresolvable-spec`, whether or not the request had entered the
+  gateway queue (ADR 0021 §4). After a progress push, and for any other code, a
+  failure is final (ADR 0009 §5), and the gateway records it as
+  `lease.rejected` with reason `worker-failed`, the `code` the caller got and
+  the `worker` it failed on;
+- the gateway records the end of every fleet request itself (ADR 0021 §4):
+  `request.granted` when it hands a grant to its caller, `lease.rejected` for
+  any other ending while it runs. A request that moves on from one worker to
+  another leaves a `lease.declined` on each worker that refused it, and no
+  rejection;
 - a request a busy fleet cannot take yet is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
   capacity frees. A request **no worker can serve at all** is not passed

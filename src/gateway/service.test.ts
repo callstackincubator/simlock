@@ -1096,6 +1096,28 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("marks a worker one protocol version behind the gateway incompatible (ADR 0021 §6: it would refuse fleetRequestId)", async () => {
+    const previous = {
+      min: PROTOCOL_VERSION_RANGE.max - 1,
+      max: PROTOCOL_VERSION_RANGE.max - 1,
+    };
+    expect(PROTOCOL_VERSION_RANGE.max).toBe(22);
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+
+    expect(worker.calls).toEqual(["status.get"]);
+
+    await harness.service.stop();
+  });
+
   it("a worker advertising protocol 10 is incompatible on the gateway and nothing it pushes reaches the gateway's bus", async () => {
     const worker10 = { min: 10, max: 10 };
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, worker10)).toBeUndefined();
