@@ -920,6 +920,7 @@ describe("Dispatcher: ownership", () => {
         ]) {
           await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
             code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
           });
         }
 
@@ -937,7 +938,10 @@ describe("Dispatcher: ownership", () => {
           probeInput,
           session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
         ),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("noWait"),
+      });
 
       expect(registry.leaseRequests()).toEqual([]);
     });

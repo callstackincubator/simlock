@@ -392,9 +392,7 @@ export class ScriptedWorkerClient {
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
-    // Awaited only when it returns a promise, so a synchronous hook adds no turn to the grant.
-    const pending = outcome.beforeGrant?.();
-    if (pending !== undefined) await pending;
+    await outcome.beforeGrant?.();
     return outcome.grant;
   }
 

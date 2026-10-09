@@ -733,27 +733,25 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      const next = await this.options.decisions.run(async () => {
-        if (waiter.state === "rejected") return "done";
+      const retry = await this.options.decisions.run(async () => {
+        if (waiter.state === "rejected") return false;
         waiter.failures += 1;
         if (waiter.failures === 1) {
           this.options.queue.markNew(waiter);
-          return "retry";
+          return true;
         }
         // ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
         // caller (the gateway) walks on to another worker.
         if (waiter.options.fleetRequestId !== undefined) {
           this.#reject(waiter, new NoCapacityError(), "no-wait");
-          return "declined";
+          return false;
         }
         this.#enqueue(waiter);
-        return "done";
+        return false;
       });
-      if (next === "retry") {
+      if (retry) {
         this.#driving.delete(waiter);
         await this.#drive(waiter);
-      } else if (next === "declined") {
-        this.#wakeQueue();
       }
       return;
     }

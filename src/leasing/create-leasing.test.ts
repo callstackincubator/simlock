@@ -3948,14 +3948,14 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
     await harness.engine.request(request, probeOf("gw:one"));
     await harness.engine.request(request, { ownerId: "local", requesterId: "local" });
 
-    expect(payloads(harness, "lease.requested")).toEqual([
-      expect.objectContaining({ fleetRequestId: "req_gw1", requester: "gw:one" }),
-      expect.not.objectContaining({ fleetRequestId: expect.anything() }),
-    ]);
-    expect(payloads(harness, "lease.granted")).toEqual([
-      expect.objectContaining({ fleetRequestId: "req_gw1", requester: "gw:one" }),
-      expect.not.objectContaining({ fleetRequestId: expect.anything() }),
-    ]);
+    const [requestedProbe, requestedLocal] = payloads(harness, "lease.requested");
+    const [grantedProbe, grantedLocal] = payloads(harness, "lease.granted");
+    expect(requestedProbe).toMatchObject({ fleetRequestId: "req_gw1", requester: "gw:one" });
+    expect(grantedProbe).toMatchObject({ fleetRequestId: "req_gw1", requester: "gw:one" });
+    expect(requestedLocal).toMatchObject({ requester: "local" });
+    expect(requestedLocal).not.toHaveProperty("fleetRequestId");
+    expect(grantedLocal).toMatchObject({ requester: "local" });
+    expect(grantedLocal).not.toHaveProperty("fleetRequestId");
   });
 
   it("answers a declined probe with the error code it answered before, NO_CAPACITY for no room and the already-leased error for an existing lease", async () => {

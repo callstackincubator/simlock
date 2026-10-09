@@ -899,6 +899,7 @@ describe("GatewayDispatcher", () => {
         ]) {
           await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
             code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
           });
         }
       },
