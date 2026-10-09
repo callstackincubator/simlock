@@ -228,7 +228,12 @@ describe("EventHistory", () => {
 
     const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
 
-    expect(read).toEqual({ events: [early, late], oldestTs: 1_000, requestedBefore: new Set() });
+    expect(read).toEqual({
+      answeredBefore: new Set(),
+      events: [early, late],
+      oldestTs: 1_000,
+      requestedBefore: new Set(),
+    });
     expect(await events.replay({ carry: ["queue.changed"], sinceTs: 2_000 })).toEqual([
       early,
       late,
@@ -437,6 +442,41 @@ describe("readEventFile", () => {
     const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
 
     expect([...read.requestedBefore]).toEqual([]);
+  });
+
+  it("reports the requestId of each lease.granted, lease.rejected and request.granted at or before sinceTs as answered, and none from after it or from other events", async () => {
+    const answer = (seq: number, timestamp: number, event: string, requestId: string) =>
+      ({ ...envelope(seq, timestamp), event, payload: { requestId } }) as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        answer(1, 100, "lease.granted", "granted"),
+        answer(2, 110, "lease.rejected", "rejected"),
+        answer(3, 120, "request.granted", "handed"),
+        answer(4, 130, "lease.declined", "declined"),
+        answer(5, 140, "lease.requested", "asked"),
+        answer(6, 200, "lease.granted", "edge"),
+        answer(7, 300, "lease.granted", "later"),
+        { ...envelope(8, 150), event: "lease.granted", payload: {} } as EventEnvelope,
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.answeredBefore].sort()).toEqual(["edge", "granted", "handed", "rejected"]);
+    expect([...read.requestedBefore]).toEqual(["asked"]);
+  });
+
+  it("reports the requests answered before sinceTs from the ring too", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("lease.rejected", { requestId: "old", requester: "a" } as never, "lease");
+    clock.advance(2_000);
+    bus.emit("lease.rejected", { requestId: "new", requester: "a" } as never, "lease");
+
+    const read = await events.read({ carry: [], sinceTs: 2_000 });
+
+    expect([...read.answeredBefore]).toEqual(["old"]);
   });
 
   it("carries events whose worker and requester run together into the same text as two different ones", async () => {

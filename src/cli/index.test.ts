@@ -5724,6 +5724,7 @@ function usageAnswer(
   const figures = {
     boot: samples,
     bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
     failures: { byEvent: {} },
     granted: 0,
     held: samples,

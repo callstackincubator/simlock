@@ -21,6 +21,8 @@ interface Figures {
   readonly requests: number;
   readonly granted: number;
   readonly bySource: Record<string, number>;
+  readonly declined: number;
+  readonly probes?: number;
   readonly rejected: { readonly total: number; readonly byReason: Record<string, number> };
   readonly wait: Samples;
   readonly held: Samples;
@@ -103,7 +105,7 @@ function payload(event: RecordedEvent): Record<string, string> {
 }
 
 describe("simlock stats", () => {
-  it("after a scripted run of leases against the fake driver, simlock stats --since 1h --json reports the counts a test derives independently from simlock events --since 1h", async () => {
+  it("after a scripted run of leases against the fake driver, simlock stats --json for the last hour, named with --from and --to, reports the counts a test derives independently from the same hour of simlock events", async () => {
     const env = await withDaemon({
       configOverrides: { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } },
     });
@@ -217,7 +219,7 @@ describe("simlock stats", () => {
     expect(after.totals.granted).toBe(before.totals.granted);
   });
 
-  it("simlock stats --since 1h returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
+  it("simlock stats for the last hour, named with --from and --to, returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -291,12 +293,22 @@ describe("simlock stats", () => {
     expect(fleet?.totals.requests).toBe(2);
     expect(fleet?.workers.map((worker) => worker.label).sort()).toEqual(["worker-a", "worker-b"]);
     expect(fleet?.workers.map((worker) => worker.granted)).toEqual([1, 1]);
+    // The gateway knows each grant's source from its worker, counts no probes, and its declined
+    // figure is its workers'.
+    expect(fleet?.totals.bySource.unknown).toBe(0);
+    expect(fleet?.totals).not.toHaveProperty("probes");
+    expect(fleet?.totals.declined).toBe(
+      fleet?.workers.reduce((total, worker) => total + worker.declined, 0),
+    );
 
     for (const worker of [workerA, workerB]) {
       const own = await settledStats(worker);
       expect(own.workers).toHaveLength(1);
       expect(own.totals.granted).toBe(1);
       expect(own.workers[0]?.granted).toBe(1);
+      // What the gateway sent it are probes, not the worker's requests.
+      expect(own.totals.requests).toBe(0);
+      expect(own.totals.probes).toBeGreaterThanOrEqual(1);
     }
   });
 });

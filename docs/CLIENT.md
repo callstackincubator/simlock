@@ -599,7 +599,10 @@ asked for, rounded down to a whole number of `bucketMs` at both ends, and the se
 than 200 points. A window that ends before the oldest event the history holds
 rejects with `HISTORY_NOT_KEPT`; its `details.oldestTs` is the oldest time the
 history reaches. Against a gateway the totals are the fleet's and `workers` has
-one entry for each worker.
+one entry for each worker; `bySource.unknown` counts grants whose source the
+gateway never learned, and there is no `probes`. Against a worker, `probes`
+counts the requests a gateway sent it, which `requests` leaves out. `declined`
+counts the refusals of such requests.
 
 ## One connection, no reconnect, no retry
 

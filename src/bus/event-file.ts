@@ -42,7 +42,7 @@ export async function readEventHistory(
   const seen = new Set<string>();
   const events: EventEnvelope[] = [];
   const carried = new Map<string, EventEnvelope>();
-  const requestedBefore = new Set<string>();
+  const before = { answered: new Set<string>(), requested: new Set<string>() };
   let oldestTs: number | undefined;
   // Oldest generation first, so events that tie on time and seq keep the order they were written.
   for (const line of generations.reverse().flat()) {
@@ -51,7 +51,7 @@ export async function readEventHistory(
     oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
     if (envelope.timestamp <= sinceTs) {
       keepIfCarried(carried, envelope, carry);
-      noteRequest(requestedBefore, envelope);
+      noteRequest(before, envelope);
       continue;
     }
     if (seen.has(eventKey(envelope))) continue;
@@ -61,23 +61,39 @@ export async function readEventHistory(
   return {
     events: [...carried.values(), ...events].sort(byTimeThenSeq),
     oldestTs,
-    requestedBefore,
+    answeredBefore: before.answered,
+    requestedBefore: before.requested,
   };
 }
 
 /** What a history read answers: the events, how far back it reaches, and which requests were made
- * before `sinceTs` (a rejection in the window follows its request, ADR 0016 §4). */
+ * before `sinceTs` or answered by then (a rejection in the window follows its request, ADR 0016
+ * §2). */
 export interface EventHistoryRead {
   readonly events: EventEnvelope[];
   readonly oldestTs: number | undefined;
   /** The `requestId` of every `lease.requested` at or before `sinceTs`. */
   readonly requestedBefore: ReadonlySet<string>;
+  /** The `requestId` of every `lease.granted`, `lease.rejected` and `request.granted` at or before
+   * `sinceTs`: a request made before it and in neither set was still waiting when it opened. */
+  readonly answeredBefore: ReadonlySet<string>;
 }
 
-function noteRequest(requestedBefore: Set<string>, envelope: EventEnvelope): void {
-  if (envelope.event !== "lease.requested") return;
+const ANSWERS: ReadonlySet<EventName> = new Set([
+  "lease.granted",
+  "lease.rejected",
+  "request.granted",
+]);
+
+/** Notes the request id of a `lease.requested` in `requested`, and of an answer in `answered`. */
+function noteRequest(
+  { requested, answered }: { readonly requested: Set<string>; readonly answered: Set<string> },
+  envelope: EventEnvelope,
+): void {
   const requestId = (envelope.payload as { readonly requestId?: unknown }).requestId;
-  if (typeof requestId === "string") requestedBefore.add(requestId);
+  if (typeof requestId !== "string") return;
+  if (envelope.event === "lease.requested") requested.add(requestId);
+  if (ANSWERS.has(envelope.event)) answered.add(requestId);
 }
 
 /**
@@ -239,19 +255,20 @@ export class EventHistory {
   }): EventHistoryRead {
     const ring = this.#options.bus.replay();
     const carried = new Map<string, EventEnvelope>();
-    const requestedBefore = new Set<string>();
+    const before = { answered: new Set<string>(), requested: new Set<string>() };
     let oldestTs: number | undefined;
     for (const envelope of ring) {
       oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
       if (envelope.timestamp > sinceTs) continue;
       keepIfCarried(carried, envelope, carry);
-      noteRequest(requestedBefore, envelope);
+      noteRequest(before, envelope);
     }
     const newer = ring.filter((envelope) => envelope.timestamp > sinceTs);
     return {
       events: [...carried.values(), ...newer].sort(byTimeThenSeq),
       oldestTs,
-      requestedBefore,
+      answeredBefore: before.answered,
+      requestedBefore: before.requested,
     };
   }
 }

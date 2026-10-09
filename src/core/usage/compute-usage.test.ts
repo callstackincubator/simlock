@@ -10,7 +10,7 @@ const DAY = 24 * HOUR;
 const T0 = 1_000_000_000;
 const WINDOW = { from: T0, to: T0 + HOUR };
 const WORKER: UsageOptions = { fleet: false, workers: [{ id: "self" }] };
-const FLEET: UsageOptions = { fleet: true, requesterPrefix: "gw:g1:" };
+const FLEET: UsageOptions = { fleet: true };
 
 let sequence = 0;
 
@@ -99,6 +99,34 @@ const capacity = (
 
 const queueChanged = (ts: number, depth: number, extra: Record<string, unknown> = {}) =>
   at(ts, "queue.changed", { depth, ...extra });
+
+/** The gateway's own record that it handed a fleet request's grant to its caller (ADR 0021 §4). */
+const handed = (ts: number, requestId: string, worker: string, workerLeaseId: string) =>
+  at(ts, "request.granted", { leaseId: `gw-${workerLeaseId}`, requestId, worker, workerLeaseId });
+
+/** A worker's refusal of a gateway's dispatch, as the worker records it (ADR 0021 §2). */
+const declined = (ts: number, extra: Record<string, unknown> = {}) =>
+  at(ts, "lease.declined", {
+    fleetRequestId: "f",
+    reason: "no-wait",
+    requestId: "worker-side",
+    requestSpec: { platform: "ios" },
+    requester: "gw:g1:agent-a",
+    ...extra,
+  });
+
+const restarted = (ts: number, extra: Record<string, unknown> = {}) =>
+  at(ts, "daemon.started", { configSnapshot: {}, version: "0", ...extra });
+
+/** A worker's `lease.requested` for a gateway's dispatch: it carries the fleet request id. */
+const probe = (ts: number, requestId: string, requester = "gw:g1:a") =>
+  at(ts, "lease.requested", {
+    fleetRequestId: `f-${requestId}`,
+    requestId,
+    requestSpec: { platform: "ios" },
+    requester,
+    waitPolicy: "noWait",
+  });
 
 describe("computeUsage", () => {
   it("counts a request granted, held and released as one request, one grant, and one sample in wait, held and turnaround with the expected milliseconds", () => {
@@ -452,29 +480,11 @@ describe("computeUsage", () => {
     const usage = computeUsage(
       [
         requested(T0 + 1_000, "r1", "a", "ios"),
-        at(T0 + 1_500, "request.dispatched", {
-          model: "m",
-          platform: "ios",
-          queuedMs: 0,
-          reason: "warm-hit",
-          requestId: "r1",
-          requesterId: "a",
-          stage: "s",
-          workerId: "w1",
-        }),
         granted(T0 + 2_000, "w1-r", "l1", "warm", "gw:g1:a", { workerId: "w1" }),
+        handed(T0 + 2_100, "r1", "w1", "l1"),
         requested(T0 + 3_000, "r2", "b", "android"),
-        at(T0 + 3_500, "request.dispatched", {
-          model: "m",
-          platform: "android",
-          queuedMs: 0,
-          reason: "free-capacity",
-          requestId: "r2",
-          requesterId: "b",
-          stage: "s",
-          workerId: "w2",
-        }),
         granted(T0 + 4_000, "w2-r", "l2", "provisioned", "gw:g1:b", { workerId: "w2" }),
+        handed(T0 + 4_100, "r2", "w2", "l2"),
         at(T0 + 4_500, "device.provisioned", {
           deviceId: "dev-l2",
           driver: "fake",
@@ -499,22 +509,13 @@ describe("computeUsage", () => {
     expect(usage.totals.granted).toBe(2);
   });
 
-  it("with fleet: true counts a fleet request once, from the gateway's own events, and attributes its grant to the worker named by request.dispatched", () => {
+  it("with fleet: true counts a fleet request once, from the gateway's own events, and attributes its grant to the worker of its request.granted", () => {
     const usage = computeUsage(
       [
         requested(T0 + 1_000, "gw-r1"),
-        at(T0 + 1_100, "request.dispatched", {
-          model: "m",
-          platform: "ios",
-          queuedMs: 100,
-          reason: "warm-hit",
-          requestId: "gw-r1",
-          requesterId: "agent-a",
-          stage: "s",
-          workerId: "w1",
-        }),
-        // The worker's own copy of the same request.
+        // The worker's own copy of the same request, relayed.
         at(T0 + 1_300, "lease.requested", {
+          fleetRequestId: "gw-r1",
           requestId: "w-r1",
           requestSpec: { platform: "ios" },
           requester: "gw:g1:agent-a",
@@ -522,6 +523,7 @@ describe("computeUsage", () => {
           workerId: "w1",
         }),
         granted(T0 + 4_000, "w-r1", "l1", "booted", "gw:g1:agent-a", { workerId: "w1" }),
+        handed(T0 + 4_200, "gw-r1", "w1", "l1"),
         released(T0 + 9_000, "l1", { workerId: "w1" }),
       ],
       WINDOW,
@@ -531,13 +533,11 @@ describe("computeUsage", () => {
     expect(usage.totals.requests).toBe(1);
     expect(usage.totals.granted).toBe(1);
     expect(usage.totals.bySource.booted).toBe(1);
-    expect(usage.totals.wait.p50).toBe(3_000);
-    expect(usage.totals.held.p50).toBe(5_000);
     expect(usage.workers).toHaveLength(1);
     expect(usage.workers[0]).toMatchObject({ granted: 1, id: "w1", requests: 1 });
   });
 
-  it("with fleet: true ignores relayed lease.requested, lease.queued and queue.changed, and a relayed lease.rejected that matches no dispatched request", () => {
+  it("with fleet: true ignores relayed lease.requested, lease.queued, queue.changed, lease.rejected and lease.declined as request facts", () => {
     const usage = computeUsage(
       [
         queueChanged(T0 + 1_000, 1),
@@ -551,6 +551,7 @@ describe("computeUsage", () => {
         }),
         at(T0 + 2_100, "lease.queued", { queuePosition: 1, requestId: "w-r1", workerId: "w1" }),
         rejected(T0 + 2_200, "w-r1", "no-wait", "gw:g1:ghost", { workerId: "w1" }),
+        declined(T0 + 2_300, { requestId: "w-r1", workerId: "w1" }),
       ],
       WINDOW,
       FLEET,
@@ -559,123 +560,301 @@ describe("computeUsage", () => {
     expect(usage.totals.requests).toBe(0);
     expect(usage.totals.rejected).toEqual({ byReason: {}, total: 0 });
     expect(usage.totals.queue.peakDepth).toBe(1);
+    expect(usage.requesters).toEqual([]);
   });
 
-  it("with fleet: true settles a dispatched request as rejected, with the worker's reason, from the relayed lease.rejected of the worker it was dispatched to", () => {
+  it("with fleet: true does not count a relayed lease.granted carrying a request's fleetRequestId as its outcome when the gateway rejected it", () => {
     const usage = computeUsage(
       [
         requested(T0 + 1_000, "gw-r1"),
-        at(T0 + 2_000, "request.dispatched", {
-          model: "m",
-          platform: "ios",
-          queuedMs: 0,
-          reason: "free-capacity",
-          requestId: "gw-r1",
-          requesterId: "agent-a",
-          stage: "s",
+        granted(T0 + 1_500, "w-r1", "l1", "warm", "gw:g1:agent-a", {
+          fleetRequestId: "gw-r1",
           workerId: "w1",
         }),
-        // Another requester's rejection is not this request's outcome.
-        rejected(T0 + 2_500, "w1-x", "no-wait", "gw:g1:agent-b", { workerId: "w1" }),
-        rejected(T0 + 3_000, "w1-r", "boot-timeout", "gw:g1:agent-a", { workerId: "w1" }),
+        // The grant came too late: the gateway had settled the request as a timeout.
+        rejected(T0 + 1_200, "gw-r1", "timeout", "agent-a"),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.granted).toBe(0);
+    expect(usage.totals.rejected).toEqual({ byReason: { timeout: 1 }, total: 1 });
+    expect(usage.totals.bySource).toEqual({ booted: 0, provisioned: 0, unknown: 0, warm: 0 });
+  });
+
+  it("with fleet: true does not let a stale worker's relayed refusal reject a request another worker granted", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        rejected(T0 + 1_100, "w1-r", "no-wait", "gw:g1:agent-a", { workerId: "w1" }),
+        granted(T0 + 1_400, "w2-r", "l1", "warm", "gw:g1:agent-a", { workerId: "w2" }),
+        handed(T0 + 1_500, "gw-r1", "w2", "l1"),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.granted).toBe(1);
+    expect(usage.totals.rejected.total).toBe(0);
+    expect(
+      usage.workers.map((worker) => [worker.id, worker.granted, worker.rejected.total]),
+    ).toEqual([["w2", 1, 0]]);
+  });
+
+  it("with fleet: true does not close an open fleet request at a relayed worker daemon.started", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        at(T0 + 2_000, "daemon.started", { configSnapshot: {}, version: "0", workerId: "w1" }),
       ],
       WINDOW,
       FLEET,
     );
 
     expect(usage.totals.requests).toBe(1);
-    expect(usage.totals.granted).toBe(0);
-    expect(usage.totals.rejected).toEqual({ byReason: { "boot-timeout": 1 }, total: 1 });
-    expect(usage.workers[0]).toMatchObject({ id: "w1", rejected: { total: 1 } });
-    expect(usage.workers).toHaveLength(1);
+    expect(usage.totals.rejected.total).toBe(0);
+    expect(usage.totals.wait.count).toBe(0);
+    expect(usage.series.at(-1)?.waiting).toBe(1);
   });
 
-  it("with fleet: true does not join a requester's second dispatch's grant to its first request, which stays open", () => {
-    const dispatched = (ts: number, requestId: string) =>
-      at(ts, "request.dispatched", {
-        model: "m",
-        platform: "ios",
-        queuedMs: 0,
-        reason: "free-capacity",
-        requestId,
-        requesterId: "agent-a",
-        stage: "s",
-        workerId: "w1",
-      });
-
+  it("with fleet: true settles a request as rejected from the gateway's own lease.rejected, and a worker-failed one under its worker", () => {
     const usage = computeUsage(
       [
-        requested(T0 + 1_000, "gw-r1"),
-        dispatched(T0 + 1_100, "gw-r1"),
-        requested(T0 + 10_000, "gw-r2"),
-        dispatched(T0 + 10_100, "gw-r2"),
-        granted(T0 + 12_000, "w-r2", "l2", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+        requested(T0 + 1_000, "gw-r1", "a"),
+        rejected(T0 + 2_000, "gw-r1", "timeout", "a"),
+        requested(T0 + 3_000, "gw-r2", "b"),
+        rejected(T0 + 3_500, "gw-r2", "worker-failed", "b", { code: "INTERNAL", worker: "w1" }),
       ],
       WINDOW,
       FLEET,
     );
 
     expect(usage.totals.requests).toBe(2);
-    expect(usage.totals.granted).toBe(1);
+    expect(usage.totals.granted).toBe(0);
+    expect(usage.totals.rejected).toEqual({
+      byReason: { timeout: 1, "worker-failed": 1 },
+      total: 2,
+    });
+    expect(usage.workers).toHaveLength(1);
+    expect(usage.workers[0]).toMatchObject({
+      id: "w1",
+      rejected: { byReason: { "worker-failed": 1 }, total: 1 },
+      requests: 1,
+      wait: { count: 1, p50: 500 },
+    });
+  });
+
+  it("with fleet: true counts a fleet request under the worker its request.granted or worker-failed rejection names, with its wait and turnaround, and a timeout rejection under no worker", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "g1", "a"),
+        granted(T0 + 1_800, "w1-r", "l1", "warm", "gw:g1:a", { workerId: "w1" }),
+        handed(T0 + 2_000, "g1", "w1", "l1"),
+        released(T0 + 7_800, "l1", { workerId: "w1" }),
+        requested(T0 + 3_000, "g2", "b"),
+        rejected(T0 + 3_400, "g2", "worker-failed", "b", {
+          code: "WORKER_UNREACHABLE",
+          worker: "w2",
+        }),
+        requested(T0 + 4_000, "g3", "c"),
+        rejected(T0 + 9_000, "g3", "timeout", "c"),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.workers.map((worker) => worker.id)).toEqual(["w1", "w2"]);
+    expect(usage.workers[0]).toMatchObject({
+      granted: 1,
+      requests: 1,
+      turnaround: { count: 1, p50: 7_000 },
+      wait: { count: 1, p50: 1_000 },
+    });
+    expect(usage.workers[1]).toMatchObject({
+      granted: 0,
+      rejected: { total: 1 },
+      requests: 1,
+      wait: { count: 1, p50: 400 },
+    });
+    expect(usage.totals).toMatchObject({
+      granted: 1,
+      rejected: { byReason: { timeout: 1, "worker-failed": 1 }, total: 2 },
+      requests: 3,
+      wait: { count: 3 },
+    });
+    expect(usage.workers.reduce((total, worker) => total + worker.requests, 0)).toBe(2);
+  });
+
+  it("with fleet: true measures a fleet wait from the gateway's lease.requested to its request.granted, ignoring a relayed lease.granted stamped earlier", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gw-r1"),
+        granted(T0 + 800, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+        handed(T0 + 3_000, "gw-r1", "w1", "l1"),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
     expect(usage.totals.wait).toEqual({ count: 1, max: 2_000, p50: 2_000, p95: 2_000 });
   });
 
-  it("with fleet: true joins a grant the worker emitted before the gateway announced the dispatch", () => {
+  it("with fleet: true takes the grant source and held time from the relayed lease.granted whose workerId and leaseId match the request.granted's worker and workerLeaseId, and counts source unknown with no held sample when it is missing", () => {
     const usage = computeUsage(
       [
-        requested(T0 + 1_000, "gw-r1"),
-        // A warm grant reaches the gateway ahead of the response that announces the dispatch.
-        granted(T0 + 1_400, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
-        at(T0 + 1_500, "request.dispatched", {
-          model: "m",
-          platform: "ios",
-          queuedMs: 0,
-          reason: "warm-hit",
-          requestId: "gw-r1",
-          requesterId: "agent-a",
-          stage: "s",
-          workerId: "w1",
-        }),
+        requested(T0 + 1_000, "g1", "a"),
+        // The same lease id on three workers: only (w2, l1) is the one g1 names.
+        granted(T0 + 1_100, "w1-r", "l1", "warm", "gw:g1:a", { workerId: "w1" }),
+        granted(T0 + 1_200, "w2-r", "l1", "provisioned", "gw:g1:a", { workerId: "w2" }),
+        handed(T0 + 1_500, "g1", "w2", "l1"),
+        released(T0 + 6_200, "l1", { workerId: "w2" }),
+        released(T0 + 9_000, "l1", { workerId: "w1" }),
+        requested(T0 + 2_000, "g2", "b"),
+        handed(T0 + 2_400, "g2", "w3", "l9"),
       ],
       WINDOW,
       FLEET,
     );
 
-    expect(usage.totals.granted).toBe(1);
-    expect(usage.totals.wait.p50).toBe(400);
+    expect(usage.totals.bySource).toEqual({ booted: 0, provisioned: 1, unknown: 1, warm: 0 });
+    expect(usage.totals.granted).toBe(2);
+    expect(usage.totals.held).toEqual({ count: 1, max: 5_000, p50: 5_000, p95: 5_000 });
+    expect(usage.totals.turnaround).toEqual({ count: 1, max: 5_500, p50: 5_500, p95: 5_500 });
+    expect(usage.totals.wait.count).toBe(2);
+    expect(usage.requesters.map((requester) => [requester.id, requester.heldTotalMs])).toEqual([
+      ["a", 5_000],
+      ["b", 0],
+    ]);
   });
 
-  it("with fleet: true does not credit a requester's next request with a grant that came before it", () => {
+  it("with fleet: true counts each relayed lease.declined under its worker's and platform's declined, two declines of one request as two", () => {
     const usage = computeUsage(
       [
-        requested(T0 + 1_000, "gw-r1"),
-        // The grant for the first request reaches the gateway ahead of its dispatch, and the
-        // requester then asks again and nothing answers the second request.
-        granted(T0 + 1_400, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
-        requested(T0 + 10_000, "gw-r2"),
+        declined(T0 + 1_000, { workerId: "w1" }),
+        declined(T0 + 2_000, { workerId: "w1" }),
+        declined(T0 + 3_000, { requestSpec: { platform: "android" }, workerId: "w2" }),
+        declined(T0 - 1_000, { workerId: "w1" }),
+        // The gateway's own events have no decline of this kind: nothing counts for no worker.
+        declined(T0 + 4_000),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.declined).toBe(3);
+    expect(usage.platforms.ios.declined).toBe(2);
+    expect(usage.platforms.android.declined).toBe(1);
+    expect(usage.workers.map((worker) => [worker.id, worker.declined])).toEqual([
+      ["w1", 2],
+      ["w2", 1],
+    ]);
+    expect(usage.totals.requests).toBe(0);
+  });
+
+  it("with fleet: true ends a request with no outcome at the gateway's next daemon.started as rejected daemon-restarted, and leaves one with no later start open", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 1_000, "gone", "a"),
+        restarted(T0 + 5_000),
+        requested(T0 + 6_000, "open", "b"),
       ],
       WINDOW,
       FLEET,
     );
 
     expect(usage.totals.requests).toBe(2);
-    expect(usage.totals.granted).toBe(1);
-    expect(usage.totals.wait).toEqual({ count: 1, max: 400, p50: 400, p95: 400 });
+    expect(usage.totals.rejected).toEqual({ byReason: { "daemon-restarted": 1 }, total: 1 });
+    expect(usage.totals.wait).toEqual({ count: 1, max: 4_000, p50: 4_000, p95: 4_000 });
+    expect(usage.workers).toEqual([]);
+    expect(usage.series.slice(0, 7).map((point) => point.waiting)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(usage.series.at(-1)?.waiting).toBe(1);
   });
 
-  it("with fleet: true names the worker of the relayed grant when the request has no request.dispatched", () => {
+  it("with fleet: true answers no probes field in totals, platforms or worker entries", () => {
     const usage = computeUsage(
-      [
-        requested(T0 + 1_000, "gw-r1"),
-        granted(T0 + 1_400, "w-r1", "l1", "warm", "gw:g1:agent-a", { workerId: "w7" }),
-      ],
+      [capacity(T0 + 1_000, figures(0, 0, 2), undefined, { workerId: "w1" })],
       WINDOW,
       FLEET,
     );
 
-    expect(usage.totals.granted).toBe(1);
-    expect(usage.workers).toHaveLength(1);
-    expect(usage.workers[0]).toMatchObject({ granted: 1, id: "w7", requests: 1 });
+    expect(usage.totals).not.toHaveProperty("probes");
+    expect(usage.platforms.ios).not.toHaveProperty("probes");
+    expect(usage.workers[0]).not.toHaveProperty("probes");
+    expect(usage.totals.bySource).toHaveProperty("unknown", 0);
+  });
+
+  it("on a worker counts a lease.requested carrying fleetRequestId under probes, not requests, its grant under granted, its lease.declined under declined by the decline's timestamp, and gives it no wait sample", () => {
+    const usage = computeUsage(
+      [
+        probe(T0 + 1_000, "p1"),
+        granted(T0 + 2_000, "p1", "l1", "booted", "gw:g1:a", { fleetRequestId: "f-p1" }),
+        released(T0 + 8_000, "l1"),
+        probe(T0 + 3_000, "p2"),
+        declined(T0 + 3_100, { requestId: "p2" }),
+        // A decline of a probe made before the window counts by its own timestamp.
+        declined(T0 + 4_000, { requestId: "old-probe" }),
+        requested(T0 + 5_000, "local", "agent-b"),
+        granted(T0 + 5_500, "local", "l2", "warm", "agent-b"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals).toMatchObject({
+      declined: 2,
+      granted: 2,
+      probes: 2,
+      rejected: { total: 0 },
+      requests: 1,
+    });
+    expect(usage.totals.bySource).toEqual({ booted: 1, provisioned: 0, warm: 1 });
+    expect(usage.totals.bySource).not.toHaveProperty("unknown");
+    expect(usage.totals.wait).toEqual({ count: 1, max: 500, p50: 500, p95: 500 });
+    expect(usage.totals.held).toMatchObject({ count: 1, p50: 6_000 });
+    expect(usage.workers[0]).toMatchObject({ declined: 2, probes: 2, requests: 1 });
+    expect(usage.platforms.ios).toMatchObject({ declined: 2, probes: 2 });
+  });
+
+  it("on a worker gives a probe no turnaround sample and lists its gw: requester with its grant and held time and no request", () => {
+    const usage = computeUsage(
+      [
+        probe(T0 + 1_000, "p1"),
+        granted(T0 + 2_000, "p1", "l1", "warm", "gw:g1:a", { fleetRequestId: "f-p1" }),
+        released(T0 + 8_000, "l1"),
+        // A probe that was declined is nothing of its requester's.
+        probe(T0 + 9_000, "p2", "gw:g1:b"),
+        declined(T0 + 9_100, { requestId: "p2" }),
+        requested(T0 + 10_000, "local", "agent-b"),
+        granted(T0 + 10_400, "local", "l2", "warm", "agent-b"),
+        released(T0 + 12_400, "l2"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.turnaround).toEqual({ count: 1, max: 2_400, p50: 2_400, p95: 2_400 });
+    expect(usage.requesters).toEqual([
+      { granted: 1, heldTotalMs: 2_000, id: "agent-b", rejected: 0, requests: 1 },
+      { granted: 1, heldTotalMs: 6_000, id: "gw:g1:a", rejected: 0, requests: 0 },
+    ]);
+  });
+
+  it("on a worker leaves a probe between its lease.requested and its grant out of series[].waiting", () => {
+    const usage = computeUsage(
+      [
+        // A probe made before the window and still open at its start is not waiting either.
+        probe(T0 - 30_000, "old"),
+        probe(T0 + 10_000, "p1"),
+        granted(T0 + 100_000, "p1", "l1", "warm", "gw:g1:a", { fleetRequestId: "f-p1" }),
+        requested(T0 + 20_000, "local", "agent-b"),
+        granted(T0 + 130_000, "local", "l2", "warm", "agent-b"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 1, 0]);
   });
 
   it("sets partial and coversFrom when the oldest event is inside the window", () => {
@@ -823,30 +1002,6 @@ describe("computeUsage", () => {
     });
 
     expect(usage.workers.map((worker) => worker.id)).toEqual(["local"]);
-  });
-
-  it("matches a fleet request to its worker's grant by the bare requester when no requesterPrefix is given", () => {
-    const usage = computeUsage(
-      [
-        requested(T0 + 1_000, "gw-r1"),
-        at(T0 + 1_100, "request.dispatched", {
-          model: "m",
-          platform: "ios",
-          queuedMs: 0,
-          reason: "warm-hit",
-          requestId: "gw-r1",
-          requesterId: "agent-a",
-          stage: "s",
-          workerId: "w1",
-        }),
-        granted(T0 + 4_000, "w-r1", "l1", "warm", "agent-a", { workerId: "w1" }),
-      ],
-      WINDOW,
-      { fleet: true },
-    );
-
-    expect(usage.totals.granted).toBe(1);
-    expect(usage.totals.wait).toEqual({ count: 1, max: 3_000, p50: 3_000, p95: 3_000 });
   });
 
   it("counts a grant whose source is none of warm, booted and provisioned under no source", () => {
@@ -1011,14 +1166,13 @@ describe("computeUsage", () => {
     const usage = computeUsage(
       [
         requested(T0 - 30_000, "old", "agent-a"),
-        // Answered before the window opened: not waiting at its start.
+        // Answered before the window opened (the history says so): not waiting at its start.
         requested(T0 - 40_000, "done", "agent-b"),
-        granted(T0 - 35_000, "done", "l0", "warm", "agent-b"),
         queueChanged(T0 - 30_000, 1),
         granted(T0 + 90_000, "old", "l1"),
       ],
       WINDOW,
-      WORKER,
+      { ...WORKER, answeredBefore: new Set(["done"]) },
     );
 
     expect(usage.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 0, 0]);
@@ -1027,11 +1181,13 @@ describe("computeUsage", () => {
     expect(usage.totals.granted).toBe(0);
   });
 
-  it("with fleet: true counts a request made before the window until a worker's relayed answer for its requester", () => {
+  it("with fleet: true counts a request made before the window until the gateway's request.granted for it", () => {
     const usage = computeUsage(
       [
         requested(T0 - 30_000, "gw-old", "agent-a"),
-        granted(T0 + 90_000, "w-1", "l1", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+        // A relayed grant for the same requester is not the gateway's answer.
+        granted(T0 + 30_000, "w-0", "l0", "warm", "gw:g1:agent-a", { workerId: "w1" }),
+        handed(T0 + 90_000, "gw-old", "w1", "l1"),
       ],
       WINDOW,
       FLEET,
@@ -1039,6 +1195,34 @@ describe("computeUsage", () => {
 
     expect(usage.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 0, 0]);
     expect(usage.totals.granted).toBe(0);
+  });
+
+  it("with fleet: true counts a request made before the window as waiting at its start unless the history says it was answered by then", () => {
+    const events = [
+      requested(T0 - 30_000, "gw-waits", "agent-a"),
+      requested(T0 - 20_000, "gw-done", "agent-b"),
+    ];
+
+    const usage = computeUsage(events, WINDOW, { ...FLEET, answeredBefore: new Set(["gw-done"]) });
+
+    expect(usage.series[0]?.waiting).toBe(1);
+  });
+
+  it("with fleet: true stops counting a request the gateway lost at a stop as waiting from the start that followed it, whether before the window or inside it", () => {
+    const before = computeUsage(
+      [requested(T0 - 60_000, "gw-lost"), restarted(T0 - 30_000)],
+      WINDOW,
+      FLEET,
+    );
+    const inside = computeUsage(
+      [requested(T0 - 60_000, "gw-lost"), restarted(T0 + 90_000)],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(before.series.slice(0, 3).map((point) => point.waiting)).toEqual([0, 0, 0]);
+    expect(inside.series.slice(0, 3).map((point) => point.waiting)).toEqual([1, 0, 0]);
+    expect(inside.totals.rejected.total).toBe(0);
   });
 
   it("counts a request as waiting from the instant it is made until the instant it settles, per series point", () => {

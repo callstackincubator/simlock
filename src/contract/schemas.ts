@@ -1133,9 +1133,14 @@ const usageFiguresSchema = z.object({
   bySource: z.object({
     booted: z.number().int().nonnegative(),
     provisioned: z.number().int().nonnegative(),
+    /** A gateway only: a grant whose worker's own `lease.granted` was not relayed (ADR 0021 §5). */
+    unknown: z.number().int().nonnegative().optional(),
     warm: z.number().int().nonnegative(),
   }),
   boot: usageSamplesSchema,
+  /** `lease.declined` events by their timestamp: a worker's own, or a gateway's relayed ones. Not
+   * requests (ADR 0021 §5). */
+  declined: z.number().int().nonnegative(),
   failures: z.object({ byEvent: usageCountsSchema }),
   granted: z.number().int().nonnegative(),
   held: usageSamplesSchema,
@@ -1145,6 +1150,9 @@ const usageFiguresSchema = z.object({
     quarantineRecovered: z.number().int().nonnegative(),
     quarantined: z.number().int().nonnegative(),
   }),
+  /** A worker's own figure, absent from a gateway's answer: the gateway dispatches it received
+   * (`lease.requested` carrying `fleetRequestId`), which `requests` leaves out (ADR 0021 §5). */
+  probes: z.number().int().nonnegative().optional(),
   provisioning: usageSamplesSchema,
   queue: z.object({ meanDepth: z.number().nullable(), peakDepth: z.number().nullable() }),
   rejected: z.object({

@@ -1966,6 +1966,7 @@ Totals
   Requests:     12 (10 granted, 2 rejected)
   Granted:      warm 6, booted 3, provisioned 1
   Rejected:     no-wait 1, timeout 1
+  Declined:     2
   Wait:         p50 1.2s, p95 4s, max 9.1s (11 samples)
   Held:         p50 5m 0s, p95 30m 0s, max 1h 2m (9 samples)
   Turnaround:   p50 5m 10s, p95 31m 40s, max 1h 3m (9 samples)
@@ -1999,9 +2000,9 @@ What the figures count:
   `provisioned` was created for the request.
 - **Rejected** are the requests that ended without a device, by reason
   (`timeout`, `no-wait`, `cancelled`, ...), plus the requests refused before
-  they were stored (a requester that already holds a lease). Those are in the
-  window their rejection falls in and are not requests, so granted plus
-  rejected can be more than requests.
+  they were stored (a requester that already holds a lease, or one that asked
+  for a lease ID that is taken). Those are in the window their rejection falls
+  in and are not requests, so granted plus rejected can be more than requests.
 - **Wait** is the time from the request to its grant or rejection. **Held** is
   the time from the grant to the release or expiry of the lease. **Turnaround**
   is the time from the request to that end. **Provisioning** and **Boot** are the
@@ -2019,18 +2020,33 @@ What the figures count:
   the window by name: `device.purge-failed`, `device.recovery-failed`,
   `component.install-failed`, and any other event whose name ends in
   `-failed`. The row is left out when there were none.
+- **Declined** counts the times a worker refused a request that a gateway sent
+  it, by the time of the refusal. It is a count of refusals, not of requests: a
+  gateway tries another worker after a refusal, so one request can be declined
+  by several workers. The row is left out when there were none.
 - A requester that is a token shows the token's label beside its id.
 
 The window is rounded down to whole steps of the time series `--json` carries,
-which is 1 minute for a window of a few hours and grows to 1 day for 90 days, so
-it never ends at a time that has not come yet; the window in the answer is the
-rounded one.
+which is 1 minute for a window of a few hours and grows to 1 day for 90 days.
+Neither end moves later than the time you asked for; the window in the answer is
+the rounded one.
 
 Against a **gateway** the totals are the fleet's and there is a row for each
-worker, with the grants, hold times and device figures of that worker. Requests,
-waits and rejections come from the gateway's own queue; the queue figure is the
-fleet queue's. A worker's own `simlock stats` covers that worker only: its row
-is itself, and a request that arrived through a gateway shows under the
+worker. Requests, waits and rejections come from the gateway's own record of
+each request: it waits from the request until the gateway grants or rejects it,
+and a request the gateway was still holding when it stopped counts as rejected
+with the reason `daemon-restarted`. How the device came to be ready and how long
+the lease was held come from the worker's record of the lease; a grant whose
+worker's record the gateway never received counts as `unknown` and has no held
+time. A worker's row has the requests granted on it or that failed on it
+(`worker-failed`), its declined count and its device figures; a request that
+ended any other way, or is still waiting, is in the totals and the platform rows
+only. The queue figure is the fleet queue's.
+
+A worker's own `simlock stats` covers that worker only: its row is itself. A
+request that a gateway sent it is not one of the worker's requests: it is counted
+under **Probes**, not under requests, and has no wait or turnaround of its own.
+Its grant still counts as a grant, with its source and held time, under the
 requester id the gateway gave it.
 
 If the history does not reach back to the start of the window (a new daemon, or

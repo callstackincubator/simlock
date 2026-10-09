@@ -98,7 +98,14 @@ function totalRows(totals: UsageFigures): string[] {
 }
 
 /** The requests, and what became of them, leaving out the rows with nothing in them. */
-function requestRows({ bySource, granted, rejected, requests }: UsageFigures): string[] {
+function requestRows({
+  bySource,
+  declined,
+  granted,
+  probes,
+  rejected,
+  requests,
+}: UsageFigures): string[] {
   return [
     row("Requests:", `${requests} (${granted} granted, ${rejected.total} rejected)`),
     ...(granted === 0
@@ -106,10 +113,15 @@ function requestRows({ bySource, granted, rejected, requests }: UsageFigures): s
       : [
           row(
             "Granted:",
-            `warm ${bySource.warm}, booted ${bySource.booted}, provisioned ${bySource.provisioned}`,
+            `warm ${bySource.warm}, booted ${bySource.booted}, provisioned ${bySource.provisioned}` +
+              (bySource.unknown === undefined || bySource.unknown === 0
+                ? ""
+                : `, unknown ${bySource.unknown}`),
           ),
         ]),
     ...(rejected.total === 0 ? [] : [row("Rejected:", list(rejected.byReason))]),
+    ...(declined === 0 ? [] : [row("Declined:", String(declined))]),
+    ...(probes === undefined || probes === 0 ? [] : [row("Probes:", String(probes))]),
   ];
 }
 

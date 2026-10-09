@@ -2,13 +2,13 @@ import type { EventEnvelope, EventName } from "../../bus/index.js";
 import type { UsageOutput } from "../../contract/index.js";
 import { computeUsage, seriesBucketMs, type UsageWindow } from "./compute-usage.js";
 
-/** The two timelines whose step in force at a window's start is read with it (ADR 0016 §3). */
-/** The events whose latest envelope before the window the figures need: the two steps, and the
- * latest request and answer of each requester, which tell what was still waiting at its start. */
-const STEP_EVENTS: readonly EventName[] = [
+/** The events whose latest envelope at or before the window's start is read with it: the two
+ * steps in force (ADR 0016 §3), the latest request of each requester, which with the ids of the
+ * requests answered by then tells what was still waiting at the start, and a gateway's latest
+ * start, which ends the fleet requests it lost (ADR 0021 §5). */
+const CARRIED_EVENTS: readonly EventName[] = [
   "capacity.changed",
-  "lease.granted",
-  "lease.rejected",
+  "daemon.started",
   "lease.requested",
   "queue.changed",
 ];
@@ -20,6 +20,8 @@ export interface UsageHistory {
     readonly oldestTs: number | undefined;
     /** The `requestId` of every `lease.requested` at or before `sinceTs`. */
     readonly requestedBefore: ReadonlySet<string>;
+    /** The `requestId` of every request answered at or before `sinceTs`. */
+    readonly answeredBefore: ReadonlySet<string>;
   }>;
   /** The id of the event published last; the memo is good while it has not moved. */
   latestId(): string | undefined;
@@ -31,8 +33,9 @@ export interface UsageReaderOptions {
   readonly tokenLabels: () => Promise<ReadonlyMap<string, string>>;
   /** The workers to report: a worker's own entry, a gateway's registry. Read on each answer. */
   readonly workers: () => readonly { readonly id: string; readonly label?: string | undefined }[];
-  /** Set on a gateway: the figures are the fleet's (ADR 0016 §6), and this is the prefix it
-   * stamps on the requesters it forwards (`gw:<instance>:`). */
+  /** Set on a gateway: the figures are the fleet's (ADR 0016 §6, ADR 0021 §5), and this is the
+   * prefix it stamps on the requesters it forwards (`gw:<instance>:`), which is taken off before a
+   * token label is looked up. */
   readonly fleet?: { readonly requesterPrefix: string };
 }
 
@@ -42,8 +45,9 @@ export type UsageResult = { readonly usage: UsageOutput } | { readonly oldestTs:
 /**
  * Answers `usage.get` for a worker or a gateway from the same code (ADR 0016): reads the history
  * for the window, hands it to `computeUsage`, joins token labels. The window is rounded down to the
- * series bucket, both ends, so it never reaches a time that has not come, and the last answer is kept by that window and the newest event, so a caller that
- * asks again within the bucket while nothing happened reads nothing.
+ * series bucket, both ends, so neither end moves later than asked, and the last answer is kept by
+ * that window and the newest event, so a caller that asks again within the bucket while nothing
+ * happened reads nothing.
  */
 export class UsageReader {
   #memo: { readonly key: string; readonly usage: UsageOutput } | undefined;
@@ -52,7 +56,7 @@ export class UsageReader {
 
   async get(asked: UsageWindow): Promise<UsageResult> {
     const bucketMs = seriesBucketMs(asked.to - asked.from);
-    // Down to the bucket on both sides (ADR 0016): the answer never reaches a time not yet come.
+    // Down to the bucket on both sides (ADR 0016 §8): neither end moves later than asked.
     const window = {
       from: Math.floor(asked.from / bucketMs) * bucketMs,
       to: Math.floor(asked.to / bucketMs) * bucketMs,
@@ -60,18 +64,18 @@ export class UsageReader {
     const key = `${window.from}:${window.to}:${String(this.options.history.latestId())}`;
     if (this.#memo?.key === key) return { usage: this.#memo.usage };
 
-    const { events, oldestTs, requestedBefore } = await this.options.history.read({
-      carry: STEP_EVENTS,
+    const { answeredBefore, events, oldestTs, requestedBefore } = await this.options.history.read({
+      carry: CARRIED_EVENTS,
       sinceTs: window.from,
     });
     if (oldestTs !== undefined && oldestTs > asked.to) return { oldestTs };
     const usage = computeUsage(events, window, {
+      answeredBefore,
       bucketMs,
       fleet: this.options.fleet !== undefined,
       labels: await this.#labelsFor(events),
       oldestTs,
       requestedBefore,
-      requesterPrefix: this.options.fleet?.requesterPrefix ?? "",
       workers: this.options.workers(),
     });
     this.#memo = { key, usage };

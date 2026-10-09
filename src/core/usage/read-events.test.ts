@@ -5,15 +5,15 @@ import { readEvents, type ReadOptions } from "./read-events.js";
 
 const WINDOW = { from: 100, to: 200 };
 const WORKER: ReadOptions = {
+  answeredBefore: new Set(),
   fleet: false,
   requestedBefore: new Set(),
-  requesterPrefix: "",
   self: "self",
 };
 const FLEET: ReadOptions = {
+  answeredBefore: new Set(),
   fleet: true,
   requestedBefore: new Set(),
-  requesterPrefix: "gw:",
   self: "gateway",
 };
 
@@ -47,22 +47,49 @@ const capacityPayload = (extra: Record<string, unknown> = {}) => ({
 });
 const request = (ts: number, requestId: string, requester = "a", extra = {}) =>
   at(ts, "lease.requested", { requestId, requestSpec: { platform: "ios" }, requester, ...extra });
-const dispatch = (ts: number, requestId: string, requesterId = "a", workerId = "w1") =>
-  at(ts, "request.dispatched", { requestId, requesterId, workerId });
+/** What a worker relays of the grant it made for a gateway's dispatch. */
 const relayedGrant = (ts: number, extra: Record<string, unknown> = {}) =>
   at(ts, "lease.granted", {
     leaseId: "L",
+    requestId: "worker-side",
     requester: "gw:a",
     source: "warm",
     workerId: "w1",
     ...extra,
   });
-const relayedReject = (ts: number, extra: Record<string, unknown> = {}) =>
+/** The gateway's own record that it handed a fleet request's grant to its caller. */
+const handed = (ts: number, requestId: string, extra: Record<string, unknown> = {}) =>
+  at(ts, "request.granted", {
+    leaseId: "gw-lease",
+    requestId,
+    worker: "w1",
+    workerLeaseId: "L",
+    ...extra,
+  });
+/** The gateway's own rejection of a fleet request. */
+const gatewayReject = (
+  ts: number,
+  requestId: string,
+  reason: string,
+  extra: Record<string, unknown> = {},
+) =>
   at(ts, "lease.rejected", {
-    reason: "no-capacity",
+    reason,
+    requestId,
+    requestSpec: { platform: "ios" },
+    requester: "a",
+    ...extra,
+  });
+const restarted = (ts: number, extra: Record<string, unknown> = {}) =>
+  at(ts, "daemon.started", { configSnapshot: {}, version: "0", ...extra });
+/** What a worker relays of its refusal of a gateway's dispatch. */
+const declined = (ts: number, extra: Record<string, unknown> = {}) =>
+  at(ts, "lease.declined", {
+    fleetRequestId: "r",
+    reason: "no-wait",
+    requestId: "worker-side",
+    requestSpec: { platform: "ios" },
     requester: "gw:a",
-    requestId: "r",
-    workerId: "w1",
     ...extra,
   });
 
@@ -249,12 +276,7 @@ describe("requests on a worker", () => {
       request(130, "r2", "b"),
       at(140, "lease.granted", { requestId: "r2", requester: "b", source: "warm" }),
     ]);
-    expect(result.requests[0]?.outcome).toEqual({
-      at: 120,
-      kind: "granted",
-      leaseId: "L1",
-      source: "",
-    });
+    expect(result.requests[0]?.outcome).toEqual({ at: 120, kind: "granted", source: "" });
     expect(result.requests[1]).not.toHaveProperty("outcome");
   });
 
@@ -307,8 +329,8 @@ describe("requests on a worker", () => {
     ]);
     expect(result.requests).toEqual([
       {
-        endedAt: 130,
-        outcome: { at: 120, kind: "granted", leaseId: "L", source: "" },
+        heldMs: 10,
+        outcome: { at: 120, kind: "granted", source: "" },
         platform: "ios",
         requestedAt: 110,
         requester: "a",
@@ -323,7 +345,7 @@ describe("requests on a worker", () => {
       at(120, "lease.granted", { leaseId: "L", requestId: "r", source: "warm" }),
       at(130, "lease.expired", { leaseId: "L" }),
     ]);
-    expect(result.requests[0]).toMatchObject({ endedAt: 130, outcome: { source: "warm" } });
+    expect(result.requests[0]).toMatchObject({ heldMs: 10, outcome: { source: "warm" } });
   });
 
   it("does not join an end of another lease id", () => {
@@ -332,7 +354,7 @@ describe("requests on a worker", () => {
       at(120, "lease.granted", { leaseId: "L", requestId: "r" }),
       at(130, "lease.released", { leaseId: "other" }),
     ]);
-    expect(result.requests[0]).not.toHaveProperty("endedAt");
+    expect(result.requests[0]).not.toHaveProperty("heldMs");
   });
 
   it("ignores a grant missing requestId or leaseId, and one outside the window", () => {
@@ -351,12 +373,7 @@ describe("requests on a worker", () => {
       request(110, "r"),
       at(200, "lease.granted", { leaseId: "L", requestId: "r", source: "cold" }),
     ]);
-    expect(result.requests[0]?.outcome).toEqual({
-      at: 200,
-      kind: "granted",
-      leaseId: "L",
-      source: "cold",
-    });
+    expect(result.requests[0]?.outcome).toEqual({ at: 200, kind: "granted", source: "cold" });
   });
 
   it("ignores an end with no lease id, and one outside the window", () => {
@@ -367,7 +384,7 @@ describe("requests on a worker", () => {
       at(100, "lease.released", { leaseId: "L" }),
       at(201, "lease.released", { leaseId: "L" }),
     ]);
-    expect(result.requests[0]).not.toHaveProperty("endedAt");
+    expect(result.requests[0]).not.toHaveProperty("heldMs");
   });
 
   it("takes an end at exactly the window end", () => {
@@ -376,7 +393,7 @@ describe("requests on a worker", () => {
       at(120, "lease.granted", { leaseId: "L", requestId: "r" }),
       at(200, "lease.released", { leaseId: "L" }),
     ]);
-    expect(result.requests[0]?.endedAt).toBe(200);
+    expect(result.requests[0]?.heldMs).toBe(80);
   });
 
   it("outcome of a rejection of a seen request is the rejection with its reason", () => {
@@ -576,17 +593,17 @@ describe("device facts", () => {
 });
 
 describe("requests carried into the window", () => {
-  it("carries a request made exactly at the window's start, and treats an answer exactly then as answering it", () => {
-    expect(read([request(100, "edge")]).carried).toHaveLength(1);
-    const answered = read([
-      request(90, "old"),
-      at(100, "lease.granted", { leaseId: "L", requestId: "old", requester: "a", source: "warm" }),
-    ]);
-    expect(answered.carried).toEqual([]);
+  const answered = (...ids: string[]): ReadOptions => ({
+    ...WORKER,
+    answeredBefore: new Set(ids),
   });
-
   const grant = (ts: number, requestId: string, requester = "a") =>
     at(ts, "lease.granted", { leaseId: `L${requestId}`, requestId, requester, source: "warm" });
+
+  it("carries a request made exactly at the window's start, and treats an answer the history reports as answering it", () => {
+    expect(read([request(100, "edge")]).carried).toHaveLength(1);
+    expect(read([request(90, "old")], answered("old")).carried).toEqual([]);
+  });
 
   it("carries a request made before the window that nothing had answered, with its outcome inside it", () => {
     const result = read([request(90, "old"), grant(150, "old")]);
@@ -601,31 +618,95 @@ describe("requests carried into the window", () => {
   });
 
   it("does not carry a request answered before the window, or one made inside it", () => {
-    const result = read([
-      request(80, "done", "b"),
-      grant(90, "done", "b"),
-      request(85, "refused", "c"),
-      at(95, "lease.rejected", { reason: "timeout", requestId: "refused", requester: "c" }),
-      request(110, "inside"),
-    ]);
+    const result = read(
+      [request(80, "done", "b"), request(85, "refused", "c"), request(110, "inside")],
+      answered("done", "refused"),
+    );
     expect(result.carried).toEqual([]);
     expect(result.requests).toHaveLength(1);
   });
 
   it("carries only a requester's latest request made before the window", () => {
-    const result = read([request(80, "first"), grant(85, "first"), request(90, "second")]);
+    const result = read([request(80, "first"), request(90, "second")], answered("first"));
     expect(result.carried.map((fact) => fact.requestedAt)).toEqual([90]);
   });
 
-  it("carries a gateway request answered only by a relayed answer inside the window, matched by the namespaced requester", () => {
-    const answered = read([request(90, "old"), relayedGrant(150)], FLEET);
-    expect(answered.carried).toEqual([
+  it("matches a carried request to its answer by request id, not by requester", () => {
+    // Another request of the same requester was answered; this one was not.
+    const result = read([request(90, "waits")], answered("some-other-request"));
+    expect(result.carried.map((fact) => fact.requestedAt)).toEqual([90]);
+  });
+
+  it("does not carry a worker's probe, which never waits there", () => {
+    const result = read([request(90, "probe", "gw:a", { fleetRequestId: "f" })]);
+    expect(result.carried).toEqual([]);
+  });
+
+  it("carries a gateway request that nothing, on the gateway's own clock, had answered, with its outcome inside the window", () => {
+    const result = read([request(90, "old"), handed(150, "old")], FLEET);
+    expect(result.carried).toEqual([
       expect.objectContaining({ outcome: expect.objectContaining({ at: 150 }), worker: "w1" }),
     ]);
-    const before = read([request(80, "old"), relayedGrant(90), request(95, "later")], FLEET);
-    expect(before.carried.map((fact) => fact.requestedAt)).toEqual([95]);
-    const first = read([request(80, "old"), relayedGrant(90)], FLEET);
-    expect(first.carried).toEqual([]);
+    expect(read([request(90, "old")], FLEET).carried).toHaveLength(1);
+    expect(
+      read([request(90, "old")], { ...FLEET, answeredBefore: new Set(["old"]) }).carried,
+    ).toEqual([]);
+  });
+
+  it("does not carry a gateway request that a restart before the window ended, and carries one a restart inside it ends", () => {
+    const ended = read([request(80, "old"), restarted(90)], FLEET);
+    expect(ended.carried).toEqual([]);
+    const later = read([request(80, "old"), restarted(150)], FLEET);
+    expect(later.carried).toEqual([
+      expect.objectContaining({
+        outcome: { at: 150, kind: "rejected", reason: "daemon-restarted" },
+        requestedAt: 80,
+      }),
+    ]);
+    const after = read([restarted(70), request(80, "old")], FLEET);
+    expect(after.carried).toHaveLength(1);
+  });
+});
+
+describe("a worker's probes and declines", () => {
+  it("marks a request carrying fleetRequestId as a probe and a request without one as no probe", () => {
+    const result = read([
+      request(110, "p", "gw:a", { fleetRequestId: "f" }),
+      request(111, "l", "b"),
+    ]);
+    expect(result.requests[0]).toHaveProperty("probe", true);
+    expect(result.requests[1]).not.toHaveProperty("probe");
+  });
+
+  it("counts a probe's grant and held time like any grant", () => {
+    const result = read([
+      request(110, "p", "gw:a", { fleetRequestId: "f" }),
+      at(120, "lease.granted", { leaseId: "L", requestId: "p", requester: "gw:a", source: "warm" }),
+      at(150, "lease.released", { leaseId: "L" }),
+    ]);
+    expect(result.requests[0]).toMatchObject({
+      heldMs: 30,
+      outcome: { at: 120, kind: "granted", source: "warm" },
+      probe: true,
+    });
+  });
+
+  it("counts the worker's own lease.declined under itself with the platform of requestSpec", () => {
+    const result = read([
+      declined(110, { requestSpec: { platform: "android" } }),
+      declined(111, { requestSpec: {} }),
+    ]);
+    expect(result.declines).toEqual([
+      { platform: "android", worker: "self" },
+      { platform: undefined, worker: "self" },
+    ]);
+    expect(result.requests).toEqual([]);
+    expect([...result.workers]).toEqual(["self"]);
+  });
+
+  it("counts a decline at exactly the window end and not at its start or after", () => {
+    const result = read([declined(100), declined(200), declined(201)]);
+    expect(result.declines).toHaveLength(1);
   });
 });
 
@@ -664,32 +745,7 @@ describe("a gateway", () => {
     expect([...result.workers].sort()).toEqual(["w1", "w2", "w3"]);
   });
 
-  it("ignores a lease end that no worker relayed", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r"),
-        relayedGrant(112),
-        at(130, "lease.released", { leaseId: "L" }),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]).not.toHaveProperty("endedAt");
-  });
-
-  it("joins a relayed grant with the end of the same worker and lease id only", () => {
-    const events = (endWorker: string, endLease: string) => [
-      request(110, "r"),
-      dispatch(111, "r"),
-      relayedGrant(112),
-      at(130, "lease.released", { leaseId: endLease, workerId: endWorker }),
-    ];
-    expect(read(events("w1", "L"), FLEET).requests[0]?.endedAt).toBe(130);
-    expect(read(events("w2", "L"), FLEET).requests[0]).not.toHaveProperty("endedAt");
-    expect(read(events("w1", "M"), FLEET).requests[0]).not.toHaveProperty("endedAt");
-  });
-
-  it("gives a request with no dispatch and no relayed answer no worker and no outcome", () => {
+  it("gives a request with no outcome no worker and leaves it open", () => {
     const result = read([request(110, "r")], FLEET);
     expect(result.requests).toEqual([
       { platform: "ios", requestedAt: 110, requester: "a", worker: undefined },
@@ -697,319 +753,296 @@ describe("a gateway", () => {
     expect([...result.workers]).toEqual([]);
   });
 
-  it("takes the worker of the relayed answer for a request with no dispatch", () => {
-    const grant = read([request(110, "r"), relayedGrant(112, { workerId: "w5" })], FLEET);
-    expect(grant.requests[0]).toMatchObject({
-      outcome: { kind: "granted" },
-      requestedAt: 110,
-      worker: "w5",
-    });
-    const rejection = read([request(110, "r"), relayedReject(112, { workerId: "w6" })], FLEET);
-    expect(rejection.requests[0]).toMatchObject({ outcome: { kind: "rejected" }, worker: "w6" });
-    expect([...grant.workers]).toEqual(["w5"]);
-  });
-
-  it("names the worker the request was dispatched to, not the one that relayed the answer", () => {
-    const result = read(
-      [request(110, "r"), dispatch(111, "r", "a", "w1"), relayedGrant(112, { workerId: "w2" })],
-      FLEET,
-    );
-    expect(result.requests[0]?.worker).toBe("w1");
-  });
-
-  it("serves a request through its dispatch, and records the worker it was dispatched to", () => {
-    const result = read([request(110, "r"), dispatch(111, "r", "a", "w9")], FLEET);
-    expect(result.requests).toEqual([
-      { platform: "ios", requestedAt: 110, requester: "a", worker: "w9" },
-    ]);
-    expect([...result.workers]).toEqual(["w9"]);
-  });
-
-  it("ignores a dispatch missing requestId or workerId, or outside the window", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        at(111, "request.dispatched", { requesterId: "a", workerId: "w1" }),
-        at(113, "request.dispatched", { requestId: "r", requesterId: "a" }),
-        dispatch(100, "r"),
-        dispatch(201, "r"),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]?.worker).toBeUndefined();
-  });
-
-  it("takes a dispatch at exactly the window end", () => {
-    const result = read([request(110, "r"), dispatch(200, "r")], FLEET);
-    expect(result.requests[0]?.worker).toBe("w1");
-  });
-
-  it("ignores a dispatch on a worker", () => {
-    const result = read([request(110, "r"), dispatch(111, "r")]);
-    expect(result.requests[0]?.worker).toBe("self");
-    expect(result.requests[0]).not.toHaveProperty("outcome");
-  });
-
-  it("counts a relayed grant with its source and lease id, and defaults both to empty", () => {
-    const withEnd = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r"),
-        relayedGrant(112, { leaseId: undefined, source: undefined }),
-        at(130, "lease.released", { leaseId: "", workerId: "w1" }),
-      ],
-      FLEET,
-    );
-    expect(withEnd.requests[0]).toMatchObject({
-      endedAt: 130,
-      outcome: { at: 112, kind: "granted", source: "" },
-    });
-    const plain = read(
-      [request(110, "r"), dispatch(111, "r"), relayedGrant(112, { source: "cold" })],
-      FLEET,
-    );
-    expect(plain.requests[0]?.outcome).toEqual({ at: 112, kind: "granted", source: "cold" });
-  });
-
-  it("counts a relayed rejection with its reason, defaulting a missing reason to empty is impossible so it is ignored", () => {
-    const rejection = read([request(110, "r"), dispatch(111, "r"), relayedReject(112)], FLEET);
-    expect(rejection.requests[0]?.outcome).toEqual({
-      at: 112,
-      kind: "rejected",
-      reason: "no-capacity",
-    });
-    const reasonless = read(
-      [request(110, "r"), dispatch(111, "r"), relayedReject(112, { reason: undefined })],
-      FLEET,
-    );
-    expect(reasonless.requests[0]).not.toHaveProperty("outcome");
-  });
-
-  it("ignores a relayed grant or rejection without a requester, and one outside the window", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r"),
-        relayedGrant(112, { requester: undefined }),
-        relayedReject(113, { requester: undefined }),
-        relayedGrant(100),
-        relayedGrant(201),
-        relayedReject(100),
-        relayedReject(201),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]).not.toHaveProperty("outcome");
-  });
-
-  it("ignores a relayed grant of another requester, or of one without the gateway's prefix", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r"),
-        relayedGrant(113, { requester: "gw:b" }),
-        relayedGrant(114, { requester: "a" }),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]).not.toHaveProperty("outcome");
-  });
-
-  it("takes the first relayed answer, in event order", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r"),
-        relayedGrant(112, { source: "first" }),
-        relayedGrant(113, { source: "second" }),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]?.outcome).toMatchObject({ source: "first" });
-  });
-
-  it("counts a grant or a rejection that came before the dispatch", () => {
-    const grant = read([request(110, "r"), relayedGrant(111), dispatch(112, "r")], FLEET);
-    expect(grant.requests[0]?.outcome).toMatchObject({ kind: "granted" });
-    expect(grant.requests[0]?.worker).toBe("w1");
-    const rejection = read([request(110, "r"), relayedReject(111), dispatch(112, "r")], FLEET);
-    expect(rejection.requests[0]?.outcome).toMatchObject({ kind: "rejected" });
-  });
-
-  it("does not let a grant from before the request count", () => {
-    const result = read([relayedGrant(105), request(110, "r"), dispatch(111, "r")], FLEET);
-    expect(result.requests[0]).not.toHaveProperty("outcome");
-  });
-
-  it("counts a rejection arriving right after the dispatch", () => {
-    const result = read([request(110, "r"), dispatch(111, "r"), relayedReject(112)], FLEET);
-    expect(result.requests[0]?.outcome).toMatchObject({ kind: "rejected" });
-  });
-
-  it("cuts off relayed answers at the requester's next request", () => {
-    const result = read(
-      [
-        request(110, "r1"),
-        dispatch(111, "r1"),
-        request(112, "r2"),
-        dispatch(113, "r2"),
-        relayedGrant(114, { leaseId: "L2", source: "late" }),
-      ],
-      FLEET,
-    );
-    const [first, second] = result.requests;
-    expect(first).not.toHaveProperty("outcome");
-    expect(second?.outcome).toMatchObject({ source: "late" });
-  });
-
-  it("does not cut off at a next dispatch of the requester, only at its next request", () => {
-    const result = read(
-      [request(110, "r1"), dispatch(111, "r1"), dispatch(112, "r2"), relayedGrant(113)],
-      FLEET,
-    );
-    expect(result.requests[0]?.outcome).toMatchObject({ kind: "granted" });
-  });
-
-  it("does not cut off at another requester's request", () => {
-    const result = read(
-      [request(110, "r1"), dispatch(111, "r1"), request(112, "r2", "b"), relayedGrant(113)],
-      FLEET,
-    );
-    expect(result.requests[0]?.outcome).toMatchObject({ kind: "granted" });
-  });
-
-  it("does not cut off at a request with no requester or a dispatch with no requesterId", () => {
-    const result = read(
-      [
-        request(110, "r1"),
-        dispatch(111, "r1"),
-        at(112, "lease.requested", { requestId: "x" }),
-        at(113, "request.dispatched", { requestId: "x", workerId: "w1" }),
-        relayedGrant(114),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]?.outcome).toMatchObject({ kind: "granted" });
-  });
-
-  it("does not cut off at an earlier request of the same requester", () => {
-    const result = read(
-      [request(105, "r0"), request(110, "r1"), dispatch(111, "r1"), relayedGrant(112)],
-      FLEET,
-    );
-    expect(result.requests.map((r) => r.outcome?.kind)).toEqual([undefined, "granted"]);
-  });
-
-  it("does not treat a relayed lease.requested as a request or a boundary", () => {
-    const result = read(
-      [
-        request(110, "r1"),
-        dispatch(111, "r1"),
-        request(112, "r9", "a", { workerId: "w1" }),
-        relayedGrant(113),
-      ],
-      FLEET,
-    );
-    expect(result.requests).toHaveLength(1);
-    expect(result.requests[0]?.outcome).toMatchObject({ kind: "granted" });
-  });
-
-  it("settles a gateway's own rejection of a seen request without a worker", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        at(120, "lease.rejected", { reason: "no-capacity", requestId: "r", requester: "a" }),
-      ],
-      FLEET,
-    );
-    expect(result.requests).toEqual([
-      {
-        outcome: { at: 120, kind: "rejected", reason: "no-capacity" },
-        platform: "ios",
-        requestedAt: 110,
-        requester: "a",
-        worker: undefined,
-      },
-    ]);
-  });
-
-  it("counts a gateway's own refused-at-admission rejection with no worker", () => {
-    const result = read(
-      [at(120, "lease.rejected", { reason: "killed", requestId: "x", requester: "a" })],
-      FLEET,
-    );
-    expect(result.requests).toEqual([
-      {
-        outcome: { at: 120, kind: "rejected", reason: "killed" },
-        platform: undefined,
-        requestedAt: undefined,
-        requester: "a",
-        worker: undefined,
-      },
-    ]);
-  });
-
-  it("does not count a relayed rejection with a refused-at-admission reason as the gateway's own", () => {
-    const result = read([relayedReject(120, { reason: "killed", requestId: "x" })], FLEET);
-    expect(result.requests).toEqual([]);
-  });
-
   it("does not take a relayed lease.requested as the gateway's own request", () => {
     const result = read([request(110, "r", "a", { workerId: "w1" })], FLEET);
     expect(result.requests).toEqual([]);
   });
 
-  it("names the worker from a dispatch that carries no requesterId, and records none for one with no workerId", () => {
-    const noRequester = read(
-      [request(110, "r"), at(111, "request.dispatched", { requestId: "r", workerId: "w1" })],
-      FLEET,
-    );
-    expect(noRequester.requests[0]?.worker).toBe("w1");
-    const noWorker = read(
-      [request(110, "r"), at(111, "request.dispatched", { requestId: "r", requesterId: "a" })],
-      FLEET,
-    );
-    expect(noWorker.requests[0]?.worker).toBeUndefined();
-    expect([...noWorker.workers]).toEqual([]);
+  describe("the outcome of a fleet request, by its request id", () => {
+    it("is the gateway's request.granted, by the gateway's clock, naming the worker it handed the grant from", () => {
+      const result = read(
+        [relayedGrant(105), request(110, "r"), handed(150, "r", { worker: "w1" })],
+        FLEET,
+      );
+      expect(result.requests[0]).toMatchObject({
+        outcome: { at: 150, kind: "granted" },
+        requestedAt: 110,
+        worker: "w1",
+      });
+      expect([...result.workers]).toEqual(["w1"]);
+    });
+
+    it("is a request.granted at exactly the window end, and none missing a field or outside the window", () => {
+      expect(read([request(110, "r"), handed(200, "r")], FLEET).requests[0]).toHaveProperty(
+        "outcome",
+      );
+      const none = read(
+        [
+          request(110, "r"),
+          handed(120, "r", { requestId: undefined }),
+          handed(121, "r", { worker: undefined }),
+          handed(122, "r", { workerLeaseId: undefined }),
+          handed(100, "r"),
+          handed(201, "r"),
+        ],
+        FLEET,
+      );
+      expect(none.requests[0]).not.toHaveProperty("outcome");
+    });
+
+    it("is not a request.granted that carries a workerId, which only a worker's relayed event does", () => {
+      const result = read([request(110, "r"), handed(120, "r", { workerId: "w1" })], FLEET);
+      expect(result.requests[0]).not.toHaveProperty("outcome");
+    });
+
+    it("is not a request.granted on a worker", () => {
+      const result = read([request(110, "r"), handed(120, "r")]);
+      expect(result.requests[0]).not.toHaveProperty("outcome");
+    });
+
+    it("is the gateway's own lease.rejected, under no worker, and a worker-failed one under its worker", () => {
+      const result = read(
+        [
+          request(110, "timed-out"),
+          gatewayReject(120, "timed-out", "timeout", { worker: "w1" }),
+          request(111, "failed", "b"),
+          gatewayReject(121, "failed", "worker-failed", {
+            code: "INTERNAL",
+            requester: "b",
+            worker: "w2",
+          }),
+        ],
+        FLEET,
+      );
+      expect(result.requests).toEqual([
+        {
+          outcome: { at: 120, kind: "rejected", reason: "timeout" },
+          platform: "ios",
+          requestedAt: 110,
+          requester: "a",
+          worker: undefined,
+        },
+        {
+          outcome: { at: 121, kind: "rejected", reason: "worker-failed" },
+          platform: "ios",
+          requestedAt: 111,
+          requester: "b",
+          worker: "w2",
+        },
+      ]);
+      expect([...result.workers]).toEqual(["w2"]);
+    });
+
+    it("is never a rejection a worker relayed, nor a grant it relayed, nor a decline", () => {
+      const result = read(
+        [
+          request(110, "r"),
+          gatewayReject(120, "r", "no-wait", { workerId: "w1" }),
+          relayedGrant(121, { requestId: "r" }),
+          declined(122, { requestId: "r" }),
+          request(130, "r2", "b"),
+          relayedGrant(131, { requester: "gw:b" }),
+        ],
+        FLEET,
+      );
+      expect(result.requests.map((fact) => fact.outcome)).toEqual([undefined, undefined]);
+    });
+
+    it("follows the request id, so another request of the same requester neither takes nor loses the outcome", () => {
+      const result = read(
+        [request(110, "r1"), request(112, "r2"), handed(120, "r2"), request(130, "r3")],
+        FLEET,
+      );
+      expect(result.requests.map((fact) => fact.outcome?.kind)).toEqual([
+        undefined,
+        "granted",
+        undefined,
+      ]);
+    });
+
+    it("is, with neither, the gateway's next own daemon.started, as a rejection daemon-restarted under no worker", () => {
+      const result = read([request(110, "r"), restarted(150), restarted(160)], FLEET);
+      expect(result.requests[0]).toEqual({
+        outcome: { at: 150, kind: "rejected", reason: "daemon-restarted" },
+        platform: "ios",
+        requestedAt: 110,
+        requester: "a",
+        worker: undefined,
+      });
+    });
+
+    it("stays open past a daemon.started before the request, a relayed one, one after the window, and one on a worker", () => {
+      const open = (events: EventEnvelope[], options: ReadOptions = FLEET) =>
+        read(events, options).requests[0]?.outcome;
+      expect(open([restarted(105), request(110, "r")])).toBeUndefined();
+      expect(open([request(110, "r"), restarted(150, { workerId: "w1" })])).toBeUndefined();
+      expect(open([request(110, "r"), restarted(201)])).toBeUndefined();
+      expect(open([request(110, "r"), restarted(150)], WORKER)).toBeUndefined();
+    });
+
+    it("is the request.granted or lease.rejected, not the restart that follows it", () => {
+      const result = read(
+        [
+          request(110, "g"),
+          request(111, "j", "b"),
+          restarted(150),
+          handed(160, "g"),
+          gatewayReject(161, "j", "timeout", { requester: "b" }),
+        ],
+        FLEET,
+      );
+      expect(result.requests.map((fact) => fact.outcome?.kind)).toEqual(["granted", "rejected"]);
+      expect(result.requests[1]?.outcome).toMatchObject({ reason: "timeout" });
+    });
   });
 
-  it("keeps a grant answering a request before the requester's next request", () => {
+  describe("the device facts of a fleet grant, from the worker it names", () => {
+    const events = (endWorker: string, endLease: string) => [
+      request(110, "r"),
+      relayedGrant(112),
+      handed(115, "r"),
+      at(130, "lease.released", { leaseId: endLease, workerId: endWorker }),
+    ];
+
+    it("take the source and the held time, by the worker's clock, from the relayed lease.granted and end of the worker and lease it names", () => {
+      const result = read(events("w1", "L"), FLEET);
+      expect(result.requests[0]).toMatchObject({
+        heldMs: 18,
+        outcome: { at: 115, kind: "granted", source: "warm" },
+      });
+    });
+
+    it("have no held time from an end of another worker or another lease, or one no worker relayed", () => {
+      expect(read(events("w2", "L"), FLEET).requests[0]).not.toHaveProperty("heldMs");
+      expect(read(events("w1", "M"), FLEET).requests[0]).not.toHaveProperty("heldMs");
+      const unrelayed = read(
+        [
+          request(110, "r"),
+          relayedGrant(112),
+          handed(115, "r"),
+          at(130, "lease.released", { leaseId: "L" }),
+        ],
+        FLEET,
+      );
+      expect(unrelayed.requests[0]).not.toHaveProperty("heldMs");
+    });
+
+    it("look up each grant's end under the worker its own request.granted names, when two workers use one lease id", () => {
+      const result = read(
+        [
+          request(110, "r1"),
+          request(111, "r2", "b"),
+          relayedGrant(112, { workerId: "w1" }),
+          relayedGrant(115, { requester: "gw:b", workerId: "w2" }),
+          handed(116, "r1", { worker: "w1" }),
+          handed(117, "r2", { worker: "w2" }),
+          at(130, "lease.released", { leaseId: "L", workerId: "w1" }),
+          at(150, "lease.released", { leaseId: "L", workerId: "w2" }),
+        ],
+        FLEET,
+      );
+      expect(result.requests.map((fact) => [fact.worker, fact.heldMs])).toEqual([
+        ["w1", 18],
+        ["w2", 35],
+      ]);
+    });
+
+    it("are the source unknown and no held time when no worker relayed the grant, whichever of its lease id or worker is missing", () => {
+      const missing = read([request(110, "r"), handed(115, "r")], FLEET);
+      expect(missing.requests[0]).toMatchObject({
+        outcome: { at: 115, kind: "granted", source: "unknown" },
+        worker: "w1",
+      });
+      expect(missing.requests[0]).not.toHaveProperty("heldMs");
+      const otherLease = read(
+        [request(110, "r"), relayedGrant(112, { leaseId: "M" }), handed(115, "r")],
+        FLEET,
+      );
+      expect(otherLease.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+      const otherWorker = read(
+        [request(110, "r"), relayedGrant(112, { workerId: "w2" }), handed(115, "r")],
+        FLEET,
+      );
+      expect(otherWorker.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+    });
+
+    it("default a relayed grant's missing source to empty, and ignore a relayed grant with no lease id or worker", () => {
+      const noSource = read(
+        [request(110, "r"), relayedGrant(112, { source: undefined }), handed(115, "r")],
+        FLEET,
+      );
+      expect(noSource.requests[0]?.outcome).toMatchObject({ source: "" });
+      const noLease = read(
+        [
+          request(110, "r"),
+          relayedGrant(112, { leaseId: undefined }),
+          handed(115, "r", { workerLeaseId: "undefined" }),
+        ],
+        FLEET,
+      );
+      expect(noLease.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+      const noWorker = read(
+        [
+          request(110, "r"),
+          relayedGrant(112, { workerId: undefined }),
+          handed(115, "r", { worker: "undefined" }),
+        ],
+        FLEET,
+      );
+      expect(noWorker.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+    });
+
+    it("ignore a relayed grant outside the window", () => {
+      const result = read(
+        [request(110, "r"), relayedGrant(100), relayedGrant(201), handed(115, "r")],
+        FLEET,
+      );
+      expect(result.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+    });
+  });
+
+  it("counts a relayed lease.declined under its worker and platform, one for each, and ignores a gateway's own and one outside the window", () => {
     const result = read(
       [
-        request(110, "r1"),
-        dispatch(111, "r1"),
-        relayedGrant(112, { source: "mine" }),
-        request(113, "r2"),
-        dispatch(114, "r2"),
+        declined(110, { workerId: "w1" }),
+        declined(111, { workerId: "w1" }),
+        declined(112, { requestSpec: { platform: "android" }, workerId: "w2" }),
+        declined(113),
+        declined(100, { workerId: "w1" }),
+        declined(201, { workerId: "w1" }),
       ],
       FLEET,
     );
-    expect(result.requests[0]?.outcome).toMatchObject({ source: "mine" });
-    expect(result.requests[1]).not.toHaveProperty("outcome");
+    expect(result.declines).toEqual([
+      { platform: "ios", worker: "w1" },
+      { platform: "ios", worker: "w1" },
+      { platform: "android", worker: "w2" },
+    ]);
+    expect(result.requests).toEqual([]);
+    expect([...result.workers].sort()).toEqual(["w1", "w2"]);
   });
 
-  it("does not match a worker-less relayed grant to a dispatch to a worker named undefined", () => {
-    const result = read(
-      [
-        request(110, "r"),
-        dispatch(111, "r", "a", "undefined"),
-        at(112, "lease.granted", { leaseId: "L", requester: "gw:a" }),
-      ],
-      FLEET,
-    );
-    expect(result.requests[0]).not.toHaveProperty("outcome");
+  it("counts a gateway's own refused-at-admission rejection with no worker, including lease-id-taken", () => {
+    for (const reason of ["killed", "already-leased", "lease-id-taken"]) {
+      const result = read(
+        [at(120, "lease.rejected", { reason, requestId: "x", requester: "a" })],
+        FLEET,
+      );
+      expect(result.requests).toEqual([
+        {
+          outcome: { at: 120, kind: "rejected", reason },
+          platform: undefined,
+          requestedAt: undefined,
+          requester: "a",
+          worker: undefined,
+        },
+      ]);
+    }
   });
 
-  it("does not match a relayed grant with no requester to a requester named undefined", () => {
-    const result = read(
-      [
-        request(110, "r", "undefined"),
-        dispatch(111, "r", "undefined"),
-        relayedGrant(112, { requester: undefined }),
-      ],
-      { ...FLEET, requesterPrefix: "" },
-    );
-    expect(result.requests[0]).not.toHaveProperty("outcome");
+  it("does not count a relayed rejection with a refused-at-admission reason as the gateway's own", () => {
+    const result = read([gatewayReject(120, "x", "killed", { workerId: "w1" })], FLEET);
+    expect(result.requests).toEqual([]);
   });
 });
 
@@ -1020,7 +1053,7 @@ describe("keys that look like missing ids", () => {
       at(120, "lease.granted", { leaseId: "undefined", requestId: "r" }),
       at(130, "lease.released", {}),
     ]);
-    expect(result.requests[0]).not.toHaveProperty("endedAt");
+    expect(result.requests[0]).not.toHaveProperty("heldMs");
   });
 
   it("does not remember a platform for a provisioning with no device id under the name undefined", () => {

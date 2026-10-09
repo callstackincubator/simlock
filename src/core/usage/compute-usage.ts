@@ -1,5 +1,4 @@
-import { byTimeThenSeq } from "../../bus/order.js";
-import type { EventEnvelope } from "../../bus/index.js";
+import { byTimeThenSeq, type EventEnvelope } from "../../bus/index.js";
 import type { UsageFigures, UsageOutput } from "../../contract/index.js";
 import {
   type CapacityStep,
@@ -20,14 +19,14 @@ export interface UsageOptions {
   readonly bucketMs?: number;
   /** The `requestId` of every request made before the window; a rejection of one is in no count. */
   readonly requestedBefore?: ReadonlySet<string>;
-  /** The gateway rule (ADR 0016 §6): request facts from the gateway's own events, device facts
-   * from the events its workers relayed. */
+  /** The `requestId` of every request answered, granted or rejected, before the window; a request
+   * made before it and not in this set was still waiting when it began. */
+  readonly answeredBefore?: ReadonlySet<string>;
+  /** The gateway rule (ADR 0016 §6 as ADR 0021 §5 amends it): request facts from the gateway's
+   * own events, device facts from the events its workers relayed. */
   readonly fleet: boolean;
   /** Requester id to label, for the requesters the caller found a label for (ADR 0016 §7). */
   readonly labels?: Readonly<Record<string, string>>;
-  /** What a gateway puts in front of a requester it forwards (`gw:<instance>:`). A fleet request
-   * is matched with its worker's events by the requester carrying it. */
-  readonly requesterPrefix?: string;
   /** The workers there are to report: a worker's own entry, a gateway's registry. A worker the
    * events name and this list does not is reported too. */
   readonly workers?: readonly { readonly id: string; readonly label?: string | undefined }[];
@@ -52,9 +51,11 @@ export function seriesBucketMs(spanMs: number): number {
 
 /**
  * The usage figures for `window`, from the events of a history (ADR 0016). Pure: events in, numbers
- * out. `events` are the envelopes the history holds for the window, with the step in force at its
- * start for each capacity and queue timeline; any order, and any envelope outside the window is
- * left out.
+ * out. `events` are the envelopes the history holds for the window, with the latest envelope at or
+ * before its start of `capacity.changed` and `queue.changed` (the step in force), of
+ * `lease.requested` for each requester (a request still waiting when the window began) and, on a
+ * gateway, the latest of its own `daemon.started`; any order, and any envelope outside the window
+ * is left out.
  */
 export function computeUsage(
   events: readonly EventEnvelope[],
@@ -64,15 +65,15 @@ export function computeUsage(
   const sorted = [...events].sort(byTimeThenSeq);
   const workers = options.workers ?? [];
   const read = readEvents(sorted, window, {
+    answeredBefore: options.answeredBefore ?? new Set(),
     fleet: options.fleet,
     requestedBefore: options.requestedBefore ?? new Set(),
-    requesterPrefix: options.requesterPrefix ?? "",
     self: workers[0]?.id ?? "local",
   });
   const bucketMs = options.bucketMs ?? seriesBucketMs(window.to - window.from);
   const oldest = options.oldestTs ?? sorted[0]?.timestamp;
   const coversFrom = oldest === undefined ? window.from : Math.max(window.from, oldest);
-  const figures = (scope: Scope) => figuresFor(read, window, scope);
+  const figures = (scope: Scope) => figuresFor(read, window, scope, options.fleet);
   const labelOf = new Map(workers.map((worker) => [worker.id, worker.label]));
   const ids = new Set([...labelOf.keys(), ...read.workers]);
   return {
@@ -113,29 +114,56 @@ function inScope(
   );
 }
 
-function figuresFor(read: ReadEvents, window: UsageWindow, scope: Scope): UsageFigures {
+/**
+ * One scope's figures. On a worker a probe (a gateway's dispatch, ADR 0021 §5) is not a request:
+ * it is counted under `probes`, gives no wait, turnaround or rejection, and still counts as a grant
+ * with its source and held time. A gateway's answer has no `probes`, and its sources include
+ * `unknown`.
+ */
+function figuresFor(
+  read: ReadEvents,
+  window: UsageWindow,
+  scope: Scope,
+  fleet: boolean,
+): UsageFigures {
   const requests = read.requests.filter((fact) => inScope(fact, scope));
   const devices = read.devices.filter((fact) => inScope(fact, scope));
-  const asked = requests.filter((fact) => fact.requestedAt !== undefined);
+  const asked = requests.filter((fact) => fact.requestedAt !== undefined && fact.probe !== true);
+  const probes = requests.filter((fact) => fact.requestedAt !== undefined && fact.probe === true);
   const grants = requests.flatMap((fact) =>
     fact.outcome?.kind === "granted" ? [{ ...fact, outcome: fact.outcome }] : [],
   );
+  const turnarounds = grants.filter((fact) => fact.probe !== true).flatMap(turnaroundOf);
   const rejected = requests.flatMap((fact) =>
-    fact.outcome?.kind === "rejected" ? [fact.outcome.reason] : [],
+    fact.outcome?.kind === "rejected" && fact.probe !== true ? [fact.outcome.reason] : [],
   );
+  const sources = sourcesOf(grants.map((fact) => fact.outcome.source));
   return {
     ...deviceFigures(devices),
-    bySource: sourcesOf(grants.map((fact) => fact.outcome.source)),
+    bySource: {
+      booted: sources.booted,
+      provisioned: sources.provisioned,
+      ...(fleet ? { unknown: sources.unknown } : {}),
+      warm: sources.warm,
+    },
+    declined: read.declines.filter((fact) => inScope(fact, scope)).length,
     granted: grants.length,
-    held: summarise(grants.flatMap((fact) => spanOf(fact.outcome.at, fact.endedAt))),
+    held: summarise(grants.flatMap((fact) => fact.heldMs ?? [])),
     queue:
       scope.queue === true ? queueOf(read.queue, window) : { meanDepth: null, peakDepth: null },
     rejected: { byReason: countBy(rejected), total: rejected.length },
     requests: asked.length,
-    turnaround: summarise(grants.flatMap((fact) => spanOf(fact.requestedAt, fact.endedAt))),
+    turnaround: summarise(turnarounds),
     utilisation: utilisationOf(read.capacity, window, scope),
     wait: summarise(asked.flatMap((fact) => spanOf(fact.requestedAt, fact.outcome?.at))),
+    ...(fleet ? {} : { probes: probes.length }),
   };
+}
+
+/** Wait plus held time: each by the clock of the host that saw it, so the two never mix. */
+function turnaroundOf(fact: RequestFact): number[] {
+  const wait = spanOf(fact.requestedAt, fact.outcome?.at)[0];
+  return wait === undefined || fact.heldMs === undefined ? [] : [wait + fact.heldMs];
 }
 
 /** The milliseconds from `start` to `end`, when both are known. */
@@ -143,10 +171,18 @@ function spanOf(start: number | undefined, end: number | undefined): number[] {
   return start === undefined || end === undefined ? [] : [end - start];
 }
 
-function sourcesOf(grantedSources: readonly string[]): UsageFigures["bySource"] {
-  const sources = { booted: 0, provisioned: 0, warm: 0 };
+type GrantSource = "booted" | "provisioned" | "unknown" | "warm";
+
+function sourcesOf(grantedSources: readonly string[]): Record<GrantSource, number> {
+  const sources = { booted: 0, provisioned: 0, unknown: 0, warm: 0 };
   for (const source of grantedSources) {
-    if (source === "warm" || source === "booted" || source === "provisioned") sources[source] += 1;
+    if (
+      source === "warm" ||
+      source === "booted" ||
+      source === "provisioned" ||
+      source === "unknown"
+    )
+      sources[source] += 1;
   }
   return sources;
 }
@@ -244,6 +280,8 @@ function requestersOf(
 ): UsageOutput["requesters"] {
   const byId = new Map<string, Requester>();
   for (const fact of requests) {
+    // A probe that was not granted is nothing of its requester's: it was never its request.
+    if (fact.probe === true && fact.outcome?.kind !== "granted") continue;
     const entry = byId.get(fact.requester) ?? {
       granted: 0,
       heldTotalMs: 0,
@@ -263,16 +301,17 @@ function requestersOf(
 
 type Requester = UsageOutput["requesters"][number];
 
-/** `entry` with `fact` counted in it: a request made, a grant and the time it was held, a rejection. */
+/** `entry` with `fact` counted in it: a request made, a grant and the time it was held, a rejection.
+ * A probe counts only as a grant and its held time. */
 function countRequest(entry: Requester, fact: RequestFact): Requester {
   const { outcome } = fact;
-  const held = outcome?.kind === "granted" ? (spanOf(outcome.at, fact.endedAt)[0] ?? 0) : 0;
+  const probe = fact.probe === true;
   return {
     ...entry,
     granted: entry.granted + (outcome?.kind === "granted" ? 1 : 0),
-    heldTotalMs: entry.heldTotalMs + held,
-    rejected: entry.rejected + (outcome?.kind === "rejected" ? 1 : 0),
-    requests: entry.requests + (fact.requestedAt === undefined ? 0 : 1),
+    heldTotalMs: entry.heldTotalMs + (outcome?.kind === "granted" ? (fact.heldMs ?? 0) : 0),
+    rejected: entry.rejected + (outcome?.kind === "rejected" && !probe ? 1 : 0),
+    requests: entry.requests + (fact.requestedAt === undefined || probe ? 0 : 1),
   };
 }
 
@@ -283,7 +322,10 @@ function seriesOf(read: ReadEvents, window: UsageWindow, bucketMs: number): Usag
   );
   const capacity = valuesAt(scopedSteps(read.capacity, {}), ends);
   const depths = valuesAt(read.queue, ends);
-  const waiting = waitingAt([...read.requests, ...read.carried], ends);
+  const waiting = waitingAt(
+    [...read.requests, ...read.carried].filter((fact) => fact.probe !== true),
+    ends,
+  );
   return ends.map((at, index) => {
     const values = capacity[index] as readonly CapacityValue[];
     const ram = ramOf(values, "used");

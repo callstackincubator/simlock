@@ -23,7 +23,11 @@ function requested(
 }
 
 /** A history that records what it was asked for and answers what the test sets. */
-function history(events: readonly EventEnvelope[] = [], oldestTs: number | undefined = undefined) {
+function history(
+  events: readonly EventEnvelope[] = [],
+  oldestTs: number | undefined = undefined,
+  before: { requested?: readonly string[]; answered?: readonly string[] } = {},
+) {
   const state = {
     asked: [] as { sinceTs: number; carry: readonly EventName[] }[],
     events,
@@ -34,7 +38,12 @@ function history(events: readonly EventEnvelope[] = [], oldestTs: number | undef
     latestId: () => state.newest,
     read: async (input) => {
       state.asked.push(input);
-      return { events: state.events, oldestTs: state.oldestTs, requestedBefore: new Set<string>() };
+      return {
+        answeredBefore: new Set(before.answered),
+        events: state.events,
+        oldestTs: state.oldestTs,
+        requestedBefore: new Set(before.requested),
+      };
     },
   };
   return { source, state };
@@ -63,7 +72,7 @@ const answer = (result: Awaited<ReturnType<UsageReader["get"]>>) => {
 };
 
 describe("UsageReader", () => {
-  it("rounds the window down to the bucket on both sides, so it never ends in the future, and reads the history from its start, with the step and the request events carried", async () => {
+  it("rounds the window down to the bucket on both sides, so neither end moves later than asked, and reads the history from its start, with the steps, the requests and a gateway start carried", async () => {
     const { source, state } = history();
     const { usage } = reader(source);
 
@@ -73,16 +82,45 @@ describe("UsageReader", () => {
     expect(result.bucketMs).toBe(MINUTE);
     expect(state.asked).toEqual([
       {
-        carry: [
-          "capacity.changed",
-          "lease.granted",
-          "lease.rejected",
-          "lease.requested",
-          "queue.changed",
-        ],
+        carry: ["capacity.changed", "daemon.started", "lease.requested", "queue.changed"],
         sinceTs: T0,
       },
     ]);
+  });
+
+  it("computes with the series bucket picked from the span asked, not from the rounded window", async () => {
+    const { usage } = reader(history().source);
+
+    const result = answer(await usage.get({ from: T0 + 1_000, to: T0 + 200 * MINUTE + 31_000 }));
+
+    expect(result.window).toEqual({ from: T0, to: T0 + 200 * MINUTE });
+    expect(result.bucketMs).toBe(5 * MINUTE);
+    expect(result.series).toHaveLength(40);
+  });
+
+  it("counts no rejection of a request the history says was made before the window, and one of a request it does not say so about", async () => {
+    const refused = {
+      event: "lease.rejected",
+      id: "evt_rej",
+      module: "test",
+      payload: { reason: "already-leased", requestId: "old", requester: "a" },
+      seq: 1,
+      timestamp: T0 + 1_000,
+    } as unknown as EventEnvelope;
+    const known = reader(history([refused], undefined, { requested: ["old"] }).source).usage;
+    const unknown = reader(history([refused]).source).usage;
+
+    expect(answer(await known.get({ from: T0, to: T0 + HOUR })).totals.rejected.total).toBe(0);
+    expect(answer(await unknown.get({ from: T0, to: T0 + HOUR })).totals.rejected.total).toBe(1);
+  });
+
+  it("counts a request made before the window as waiting at its start unless the history says it was answered by then", async () => {
+    const events = [requested(T0 - 30_000, "a", "waits"), requested(T0 - 20_000, "b", "done")];
+    const { usage } = reader(history(events, undefined, { answered: ["done"] }).source);
+
+    const result = answer(await usage.get({ from: T0, to: T0 + HOUR }));
+
+    expect(result.series[0]?.waiting).toBe(1);
   });
 
   it("leaves a window that is already on bucket edges as it is", async () => {

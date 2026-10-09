@@ -1213,7 +1213,12 @@ describe("Dispatcher: events.replay", () => {
 /** The parts of the history `usage.get` reads, for a test that is not about it. */
 const noUsageHistory = {
   latestId: () => undefined,
-  read: async () => ({ events: [], oldestTs: undefined, requestedBefore: new Set<string>() }),
+  read: async () => ({
+    events: [],
+    oldestTs: undefined,
+    answeredBefore: new Set<string>(),
+    requestedBefore: new Set<string>(),
+  }),
 };
 
 describe("Dispatcher: usage.get", () => {
@@ -1227,7 +1232,12 @@ describe("Dispatcher: usage.get", () => {
       latestId: () => state.newest,
       read: async () => {
         state.reads += 1;
-        return { events: [], oldestTs, requestedBefore: new Set<string>() };
+        return {
+          events: [],
+          oldestTs,
+          answeredBefore: new Set<string>(),
+          requestedBefore: new Set<string>(),
+        };
       },
       replay: async () => [],
     };
@@ -1247,7 +1257,7 @@ describe("Dispatcher: usage.get", () => {
 
     expect(state.reads).toBe(1);
     expect(second).toEqual(first);
-    // The answer's window is the window asked for rounded down to the bucket, never into the future.
+    // The answer's window is the window asked for rounded down to the bucket, so never later than asked.
     expect(second.window).toEqual({ from: WINDOW.from, to: WINDOW.to });
 
     state.newest = "evt_2";

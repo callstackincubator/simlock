@@ -1,6 +1,8 @@
 import { type Clock, CryptoIdGenerator, type IdGenerator } from "../ports/index.js";
 import { byTimeThenSeq } from "./order.js";
 
+export { byTimeThenSeq };
+
 export interface CapacityFiguresPayload {
   readonly running: number;
   readonly maxRunning: number;

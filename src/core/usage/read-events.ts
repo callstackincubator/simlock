@@ -3,9 +3,9 @@ import type { UsageFigures } from "../../contract/index.js";
 import type { Step } from "./timeline.js";
 
 /**
- * Reads a window's events into the facts the figures count (ADR 0016 §2, §6): one fact for each
- * request, one for each device event that counts, and the capacity and queue steps. Nothing here
- * adds a number up.
+ * Reads a window's events into the facts the figures count (ADR 0016 §2, ADR 0021 §5): one fact
+ * for each request, one for each device event that counts, one for each decline, and the capacity
+ * and queue steps. Nothing here adds a number up.
  */
 
 export type Platform = "ios" | "android";
@@ -17,16 +17,21 @@ export interface RequestFact {
   readonly worker: string | undefined;
   /** `undefined` for a rejection refused before the request was stored, which is no request. */
   readonly requestedAt: number | undefined;
+  /** On a worker: a gateway's dispatch (ADR 0021 §1), which gives no wait, turnaround, request or
+   * rejection. Absent otherwise. */
+  readonly probe?: true;
   readonly outcome?: Granted | Rejected;
-  /** When the lease ended, if the window saw it. */
-  readonly endedAt?: number;
+  /** How long the lease was held, when the window saw both its grant and its end. Both are the
+   * clock of the host that granted it, so on a gateway it is not `outcome.at` to an end. */
+  readonly heldMs?: number;
 }
 
-type RequestFactBase = Pick<RequestFact, "platform" | "requestedAt" | "requester">;
+type RequestFactBase = Pick<RequestFact, "platform" | "probe" | "requestedAt" | "requester">;
 
 interface Granted {
   readonly kind: "granted";
   readonly at: number;
+  /** `unknown` on a gateway for a grant whose worker's own `lease.granted` was not relayed. */
   readonly source: string;
 }
 
@@ -44,6 +49,12 @@ export interface DeviceFact {
   readonly value: number | string;
 }
 
+/** One `lease.declined` (ADR 0021 §2): a worker's refusal of a gateway dispatch. Not a request. */
+export interface DeclineFact {
+  readonly worker: string;
+  readonly platform: Platform | undefined;
+}
+
 export interface CapacityValue {
   readonly used: number;
   readonly max: number;
@@ -59,6 +70,7 @@ export interface ReadEvents {
   /** Requests made before the window and still open when it began; only the series counts them. */
   readonly carried: readonly RequestFact[];
   readonly devices: readonly DeviceFact[];
+  readonly declines: readonly DeclineFact[];
   readonly capacity: readonly CapacityStep[];
   readonly queue: readonly Step<number>[];
   readonly workers: ReadonlySet<string>;
@@ -68,10 +80,10 @@ export interface ReadOptions {
   readonly fleet: boolean;
   /** The `requestId` of every request made before the window. */
   readonly requestedBefore: ReadonlySet<string>;
+  /** The `requestId` of every request answered before the window: granted or rejected. */
+  readonly answeredBefore: ReadonlySet<string>;
   /** The id a worker's own events are attributed to. */
   readonly self: string;
-  /** What a gateway puts in front of a requester it forwards. */
-  readonly requesterPrefix: string;
 }
 
 export interface UsageWindow {
@@ -83,10 +95,10 @@ type Payload = Readonly<Record<string, unknown>>;
 type Incident = keyof UsageFigures["incidents"];
 
 /** A rejection with no `lease.requested` anywhere in the history read was refused before the
- * request was stored; only these two reasons are ever given before admission. One whose request
+ * request was stored; only these reasons are ever given before admission. One whose request
  * is in the history follows that request: counted with it, or in no count when it was made before
  * the window. */
-const REFUSED_AT_ADMISSION = new Set(["already-leased", "killed"]);
+const REFUSED_AT_ADMISSION = new Set(["already-leased", "killed", "lease-id-taken"]);
 /** The device events that count as an incident, by what the figure calls them. */
 const INCIDENT_OF: Readonly<Record<string, Incident>> = {
   "device.quarantine-abandoned": "lost",
@@ -115,21 +127,12 @@ const platformOf = (value: unknown): Platform | undefined =>
 const objectOf = (value: unknown): Payload | undefined =>
   typeof value === "object" && value !== null ? (value as Payload) : undefined;
 
-/** A relayed grant or rejection, kept for the request that will claim it. */
-type RelayedAnswer =
-  | { readonly kind: "granted"; readonly source: string; readonly leaseId: string }
-  | { readonly kind: "rejected"; readonly reason: string };
-type Relayed = {
-  readonly index: number;
-  readonly at: number;
-  readonly worker: string;
-} & RelayedAnswer;
-
 interface Request {
   readonly index: number;
   readonly at: number;
   readonly requester: string;
   readonly platform: Platform | undefined;
+  readonly probe: boolean;
 }
 
 /** What one event brings to a handler. */
@@ -144,6 +147,13 @@ interface Seen {
   readonly within: boolean;
 }
 
+type OwnRejection = Omit<Rejected, "kind"> & {
+  readonly requester: string;
+  readonly platform: Platform | undefined;
+  /** The worker a `worker-failed` rejection names. */
+  readonly worker: string | undefined;
+};
+
 export function readEvents(
   sorted: readonly EventEnvelope[],
   window: UsageWindow,
@@ -156,39 +166,40 @@ export function readEvents(
 
 class Reader {
   readonly #devices: DeviceFact[] = [];
+  readonly #declines: DeclineFact[] = [];
   readonly #capacity: CapacityStep[] = [];
   readonly #queue: Step<number>[] = [];
   readonly #workers = new Set<string>();
   readonly #devicePlatform = new Map<string, Platform>();
   readonly #requested = new Map<string, Request>();
-  /** The latest request of each requester made before the window, and where each was answered. */
+  /** The latest request of each requester made before the window. */
   readonly #carriedRequests = new Map<string, Request & { readonly requestId: string }>();
-  readonly #answeredBefore = new Map<string, number>();
-  readonly #ownRejections = new Map<
-    string,
-    Omit<Rejected, "kind"> & {
-      readonly requester: string;
-      readonly platform: Platform | undefined;
-    }
-  >();
+  readonly #ownRejections = new Map<string, OwnRejection>();
+  /** A worker's own grants by request id: the lease each served. */
   readonly #grants = new Map<string, Granted & { readonly leaseId: string }>();
+  /** A gateway's `request.granted` by request id (ADR 0021 §4). */
+  readonly #handed = new Map<
+    string,
+    { readonly at: number; readonly worker: string; readonly workerLeaseId: string }
+  >();
+  /** The grants workers relayed to a gateway, by worker and the worker's lease id. */
+  readonly #relayedGrants = new Map<string, { readonly at: number; readonly source: string }>();
   readonly #ends = new Map<string, number>();
-  /** The worker each request was dispatched to, by request id. */
-  readonly #dispatches = new Map<string, string>();
-  readonly #boundaries = new Map<string, number[]>();
-  /** Relayed grants and rejections by the namespaced requester they are for. */
-  readonly #relayed = new Map<string, Relayed[]>();
+  /** Where the gateway's own `daemon.started` events fall, in event order (ADR 0021 §5). */
+  readonly #restarts: { readonly index: number; readonly at: number }[] = [];
   readonly #handlers: Record<string, (seen: Seen) => void> = {
     "capacity.changed": (seen) => this.#capacityChanged(seen),
+    "daemon.started": (seen) => this.#daemonStarted(seen),
     "device.provisioned": (seen) => this.#provisioned(seen),
     "device.ready": (seen) => this.#ready(seen),
+    "lease.declined": (seen) => this.#declined(seen),
     "lease.expired": (seen) => this.#ended(seen),
     "lease.granted": (seen) => this.#granted(seen),
     "lease.rejected": (seen) => this.#rejected(seen),
     "lease.released": (seen) => this.#ended(seen),
     "lease.requested": (seen) => this.#leaseRequested(seen),
     "queue.changed": (seen) => this.#queueChanged(seen),
-    "request.dispatched": (seen) => this.#dispatched(seen),
+    "request.granted": (seen) => this.#requestGranted(seen),
   };
 
   constructor(
@@ -213,9 +224,10 @@ class Reader {
   finish(): ReadEvents {
     return {
       capacity: this.#capacity,
+      carried: this.#carriedOpen(),
+      declines: this.#declines,
       devices: this.#devices,
       queue: this.#queue,
-      carried: this.#carriedOpen(),
       requests: [...this.#requests(), ...this.#refusedAtAdmission()],
       workers: this.#workers,
     };
@@ -244,105 +256,80 @@ class Reader {
     this.#queue.push({ at: seen.event.timestamp, key: "queue", value: depth });
   }
 
-  #boundary(requester: string | undefined, index: number): void {
-    if (requester === undefined) return;
-    this.#boundaries.set(requester, [...this.#boundariesOf(requester), index]);
-  }
-
-  #boundariesOf(requester: string): readonly number[] {
-    return this.#boundaries.get(requester) ?? [];
-  }
-
   #leaseRequested(seen: Seen): void {
     if (!seen.own) return;
     const requestId = text(seen.payload, "requestId");
     const requester = text(seen.payload, "requester");
-    this.#boundary(requester, seen.index);
     if (requestId === undefined || requester === undefined) return;
-    if (seen.event.timestamp <= this.window.from) {
-      this.#carriedRequests.set(requester, {
-        at: seen.event.timestamp,
-        index: seen.index,
-        platform: requestPlatform(seen.payload),
-        requestId,
-        requester,
-      });
-    }
-    if (!seen.within) return;
-    this.#requested.set(requestId, {
+    const request: Request = {
       at: seen.event.timestamp,
       index: seen.index,
       platform: requestPlatform(seen.payload),
+      probe: !this.options.fleet && text(seen.payload, "fleetRequestId") !== undefined,
       requester,
-    });
+    };
+    if (seen.event.timestamp <= this.window.from) {
+      this.#carriedRequests.set(requester, { ...request, requestId });
+    }
+    if (seen.within) this.#requested.set(requestId, request);
   }
 
-  #dispatched(seen: Seen): void {
+  /** A gateway's restart ends every fleet request still without an outcome (ADR 0021 §5). */
+  #daemonStarted(seen: Seen): void {
+    if (!this.options.fleet || !seen.own || seen.event.timestamp > this.window.to) return;
+    this.#restarts.push({ at: seen.event.timestamp, index: seen.index });
+  }
+
+  /** A gateway's own `request.granted` is its fleet request's grant. */
+  #requestGranted(seen: Seen): void {
     const requestId = text(seen.payload, "requestId");
-    const worker = text(seen.payload, "workerId");
-    if (!this.options.fleet || !seen.within) return;
-    if (requestId === undefined || worker === undefined) return;
-    this.#dispatches.set(requestId, worker);
+    const worker = text(seen.payload, "worker");
+    const workerLeaseId = text(seen.payload, "workerLeaseId");
+    if (!this.options.fleet || !seen.own || !seen.within) return;
+    if (requestId === undefined || worker === undefined || workerLeaseId === undefined) return;
+    this.#handed.set(requestId, { at: seen.event.timestamp, worker, workerLeaseId });
   }
 
-  #relay(seen: Seen, relayed: RelayedAnswer): void {
-    const requester = text(seen.payload, "requester");
-    if (requester === undefined || seen.worker === undefined) return;
-    const entry = {
-      ...relayed,
-      at: seen.event.timestamp,
-      index: seen.index,
-      worker: seen.worker,
-    } as Relayed;
-    this.#relayed.set(requester, [...(this.#relayed.get(requester) ?? []), entry]);
+  /** A worker's `lease.declined`, or one a gateway's worker relayed: an event, never a request. */
+  #declined(seen: Seen): void {
+    if (!seen.within || seen.worker === undefined) return;
+    if (this.options.fleet && seen.own) return;
+    this.#declines.push({ platform: requestPlatform(seen.payload), worker: seen.worker });
+    this.#workers.add(seen.worker);
   }
 
   #rejected(seen: Seen): void {
     const requestId = text(seen.payload, "requestId");
     const reason = text(seen.payload, "reason");
-    if (this.#answeredEarlier(seen)) return;
-    if (!seen.within || requestId === undefined || reason === undefined) return;
     const requester = text(seen.payload, "requester");
-    if (seen.own) {
-      if (requester === undefined) return;
-      this.#ownRejections.set(requestId, {
-        at: seen.event.timestamp,
-        platform: requestPlatform(seen.payload),
-        reason,
-        requester,
-      });
-    } else {
-      this.#relay(seen, { kind: "rejected", reason });
-    }
-  }
-
-  /** Notes where a requester was last answered before the window; true for such an answer. */
-  #answeredEarlier(seen: Seen): boolean {
-    if (seen.event.timestamp > this.window.from) return false;
-    const requester = text(seen.payload, "requester");
-    if (requester !== undefined) this.#answeredBefore.set(requester, seen.index);
-    return true;
+    if (!seen.within || !seen.own) return;
+    if (requestId === undefined || reason === undefined || requester === undefined) return;
+    this.#ownRejections.set(requestId, {
+      at: seen.event.timestamp,
+      platform: requestPlatform(seen.payload),
+      reason,
+      requester,
+      worker: reason === "worker-failed" ? text(seen.payload, "worker") : undefined,
+    });
   }
 
   #granted(seen: Seen): void {
-    if (this.#answeredEarlier(seen) || !seen.within) return;
+    if (!seen.within) return;
+    const leaseId = text(seen.payload, "leaseId");
+    if (leaseId === undefined) return;
+    const source = text(seen.payload, "source") ?? "";
     if (this.options.fleet) {
-      this.#relay(seen, {
-        kind: "granted",
-        leaseId: text(seen.payload, "leaseId") ?? "",
-        source: text(seen.payload, "source") ?? "",
-      });
+      if (seen.worker !== undefined) {
+        this.#relayedGrants.set(this.#key(seen.worker, leaseId), {
+          at: seen.event.timestamp,
+          source,
+        });
+      }
       return;
     }
     const requestId = text(seen.payload, "requestId");
-    const leaseId = text(seen.payload, "leaseId");
-    if (requestId === undefined || leaseId === undefined) return;
-    this.#grants.set(requestId, {
-      at: seen.event.timestamp,
-      kind: "granted",
-      leaseId,
-      source: text(seen.payload, "source") ?? "",
-    });
+    if (requestId === undefined) return;
+    this.#grants.set(requestId, { at: seen.event.timestamp, kind: "granted", leaseId, source });
   }
 
   #ended(seen: Seen): void {
@@ -408,74 +395,90 @@ class Reader {
     return facts;
   }
 
-  /** The requests made before the window that nothing had answered when it began. */
+  /**
+   * The requests made before the window that nothing had answered when it began, and that no
+   * gateway restart had ended. A worker's probe never waits there (ADR 0021 §5).
+   */
   #carriedOpen(): RequestFact[] {
     const facts: RequestFact[] = [];
-    for (const [requester, request] of this.#carriedRequests) {
-      const answered = [requester, `${this.options.requesterPrefix}${requester}`].some(
-        (key) => (this.#answeredBefore.get(key) ?? -1) > request.index,
-      );
-      if (!answered) facts.push(this.#factFor(request.requestId, request));
+    for (const request of this.#carriedRequests.values()) {
+      if (request.probe || this.options.answeredBefore.has(request.requestId)) continue;
+      const fact = this.#factFor(request.requestId, request);
+      if (fact.outcome === undefined || fact.outcome.at > this.window.from) facts.push(fact);
     }
     return facts;
   }
 
   #factFor(requestId: string, request: Request): RequestFact {
-    const rejection = this.#ownRejections.get(requestId);
-    const own = this.options.fleet ? undefined : this.options.self;
     const base = {
       platform: request.platform,
       requestedAt: request.at,
       requester: request.requester,
+      ...(request.probe ? { probe: true as const } : {}),
     };
-    if (rejection !== undefined) {
-      const outcome: Rejected = { at: rejection.at, kind: "rejected", reason: rejection.reason };
-      return { ...base, outcome, worker: own };
-    }
     return this.options.fleet
       ? this.#fleetFact(base, requestId, request)
       : this.#workerFact(base, requestId, this.options.self);
   }
 
   #workerFact(base: RequestFactBase, requestId: string, own: string): RequestFact {
-    const grant = this.#grants.get(requestId);
-    return grant === undefined
-      ? { ...base, worker: own }
-      : this.#withEnd({ ...base, outcome: grant, worker: own }, grant.leaseId, own);
-  }
-
-  /** A fleet request's outcome is the worker's relayed answer for its requester (ADR 0016 §6). */
-  #fleetFact(base: RequestFactBase, requestId: string, request: Request): RequestFact {
-    const dispatched = this.#dispatches.get(requestId);
-    const relayed = this.#fleetOutcome(request);
-    const worker = dispatched ?? relayed?.worker;
-    if (worker !== undefined) this.#workers.add(worker);
-    if (relayed === undefined) return { ...base, worker };
-    if (relayed.kind === "rejected") {
-      const outcome: Rejected = { at: relayed.at, kind: "rejected", reason: relayed.reason };
-      return { ...base, outcome, worker };
+    const rejection = this.#ownRejections.get(requestId);
+    if (rejection !== undefined) {
+      return { ...base, outcome: rejectedOf(rejection), worker: own };
     }
-    const outcome: Granted = { at: relayed.at, kind: "granted", source: relayed.source };
-    return this.#withEnd({ ...base, outcome, worker }, relayed.leaseId, relayed.worker);
-  }
-
-  #withEnd(fact: RequestFact, leaseId: string, worker: string): RequestFact {
-    const endedAt = this.#ends.get(this.#key(worker, leaseId));
-    return endedAt === undefined ? fact : { ...fact, endedAt };
+    const grant = this.#grants.get(requestId);
+    if (grant === undefined) return { ...base, worker: own };
+    const outcome: Granted = { at: grant.at, kind: "granted", source: grant.source };
+    return this.#withHeld(
+      { ...base, outcome, worker: own },
+      this.#heldFor(own, grant.leaseId, grant),
+    );
   }
 
   /**
-   * The first relayed grant or rejection for the request's namespaced requester at or after the
-   * gateway's own `lease.requested` for it and before that requester's next one (ADR 0016 §6). A
-   * grant may come before `request.dispatched`: a warm device is granted before the dispatch
-   * answer reaches the gateway.
+   * A fleet request's outcome is the gateway's own `request.granted` or `lease.rejected` for its
+   * request id; with neither, the gateway's next start ends it; else it is open (ADR 0021 §5).
    */
-  #fleetOutcome(request: Request): Relayed | undefined {
-    const next = this.#boundariesOf(request.requester).find((index) => index > request.index);
-    return (this.#relayed.get(`${this.options.requesterPrefix}${request.requester}`) ?? []).find(
-      (candidate) =>
-        candidate.index >= request.index && (next === undefined || candidate.index < next),
-    );
+  #fleetFact(base: RequestFactBase, requestId: string, request: Request): RequestFact {
+    const rejection = this.#ownRejections.get(requestId);
+    if (rejection !== undefined) {
+      if (rejection.worker !== undefined) this.#workers.add(rejection.worker);
+      return { ...base, outcome: rejectedOf(rejection), worker: rejection.worker };
+    }
+    const handed = this.#handed.get(requestId);
+    if (handed !== undefined) return this.#grantedFleetFact(base, handed);
+    const restart = this.#restarts.find((candidate) => candidate.index > request.index);
+    if (restart === undefined) return { ...base, worker: undefined };
+    const outcome: Rejected = { at: restart.at, kind: "rejected", reason: "daemon-restarted" };
+    return { ...base, outcome, worker: undefined };
+  }
+
+  /** The grant source and the held time are the worker's own facts, by the worker's clock. */
+  #grantedFleetFact(
+    base: RequestFactBase,
+    handed: { readonly at: number; readonly worker: string; readonly workerLeaseId: string },
+  ): RequestFact {
+    this.#workers.add(handed.worker);
+    const relayed = this.#relayedGrants.get(this.#key(handed.worker, handed.workerLeaseId));
+    const outcome: Granted = {
+      at: handed.at,
+      kind: "granted",
+      source: relayed === undefined ? "unknown" : relayed.source,
+    };
+    const fact = { ...base, outcome, worker: handed.worker };
+    return relayed === undefined
+      ? fact
+      : this.#withHeld(fact, this.#heldFor(handed.worker, handed.workerLeaseId, relayed));
+  }
+
+  /** How long a lease was held, from its grant to the end the window saw. */
+  #heldFor(worker: string, leaseId: string, grant: { readonly at: number }): number | undefined {
+    const endedAt = this.#ends.get(this.#key(worker, leaseId));
+    return endedAt === undefined ? undefined : endedAt - grant.at;
+  }
+
+  #withHeld(fact: RequestFact, heldMs: number | undefined): RequestFact {
+    return heldMs === undefined ? fact : { ...fact, heldMs };
   }
 
   /** A gateway's or worker's own rejection of a request the window did not see made, when its
@@ -486,7 +489,7 @@ class Reader {
       if (this.#requested.has(requestId) || this.options.requestedBefore.has(requestId)) continue;
       if (!REFUSED_AT_ADMISSION.has(rejection.reason)) continue;
       facts.push({
-        outcome: { at: rejection.at, kind: "rejected", reason: rejection.reason },
+        outcome: rejectedOf(rejection),
         platform: rejection.platform,
         requestedAt: undefined,
         requester: rejection.requester,
@@ -496,6 +499,12 @@ class Reader {
     return facts;
   }
 }
+
+const rejectedOf = (rejection: OwnRejection): Rejected => ({
+  at: rejection.at,
+  kind: "rejected",
+  reason: rejection.reason,
+});
 
 function requestPlatform(payload: Payload): Platform | undefined {
   return platformOf(objectOf(payload.requestSpec)?.platform);

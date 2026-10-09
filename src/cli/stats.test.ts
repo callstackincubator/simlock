@@ -9,6 +9,7 @@ function figuresFixture(overrides: Partial<UsageFigures> = {}): UsageFigures {
   return {
     boot: NONE,
     bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
     failures: { byEvent: {} },
     granted: 0,
     held: NONE,
@@ -249,6 +250,46 @@ describe("formatUsage rows that depend on the figures", () => {
 
     expect(withGrant).toContain("  Granted:      warm 1, booted 0, provisioned 0");
     expect(without.some((line) => line.startsWith("  Granted:"))).toBe(false);
+  });
+
+  it("prints the unknown grant source only when a gateway counted one", () => {
+    const unknown = formatUsage(
+      usageFixture({
+        totals: figuresFixture({
+          bySource: { booted: 0, provisioned: 0, unknown: 2, warm: 1 },
+          granted: 3,
+        }),
+      }),
+    ).split("\n");
+    const none = formatUsage(
+      usageFixture({
+        totals: figuresFixture({
+          bySource: { booted: 0, provisioned: 0, unknown: 0, warm: 1 },
+          granted: 1,
+        }),
+      }),
+    ).split("\n");
+
+    expect(unknown).toContain("  Granted:      warm 1, booted 0, provisioned 0, unknown 2");
+    expect(none).toContain("  Granted:      warm 1, booted 0, provisioned 0");
+  });
+
+  it("prints the Declined row only when a worker declined something, and the Probes row only when a worker counted a probe", () => {
+    const both = formatUsage(
+      usageFixture({ totals: figuresFixture({ declined: 4, probes: 7 }) }),
+    ).split("\n");
+    const without = formatUsage(
+      usageFixture({ totals: figuresFixture({ declined: 0, probes: 0 }) }),
+    ).split("\n");
+    const gateway = formatUsage(usageFixture({ totals: figuresFixture({ declined: 1 }) })).split(
+      "\n",
+    );
+
+    expect(both).toContain("  Declined:     4");
+    expect(both).toContain("  Probes:       7");
+    expect(without.some((line) => /^ {2}(Declined|Probes):/.test(line))).toBe(false);
+    expect(gateway).toContain("  Declined:     1");
+    expect(gateway.some((line) => line.startsWith("  Probes:"))).toBe(false);
   });
 
   it("prints the Rejected row only when something was rejected", () => {
