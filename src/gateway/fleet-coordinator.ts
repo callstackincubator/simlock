@@ -1011,13 +1011,15 @@ export class FleetLeaseCoordinator {
       // C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
       // up (or never actually reached) may still be free for whoever else is queued behind it --
       // and unlike `#staleView`'s branch above, nothing else here schedules another look at them.
-      // `WORKER_UNREACHABLE`/`INTERNAL` in particular produce no worker-side event at all, so
+      // `WORKER_UNREACHABLE`/`INTERNAL` in particular need not produce any worker-side event, so
       // without this a waiter passed over in this same pass had nothing left to wake it until the
       // next real worker-view change (the 30s refresh tick, at best).
       // ADR 0021 §4: this is the request's end, and the worker emits no `lease.rejected` for a
-      // probe (at most a `lease.declined`, and none at all for an unreachable worker, a
-      // gateway-side `INTERNAL` or a dispatch timeout), so this gateway records it, with the code
-      // the caller got and the worker it failed on.
+      // probe (at most a `lease.declined`; for an unreachable worker or a gateway-side `INTERNAL`
+      // there is usually none, and a dispatch timeout only stops this gateway waiting: the
+      // worker's `lease.request` keeps running and can still end in a relayed `lease.declined`
+      // or a grant), so this gateway records it, with the code the caller got and the worker it
+      // failed on.
       const failure = this.#classifyLeaseRequestError(error, workerId);
       this.#reject(waiter, failure, "worker-failed", { code: failure.code, worker: workerId });
       this.#dispatch();
@@ -1042,7 +1044,9 @@ export class FleetLeaseCoordinator {
    * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
    * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
    * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
-   * `INTERNAL`, a dispatch timeout) it emitted nothing. Either way the request's end is this
+   * `INTERNAL`) it usually emitted nothing; after a dispatch timeout the worker's request is
+   * still running and may yet end in a relayed `lease.declined` or a grant, since the timeout
+   * only stops this gateway waiting. Either way the request's end is this
    * gateway's own `lease.rejected` (ADR 0021 §4). The error code is
    * preserved so the caller sees what the worker actually said, with three exceptions:
    *
