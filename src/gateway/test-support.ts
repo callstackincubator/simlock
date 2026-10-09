@@ -175,7 +175,7 @@ export type RequestLeaseOutcome =
       readonly progress?: readonly LeaseProgressLike[];
       /** Runs after the worker has decided to grant and before the answer reaches the gateway:
        * what lands on the gateway while the grant is on its way. */
-      readonly beforeGrant?: () => void;
+      readonly beforeGrant?: () => void | Promise<void>;
     }
   | {
       readonly kind: "error";
@@ -391,7 +391,9 @@ export class ScriptedWorkerClient {
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
-    outcome.beforeGrant?.();
+    // Awaited only when it returns a promise, so a synchronous hook adds no turn to the grant.
+    const pending = outcome.beforeGrant?.();
+    if (pending !== undefined) await pending;
     return outcome.grant;
   }
 

@@ -2635,6 +2635,7 @@ describe("createLeasing: lease.rejected names its request", () => {
       return { harness, requestId: await admittedId(harness, "odd"), requester: "odd" };
     },
     "no-worker": "gateway",
+    "worker-failed": "gateway",
     "already-leased": async () => {
       const harness = await createHarness();
       await harness.engine.request(request, holder);
@@ -3759,6 +3760,252 @@ describe("createLeasing a lease ID chosen by the requester", () => {
 
     await expect(after.engine.request(request, asking("agent-3", "myid"))).resolves.toMatchObject({
       lease: { id: "myid" },
+    });
+  });
+});
+
+describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
+  type Harness = Awaited<ReturnType<typeof createHarness>>;
+
+  const holder = { ownerId: "holder", requesterId: "holder" };
+  const probeOf = (requesterId: string, extra: Record<string, unknown> = {}) => ({
+    fleetRequestId: "req_gw1",
+    noWait: true,
+    ownerId: requesterId,
+    requesterId,
+    ...extra,
+  });
+
+  function payloads<
+    Name extends
+      | "lease.declined"
+      | "lease.rejected"
+      | "lease.requested"
+      | "lease.queued"
+      | "lease.granted",
+  >(harness: Harness, name: Name): Array<EventMap[Name]> {
+    return harness.bus
+      .replay()
+      .filter((event) => event.event === name)
+      .map((event) => event.payload as EventMap[Name]);
+  }
+
+  async function admittedId(harness: Harness, requesterId: string): Promise<string | undefined> {
+    return harness.registry.leaseRequests().find((record) => record.requesterId === requesterId)
+      ?.id;
+  }
+
+  it("emits lease.declined with reason no-wait and its fleetRequestId, and no lease.rejected, for a probe refused for no capacity", async () => {
+    const harness = await createHarness();
+    await harness.engine.request(request, holder);
+
+    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toBeInstanceOf(
+      NoCapacityError,
+    );
+
+    expect(payloads(harness, "lease.declined")).toEqual([
+      {
+        fleetRequestId: "req_gw1",
+        reason: "no-wait",
+        requestId: await admittedId(harness, "gw:one"),
+        requestSpec: request,
+        requester: "gw:one",
+      },
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
+  it("emits lease.declined with reason unresolvable-spec for a probe naming a model the catalog lacks", async () => {
+    const harness = await createHarness();
+    const odd = { ...request, osVersion: "1.0" };
+
+    await settledOrPending(harness.engine.request(odd, probeOf("gw:odd")));
+
+    expect(payloads(harness, "lease.declined")).toEqual([
+      expect.objectContaining({
+        fleetRequestId: "req_gw1",
+        reason: "unresolvable-spec",
+        requestSpec: odd,
+      }),
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
+  it("emits lease.declined for a probe refused already-leased at admission, carrying its requestSpec", async () => {
+    const harness = await createHarness();
+    await harness.engine.request(request, { ownerId: "gw:one", requesterId: "gw:one" });
+
+    await settledOrPending(harness.engine.request(request, probeOf("gw:one")));
+
+    expect(payloads(harness, "lease.declined")).toEqual([
+      {
+        fleetRequestId: "req_gw1",
+        reason: "already-leased",
+        requestId: expect.stringMatching(/^req_/),
+        requestSpec: request,
+        requester: "gw:one",
+      },
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
+  it("emits lease.declined for a probe refused lease-id-taken", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 3, maxRunning: 3 },
+        maxRunning: 4,
+      },
+    });
+    await harness.engine.request(request, { ...holder, leaseId: "myid" });
+
+    await settledOrPending(harness.engine.request(request, probeOf("gw:two", { leaseId: "myid" })));
+
+    expect(payloads(harness, "lease.declined")).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "lease-id-taken" }),
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
+  it("emits lease.declined for a probe whose boot times out after a progress push, with reason boot-timeout", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    driver.failOn("makeReady", 1, new Error("boot failed"));
+    const harness = await createHarness({ driver });
+    const stages: string[] = [];
+
+    await settledOrPending(
+      harness.engine.request(request, {
+        ...probeOf("gw:slow"),
+        onProgress: (progress) => stages.push(progress.stage),
+      }),
+    );
+
+    expect(stages.length).toBeGreaterThan(0);
+    expect(payloads(harness, "lease.declined")).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "boot-timeout" }),
+    ]);
+    expect(payloads(harness, "lease.rejected")).toEqual([]);
+  });
+
+  it("emits lease.declined daemon-restarted with its fleetRequestId at the next start, for a probe still open when the daemon stopped, after the registry is reloaded from disk", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    driver.hangMakeReady();
+    const before = await createHarness({ driver });
+    void before.engine.request(request, probeOf("gw:open")).catch(() => undefined);
+    await expect
+      .poll(() =>
+        before.registry.leaseRequests().find((record) => record.requesterId === "gw:open"),
+      )
+      .toMatchObject({ fleetRequestId: "req_gw1", state: "open" });
+    const requestId = await admittedId(before, "gw:open");
+
+    const after = await createHarness({ filesystem: before.filesystem });
+    await after.engine.convergeRunningCapacity();
+
+    expect(payloads(after, "lease.declined")).toEqual([
+      {
+        fleetRequestId: "req_gw1",
+        reason: "daemon-restarted",
+        requestId,
+        requestSpec: request,
+        requester: "gw:open",
+      },
+    ]);
+    expect(payloads(after, "lease.rejected")).toEqual([]);
+  });
+
+  it("still emits lease.rejected no-wait, and no lease.declined, for a local noWait request with no room", async () => {
+    const harness = await createHarness();
+    await harness.engine.request(request, holder);
+
+    await expect(
+      harness.engine.request(request, { noWait: true, ownerId: "local", requesterId: "local" }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(payloads(harness, "lease.rejected")).toEqual([
+      expect.objectContaining({ reason: "no-wait", requester: "local" }),
+    ]);
+    expect(payloads(harness, "lease.declined")).toEqual([]);
+  });
+
+  it("carries a probe's fleetRequestId on its lease.requested and lease.granted, and none on a local request's", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 2,
+      },
+    });
+
+    await harness.engine.request(request, probeOf("gw:one"));
+    await harness.engine.request(request, { ownerId: "local", requesterId: "local" });
+
+    expect(payloads(harness, "lease.requested")).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", requester: "gw:one" }),
+      expect.not.objectContaining({ fleetRequestId: expect.anything() }),
+    ]);
+    expect(payloads(harness, "lease.granted")).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", requester: "gw:one" }),
+      expect.not.objectContaining({ fleetRequestId: expect.anything() }),
+    ]);
+  });
+
+  it("answers a declined probe with the error code it answered before, NO_CAPACITY for no room and the already-leased error for an existing lease", async () => {
+    const harness = await createHarness();
+    const first = await harness.engine.request(request, holder);
+
+    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
+      name: "NoCapacityError",
+    });
+    await expect(harness.engine.request(request, probeOf("holder"))).rejects.toMatchObject({
+      existingLeaseId: first.lease.id,
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  describe("a provision that fails twice", () => {
+    function failingTwice() {
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(1_000),
+        platform: "ios",
+      });
+      driver.failOn("provision", 1, new DriverCrashError("simulator exited"));
+      driver.failOn("provision", 2, new DriverCrashError("simulator exited again"));
+      return driver;
+    }
+
+    it("declines a probe with reason no-wait, answers NO_CAPACITY, and emits no lease.queued", async () => {
+      const harness = await createHarness({ driver: failingTwice() });
+
+      const outcome = await settledOrPending(harness.engine.request(request, probeOf("gw:one")));
+
+      expect(outcome).toBeInstanceOf(NoCapacityError);
+      expect(payloads(harness, "lease.declined")).toEqual([
+        expect.objectContaining({ fleetRequestId: "req_gw1", reason: "no-wait" }),
+      ]);
+      expect(payloads(harness, "lease.queued")).toEqual([]);
+      expect(payloads(harness, "lease.rejected")).toEqual([]);
+    });
+
+    it("still queues a local request in the same case", async () => {
+      const harness = await createHarness({ driver: failingTwice() });
+
+      const outcome = await settledOrPending(
+        harness.engine.request(request, { ownerId: "local", requesterId: "local" }),
+      );
+
+      expect(outcome).toBe("still pending");
+      expect(payloads(harness, "lease.queued")).toEqual([expect.objectContaining({})]);
+      expect(payloads(harness, "lease.declined")).toEqual([]);
     });
   });
 });

@@ -27,6 +27,17 @@ describe("MCP contracts", () => {
     ).toThrow();
   });
 
+  it("rejects fleetRequestId -- only a gateway's dispatch names one", () => {
+    expect(
+      leaseSimulatorInputSchema.safeParse({
+        fleetRequestId: "req_1",
+        model: "iPhone 17 Pro",
+        noWait: true,
+        platform: "ios",
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts a device mode", () => {
     expect(
       leaseSimulatorInputSchema.parse({ model: "iPhone 17 Pro", mode: "slim", platform: "ios" }),
@@ -53,10 +64,10 @@ describe("MCP contracts", () => {
     ).toEqual({ model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 });
   });
 
-  it("is the same schema the contract validates lease.request input against, minus requesterId", () => {
+  it("is the same schema the contract validates lease.request input against, minus requesterId and fleetRequestId", () => {
     expect(Object.keys(leaseSimulatorInputSchema.shape).sort()).toEqual(
       Object.keys(leaseRequestFields.shape)
-        .filter((key) => key !== "requesterId")
+        .filter((key) => key !== "requesterId" && key !== "fleetRequestId")
         .sort(),
     );
   });

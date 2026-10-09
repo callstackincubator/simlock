@@ -935,6 +935,7 @@ const leaseRequestRecordKeys = [
   "ownerId",
   "idempotencyKey",
   "leaseId",
+  "fleetRequestId",
   "request",
   "createdAt",
   "state",
@@ -1222,7 +1223,17 @@ function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
  */
 function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
   if (!hasLeaseRequestFields(value)) return undefined;
-  const { createdAt, id, idempotencyKey, leaseId, ownerId, request, requesterId, state } = value;
+  const {
+    createdAt,
+    fleetRequestId,
+    id,
+    idempotencyKey,
+    leaseId,
+    ownerId,
+    request,
+    requesterId,
+    state,
+  } = value;
   const result = parseLeaseRequestResult(state, value);
   if (result === undefined) return undefined;
   return {
@@ -1230,6 +1241,7 @@ function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
     id,
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     ...(leaseId === undefined ? {} : { leaseId }),
+    ...(fleetRequestId === undefined ? {} : { fleetRequestId }),
     ownerId,
     request: withoutRetiredRequestKeys(request),
     requesterId,
@@ -1241,6 +1253,7 @@ function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
 /** The fields every lease-request record has, whatever its state. */
 function hasLeaseRequestFields(value: unknown): value is Record<string, unknown> & {
   readonly createdAt: number;
+  readonly fleetRequestId?: string;
   readonly id: string;
   readonly idempotencyKey?: string;
   readonly leaseId?: string;
@@ -1256,6 +1269,7 @@ function hasLeaseRequestFields(value: unknown): value is Record<string, unknown>
     typeof value.ownerId === "string" &&
     isOptionalString(value.idempotencyKey) &&
     isOptionalString(value.leaseId) &&
+    isOptionalString(value.fleetRequestId) &&
     isDeviceRequest(value.request) &&
     typeof value.createdAt === "number" &&
     isLeaseRequestState(value.state)

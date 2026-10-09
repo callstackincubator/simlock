@@ -27,6 +27,11 @@ export interface LeaseRequestOptions {
    * An option of the request, not part of the device it names.
    */
   readonly leaseId?: string;
+  /**
+   * ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
+   * failures are `lease.declined`, and it is never queued. Set only for the gateway's uplink.
+   */
+  readonly fleetRequestId?: string;
   /** Called with the stored request's id once it is admitted (`replayed` false), or once a
    * repeat finds it (`replayed` true). */
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;

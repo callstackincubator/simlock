@@ -238,6 +238,15 @@ const leaseRequestBaseSchema = z
      * part of the device it names. Anything outside the pattern is `BAD_REQUEST`.
      */
     leaseId: leaseIdSchema.optional(),
+    /**
+     * ADR 0021: the gateway's own request id, sent on every dispatch to a worker. A request that
+     * carries it is a probe: the worker declines it (`lease.declined`) rather than rejecting it,
+     * never queues it, and names the id on the request's lease events. Only the gateway's uplink
+     * session may send it, and only with `noWait: true`; the dispatcher refuses it otherwise
+     * (`FORBIDDEN`, then `BAD_REQUEST`). Not part of the MCP lease tool or the HTTP lease body.
+     * Bounded as `idempotencyKey` is, because the worker stores it.
+     */
+    fleetRequestId: z.string().min(1).max(200).optional(),
   })
   .strict();
 

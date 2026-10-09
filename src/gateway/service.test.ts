@@ -643,6 +643,32 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("refuses to republish a request.granted a worker pushes, which only the gateway itself emits (ADR 0021 §4)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "request.granted",
+      module: "fleet-lease-coordinator",
+      payload: { leaseId: "wrk_1.lease_1", requestId: "req_forged", worker: "wrk_1" },
+    });
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+
+    await harness.service.stop();
+  });
+
   it("refreshes the view on a worker event that changes capacity or leases", async () => {
     const harness = fleet();
     await harness.service.start();
