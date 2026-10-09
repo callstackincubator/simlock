@@ -802,14 +802,15 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(requestState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
-    expect(events).toEqual([]);
+    // The timeout is the request's end, so the gateway records it (ADR 0021 §4) -- and only it.
+    expect(events).toEqual(["lease.rejected"]);
 
     // The worker, unaware this gateway already gave up, pushes progress on the RPC it still
     // thinks is live -- exactly as `client.exec`'s own late `onOutput` chunk does in H4's test.
     client.lastRequestLeaseOptions?.onProgress?.({ etaMs: 5_000, stage: "provisioning" });
     await tick();
 
-    expect(events).toEqual([]);
+    expect(events).toEqual(["lease.rejected"]);
   });
 
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {
@@ -3045,7 +3046,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       expect(events[1]?.payload).toMatchObject({ reason: "unresolvable-spec" });
     });
 
-    it("emits no gateway lease.rejected for a request the stored refusal ends before it entered the gateway queue", async () => {
+    it("emits one lease.rejected with reason unresolvable-spec, and no lease.queued, for a request the stored refusal ends before it entered the gateway queue (ADR 0021 §4)", async () => {
       const fleetHarness = harness();
       const a = new ScriptedWorkerClient();
       fleetHarness.directory.add("wrk_a", a);
@@ -3057,7 +3058,12 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
 
       expect(state.state).toBe("rejected");
       expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
-      expect(events).toEqual([]);
+      expect(events).toEqual([
+        {
+          name: "lease.rejected",
+          payload: expect.objectContaining({ reason: "unresolvable-spec" }),
+        },
+      ]);
     });
   });
 });
@@ -3160,6 +3166,19 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
       await fleet.coordinator.cancelPending("agent-2");
       return { fleet, requestId, requester: "agent-2" };
+    },
+    "worker-failed": async () => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        error: new SimlockError("INTERNAL", "domain", "the worker broke", {}),
+        kind: "error",
+        progress: [{ etaMs: 1_000, stage: "booting" }],
+      });
+      const requestId = await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requestId, requester: "agent-9" };
     },
     "boot-timeout": "worker",
     killed: "worker",
@@ -3895,4 +3914,390 @@ describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
       ]);
     });
   });
+});
+
+describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)", () => {
+  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
+    const fleet = harness(overrides);
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    connectWorker(fleet.workers, "wrk_a");
+    return { ...fleet, client };
+  }
+
+  /** Every payload of the named gateway events, in order. */
+  function record<Name extends keyof EventMap>(
+    eventBus: EventBus,
+    ...names: Name[]
+  ): Array<{ name: Name; payload: EventMap[Name] }> {
+    const seen: Array<{ name: Name; payload: EventMap[Name] }> = [];
+    for (const name of names) {
+      eventBus.subscribe(name, (envelope) =>
+        seen.push({ name, payload: envelope.payload as EventMap[Name] }),
+      );
+    }
+    return seen;
+  }
+
+  /** Starts a request, remembers its stored id, and lets it settle as far as it will. */
+  async function start(
+    coordinator: FleetLeaseCoordinator,
+    overrides: Parameters<typeof requestOptions>[0] = {},
+  ) {
+    let requestId: string | undefined;
+    const outcome = coordinator.request(
+      REQUEST,
+      requestOptions({ ...overrides, onAdmitted: (id) => (requestId = id) }),
+    );
+    const ended = outcome.then(
+      (grant) => grant as unknown,
+      (error: unknown) => error,
+    );
+    const state = promiseState(outcome);
+    await tick();
+    return { ended, outcome, requestId: () => requestId, state };
+  }
+
+  it.each([
+    ["a waiting caller", { noWait: false }],
+    ["a noWait caller", { noWait: true }],
+  ])(
+    "sends the gateway's request id as fleetRequestId on every dispatch, for %s",
+    async (_label, caller) => {
+      const { client, coordinator } = oneWorker();
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const { requestId } = await start(coordinator, caller);
+
+      expect(requestId()).toMatch(/^req_/);
+      expect(client.lastRequestLeaseInput).toMatchObject({
+        fleetRequestId: requestId(),
+        noWait: true,
+      });
+    },
+  );
+
+  /** `wrk_a` has the most room, so it is asked first; `wrk_b` is asked after it refuses. */
+  function twoWorkersAPreferred() {
+    const fleet = harness();
+    const preferred = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", preferred);
+    fleet.directory.add("wrk_b", other);
+    const capacity = statusFixture().capacity;
+    connectWorker(fleet.workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(fleet.workers, "wrk_b");
+    return { ...fleet, other, preferred };
+  }
+
+  it("sends the same fleetRequestId to the second worker when the first refuses NO_CAPACITY", async () => {
+    const { coordinator, other, preferred } = twoWorkersAPreferred();
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { requestId } = await start(coordinator, { noWait: true });
+
+    expect(
+      [preferred, other].map(
+        (client) =>
+          (client.lastRequestLeaseInput as Record<string, unknown> | undefined)?.fleetRequestId,
+      ),
+    ).toEqual([requestId(), requestId()]);
+  });
+
+  it("emits one lease.rejected worker-failed with the caller's error code for a request whose dispatch fails after a progress push", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "request.granted");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("INTERNAL", "domain", "the worker broke", {}),
+      kind: "error",
+      progress: [{ etaMs: 1_000, stage: "booting" }],
+    });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "INTERNAL" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: {
+          code: "INTERNAL",
+          reason: "worker-failed",
+          requestId: requestId(),
+          requestSpec: REQUEST,
+          requester: "agent-1",
+          worker: "wrk_a",
+        },
+      },
+    ]);
+  });
+
+  it("emits one lease.rejected worker-failed with code WORKER_UNREACHABLE for a request whose worker is unreachable", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected");
+    client.requestLeaseQueue.push({
+      error: new SimlockError(
+        "DAEMON_CONNECTION_LOST",
+        "transport",
+        "Daemon connection is closed",
+        {},
+      ),
+      kind: "error",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({
+          code: "WORKER_UNREACHABLE",
+          reason: "worker-failed",
+          worker: "wrk_a",
+        }),
+      },
+    ]);
+  });
+
+  it("emits one lease.rejected worker-failed for a dispatch that timed out, naming the worker", async () => {
+    const { clock, client, coordinator, eventBus } = oneWorker({ leaseRequestTimeoutMs: 5_000 });
+    const events = record(eventBus, "lease.rejected");
+    client.requestLeaseQueue.push({ kind: "hang" });
+
+    const { ended } = await start(coordinator);
+    clock.advance(5_000);
+    await tick();
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "worker-failed", worker: "wrk_a" }),
+      },
+    ]);
+  });
+
+  it("carries the failing worker's id, not the one that only refused, as worker on a worker-failed rejection", async () => {
+    const { coordinator, eventBus, other } = twoWorkersAPreferred();
+    const events = record(eventBus, "lease.rejected");
+    // wrk_a (asked first) refuses for lack of room by default; wrk_b then fails after progress.
+    other.requestLeaseQueue.push({
+      error: new SimlockError("INTERNAL", "domain", "wrk_b broke", {}),
+      kind: "error",
+      progress: [{ etaMs: 1, stage: "booting" }],
+    });
+
+    await start(coordinator, { noWait: true });
+
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "worker-failed", worker: "wrk_b" }),
+      },
+    ]);
+  });
+
+  it("ends a request never queued on a worker's cannot-serve refusal in one lease.rejected unresolvable-spec", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "lease.queued");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("RUNTIME_MISSING", "domain", "no such runtime", {
+        downloadable: false,
+        osVersion: "26.0",
+        platform: "ios",
+      }),
+      kind: "error",
+    });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "unresolvable-spec", requestId: requestId() }),
+      },
+    ]);
+  });
+
+  it("emits no lease.rejected for a request one worker refuses NO_CAPACITY and another grants", async () => {
+    const { coordinator, eventBus, other } = twoWorkersAPreferred();
+    const events = record(eventBus, "lease.rejected");
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { ended } = await start(coordinator, { noWait: true });
+
+    expect(await ended).toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+    expect(events).toEqual([]);
+  });
+
+  it("emits one request.granted with worker and both lease ids, and no workerId in its payload, for a settled grant", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ lease: { id: "wrk_a.lse_1" } });
+    expect(events).toEqual([
+      {
+        name: "request.granted",
+        payload: {
+          leaseId: "wrk_a.lse_1",
+          requestId: requestId(),
+          worker: "wrk_a",
+          workerLeaseId: "lse_1",
+        },
+      },
+    ]);
+    expect(events[0]?.payload).not.toHaveProperty("workerId");
+  });
+
+  it("emits lease.rejected lease-id-taken and no request.granted for a grant the lease index refuses", async () => {
+    const { client, coordinator, eventBus, leaseIndex } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({
+      beforeGrant: () => {
+        leaseIndex.rebuildFromWorker("wrk_b", [
+          {
+            grantedAt: 1,
+            id: "myid",
+            idChosenByRequester: true,
+            ownerId: "agent-9",
+            requesterId: `${GATEWAY_PREFIX}agent-9`,
+          } as WorkerReportedLease,
+        ]);
+      },
+      grant: grantFixture({
+        lease: { ...grantFixture().lease, id: "myid", idChosenByRequester: true } as LeaseRecord,
+      }),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator, { leaseId: "myid" } as never);
+
+    expect(await ended).toMatchObject({ code: "LEASE_ID_TAKEN" });
+    expect(events).toEqual([
+      { name: "lease.rejected", payload: expect.objectContaining({ reason: "lease-id-taken" }) },
+    ]);
+  });
+
+  it("emits no request.granted for a grant that lands after dispose()", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({
+      beforeGrant: () => coordinator.dispose(),
+      grant: grantFixture(),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no request.granted for a grant that lands after the dispatch timed out", async () => {
+    const { clock, client, coordinator, eventBus } = oneWorker({ leaseRequestTimeoutMs: 5_000 });
+    const events = record(eventBus, "request.granted");
+    client.requestLeaseQueue.push({
+      // The hook yields once, so the gateway's timeout is armed before it fires.
+      beforeGrant: async () => {
+        await Promise.resolve();
+        clock.advance(5_000);
+      },
+      grant: grantFixture(),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no lease.rejected and no request.granted on dispose() with a queued and an in-flight request", async () => {
+    const { client, coordinator, directory, eventBus, workers } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "request.granted");
+    // agent-1's dispatch hangs in flight; agent-2 waits behind a worker with no room.
+    client.requestLeaseQueue.push({ kind: "hang" });
+    const inFlight = await start(coordinator);
+    const busy = new ScriptedWorkerClient();
+    directory.add("wrk_b", busy);
+    connectWorker(workers, "wrk_b", { capacity: saturatedIos(), models: ["iPhone 18"] });
+    const queued = await start(coordinator, { ownerId: "agent-2", requesterId: "agent-2" });
+    expect(coordinator.queueDepth + (inFlight.state.state === "pending" ? 1 : 0)).toBeGreaterThan(
+      0,
+    );
+
+    coordinator.dispose();
+    await tick();
+
+    expect(await inFlight.ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(await queued.ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no request.granted for a grant given back for a mismatched leaseId, and one for the retried grant", async () => {
+    const { client, coordinator, eventBus, workers } = oneWorker();
+    const events = record(eventBus, "request.granted");
+    const chosen = (leaseId: string) =>
+      grantFixture({
+        lease: { ...grantFixture().lease, id: leaseId, idChosenByRequester: true } as LeaseRecord,
+      });
+    client.requestLeaseQueue.push(
+      { grant: chosen("not-what-was-sent"), kind: "grant" },
+      { grant: chosen("myid"), kind: "grant" },
+    );
+
+    const { ended, requestId } = await start(coordinator, { leaseId: "myid" } as never);
+    expect(events).toEqual([]);
+
+    // A changed view lifts the worker's exclusion, so it is asked again.
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+
+    expect(await ended).toMatchObject({ lease: { id: "myid" } });
+    expect(events).toEqual([
+      {
+        name: "request.granted",
+        payload: {
+          leaseId: "myid",
+          requestId: requestId(),
+          worker: "wrk_a",
+          workerLeaseId: "myid",
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "REQUESTER_ALREADY_LEASED",
+      fromWireError("REQUESTER_ALREADY_LEASED", "already holds a lease", { requesterId: "gw" }),
+    ],
+    [
+      "LEASE_ID_TAKEN",
+      fromWireError("LEASE_ID_TAKEN", "lease ID myid is already in use", { leaseId: "myid" }),
+    ],
+  ])(
+    "ends a request a worker refuses %s before any progress in lease.rejected worker-failed with that code, not the gateway's own lease-id-taken",
+    async (code, error) => {
+      const { client, coordinator, eventBus } = oneWorker();
+      const events = record(eventBus, "lease.rejected");
+      client.requestLeaseQueue.push({ error, kind: "error" });
+
+      const { ended } = await start(coordinator);
+
+      expect(await ended).toMatchObject({ code });
+      expect(events).toEqual([
+        {
+          name: "lease.rejected",
+          payload: expect.objectContaining({ code, reason: "worker-failed", worker: "wrk_a" }),
+        },
+      ]);
+    },
+  );
 });

@@ -29,6 +29,7 @@ import type {
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { LeaseRequestBook, type WaitingRequest } from "./lease-request-book.js";
 import { LeaseReconciler } from "./lease-reconciler.js";
+import { emitLeaseRefusal } from "./lease-refusal.js";
 import { LeaseStartup } from "./lease-startup.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
@@ -151,13 +152,14 @@ export function createLeasing(options: LeasingOptions): Leasing {
     idGenerator: options.idGenerator,
     onDepthChange: (depth) => options.eventBus.emit("queue.changed", { depth }, "wait-queue"),
     onTimeout: (waiter) => {
-      options.eventBus.emit(
-        "lease.rejected",
+      emitLeaseRefusal(
+        options.eventBus,
         {
           requestId: waiter.id,
           requester: waiter.options.requesterId,
           requestSpec: waiter.request,
           reason: "timeout",
+          fleetRequestId: waiter.options.fleetRequestId,
         },
         "wait-queue",
       );

@@ -672,6 +672,21 @@ describe("POST /v1/lease-requests leaseId", () => {
     expect(dispatcher.calls).toEqual([]);
   });
 
+  it("answers 400 BAD_REQUEST for a body carrying fleetRequestId, as for any unknown field, without dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => makeGrant({ lease: { id: "lse_1" } });
+
+    const response = await postLeaseRequest(app, {
+      ...defaultBody,
+      fleetRequestId: "req_1",
+      noWait: true,
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toEqual([]);
+  });
+
   it("answers 409 LEASE_ID_TAKEN with the ID in the body when the dispatcher refuses it", async () => {
     const { app, dispatcher } = buildHarness();
     dispatcher.handlers["lease.request"] = () => {

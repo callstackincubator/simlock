@@ -526,6 +526,19 @@ describe("LeaseRequestBook", () => {
     expect(without).not.toHaveProperty("leaseId");
   });
 
+  it("stores the fleetRequestId a request sent beside it, and no fleetRequestId key for a request that sent none", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+    await book.admit(request, { ownerId: "a", requesterId: "a", fleetRequestId: "req_gw1" }, () =>
+      granted("lse_1"),
+    );
+    await book.admit(request, { ownerId: "b", requesterId: "b" }, () => granted("lse_2"));
+
+    const [withId, without] = store.leaseRequests();
+    expect(withId).toMatchObject({ fleetRequestId: "req_gw1", request });
+    expect(without).not.toHaveProperty("fleetRequestId");
+  });
+
   it("names the lease ID in the message of an idempotency conflict over it", async () => {
     const book = bookOver(memoryStore());
     await book.admit(request, { ...keyed, leaseId: "myid" }, () => granted("myid"));

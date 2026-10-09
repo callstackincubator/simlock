@@ -512,9 +512,9 @@ export class WorkerLink {
    * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
    * -- a client of this same admin protocol, on a machine this gateway does not otherwise
    * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
-   * taken on faith. Refusing the six subjects `docs/internal/EVENTS.md` calls "the gateway's own"
-   * (`GATEWAY_OWN_EVENTS`) keeps a worker from forging `worker.drain-ended`, `worker.removed`,
-   * etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
+   * taken on faith. Refusing the names in `GATEWAY_OWN_EVENTS` (the six `worker.*` facts and
+   * `request.granted`; `request.dispatched` is not in the set) keeps a worker from forging
+   * `worker.drain-ended`, `worker.removed`, `request.granted`, etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
    * author of. Every other name still forwards unchanged, including ones this gateway's own
    * `EventMap` has never heard of (a newer worker's own vocabulary).
    */
@@ -557,8 +557,9 @@ export class WorkerLink {
 }
 
 /**
- * ADR 0005 §22 / `docs/internal/EVENTS.md`: the six facts only a gateway itself ever emits, about the
- * workers connected to it. Never forwarded from a worker's own event stream (see
+ * ADR 0005 §22 / `docs/internal/EVENTS.md`: the facts only a gateway itself ever emits -- six about
+ * the workers connected to it, and (ADR 0021 §4) `request.granted`, the outcome of a fleet request.
+ * Never forwarded from a worker's own event stream (see
  * `#onWorkerEvent`) -- a worker is a client of the same admin protocol, and nothing about
  * `events.subscribe` proves the name it pushes is genuinely its own.
  */
@@ -569,6 +570,7 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
   "worker.removed",
   "worker.drain-started",
   "worker.drain-ended",
+  "request.granted",
 ]);
 
 /**

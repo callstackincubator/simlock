@@ -23,10 +23,11 @@ import {
 // ---- lease_simulator ---------------------------------------------------------------------
 
 /**
- * `lease.request`'s input, minus the one field this tool never lets the caller set:
+ * `lease.request`'s input, minus the two fields this tool never lets the caller set:
  * `requesterId` (session-controlled -- see `main.ts`'s requester resolution, never
  * caller-supplied, for the same reason the daemon never lets a request rename its own
- * principal). `ttlMs` is no longer omitted: ADR 0004 accepts it on every request, so this tool
+ * principal) and `fleetRequestId` (a gateway's own mark on its dispatch to a worker, ADR 0021).
+ * `ttlMs` is no longer omitted: ADR 0004 accepts it on every request, so this tool
  * inherits it from the contract like every other field -- `lease.defaultTtlMs` when the caller
  * names none, `BAD_REQUEST` above `lease.maxTtlMs`. `mode` is the device mode, inherited the
  * same way: `slim` or `full`, absent for the worker's default, anything else `BAD_REQUEST`.
@@ -36,7 +37,10 @@ import {
  * no fields at all. A malformed `osVersion` is refused the same way, by the contract's own check
  * when the request reaches `lease.request`: the MCP side adds no second check.
  */
-export const leaseSimulatorInputSchema = leaseRequestFields.omit({ requesterId: true });
+export const leaseSimulatorInputSchema = leaseRequestFields.omit({
+  fleetRequestId: true,
+  requesterId: true,
+});
 
 /**
  * The tool's input with the contract's model-or-class check on top, for the handler to run

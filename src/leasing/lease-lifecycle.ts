@@ -79,8 +79,11 @@ export class LeaseLifecycle {
     /** ADR 0020: the lease ID the requester chose, when it did. The caller has already refused one
      * that is in use. */
     readonly leaseId?: string;
+    /** ADR 0021: the gateway's request id, when the request is a gateway dispatch, carried on
+     * `lease.granted`. */
+    readonly fleetRequestId?: string;
   }): Promise<LeaseGrant> {
-    const { ttlMs, requestId, environment, timing, source, ...createInput } = input;
+    const { ttlMs, requestId, environment, timing, source, fleetRequestId, ...createInput } = input;
     const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;
     const lease = await this.options.registry.createLease({
       ...createInput,
@@ -105,6 +108,7 @@ export class LeaseLifecycle {
         requester: lease.requesterId,
         requestId,
         source,
+        ...(fleetRequestId === undefined ? {} : { fleetRequestId }),
       },
       "lease-lifecycle",
     );

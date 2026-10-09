@@ -175,7 +175,7 @@ export type RequestLeaseOutcome =
       readonly progress?: readonly LeaseProgressLike[];
       /** Runs after the worker has decided to grant and before the answer reaches the gateway:
        * what lands on the gateway while the grant is on its way. */
-      readonly beforeGrant?: () => void;
+      readonly beforeGrant?: () => void | Promise<void>;
     }
   | {
       readonly kind: "error";
@@ -379,6 +379,7 @@ export class ScriptedWorkerClient {
 
   /** #118: `FleetLeaseCoordinator#attempt` forwards every dispatch through this, always with
    * `noWait: true` (ADR §12) -- scripted per `requestLeaseQueue`/`requestLeaseDefault` above. */
+  // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real lease.request.
   async requestLease(
     input: LeaseRequestInput,
     options: RequestLeaseOptions = {},
@@ -391,7 +392,7 @@ export class ScriptedWorkerClient {
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
-    outcome.beforeGrant?.();
+    await outcome.beforeGrant?.();
     return outcome.grant;
   }
 

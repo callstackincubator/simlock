@@ -441,6 +441,14 @@ export class GatewayDispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
+    // ADR 0021 §1: gateways do not chain, so no session may send the field a gateway puts on its
+    // own dispatch to a worker. Refused whatever `noWait` says, as on a worker.
+    if (input.fleetRequestId !== undefined) {
+      throw new DispatchError(
+        "FORBIDDEN",
+        "A gateway does not accept lease.request's `fleetRequestId` field: only a gateway sets it, on its own dispatch to a worker",
+      );
+    }
     return this.options.coordinator.request(
       // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
       // relays an image tag unread.

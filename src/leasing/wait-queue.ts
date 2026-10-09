@@ -27,6 +27,11 @@ export interface LeaseRequestOptions {
    * An option of the request, not part of the device it names.
    */
   readonly leaseId?: string;
+  /**
+   * ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
+   * failures are `lease.declined`, and it is never queued. Set only for the gateway's uplink.
+   */
+  readonly fleetRequestId?: string;
   /** Called with the stored request's id once it is admitted (`replayed` false), or once a
    * repeat finds it (`replayed` true). */
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
@@ -193,7 +198,7 @@ export class WaitQueue {
    *
    * One pending request per requester is the owner's rule, not the queue's: the owner asks
    * `hasPendingRequester` inside its admission decision, before it stores the request and calls
-   * this, and answers a duplicate with its own `lease.rejected`. Checking again here would be a
+   * this, and answers a duplicate with its own refusal (`emitLeaseRefusal`). Checking again here would be a
    * second copy of that rule, firing only after the request was already stored.
    */
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {

@@ -135,7 +135,8 @@ type FleetEventName =
   | "lease.queued"
   | "lease.rejected"
   | "queue.changed"
-  | "request.dispatched";
+  | "request.dispatched"
+  | "request.granted";
 
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
@@ -822,10 +823,9 @@ export class FleetLeaseCoordinator {
 
   /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
    * details a worker gives the same request. A request that holds a worker's "cannot serve"
-   * refusal ends with the last one instead, as that worker's own fact (ADR 0009 §5); the worker
-   * already emitted its own `lease.rejected`, so the gateway emits none -- unless the request had
-   * entered the gateway queue, whose `lease.queued` needs a gateway terminal fact of its own:
-   * `lease.rejected` with reason `unresolvable-spec`. */
+   * refusal ends with the last one instead (ADR 0009 §5). The worker only declined the dispatch
+   * (`lease.declined`), so the end is this gateway's own fact (ADR 0021 §4): `lease.rejected`
+   * with reason `unresolvable-spec`, whether or not the request had entered the gateway queue. */
   #rejectUnservable(
     waiter: FleetWaiter,
     verdict: Rejection,
@@ -833,10 +833,9 @@ export class FleetLeaseCoordinator {
   ): void {
     const last = refusals === undefined ? undefined : [...refusals.values()].at(-1);
     if (last !== undefined) {
-      const wasQueued = this.#queue.isQueued(waiter);
-      if (this.#queue.reject(waiter, last) && wasQueued) {
-        this.#emitRejected(waiter, "unresolvable-spec");
-      }
+      // The worker's own refusal was only a probe's decline (ADR 0021), so the request's end is
+      // this gateway's fact, whether or not the request had entered the queue.
+      this.#reject(waiter, last, "unresolvable-spec");
       return;
     }
     this.#reject(
@@ -957,6 +956,10 @@ export class FleetLeaseCoordinator {
             // ADR 0020: sent as the requester sent it. The worker grants exactly this id, and
             // its refusal (`LEASE_ID_TAKEN`) is the caller's answer: no other worker is tried.
             ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
+            // ADR 0021: this gateway's id for the request marks the dispatch a probe. The worker
+            // declines a probe it refuses (`lease.declined`) rather than rejecting it, and names
+            // the id on the lease events of the dispatch.
+            fleetRequestId: waiter.id,
           },
           {
             onProgress: (progress) => {
@@ -1008,10 +1011,17 @@ export class FleetLeaseCoordinator {
       // C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
       // up (or never actually reached) may still be free for whoever else is queued behind it --
       // and unlike `#staleView`'s branch above, nothing else here schedules another look at them.
-      // `WORKER_UNREACHABLE`/`INTERNAL` in particular produce no worker-side event at all, so
+      // `WORKER_UNREACHABLE`/`INTERNAL` in particular need not produce any worker-side event, so
       // without this a waiter passed over in this same pass had nothing left to wake it until the
       // next real worker-view change (the 30s refresh tick, at best).
-      this.#queue.reject(waiter, this.#classifyLeaseRequestError(error, workerId));
+      // ADR 0021 §4: this is the request's end, and the worker emits no `lease.rejected` for a
+      // probe (at most a `lease.declined`; for an unreachable worker or a gateway-side `INTERNAL`
+      // there is usually none, and a dispatch timeout only stops this gateway waiting: the
+      // worker's `lease.request` keeps running and can still end in a relayed `lease.declined`
+      // or a grant), so this gateway records it, with the code the caller got and the worker it
+      // failed on.
+      const failure = this.#classifyLeaseRequestError(error, workerId);
+      this.#reject(waiter, failure, "worker-failed", { code: failure.code, worker: workerId });
       this.#dispatch();
       return;
     }
@@ -1031,18 +1041,21 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check is the worker's own fact
-   * (it already emitted its own `lease.rejected`, relayed onto this bus with `workerId` added by
-   * `WorkerLink`) -- this class does not emit a second one for it (see the module doc, "two
-   * different fields", and events.md's post-commit rule apply equally to not inventing a
-   * duplicate fact). Only the error code is preserved so the caller sees what the worker actually
-   * said, with three exceptions:
+   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
+   * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
+   * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
+   * `INTERNAL`) it usually emitted nothing; after a dispatch timeout the worker's request is
+   * still running and may yet end in a relayed `lease.declined` or a grant, since the timeout
+   * only stops this gateway waiting. Either way the request's end is this
+   * gateway's own `lease.rejected` (ADR 0021 §4). The error code is
+   * preserved so the caller sees what the worker actually said, with three exceptions:
    *
    * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
    *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
    *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
    * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
-   *   `SimlockError`, since it never reached the worker at all -- forwarded as-is;
+   *   `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
+   *   answer (the request itself did reach the worker and keeps running there) -- forwarded as-is;
    * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
    *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
    *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
@@ -1156,7 +1169,16 @@ export class FleetLeaseCoordinator {
       lease: this.#projectRecord(grant.lease, entry),
       timing: grant.timing,
     };
-    this.#queue.resolve(waiter, fleetGrant);
+    // ADR 0021 §4: the grant is the request's end only if the waiter was still open. One that
+    // landed after a timeout, a cancel or `dispose()` handed nothing to a caller, so it is no fact.
+    if (this.#queue.resolve(waiter, fleetGrant)) {
+      this.#emit("request.granted", {
+        leaseId: gatewayLeaseId,
+        requestId: waiter.id,
+        worker: workerId,
+        workerLeaseId: grant.lease.id,
+      });
+    }
     return "settled";
   }
 
@@ -1184,19 +1206,32 @@ export class FleetLeaseCoordinator {
   #reject(
     waiter: FleetWaiter,
     error: Error,
-    reason: Rejection["reason"] | "no-wait" | "cancelled" | "timeout" | "lease-id-taken",
+    reason:
+      | Rejection["reason"]
+      | "no-wait"
+      | "cancelled"
+      | "timeout"
+      | "lease-id-taken"
+      | "worker-failed",
+    failedOn?: { readonly code: string; readonly worker: string },
   ): void {
     if (this.#queue.reject(waiter, error)) {
-      this.#emitRejected(waiter, reason);
+      this.#emitRejected(waiter, reason, failedOn);
     }
   }
 
-  #emitRejected(waiter: FleetWaiter, reason: EventMap["lease.rejected"]["reason"]): void {
+  #emitRejected(
+    waiter: FleetWaiter,
+    reason: EventMap["lease.rejected"]["reason"],
+    failedOn?: { readonly code: string; readonly worker: string },
+  ): void {
     this.#emit("lease.rejected", {
       requestId: waiter.id,
       requester: waiter.options.requesterId,
       requestSpec: waiter.request,
       reason,
+      // `worker`, never `workerId`: that key marks an event relayed from a worker (ADR 0014 §6).
+      ...(failedOn === undefined ? {} : { code: failedOn.code, worker: failedOn.worker }),
     });
   }
 

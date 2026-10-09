@@ -898,6 +898,69 @@ describe("Dispatcher: ownership", () => {
     ).resolves.toMatchObject({ id: (grant as { lease: { id: string } }).lease.id });
   });
 
+  describe("lease.request's fleetRequestId (ADR 0021)", () => {
+    const probeInput = {
+      fleetRequestId: "req_gw1",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+
+    it.each([
+      ["with noWait: true", { ...probeInput, noWait: true }],
+      ["without noWait", probeInput],
+    ])(
+      "refuses it from a session that is not the gateway uplink with FORBIDDEN and stores nothing, %s",
+      async (_label, input) => {
+        const { dispatcher, registry } = await buildDispatcher();
+
+        for (const refused of [
+          session({ principal: "tok_agent", role: "agent" }),
+          session({ principal: "tok_operator", role: "admin" }),
+        ]) {
+          await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
+          });
+        }
+
+        expect(registry.leaseRequests()).toEqual([]);
+        expect(registry.snapshot.leases).toEqual([]);
+      },
+    );
+
+    it("refuses it without noWait: true from the gateway uplink with BAD_REQUEST and stores nothing", async () => {
+      const { dispatcher, registry } = await buildDispatcher();
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          probeInput,
+          session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("noWait"),
+      });
+
+      expect(registry.leaseRequests()).toEqual([]);
+    });
+
+    it("stores it on the request when the gateway uplink sends it with noWait: true", async () => {
+      const { dispatcher, registry } = await buildDispatcher();
+
+      await dispatcher.dispatch(
+        "lease.request",
+        { ...probeInput, noWait: true },
+        session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+      );
+
+      expect(registry.leaseRequests()).toEqual([
+        expect.objectContaining({ fleetRequestId: "req_gw1", state: "granted" }),
+      ]);
+    });
+  });
+
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
     const { dispatcher } = await buildDispatcher();
     const leaseId = await grantLease(dispatcher);
