@@ -146,6 +146,19 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("the lease tool's input schema in tools/list has no fleetRequestId", async () => {
+    const { mcpClient, close } = await connectedServer(new FakeSimlockClient());
+    try {
+      const tools = await mcpClient.request({ method: "tools/list" }, ListToolsResultSchema);
+      const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
+
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).toContain("noWait");
+      expect(Object.keys(leaseTool?.inputSchema.properties ?? {})).not.toContain("fleetRequestId");
+    } finally {
+      await close();
+    }
+  });
+
   it("surfaces a daemon FORBIDDEN as-is when releasing a lease this session does not own -- no client-side pre-check", async () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = () =>

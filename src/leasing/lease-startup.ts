@@ -5,6 +5,7 @@ import type {
   SerializedDecision,
   StartupRead,
 } from "../core/index.js";
+import { emitLeaseRefusal } from "./lease-refusal.js";
 
 export interface LeaseStartupRegistry {
   failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
@@ -67,13 +68,14 @@ export class LeaseStartup {
       this.options.registry.failOpenLeaseRequests(DAEMON_RESTARTED),
     );
     for (const record of settled) {
-      this.options.eventBus.emit(
-        "lease.rejected",
+      emitLeaseRefusal(
+        this.options.eventBus,
         {
           requestId: record.id,
           requester: record.requesterId,
           requestSpec: record.request,
           reason: "daemon-restarted",
+          fleetRequestId: record.fleetRequestId,
         },
         "lease-startup",
       );

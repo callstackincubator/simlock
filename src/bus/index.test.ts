@@ -60,6 +60,8 @@ const EVENT_NAMES: Record<EventName, true> = {
   "worker.drain-started": true,
   "worker.drain-ended": true,
   "request.dispatched": true,
+  "request.granted": true,
+  "lease.declined": true,
   "warm-pool.target-missed": true,
 };
 

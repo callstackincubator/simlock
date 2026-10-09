@@ -285,6 +285,44 @@ describe("lease.request leaseId", () => {
   });
 });
 
+describe("lease.request fleetRequestId", () => {
+  const parse = (fleetRequestId: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({
+      fleetRequestId,
+      model: "iPhone 17",
+      noWait: true,
+      platform: "ios",
+    });
+
+  it.each([
+    ["a single character", "a"],
+    ["a generated request id", "req_0f3a"],
+    ["200 characters", "a".repeat(200)],
+  ])("accepts %s", (_label, fleetRequestId) => {
+    expect(parse(fleetRequestId).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["201 characters", "a".repeat(201)],
+    ["a number", 7],
+    ["null", null],
+  ])("refuses %s", (_label, fleetRequestId) => {
+    expect(parse(fleetRequestId).success).toBe(false);
+  });
+
+  it("is not part of the device the request names", () => {
+    const input = OPERATIONS["lease.request"].input.parse({
+      fleetRequestId: "req_1",
+      model: "iPhone 17",
+      noWait: true,
+      platform: "ios",
+    });
+
+    expect(requestedDevice(input)).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({

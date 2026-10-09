@@ -1663,6 +1663,76 @@ describe("Registry", () => {
     expect(reloaded.leaseRequests()[1]).not.toHaveProperty("leaseId");
   });
 
+  it("keeps the fleetRequestId a request stored across a reload, and loads a record without one as having none", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    await registry.createLeaseRequest({
+      fleetRequestId: "req_gw1",
+      id: "req_1",
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+    });
+    await registry.createLeaseRequest({
+      id: "req_2",
+      ownerId: "agent-2",
+      request: { platform: "ios" },
+      requesterId: "agent-2",
+    });
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.leaseRequests()).toMatchObject([
+      { fleetRequestId: "req_gw1", id: "req_1" },
+      { id: "req_2" },
+    ]);
+    expect(reloaded.leaseRequests()[1]).not.toHaveProperty("fleetRequestId");
+  });
+
+  it("drops a stored lease request whose fleetRequestId is not a string and keeps the others", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const open = (id: string, extra: Record<string, unknown>) => ({
+      createdAt: 1_000,
+      id,
+      ownerId: "agent-1",
+      request: { platform: "ios" },
+      requesterId: "agent-1",
+      state: "open",
+      ...extra,
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [
+          open("req_bad", { fleetRequestId: 7 }),
+          open("req_ok", { fleetRequestId: "req_gw1" }),
+        ],
+        leases: [],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_ok"]);
+  });
+
   it("drops a stored lease request whose leaseId is not a string and keeps the others", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();

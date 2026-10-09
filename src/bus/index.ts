@@ -17,6 +17,9 @@ export interface EventMap {
     readonly requestSpec: unknown;
     readonly requester: string;
     readonly waitPolicy: string;
+    /** ADR 0021: the gateway's request id, on a worker's event for a gateway dispatch (a
+     * probe). Absent on a local request. */
+    readonly fleetRequestId?: string;
   };
   "lease.queued": { readonly requestId: string; readonly queuePosition: number };
   /** ADR 0004's Consequences: `mode` left this payload, a deliberate one-off exception to
@@ -31,6 +34,8 @@ export interface EventMap {
     /** How the device came to be ready: handed over `warm`, `booted` from shut down, or
      * `provisioned` for this request. */
     readonly source: "warm" | "booted" | "provisioned";
+    /** ADR 0021: the gateway's request id, when this grant served a gateway dispatch. */
+    readonly fleetRequestId?: string;
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
@@ -81,7 +86,37 @@ export interface EventMap {
       | "killed"
       | "cancelled"
       /** A request still open when the daemon stopped, settled as failed at the next start. */
-      | "daemon-restarted";
+      | "daemon-restarted"
+      /** A gateway's request that failed on the worker it went to (ADR 0021 §4). */
+      | "worker-failed";
+    /** On `worker-failed`: the error code the caller got. */
+    readonly code?: string;
+    /** On `worker-failed`: the worker the request failed on. Named `worker`, never `workerId`,
+     * because `payload.workerId` marks a relayed event (ADR 0014 §6). */
+    readonly worker?: string;
+  };
+  /**
+   * ADR 0021 §2: a worker refused or failed a gateway dispatch (a probe). The gateway owns that
+   * request's outcome, so the worker never rejects it. `reason` takes `lease.rejected`'s values.
+   */
+  "lease.declined": {
+    readonly requestId: string;
+    readonly fleetRequestId: string;
+    readonly requester: string;
+    readonly requestSpec: unknown;
+    readonly reason: EventMap["lease.rejected"]["reason"];
+  };
+  /**
+   * ADR 0021 §4: the gateway handed a fleet request's grant to its caller. Emitted by the
+   * gateway only, after its lease index accepted the grant. `worker`, never `workerId`.
+   */
+  "request.granted": {
+    readonly requestId: string;
+    readonly worker: string;
+    /** The gateway's lease id. */
+    readonly leaseId: string;
+    /** The worker's lease id. */
+    readonly workerLeaseId: string;
   };
   /**
    * A worker's capacity figures changed. Emitted after every registry commit and every

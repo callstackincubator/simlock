@@ -400,6 +400,23 @@ export class Dispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
+    // ADR 0021 §1: `fleetRequestId` marks a gateway's dispatch, a probe, so it follows `owner`'s
+    // rule exactly: only the uplink may send it, and the refusal comes before anything is stored.
+    // A probe is never queued on a worker, so it must also say `noWait`.
+    if (input.fleetRequestId !== undefined) {
+      if (session.isGatewayUplink !== true) {
+        throw new DispatchError(
+          "FORBIDDEN",
+          "Only the gateway's own uplink session may set lease.request's `fleetRequestId` field",
+        );
+      }
+      if (input.noWait !== true) {
+        throw new DispatchError(
+          "BAD_REQUEST",
+          "lease.request's `fleetRequestId` is sent only with `noWait: true`",
+        );
+      }
+    }
     const ownerId = input.owner ?? session.principal;
     try {
       return await this.options.leases.request(request, {
@@ -413,6 +430,7 @@ export class Dispatcher {
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });

@@ -643,6 +643,32 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("refuses to republish a request.granted a worker pushes, which only the gateway itself emits (ADR 0021 §4)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "request.granted",
+      module: "fleet-lease-coordinator",
+      payload: { leaseId: "wrk_1.lease_1", requestId: "req_forged", worker: "wrk_1" },
+    });
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+
+    await harness.service.stop();
+  });
+
   it("refreshes the view on a worker event that changes capacity or leases", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1066,6 +1092,28 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
+
+    await harness.service.stop();
+  });
+
+  it("marks a worker one protocol version behind the gateway incompatible (ADR 0021 §6: it would refuse fleetRequestId)", async () => {
+    const previous = {
+      min: PROTOCOL_VERSION_RANGE.max - 1,
+      max: PROTOCOL_VERSION_RANGE.max - 1,
+    };
+    expect(PROTOCOL_VERSION_RANGE.max).toBe(22);
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+
+    expect(worker.calls).toEqual(["status.get"]);
 
     await harness.service.stop();
   });

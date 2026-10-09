@@ -2919,6 +2919,63 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
   });
 });
 
+describe("LeaseAcquisitionCoordinator probes (ADR 0021)", () => {
+  const probe = (requesterId: string) => ({
+    fleetRequestId: "req_gw1",
+    noWait: true,
+    ownerId: requesterId,
+    requesterId,
+  });
+
+  it("emits lease.declined, and no lease.rejected, for a probe refused killed at admission", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.beginMaintenance();
+    const declined: unknown[] = [];
+    const rejected: unknown[] = [];
+    harness.bus.subscribe("lease.declined", (envelope) => declined.push(envelope.payload));
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    await expect(harness.coordinator.request(request, probe("gw:one"))).rejects.toMatchObject({
+      name: "NukeCancelledError",
+    });
+
+    expect(declined).toEqual([
+      {
+        fleetRequestId: "req_gw1",
+        reason: "killed",
+        requestId: `req_${harness.requestIds[0]}`,
+        requestSpec: request,
+        requester: "gw:one",
+      },
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("emits lease.declined, and no lease.rejected, for a probe in progress when beginMaintenance runs", async () => {
+    const harness = await createHarness();
+    harness.driver.hangMakeReady();
+    const declined: unknown[] = [];
+    const rejected: unknown[] = [];
+    harness.bus.subscribe("lease.declined", (envelope) => declined.push(envelope.payload));
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+    const acquisition = harness.coordinator.request(request, probe("gw:one"));
+    void acquisition.catch(() => undefined);
+    await settle();
+
+    const maintenance = harness.coordinator.beginMaintenance();
+    await flush();
+    harness.driver.releaseMakeReady();
+    await maintenance;
+
+    await expect(acquisition).rejects.toMatchObject({ name: "NukeCancelledError" });
+    expect(declined).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "killed", requester: "gw:one" }),
+    ]);
+    expect(rejected).toEqual([]);
+    await harness.coordinator.endMaintenance();
+  });
+});
+
 describe("LeaseAcquisitionCoordinator waiting demand", () => {
   it("lists a request waiting for a device with what a device must satisfy, and drops it once it is granted", async () => {
     const harness = await createHarness();

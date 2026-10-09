@@ -1015,6 +1015,28 @@ describe("GatewayDispatcher", () => {
       }
     });
 
+    it.each([
+      ["with noWait: true", { noWait: true }],
+      ["without noWait", {}],
+    ])(
+      "refuses a lease.request carrying fleetRequestId with FORBIDDEN from every session, even the uplink, %s",
+      async (_label, extra) => {
+        const { dispatcher } = harness();
+        const input = { fleetRequestId: "req_gw1", model: "iPhone 17", platform: "ios", ...extra };
+
+        for (const refused of [
+          session({ role: "agent" }),
+          session({ role: "admin" }),
+          session({ isGatewayUplink: true, role: "admin" }),
+        ]) {
+          await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
+          });
+        }
+      },
+    );
+
     it("answers not-found for lease.cancel and an empty result for lease.release-all with nothing queued or leased", async () => {
       const { dispatcher } = harness();
 
