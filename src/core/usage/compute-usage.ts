@@ -129,7 +129,7 @@ function figuresFor(
   const requests = read.requests.filter((fact) => inScope(fact, scope));
   const devices = read.devices.filter((fact) => inScope(fact, scope));
   const asked = requests.filter((fact) => fact.requestedAt !== undefined && fact.probe !== true);
-  const probes = requests.filter((fact) => fact.requestedAt !== undefined && fact.probe === true);
+  const probes = requests.filter((fact) => fact.probe === true);
   const grants = requests.flatMap((fact) =>
     fact.outcome?.kind === "granted" ? [{ ...fact, outcome: fact.outcome }] : [],
   );
@@ -174,17 +174,13 @@ function spanOf(start: number | undefined, end: number | undefined): number[] {
 type GrantSource = "booted" | "provisioned" | "unknown" | "warm";
 
 function sourcesOf(grantedSources: readonly string[]): Record<GrantSource, number> {
-  const sources = { booted: 0, provisioned: 0, unknown: 0, warm: 0 };
-  for (const source of grantedSources) {
-    if (
-      source === "warm" ||
-      source === "booted" ||
-      source === "provisioned" ||
-      source === "unknown"
-    )
-      sources[source] += 1;
-  }
-  return sources;
+  const counts = countBy(grantedSources);
+  return {
+    booted: counts.booted ?? 0,
+    provisioned: counts.provisioned ?? 0,
+    unknown: counts.unknown ?? 0,
+    warm: counts.warm ?? 0,
+  };
 }
 
 /** The figures a device event brings: durations, incidents, and failures by name. */

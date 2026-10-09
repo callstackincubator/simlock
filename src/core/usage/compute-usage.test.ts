@@ -505,6 +505,7 @@ describe("computeUsage", () => {
       ["w2", undefined, 1],
     ]);
     expect(usage.workers[1]?.provisioning.p50).toBe(7_000);
+    expect(usage.workers[1]).not.toHaveProperty("label");
     expect(usage.workers[0]?.provisioning.count).toBe(0);
     expect(usage.totals.granted).toBe(2);
   });
@@ -838,6 +839,30 @@ describe("computeUsage", () => {
       { granted: 1, heldTotalMs: 2_000, id: "agent-b", rejected: 0, requests: 1 },
       { granted: 1, heldTotalMs: 6_000, id: "gw:g1:a", rejected: 0, requests: 0 },
     ]);
+  });
+
+  it("on a worker counts no rejection for a probe, which a worker declines and never rejects", () => {
+    const usage = computeUsage(
+      [probe(T0 + 1_000, "p1"), rejected(T0 + 1_500, "p1", "no-wait", "gw:g1:a")],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals).toMatchObject({ probes: 1, rejected: { byReason: {}, total: 0 } });
+    expect(usage.requesters).toEqual([]);
+  });
+
+  it("lists workers by id whichever order the events name them in", () => {
+    const usage = computeUsage(
+      [
+        capacity(T0 + 1_000, figures(0, 0, 2), undefined, { workerId: "w2" }),
+        capacity(T0 + 2_000, figures(0, 0, 2), undefined, { workerId: "w1" }),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.workers.map((worker) => worker.id)).toEqual(["w1", "w2"]);
   });
 
   it("on a worker leaves a probe between its lease.requested and its grant out of series[].waiting", () => {

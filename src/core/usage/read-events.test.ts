@@ -653,9 +653,13 @@ describe("requests carried into the window", () => {
     ).toEqual([]);
   });
 
-  it("does not carry a gateway request that a restart before the window ended, and carries one a restart inside it ends", () => {
-    const ended = read([request(80, "old"), restarted(90)], FLEET);
-    expect(ended.carried).toEqual([]);
+  it("settles a carried gateway request at the gateway's next start, whether that is before the window or inside it, and leaves one a start preceded open", () => {
+    const before = read([request(80, "old"), restarted(90)], FLEET);
+    expect(before.carried).toEqual([
+      expect.objectContaining({
+        outcome: { at: 90, kind: "rejected", reason: "daemon-restarted" },
+      }),
+    ]);
     const later = read([request(80, "old"), restarted(150)], FLEET);
     expect(later.carried).toEqual([
       expect.objectContaining({
@@ -664,7 +668,7 @@ describe("requests carried into the window", () => {
       }),
     ]);
     const after = read([restarted(70), request(80, "old")], FLEET);
-    expect(after.carried).toHaveLength(1);
+    expect(after.carried[0]).not.toHaveProperty("outcome");
   });
 });
 
@@ -871,6 +875,15 @@ describe("a gateway", () => {
       });
     });
 
+    it("is a daemon.started at exactly the window end", () => {
+      const result = read([request(110, "r"), restarted(200)], FLEET);
+      expect(result.requests[0]?.outcome).toEqual({
+        at: 200,
+        kind: "rejected",
+        reason: "daemon-restarted",
+      });
+    });
+
     it("stays open past a daemon.started before the request, a relayed one, one after the window, and one on a worker", () => {
       const open = (events: EventEnvelope[], options: ReadOptions = FLEET) =>
         read(events, options).requests[0]?.outcome;
@@ -964,6 +977,16 @@ describe("a gateway", () => {
         FLEET,
       );
       expect(otherWorker.requests[0]?.outcome).toMatchObject({ source: "unknown" });
+      // An end of the lease with no relayed grant to start from gives no held time either.
+      const endOnly = read(
+        [
+          request(110, "r"),
+          handed(115, "r"),
+          at(130, "lease.released", { leaseId: "L", workerId: "w1" }),
+        ],
+        FLEET,
+      );
+      expect(endOnly.requests[0]).not.toHaveProperty("heldMs");
     });
 
     it("default a relayed grant's missing source to empty, and ignore a relayed grant with no lease id or worker", () => {

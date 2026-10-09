@@ -265,7 +265,9 @@ export class EventHistory {
     }
     const newer = ring.filter((envelope) => envelope.timestamp > sinceTs);
     return {
-      events: [...carried.values(), ...newer].sort(byTimeThenSeq),
+      // The ring replays by time then seq, and every carried envelope is at or before `sinceTs`, so
+      // the carried ones (in that order) come before the newer ones.
+      events: [...carried.values(), ...newer],
       oldestTs,
       answeredBefore: before.answered,
       requestedBefore: before.requested,

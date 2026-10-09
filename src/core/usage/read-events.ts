@@ -176,7 +176,10 @@ class Reader {
   readonly #carriedRequests = new Map<string, Request & { readonly requestId: string }>();
   readonly #ownRejections = new Map<string, OwnRejection>();
   /** A worker's own grants by request id: the lease each served. */
-  readonly #grants = new Map<string, Granted & { readonly leaseId: string }>();
+  readonly #grants = new Map<
+    string,
+    { readonly at: number; readonly leaseId: string; readonly source: string }
+  >();
   /** A gateway's `request.granted` by request id (ADR 0021 §4). */
   readonly #handed = new Map<
     string,
@@ -328,7 +331,7 @@ class Reader {
     }
     const requestId = text(seen.payload, "requestId");
     if (requestId === undefined) return;
-    this.#grants.set(requestId, { at: seen.event.timestamp, kind: "granted", leaseId, source });
+    this.#grants.set(requestId, { at: seen.event.timestamp, leaseId, source });
   }
 
   #ended(seen: Seen): void {
@@ -395,15 +398,15 @@ class Reader {
   }
 
   /**
-   * The requests made before the window that nothing had answered when it began, and that no
-   * gateway restart had ended. A worker's probe never waits there (ADR 0021 §5).
+   * The requests made before the window that the history does not report answered by its start.
+   * One a gateway restart ended may carry an outcome from before the window, which settles it for
+   * every time in it. A worker's probe never waits there (ADR 0021 §5).
    */
   #carriedOpen(): RequestFact[] {
     const facts: RequestFact[] = [];
     for (const request of this.#carriedRequests.values()) {
       if (request.probe || this.options.answeredBefore.has(request.requestId)) continue;
-      const fact = this.#factFor(request.requestId, request);
-      if (fact.outcome === undefined || fact.outcome.at > this.window.from) facts.push(fact);
+      facts.push(this.#factFor(request.requestId, request));
     }
     return facts;
   }
