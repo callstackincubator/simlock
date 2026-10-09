@@ -18,7 +18,10 @@
   "A worker's own events carry no marker ... its `simlock events` shows
   what it always showed". A probe's events on a worker carry
   `fleetRequestId`, and a refused probe shows as `lease.declined`. A
-  worker's events for its local requests are unchanged.
+  worker's events for its local requests are unchanged. And it replaces
+  ADR 0016's Consequence that a worker in a fleet counts gateway requests
+  as its own requests, with their wait as the boot or creation time: on a
+  worker they are probes (§5).
 - **Depends on:** [ADR 0005](0005-gateway-and-worker-modes.md) requirements
   11, 12, 27a and 30, [ADR
   0009](0009-gateway-routing-is-a-list-of-stages.md) §5, [ADR
@@ -101,7 +104,9 @@ in the handler, in this order, before anything is stored:
 1. the session check, which answers `FORBIDDEN`;
 2. the `noWait` check, which answers `BAD_REQUEST`.
 
-So a caller that may not send the field always gets `FORBIDDEN`. A probe is
+So a caller that may not send the field gets `FORBIDDEN`, whatever `noWait`
+says. Input the schema refuses (a `fleetRequestId` out of bounds, a TTL over
+the cap) is still `BAD_REQUEST` first, as for any request. A probe is
 never queued on the worker. Where the worker would queue a request (after a
 second failed provision, for example), it declines a probe instead, with
 reason `no-wait`, and answers `NO_CAPACITY`.
@@ -157,13 +162,16 @@ gateway's clock:
     gateway stopping).
 - **`lease.rejected`**, for every other ending:
   - the cases it covers today (`timeout`, `cancelled`, `no-wait`,
-    `no-worker`, `lease-id-taken`);
+    `no-worker`, and `lease-id-taken` when the gateway's own lease index
+    refuses the id);
   - the last cannot-serve refusal, as `unresolvable-spec`, whether or not
     the request had been queued;
   - every other failure on the worker it went to, as the new reason
     `worker-failed`, with `code` (the error code the caller got) and
     `worker`. That covers a terminal refusal, a failure after progress,
-    `WORKER_UNREACHABLE`, `INTERNAL` and a dispatch timeout.
+    `WORKER_UNREACHABLE`, `INTERNAL` and a dispatch timeout. A worker's own
+    `ALREADY_LEASED` or `LEASE_ID_TAKEN` is `worker-failed` too, with that
+    `code`.
 
 The worker field on these two events is named `worker`, not `workerId`.
 `payload.workerId` is the only mark of a relayed event (ADR 0014 §6), so a
@@ -216,7 +224,8 @@ On a worker, the figures separate the two kinds of request:
   worker's devices.
 - **`declined`** counts the worker's `lease.declined` events.
 - **Wait and turnaround.** A probe gives no sample of either on the worker:
-  both belong to the gateway's request.
+  both belong to the gateway's request. A probe is not counted in the
+  worker's `waiting` series either.
 - **Requester rows.** A probe counts under its namespaced `gw:` requester in
   `granted` and held time, never in `requests` or `rejected`.
 
@@ -226,7 +235,8 @@ requests that ended on it, with their waits and turnarounds:
 - those its `request.granted` names;
 - its `worker-failed` rejections.
 
-It has its `declined` events too. A fleet request that ended any other way
+It has its `declined` events too. `probes` is a worker's own figure: a
+gateway's answer has none, in totals or in a worker's entry. A fleet request that ended any other way
 (a gateway-reason rejection, `daemon-restarted`, or still open) counts in
 the totals and per platform, under no worker.
 

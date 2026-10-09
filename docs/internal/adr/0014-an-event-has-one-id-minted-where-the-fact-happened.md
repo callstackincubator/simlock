@@ -1,6 +1,7 @@
 # 0014. An event has one id, minted where the fact happened
 
-- **Status:** Accepted
+- **Status:** Accepted §6's "a worker's own events carry no marker" is narrowed by [ADR
+  0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) for a gateway's probes.
 - **Date:** 2026-10-04
 - **Issue:** [#314](https://github.com/callstackincubator/simlock/issues/314)
 - **Supersedes:** nothing. Narrows [ADR

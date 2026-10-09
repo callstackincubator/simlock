@@ -1,7 +1,8 @@
 # 0016. Usage figures are derived on read from the event history
 
 - **Status:** Accepted — not yet implemented. §6's rules on relayed
-  rejections and the fleet join are superseded by [ADR
+  rejections and the fleet join, and the Consequence on gateway requests
+  counted on a worker, are superseded by [ADR
   0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md).
 - **Date:** 2026-10-05
 - **Issue:** [#329](https://github.com/callstackincubator/simlock/issues/329)
