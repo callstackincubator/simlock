@@ -198,7 +198,7 @@ export class WaitQueue {
    *
    * One pending request per requester is the owner's rule, not the queue's: the owner asks
    * `hasPendingRequester` inside its admission decision, before it stores the request and calls
-   * this, and answers a duplicate with its own `lease.rejected`. Checking again here would be a
+   * this, and answers a duplicate with its own refusal (`emitLeaseRefusal`). Checking again here would be a
    * second copy of that rule, firing only after the request was already stored.
    */
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {

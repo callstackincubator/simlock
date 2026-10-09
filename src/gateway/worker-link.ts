@@ -512,9 +512,9 @@ export class WorkerLink {
    * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
    * -- a client of this same admin protocol, on a machine this gateway does not otherwise
    * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
-   * taken on faith. Refusing the subjects `docs/internal/EVENTS.md` calls "the gateway's own"
-   * (`GATEWAY_OWN_EVENTS`) keeps a worker from forging `worker.drain-ended`, `worker.removed`,
-   * `request.granted`, etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
+   * taken on faith. Refusing the names in `GATEWAY_OWN_EVENTS` (the six `worker.*` facts and
+   * `request.granted`; `request.dispatched` is not in the set) keeps a worker from forging
+   * `worker.drain-ended`, `worker.removed`, `request.granted`, etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
    * author of. Every other name still forwards unchanged, including ones this gateway's own
    * `EventMap` has never heard of (a newer worker's own vocabulary).
    */

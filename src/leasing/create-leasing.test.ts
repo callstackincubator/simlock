@@ -3817,7 +3817,7 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
 
   it("emits lease.declined with reason unresolvable-spec for a probe naming a model the catalog lacks", async () => {
     const harness = await createHarness();
-    const odd = { ...request, osVersion: "1.0" };
+    const odd = { ...request, model: "iPhone 99 Imaginary", osVersion: ">=18" };
 
     await settledOrPending(harness.engine.request(odd, probeOf("gw:odd")));
 

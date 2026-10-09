@@ -711,7 +711,7 @@ export class FleetLeaseCoordinator {
    * claimed its worker this pass is done with it, the same "passed over, not blocked on" contract
    * this method already promises for a request a busy fleet cannot take yet. (A request no worker
    * can serve at all is not passed over: the walk rejects it, ADR 0009 §4.) Before this, only a
-   * worker's own event stream (a `lease.declined`/`lease.expired` push, or the 30s refresh tick)
+   * worker's own event stream (a `lease.rejected`/`lease.expired` push, or the 30s refresh tick)
    * ever re-ran this method -- several of `#attempt`'s own terminal branches
    * (`WORKER_UNREACHABLE`, `INTERNAL`, a target that disappeared between routing and dispatch)
    * produce no such push at all, so a waiter passed over in the same pass as one of those had
@@ -1014,8 +1014,10 @@ export class FleetLeaseCoordinator {
       // `WORKER_UNREACHABLE`/`INTERNAL` in particular produce no worker-side event at all, so
       // without this a waiter passed over in this same pass had nothing left to wake it until the
       // next real worker-view change (the 30s refresh tick, at best).
-      // ADR 0021 §4: this is the request's end and the worker only declined it, so this gateway
-      // records it, with the code the caller got and the worker it failed on.
+      // ADR 0021 §4: this is the request's end, and the worker emits no `lease.rejected` for a
+      // probe (at most a `lease.declined`, and none at all for an unreachable worker, a
+      // gateway-side `INTERNAL` or a dispatch timeout), so this gateway records it, with the code
+      // the caller got and the worker it failed on.
       const failure = this.#classifyLeaseRequestError(error, workerId);
       this.#reject(waiter, failure, "worker-failed", { code: failure.code, worker: workerId });
       this.#dispatch();
@@ -1037,9 +1039,11 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. The worker only declined
-   * the dispatch (`lease.declined`, relayed onto this bus with `workerId` added by `WorkerLink`),
-   * so the request's end is this gateway's own `lease.rejected` (ADR 0021 §4). The error code is
+   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
+   * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
+   * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
+   * `INTERNAL`, a dispatch timeout) it emitted nothing. Either way the request's end is this
+   * gateway's own `lease.rejected` (ADR 0021 §4). The error code is
    * preserved so the caller sees what the worker actually said, with three exceptions:
    *
    * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
