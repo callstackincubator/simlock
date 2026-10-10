@@ -149,7 +149,7 @@ export interface TestEnv {
   cli(args: readonly string[], options?: CliOptions): Promise<CliResult>;
   cliBackground(args: readonly string[], options?: CliOptions): CliBackgroundHandle;
   mcpClient(options?: McpClientOptions): Promise<McpClientHandle>;
-  events(since?: string): Promise<RecordedEvent[]>;
+  events(since?: string, timeout?: number): Promise<RecordedEvent[]>;
   expectEvents(
     names: readonly string[],
     options?: { readonly since?: string; readonly timeout?: number },
@@ -235,7 +235,7 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
       mcpClients.add(handle);
       return handle;
     },
-    events: (since) => events(env, since),
+    events: (since, timeout) => events(env, since, timeout),
     expectEvents: (names, expectOptions) => expectEvents(env, names, expectOptions),
     async startDaemon() {
       return cli(["daemon", "start"], env);
