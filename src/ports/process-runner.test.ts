@@ -237,7 +237,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     // before `releaseFirst()` is ever called; the assertion below confirms exactly that. What
     // the guard actually protects is `wait()` refusing to settle while the *first* chunk's
     // delivery is still unresolved, regardless of what a chatty pipe delivered around it.
-    const runner = new NodeProcessRunner();
+    const runner = new NodeProcessRunner({ exitGraceMs: 100 });
     const seen: string[] = [];
     let releaseFirst!: () => void;
     const firstDelivery = new Promise<void>((resolve) => {
@@ -260,9 +260,9 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     );
 
     // Comfortably past the child's own exit (20ms) and past the exit-to-close grace window
-    // (1s) the old code settled on, while the first chunk's delivery is deliberately still
+    // (100ms here) the old code settled on, while the first chunk's delivery is deliberately still
     // unresolved.
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await new Promise((resolve) => setTimeout(resolve, 400));
     // Both chunks already arrived -- the paused stream drained at EOF -- and `wait()` still
     // has not settled, since the first delivery is what it is actually waiting on.
     expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
@@ -289,7 +289,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     // caller that got `{ exitCode: 0 }` here would have no way to know the command's output
     // was incomplete; a rejection is the visible failure ADR 0005 §19e's "streamed, never
     // buffered" requires instead.
-    const runner = new NodeProcessRunner();
+    const runner = new NodeProcessRunner({ exitDeferralCapMs: 100 });
     const seen: string[] = [];
 
     const handle = runner.spawnStreaming(
@@ -306,7 +306,11 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       },
     );
 
-    await expect(handle.wait()).rejects.toThrow(ExecOutputDeliveryStalledError);
+    const startedAt = Date.now();
+    const error = await handle.wait().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExecOutputDeliveryStalledError);
+    expect((error as Error).message).toContain("still unresolved 100ms later");
+    expect(Date.now() - startedAt, "rejected only after the default 5 s cap").toBeLessThan(2_500);
     expect(seen).toEqual(["stuck"]);
   }, 10_000);
 
@@ -333,6 +337,23 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       "err",
     ]);
   });
+
+  it("settles wait() on the pipe's close, without waiting out the exit grace window", async () => {
+    // A grace far longer than the bound below: only `close` can settle in time.
+    const runner = new NodeProcessRunner({ exitGraceMs: 30_000 });
+
+    const handle = runner.spawnStreaming(process.execPath, ["-e", "process.exitCode = 4"], {
+      onChunk: () => {},
+    });
+    const outcome = await Promise.race([
+      handle.wait(),
+      new Promise<"not settled within 3 s">((resolve) => {
+        setTimeout(() => resolve("not settled within 3 s"), 3_000).unref();
+      }),
+    ]);
+
+    expect(outcome).toEqual({ code: 4, signal: null });
+  }, 6_000);
 
   it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
     // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
@@ -555,24 +576,41 @@ describe("NodeProcessRunner", () => {
   // Real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
   // no-op SIGTERM handler survives the initial signal `run()` sends on timeout, so this only
   // resolves at all if the follow-up SIGKILL actually lands once the grace period elapses.
-  // `SIGTERM_TO_SIGKILL_GRACE_MS` is a fixed 10s (see process-runner.ts), hence the generous
-  // per-test timeout below -- there is no faster way to prove the real runner's own timers
-  // actually escalate without mocking out `child_process`, which every other test in this
-  // `describe` block deliberately avoids.
-  it("escalates to SIGKILL when a timed-out process ignores SIGTERM", async () => {
-    const runner = new NodeProcessRunner();
+  // The grace is shortened through the constructor; the child is still real.
+  it("escalates to SIGKILL when a timed-out process ignores SIGTERM, within the configured grace", async () => {
+    const runner = new NodeProcessRunner({ sigkillGraceMs: 100 });
+    const startedAt = Date.now();
 
-    await expect(
+    // The child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
+    // SIGKILL fails on the assertion instead of waiting out vitest's timeout or leaking it.
+    const outcome = await Promise.race([
       runner.run(
         process.execPath,
-        ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000)"],
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000); setTimeout(() => process.exit(0), 4_000)",
+        ],
         { timeoutMs: 100 },
       ),
-    ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
+      new Promise<"still running after 2 s">((resolve) => {
+        setTimeout(() => resolve("still running after 2 s"), 2_000).unref();
+      }),
+    ]);
+
+    expect(outcome).toEqual({ code: null, stderr: "", stdout: "" });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   }, 15_000);
 
-  it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
+  it("keeps a 10 s SIGTERM-to-SIGKILL grace, a 5 s exit deferral cap and a 1 s exit grace when no options are given", () => {
     const runner = new NodeProcessRunner();
+
+    expect(runner.sigkillGraceMs).toBe(10_000);
+    expect(runner.exitDeferralCapMs).toBe(5_000);
+    expect(runner.exitGraceMs).toBe(1_000);
+  });
+
+  it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
+    const runner = new NodeProcessRunner({ exitGraceMs: 100 });
     // The child forks its own detached grandchild that inherits our pipe's write
     // end, prints the grandchild's pid, then exits immediately -- reproducing the
     // real defect, where a surviving grandchild silences `close` even though the
@@ -595,6 +633,7 @@ describe("NodeProcessRunner", () => {
     try {
       const lines = handle.stdout[Symbol.asyncIterator]();
       grandchildPid = Number((await lines.next()).value);
+      const printedAt = Date.now();
 
       // Race a generous but bounded timeout so a regression here fails as a clear
       // assertion instead of vitest's own suite-wide test timeout.
@@ -609,6 +648,9 @@ describe("NodeProcessRunner", () => {
       ]);
 
       expect(result.code).toBe(3);
+      expect(Date.now() - printedAt, "settled only after the default 1 s exit grace").toBeLessThan(
+        900,
+      );
     } finally {
       if (grandchildPid !== undefined) {
         try {
@@ -621,9 +663,9 @@ describe("NodeProcessRunner", () => {
   }, 4_000);
 
   it("keeps waiting while output is still arriving after the process exits", async () => {
-    const runner = new NodeProcessRunner();
+    const runner = new NodeProcessRunner({ exitGraceMs: 300 });
     // Same shape as above, but the pipe is still delivering when the process goes:
-    // the grandchild emits a chunk every 200ms for well over a grace window, then
+    // the grandchild emits a chunk every 100ms for well over a 300ms grace window, then
     // goes quiet. Settling on a bare post-exit timer would cut the capture off at
     // the first chunk -- a truncated capture surfaces later as a parse error, far
     // from its cause -- so the window has to restart while output keeps arriving.
@@ -638,7 +680,7 @@ describe("NodeProcessRunner", () => {
               // console.log appends its own newline, which keeps this three-deep
               // nested source free of escape sequences that have to survive two
               // rounds of string parsing on the way down.
-              "let n = 0; const t = setInterval(() => { console.log('chunk-' + n); if (++n === 6) { clearInterval(t); setTimeout(() => {}, 3_000); } }, 200);",
+              "let n = 0; const t = setInterval(() => { console.log('chunk-' + n); if (++n === 6) { clearInterval(t); setTimeout(() => {}, 3_000); } }, 100);",
             ],
             { detached: true, stdio: "inherit" },
           );
