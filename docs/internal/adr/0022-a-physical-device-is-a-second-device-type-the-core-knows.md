@@ -326,7 +326,7 @@ New events, past-tense facts emitted after commit:
 
 - `device.enrolled`: id, platform, canonical ID, model, OS version, class,
   app count; `reenrolled: true` on a second enrollment.
-- `device.absence-detected`: id, previous state, reason.
+- `device.absence-detected`: id, previous state, `absentReason`.
 - `device.returned`: id, OS version.
 
 Extended:
