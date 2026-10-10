@@ -375,8 +375,9 @@ Extended:
 A gateway matches a physical request against the physical devices in its
 workers' views, in any state but `deleted`. It fails at once with
 `UNKNOWN_MODEL` when no worker's device could match. It sends the request
-only to a worker with a matching `ready` device whose latest presence read
-says present, and otherwise waits. A worker's view carries each physical
+only to a worker with a matching `ready` device that its latest presence
+read does not say is gone (a device not read yet counts), and otherwise
+waits. A worker's view carries each physical
 device's latest presence read, and that read is part of the key a
 `NO_CAPACITY` refusal is remembered against (ADR 0009 §5, unchanged). So a
 device plugged back in changes the view, and the request is offered again
