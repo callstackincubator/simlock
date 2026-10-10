@@ -50,7 +50,7 @@ platform-tools 37.0.1 disabled on macOS.
 ```ts
 type VirtualDevice  = { physical: false; state: VirtualState;  spec: VirtualSpec;  … };
 type PhysicalDevice = { physical: true;  state: PhysicalState; spec: PhysicalSpec;
-                        enrolledApps: readonly string[]; reclaimingSince?: string; … };
+                        enrolledApps: readonly string[]; reclaimingSince?: number; … };
 type DeviceRecord = VirtualDevice | PhysicalDevice;
 
 type SharedState   = "ready" | "leased" | "reclaiming" | "quarantined";
@@ -128,8 +128,8 @@ make its own app part of the starting point.
 
 ### 4. Virtual-only operations take only virtual devices
 
-`provision`, `shutdown`, `destroy`, the warm pool, idle cleanup, nuke,
-`doctor --purge-orphans`, the orphan and foreign-state findings, the
+`provision`, `shutdown`, `destroy`, the warm pool, idle cleanup, nuke's
+shutdown and delete steps, `doctor --purge-orphans`, the orphan and foreign-state findings, the
 health monitor's crash recovery, capacity limits and the RAM budget take
 `VirtualDevice`. Passing a physical one does not compile. The registry
 offers one read of virtual devices that these callers use; none writes the
@@ -146,6 +146,10 @@ grants, waits or refuses. A virtual request never fits a physical device,
 and the reverse.
 
 A physical device is always reusable: `lease.identity` does not apply.
+
+`nuke` ends a lease on a physical device as it ends any lease, and the
+device then gets a normal reclaim. `nuke` never unenrolls, erases or
+otherwise touches a physical device.
 
 ### 5. One driver per platform, routing by `physical` inside
 
@@ -181,7 +185,8 @@ interface Driver {
   listManaged(): Promise<…>;                          // root contents, as today
   // physical only
   inspectPhysical(id: string): Promise<PhysicalInspection>;  // device add
-  listPresentPhysical(): Promise<PresentPhysical[]>;        // watcher, grant, startup
+  listPresentPhysical(enrolled: readonly string[]): Promise<PresentPhysical[]>;
+                                                       // watcher, grant, startup
 }
 ```
 
@@ -198,8 +203,12 @@ own refusal list, and `devicectl` arguments that read or write host files
 no isolation between lease holders: a command that names another device's
 ID is not stopped.
 
-`leaseEnvironment` for a physical Android device sets `ANDROID_SERIAL`;
-for a physical iOS device it sets `SIMLOCK_DEVICE_UDID`.
+`listPresentPhysical` is given the enrolled canonical IDs and answers only
+for them; a device that is not enrolled gets no entry and no command.
+
+`leaseEnvironment` for a physical Android device sets `ANDROID_SERIAL` and
+`ANDROID_ADB_SERVER_PORT=5037`, so an agent's adb never stays on Simlock's
+emulator server; for a physical iOS device it sets `SIMLOCK_DEVICE_UDID`.
 
 **adb.** Emulators keep Simlock's own server, unchanged (port 5038, USB
 off). Physical Android devices go through the host's default server (port
@@ -231,10 +240,16 @@ virtual side of its driver.
    device, an iOS device below 17, and a device that is not trusted or not
    in developer mode;
 5. records model, OS version (the API level on Android), class and the
-   user-installed apps (Android `pm list packages -3` for the current user;
-   iOS the user apps devicectl lists), and writes the record in `ready`.
+   user-installed apps, and writes the record in `ready`. On Android these
+   are `pm list packages -3` for the current user. On iOS they are the apps
+   devicectl lists by default: apps installed by Xcode or devicectl. App
+   Store and TestFlight apps are never recorded and never touched.
+
+A locked iPhone is refused at enrollment ("unlock it and try again"), and
+so is an emulator on the default adb server (not a USB device).
 
 The class is the device's own report: iPad is `tablet`, otherwise `phone`.
+Every Android device is `phone`.
 It is stored on the record and carried on the status device entry and the
 worker view, so the gateway can match it. A request with no class means
 `phone`, as for virtual requests.
@@ -242,20 +257,39 @@ worker view, so the gateway can match it. A request with no class means
 Physical requests skip create-spec resolution. A physical request that no
 enrolled physical device in any state but `deleted` could match fails at
 once with `UNKNOWN_MODEL` and "no enrolled physical device can match".
-Otherwise it waits, or with `noWait` fails `NO_CAPACITY` as today. A
+Otherwise it waits, or with `noWait` fails `NO_CAPACITY` as today.
+`--os` matches exactly, as for virtual requests; "18.x" is the range
+`>=18 <19`. `--device` ignores letter case.
+
+Physical and virtual requests wait in separate lines. Virtual requests keep
+today's order exactly. A device that becomes ready goes to the oldest
+waiting physical request it matches, so a request for one model never waits
+behind a request for another, and no virtual request waits behind a
+physical one. A
 waiting physical request whose last matching device is unenrolled fails
 then, with the same `UNKNOWN_MODEL`. `mode`, `imageTag` and
-`allowDownload` are refused with `physical` by the contract; the
+`allowDownload: true` are refused with `physical` by the contract; the
 platform's default mode does not apply.
 
-On a gateway, `device add` and `device remove` name a worker with
-`--worker`, as `component install` does.
+On a gateway, `device add` and `device remove` carry a `worker` field
+(`--worker` on the CLI) and are forwarded to that worker.
 
 ### 7. Presence: read at grant, watched always
 
 A physical device is present when its handler lists it on USB, trusted
 and usable: iOS paired, wired and unlocked; Android in state `device`.
-"Not present" is a read; `absent` is the state.
+"Not present" is a read; `absent` is the state. A read that is not present
+carries a reason, kept on an absent record as `absentReason` and shown in
+status:
+
+| Reason | iOS | Android |
+|---|---|---|
+| `locked` | `devicectl device info lockState` | not detected: a locked Android device is present |
+| `untrusted` | not paired, or trust lost | `adb devices` says `unauthorized` |
+| `not-present` | not listed on USB | missing, or `offline` |
+
+adb exposes no documented lock state, and adb installs and uninstalls work
+on a locked Android device, so a locked one stays in rotation.
 
 - **At grant**: a device not present is not granted, its state is left to
   the watcher, and the request tries the next match or waits.
@@ -292,23 +326,41 @@ New events, past-tense facts emitted after commit:
 
 - `device.enrolled`: id, platform, canonical ID, model, OS version, class,
   app count; `reenrolled: true` on a second enrollment.
-- `device.absence-detected`: id, previous state.
+- `device.absence-detected`: id, previous state, reason.
 - `device.returned`: id, OS version.
 
 Extended:
 
-- `device.deleted.initiator` gains `operator` (`device remove`) and
-  `quarantine` (retries used up); its payload carries `physical`. Its
+- `device.deleted.initiator` gains `operator` (`device remove`) and, for a
+  physical device only, `quarantine` (retries used up); its payload carries
+  `physical`. Its
   meaning becomes "removed from the registry, and from disk for a virtual
   device".
 - `device.quarantine-abandoned` means "destroyed, or unenrolled for a
   physical device".
-- `device.reclaimed.strategy` gains `uninstall`; its payload gains
-  `missingApps` for a physical device.
+- `device.reclaimed.strategy` gains `uninstall`; its payload, and that of
+  `device.quarantine-recovered`, gain `missingApps` for a physical device.
+- A returned device whose reclaim fails while present emits
+  `device.quarantined` only: no lease is involved.
+- `request.dispatched` carries `physical`.
 - Device payloads that carry a spec carry `physical`. A physical grant's
   `lease.granted.source` is `warm`: the device was ready and nothing booted.
 
-### 10. Rules amended
+### 10. Gateway
+
+A gateway matches a physical request against the physical devices in its
+workers' views, in any state but `deleted`. It fails at once with
+`UNKNOWN_MODEL` when no worker's device could match. It sends the request
+only to a worker with a matching `ready` device, and otherwise waits. The
+routing stages that count free slots, RAM and free capacity are skipped for
+a physical request, and a physical pick counts as a warm hit. A worker that
+is restarting stays known by its last-read physical devices, as it stays
+known by its last catalog. `device.exec` already goes to the worker that
+holds the lease; the gateway adds nothing to it. There is no `simlock
+devicectl` command: a remote iOS agent runs devicectl through exec over
+HTTP or the client.
+
+### 11. Rules amended
 
 - Safety rule 1 gains: "A physical device is Simlock's to act on only
   through its enrollment record, and the only destructive act it allows is
