@@ -231,8 +231,8 @@ restart the server. That protocol version is what makes an adb client kill
 a server. If it differs from Simlock's adb, or the server does not answer
 (only a refused connection means nothing is listening), Simlock sends no
 physical command, the devices read as not present, and `doctor` names both
-protocol versions. `device.exec` uses the latest result, at most one
-`health.probeIntervalMs` old. Simlock's own adb protocol is read again when
+protocol versions. `device.exec` uses the latest result, and refuses
+("try again") when it is older than two `health.probeIntervalMs`. Simlock's own adb protocol is read again when
 its adb binary changes.
 
 Every physical call has a time limit: 30 seconds for one read, 60 seconds
@@ -395,8 +395,8 @@ run only by hand; delivery reports them as needing hardware.
   enrolled it; `listPresentPhysical()` answers only for enrolled IDs."
 - Safety rule 9 gains: "Physical Android devices are reached through the
   host's default adb server, never Simlock's. Simlock never stops it, and
-  sends no physical command while its last check, at most one health
-  interval old, saw another protocol version or no answer."
+  sends no physical command while its last check, at most two health
+  intervals old, saw another protocol version or no answer."
 - Architecture rule 3 is unchanged: no driver is added, and platform
   knowledge stays in the driver modules. A new device type is not a new
   driver; the core learns that a device may be physical, and that is a

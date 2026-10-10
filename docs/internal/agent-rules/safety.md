@@ -106,7 +106,7 @@ never enforce them only inside an individual rule or driver.
    devices are the one exception, and they never use Simlock's server: they
    are reached through the host's default adb server, which Simlock never
    stops. Simlock sends no physical command while its last check of that
-   server, at most one health interval old, saw another adb protocol
+   server, at most two health intervals old, saw another adb protocol
    version or no answer.
 10. **Anything that arrives over the wire is a claim, not a fact.** A peer's
     stated identity, an echoed owner, a lease id, a tool name, a command's
