@@ -166,6 +166,7 @@ get the same lease/release workflow as tools, through a local stdio server:
 ```sh
 pnpm install
 pnpm build
+pnpm add --global .
 simlock lease --platform ios --device "iPhone 16" --detach
 simlock status --json
 ```
