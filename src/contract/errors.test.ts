@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_TABLE, fromWireError, isSimlockError } from "./errors.js";
+import {
+  CODES_WITH_DECLARED_DETAILS,
+  ERROR_TABLE,
+  fromWireError,
+  isSimlockError,
+} from "./errors.js";
 
 describe("SimlockError", () => {
   it("narrows details by code", () => {
@@ -16,6 +21,22 @@ describe("SimlockError", () => {
     } else {
       throw new Error("expected REQUESTER_ALREADY_LEASED");
     }
+  });
+
+  it("HISTORY_NOT_KEPT is a domain error with exit code 12, HTTP status 422, and the oldest held time in its details", () => {
+    expect(ERROR_TABLE.HISTORY_NOT_KEPT).toEqual({
+      cliExitCode: 12,
+      code: "HISTORY_NOT_KEPT",
+      httpStatus: 422,
+      kind: "domain",
+    });
+
+    const error = fromWireError("HISTORY_NOT_KEPT", "not kept", { oldestTs: 42 });
+
+    expect(error.code).toBe("HISTORY_NOT_KEPT");
+    if (error.code === "HISTORY_NOT_KEPT") expect(error.details.oldestTs).toBe(42);
+    else throw new Error("expected HISTORY_NOT_KEPT");
+    expect(CODES_WITH_DECLARED_DETAILS.has("HISTORY_NOT_KEPT")).toBe(true);
   });
 
   it("wraps an unrecognized code as UNKNOWN_DAEMON_ERROR instead of throwing", () => {

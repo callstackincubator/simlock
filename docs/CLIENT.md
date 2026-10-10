@@ -16,6 +16,7 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
 `getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`),
+`usage`,
 `createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from
@@ -570,6 +571,38 @@ const { waiting = [] } = await client.getStatus();
   its entry in `workers` and on `listWorkers()`. The admin client's
   `list({ kind: "requests" })` lists both, each worker's entries with their
   `workerId`, the same list as `GET /v1/lease-requests`.
+
+## How much was used: `usage`
+
+`simlock/admin` only. `usage({ from, to })` returns the usage figures for a
+window, the same answer `simlock stats --json` prints (see
+[CLI.md](CLI.md), under `simlock stats`,
+for what each figure counts). `from` and `to` are epoch milliseconds, `from`
+before `to`, at most 90 days apart; the client refuses anything else before it
+sends a frame.
+
+```ts
+const usage = await admin.usage({ from: Date.now() - 6 * 3_600_000, to: Date.now() });
+
+usage.totals.requests;       // lease requests made in the window
+usage.totals.wait.p95;       // milliseconds, or null when nothing waited
+usage.totals.failures.byEvent; // a count per failure event, e.g. "device.purge-failed"
+usage.workers[0]?.label;     // one entry for each worker; a worker lists itself
+usage.series;                // one point per bucket, for a chart; `waiting` counts every
+                             // request open at the bucket's end, leaving out a gateway's probes
+```
+
+The daemon computes the figures from its event history, so they cover only what
+the history holds: `partial` is `true` and `coversFrom` says where they start when
+it does not reach the start of the window. `window` in the answer is the window
+asked for, rounded down to a whole number of `bucketMs` at both ends, and the series never has more
+than 200 points. A window that ends before the oldest event the history holds
+rejects with `HISTORY_NOT_KEPT`; its `details.oldestTs` is the oldest time the
+history reaches. Against a gateway the totals are the fleet's and `workers` has
+one entry for each worker; `bySource.unknown` counts grants whose source the
+gateway never learned, and there is no `probes`. Against a worker, `probes`
+counts the requests a gateway sent it, which `requests` leaves out. `declined`
+counts the refusals of such requests.
 
 ## One connection, no reconnect, no retry
 

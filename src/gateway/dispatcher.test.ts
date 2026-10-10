@@ -79,6 +79,8 @@ const gatewayConfig = {
 };
 
 class FakeTokens implements GatewayTokenStore {
+  constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}
+
   readonly created: string[] = [];
   readonly revoked: string[] = [];
 
@@ -91,7 +93,10 @@ class FakeTokens implements GatewayTokenStore {
   }
 
   async list() {
-    return [{ createdAt: 1, id: "tok_1", role: "worker" as const }];
+    return [
+      { createdAt: 1, id: "tok_1", role: "worker" as const },
+      ...this.records.map((record) => ({ createdAt: 1, role: "agent" as const, ...record })),
+    ];
   }
 
   async revoke(id: string) {
@@ -127,7 +132,11 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(
   options: {
-    readonly eventHistory?: Pick<EventHistory, "replay">;
+    readonly eventHistory?: Pick<EventHistory, "latestId" | "read" | "replay">;
+    /** The tokens the gateway's store lists besides its worker token; none by default. */
+    readonly tokenRecords?: readonly { id: string; label?: string }[];
+    /** Leaves the token store out, as a gateway started without one is. */
+    readonly withoutTokens?: boolean;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
     /** The gateway's own health; `running` by default. */
@@ -144,7 +153,7 @@ function harness(
     leaseMaxTtlMs: gatewayConfig.lease.maxTtlMs,
     retentionMs: 24 * 60 * 60_000,
   });
-  const tokens = new FakeTokens();
+  const tokens = new FakeTokens(options.tokenRecords);
   /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
   const closedUplinkTokens: string[] = [];
   const directory = new FakeDirectory();
@@ -193,7 +202,7 @@ function harness(
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
-    tokens,
+    ...(options.withoutTokens === true ? {} : { tokens }),
     workers,
   });
   return {
@@ -685,6 +694,13 @@ describe("GatewayDispatcher", () => {
     const asked: unknown[] = [];
     const { dispatcher } = harness({
       eventHistory: {
+        latestId: () => undefined,
+        read: async () => ({
+          events: [],
+          oldestTs: undefined,
+          answeredBefore: new Set<string>(),
+          requestedBefore: new Set<string>(),
+        }),
         replay: async (input) => {
           asked.push(input);
           return fromHistory;
@@ -696,6 +712,124 @@ describe("GatewayDispatcher", () => {
       fromHistory,
     );
     expect(asked).toEqual([{ sinceTs: 10 }]);
+  });
+
+  it("the gateway handler strips its own gw: prefix before the label lookup and leaves another prefix alone", async () => {
+    const { dispatcher, eventBus } = harness({
+      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
+    });
+    for (const [index, requester] of [
+      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
+      "gw:other-instance:tok_a",
+      "tok_a",
+    ].entries()) {
+      eventBus.emit(
+        "lease.requested",
+        {
+          requestId: `req_${index}`,
+          requestSpec: { platform: "ios" },
+          requester,
+          waitPolicy: "wait",
+        },
+        "gateway",
+      );
+    }
+
+    const usage = await dispatcher.dispatch("usage.get", { from: 0, to: 600_000 }, session());
+
+    expect(
+      Object.fromEntries(usage.requesters.map((requester) => [requester.id, requester.label])),
+    ).toEqual({
+      "gw:instance-1:tok_a": "ci-bot",
+      "gw:other-instance:tok_a": undefined,
+      tok_a: "ci-bot",
+    });
+  });
+
+  it("the gateway handler answers with no label for a requester when it has no token store", async () => {
+    const { dispatcher, eventBus } = harness({ withoutTokens: true });
+    eventBus.emit(
+      "lease.requested",
+      {
+        requestId: "req_1",
+        requestSpec: { platform: "ios" },
+        requester: "tok_x",
+        waitPolicy: "wait",
+      },
+      "gateway",
+    );
+
+    const usage = await dispatcher.dispatch("usage.get", { from: 0, to: 600_000 }, session());
+
+    expect(usage.requesters.map((requester) => requester.label)).toEqual([undefined]);
+    expect(usage.requesters).toHaveLength(1);
+  });
+
+  it("answers usage.get with fleet totals and one entry per worker, labelled from the registry", async () => {
+    const { dispatcher, eventBus, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    eventBus.emit(
+      "lease.requested",
+      {
+        requestId: "req_1",
+        requestSpec: { platform: "ios" },
+        requester: "agent-1",
+        waitPolicy: "wait",
+      },
+      "gateway",
+    );
+    eventBus.republish({
+      event: "lease.granted",
+      id: "evt_worker_1",
+      module: "lease-lifecycle",
+      payload: {
+        deviceId: "dev_1",
+        leaseId: "l1",
+        requestId: "wreq_1",
+        requester: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+        source: "warm",
+        workerId: "wrk_1",
+      } as never,
+      timestamp: 1_000,
+    });
+
+    eventBus.emit(
+      "request.granted",
+      { leaseId: "gwl_1", requestId: "req_1", worker: "wrk_1", workerLeaseId: "l1" },
+      "gateway",
+    );
+
+    const usage = await dispatcher.dispatch("usage.get", { from: 0, to: 600_000 }, session());
+
+    expect(usage.totals).toMatchObject({ bySource: { warm: 1 }, granted: 1, requests: 1 });
+    expect(usage.workers).toMatchObject([{ granted: 1, id: "wrk_1", label: "mac-mini-1" }]);
+  });
+
+  it("the gateway handler answers HISTORY_NOT_KEPT with the oldest held timestamp, and refuses an agent token before it reads any history", async () => {
+    let reads = 0;
+    const { dispatcher } = harness({
+      eventHistory: {
+        latestId: () => "evt_1",
+        read: async () => {
+          reads += 1;
+          return {
+            events: [],
+            oldestTs: 99 * 3_600_000,
+            answeredBefore: new Set<string>(),
+            requestedBefore: new Set<string>(),
+          };
+        },
+        replay: async () => [],
+      },
+    });
+
+    await expect(
+      dispatcher.dispatch("usage.get", { from: 0, to: 3_600_000 }, session()),
+    ).rejects.toMatchObject({ code: "HISTORY_NOT_KEPT", details: { oldestTs: 99 * 3_600_000 } });
+    await expect(
+      dispatcher.dispatch("usage.get", { from: 0, to: 3_600_000 }, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(reads).toBe(1);
   });
 
   it("mints and revokes its own tokens, worker join tokens included", async () => {

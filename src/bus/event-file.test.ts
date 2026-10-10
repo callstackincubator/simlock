@@ -198,6 +198,97 @@ describe("EventHistory", () => {
       { reason: "memory only" },
     ]);
   });
+
+  it("reads the events and the oldest timestamp the file holds in one call, carrying the step in force", async () => {
+    const path = await eventFilePath();
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const sink = new NodeFileLogSink({ path });
+    const events = history({ bus, path, sink });
+    const early = bus.emit("queue.changed", { depth: 2 }, "wait-queue");
+    clock.advance(1_000);
+    bus.emit("daemon.stopping", { reason: "a" }, "daemon");
+    clock.advance(1_000);
+    const late = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+    sink.close();
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_500 });
+
+    expect(read.oldestTs).toBe(1_000);
+    expect(read.events).toEqual([early, late]);
+  });
+
+  it("reads from the ring, with the carried step and its oldest timestamp, when there is no sink", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    const early = bus.emit("queue.changed", { depth: 2 }, "wait-queue");
+    clock.advance(2_000);
+    const late = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
+
+    expect(read).toEqual({
+      answeredBefore: new Set(),
+      events: [early, late],
+      oldestTs: 1_000,
+      requestedBefore: new Set(),
+    });
+    expect(await events.replay({ carry: ["queue.changed"], sinceTs: 2_000 })).toEqual([
+      early,
+      late,
+    ]);
+  });
+
+  it("reads the ring with the carried envelopes in time order, though the earlier of two kinds was first set", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("queue.changed", { depth: 1 }, "wait-queue");
+    clock.advance(1_000);
+    const figures = { maxRunning: 2, reserved: 0, running: 1, warm: 0 };
+    const capacity = bus.emit(
+      "capacity.changed",
+      { android: figures, global: figures, ios: figures },
+      "capacity",
+    );
+    clock.advance(1_000);
+    const queue = bus.emit("queue.changed", { depth: 3 }, "wait-queue");
+
+    const read = await events.read({
+      carry: ["queue.changed", "capacity.changed"],
+      sinceTs: 5_000,
+    });
+
+    expect(read.events.map((envelope) => envelope.timestamp)).toEqual([2_000, 3_000]);
+    expect(read.events).toEqual([capacity, queue]);
+  });
+
+  it("reads the ring with an event at exactly sinceTs as the step in force and not as a newer event", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    clock.advance(1_000);
+    const step = bus.emit("queue.changed", { depth: 4 }, "wait-queue");
+    bus.emit("daemon.stopping", { reason: "at the edge" }, "daemon");
+    clock.advance(1);
+    const after = bus.emit("daemon.stopping", { reason: "after" }, "daemon");
+
+    const read = await events.read({ carry: ["queue.changed"], sinceTs: 2_000 });
+
+    expect(read.events).toEqual([step, after]);
+  });
+
+  it("names the newest event's id, and none before the first event", () => {
+    const bus = new EventBus(new FakeClock(1_000));
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    expect(events.latestId()).toBeUndefined();
+
+    bus.emit("daemon.stopping", { reason: "a" }, "daemon");
+    const last = bus.emit("daemon.stopping", { reason: "b" }, "daemon");
+
+    expect(events.latestId()).toBe(last.id);
+  });
 });
 
 describe("readEventFile", () => {
@@ -339,6 +430,117 @@ describe("readEventFile", () => {
     expect(empty.oldestTs).toBeUndefined();
   });
 
+  it("reports the requestId of each lease.requested at or before sinceTs, and none from after it or from other events", async () => {
+    const requested = (seq: number, timestamp: number, requestId: string): EventEnvelope =>
+      ({
+        ...envelope(seq, timestamp),
+        event: "lease.requested",
+        payload: { requestId },
+      }) as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        requested(1, 100, "old"),
+        envelope(2, 150),
+        requested(3, 200, "edge"),
+        requested(4, 300, "new"),
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.requestedBefore].sort()).toEqual(["edge", "old"]);
+  });
+
+  it("reports no requestId from a lease.requested that has none, or from another event that has one", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        { ...envelope(1, 100), event: "lease.requested", payload: {} } as EventEnvelope,
+        {
+          ...envelope(2, 110),
+          event: "lease.granted",
+          payload: { requestId: "g" },
+        } as EventEnvelope,
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.requestedBefore]).toEqual([]);
+  });
+
+  it("reports the requestId of each lease.granted, lease.rejected and request.granted at or before sinceTs as answered, and none from after it or from other events", async () => {
+    const answer = (seq: number, timestamp: number, event: string, requestId: string) =>
+      ({ ...envelope(seq, timestamp), event, payload: { requestId } }) as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        answer(1, 100, "lease.granted", "granted"),
+        answer(2, 110, "lease.rejected", "rejected"),
+        answer(3, 120, "request.granted", "handed"),
+        answer(4, 130, "lease.declined", "declined"),
+        answer(5, 140, "lease.requested", "asked"),
+        answer(6, 200, "lease.granted", "edge"),
+        answer(7, 300, "lease.granted", "later"),
+        { ...envelope(8, 150), event: "lease.granted", payload: {} } as EventEnvelope,
+      ),
+    });
+
+    const read = await readEventHistory(filesystem, "/data/events.jsonl", { sinceTs: 200 });
+
+    expect([...read.answeredBefore].sort()).toEqual(["edge", "granted", "handed", "rejected"]);
+    expect([...read.requestedBefore]).toEqual(["asked"]);
+  });
+
+  it("reports the requests answered before sinceTs from the ring too", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("lease.rejected", { requestId: "old", requester: "a" } as never, "lease");
+    clock.advance(2_000);
+    bus.emit("lease.rejected", { requestId: "new", requester: "a" } as never, "lease");
+
+    const read = await events.read({ carry: [], sinceTs: 2_000 });
+
+    expect([...read.answeredBefore]).toEqual(["old"]);
+  });
+
+  it("carries events whose worker and requester run together into the same text as two different ones", async () => {
+    const withPayload = (seq: number, payload: Record<string, string>): EventEnvelope =>
+      ({
+        event: "lease.requested",
+        id: `evt_${seq}`,
+        module: "test",
+        payload,
+        seq,
+        timestamp: 100 + seq,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        withPayload(1, { requester: "w1x" }),
+        withPayload(2, { requester: "x", workerId: "w1" }),
+      ),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["lease.requested"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.seq)).toEqual([1, 2]);
+  });
+
+  it("reports the requests made before sinceTs from the ring too", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("lease.requested", { requestId: "old", requester: "a" } as never, "lease");
+    clock.advance(2_000);
+    bus.emit("lease.requested", { requestId: "new", requester: "a" } as never, "lease");
+
+    const read = await events.read({ carry: [], sinceTs: 2_000 });
+
+    expect([...read.requestedBefore]).toEqual(["old"]);
+  });
+
   it("returns the generations when the current file is missing", async () => {
     const filesystem = await filesystemWith({
       "/data/events.jsonl.1": lines(envelope(1, 100)),
@@ -441,5 +643,132 @@ describe("readEventFile", () => {
     const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
 
     expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
+  });
+
+  it("readEventFile with carry keeps the later step when a line written afterwards is older, and the line written last on a tie", async () => {
+    const step = (id: string, seq: number, timestamp: number): EventEnvelope =>
+      ({
+        event: "capacity.changed",
+        id,
+        module: "test",
+        payload: {},
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const read = async (...written: EventEnvelope[]) =>
+      (
+        await readEventFile(
+          await filesystemWith({ "/data/events.jsonl": lines(...written) }),
+          "/data/events.jsonl",
+          {
+            carry: ["capacity.changed"],
+            sinceTs: 300,
+          },
+        )
+      ).map((entry) => entry.id);
+
+    expect(await read(step("evt_2", 2, 200), step("evt_3", 3, 100))).toEqual(["evt_2"]);
+    expect(await read(step("evt_5", 5, 200), step("evt_6", 5, 200))).toEqual(["evt_6"]);
+  });
+
+  it("readEventFile with carry keeps the latest of a named event for each requester, so a request still open when the window opens is carried", async () => {
+    const forRequester = (
+      seq: number,
+      timestamp: number,
+      event: "lease.requested" | "lease.granted",
+      requester: string,
+    ): EventEnvelope =>
+      ({
+        event,
+        id: `evt_${seq}`,
+        module: "test",
+        payload: { requester },
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        forRequester(1, 100, "lease.requested", "a"),
+        forRequester(2, 110, "lease.requested", "b"),
+        forRequester(3, 120, "lease.granted", "a"),
+        forRequester(4, 130, "lease.requested", "a"),
+        forRequester(5, 400, "lease.requested", "c"),
+      ),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["lease.requested", "lease.granted"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.seq)).toEqual([2, 3, 4, 5]);
+  });
+
+  it("readEventFile with carry returns the latest capacity.changed and queue.changed at or before sinceTs, one per worker id, and none when there is none", async () => {
+    const step = (
+      seq: number,
+      timestamp: number,
+      event: "capacity.changed" | "queue.changed",
+      workerId?: string,
+    ): EventEnvelope =>
+      ({
+        event,
+        id: `evt_${seq}`,
+        module: "test",
+        payload: {
+          ...(event === "queue.changed" ? { depth: seq } : {}),
+          ...(workerId === undefined ? {} : { workerId }),
+        },
+        seq,
+        timestamp,
+      }) as unknown as EventEnvelope;
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines(
+        step(1, 100, "capacity.changed"),
+        step(2, 200, "capacity.changed"),
+        step(3, 150, "queue.changed", "w1"),
+        step(4, 180, "queue.changed", "w2"),
+        step(5, 190, "queue.changed", "w1"),
+        envelope(6, 250),
+        envelope(7, 400),
+        step(8, 500, "capacity.changed"),
+      ),
+    });
+    const carry = ["capacity.changed", "queue.changed"] as const;
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { carry, sinceTs: 300 });
+    const none = await readEventFile(filesystem, "/data/events.jsonl", { carry, sinceTs: 50 });
+    const plain = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 300 });
+
+    // The newest step of each kind and worker at or before 300, then everything after it.
+    expect(read.map((entry) => entry.id)).toEqual(["evt_4", "evt_5", "evt_2", "evt_7", "evt_8"]);
+    expect(plain.map((entry) => entry.id)).toEqual(["evt_7", "evt_8"]);
+    // Nothing is at or before 50, so nothing is carried and nothing is repeated.
+    expect(none.map((entry) => entry.id)).toEqual([
+      "evt_1",
+      "evt_3",
+      "evt_4",
+      "evt_5",
+      "evt_2",
+      "evt_6",
+      "evt_7",
+      "evt_8",
+    ]);
+  });
+
+  it("carries a step stamped exactly sinceTs, and counts it once", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": lines({
+        ...envelope(1, 300),
+        event: "capacity.changed",
+      } as unknown as EventEnvelope),
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", {
+      carry: ["capacity.changed"],
+      sinceTs: 300,
+    });
+
+    expect(read.map((entry) => entry.id)).toEqual(["evt_1"]);
   });
 });

@@ -1,6 +1,6 @@
 import { type Filesystem, isMissingPathError, type Logger, type LogSink } from "../ports/index.js";
 import { EVENT_ID_PATTERN } from "../contract/schemas.js";
-import type { EventBus, EventEnvelope } from "./index.js";
+import type { EventBus, EventEnvelope, EventName } from "./index.js";
 import { byTimeThenSeq } from "./order.js";
 
 /** The durable record of every business event, in the data directory (ADR 0006). */
@@ -8,6 +8,9 @@ export const EVENT_FILE_NAME = "events.jsonl";
 
 /**
  * Every envelope in the event file newer than `sinceTs`, by `timestamp` then `seq` (ADR 0014 §5).
+ * With `carry`, also the latest envelope of each named event at or before `sinceTs` -- one per
+ * `workerId` and one per `requester` where the payload names one -- so a reader of a step function (ADR 0016 §3) is told
+ * the step in force when its window opens.
  * The current file is read first, then its generations `<path>.1`, `<path>.2` and so on until
  * one is missing (ADR 0016 §4). Newest first means a rotation landing mid-read can only make a
  * generation show up twice -- never make one go missing -- and the repeat is dropped by `id`.
@@ -20,7 +23,7 @@ export const EVENT_FILE_NAME = "events.jsonl";
 export async function readEventFile(
   filesystem: Filesystem,
   path: string,
-  options: { readonly sinceTs: number },
+  options: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
 ): Promise<EventEnvelope[]> {
   return (await readEventHistory(filesystem, path, options)).events;
 }
@@ -33,22 +36,86 @@ export async function readEventFile(
 export async function readEventHistory(
   filesystem: Filesystem,
   path: string,
-  { sinceTs }: { readonly sinceTs: number },
-): Promise<{ readonly events: EventEnvelope[]; readonly oldestTs: number | undefined }> {
+  { sinceTs, carry = [] }: { readonly sinceTs: number; readonly carry?: readonly EventName[] },
+): Promise<EventHistoryRead> {
   const generations = await readGenerations(filesystem, path);
   const seen = new Set<string>();
   const events: EventEnvelope[] = [];
+  const carried = new Map<string, EventEnvelope>();
+  const before = { answered: new Set<string>(), requested: new Set<string>() };
   let oldestTs: number | undefined;
   // Oldest generation first, so events that tie on time and seq keep the order they were written.
   for (const line of generations.reverse().flat()) {
     const envelope = parseEnvelope(line);
     if (envelope === undefined) continue;
     oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
-    if (envelope.timestamp <= sinceTs || seen.has(eventKey(envelope))) continue;
+    if (envelope.timestamp <= sinceTs) {
+      keepIfCarried(carried, envelope, carry);
+      noteRequest(before, envelope);
+      continue;
+    }
+    if (seen.has(eventKey(envelope))) continue;
     seen.add(eventKey(envelope));
     events.push(envelope);
   }
-  return { events: events.sort(byTimeThenSeq), oldestTs };
+  return {
+    events: [...carried.values(), ...events].sort(byTimeThenSeq),
+    oldestTs,
+    answeredBefore: before.answered,
+    requestedBefore: before.requested,
+  };
+}
+
+/** What a history read answers: the events, how far back it reaches, and which requests were made
+ * before `sinceTs` or answered by then (a rejection in the window follows its request, ADR 0016
+ * §2). */
+export interface EventHistoryRead {
+  readonly events: EventEnvelope[];
+  readonly oldestTs: number | undefined;
+  /** The `requestId` of every `lease.requested` at or before `sinceTs`. */
+  readonly requestedBefore: ReadonlySet<string>;
+  /** The `requestId` of every `lease.granted`, `lease.rejected` and `request.granted` at or before
+   * `sinceTs`: a request made before it and in neither set was still waiting when it opened. */
+  readonly answeredBefore: ReadonlySet<string>;
+}
+
+const ANSWERS: ReadonlySet<EventName> = new Set([
+  "lease.granted",
+  "lease.rejected",
+  "request.granted",
+]);
+
+/** Notes the request id of a `lease.requested` in `requested`, and of an answer in `answered`. */
+function noteRequest(
+  { requested, answered }: { readonly requested: Set<string>; readonly answered: Set<string> },
+  envelope: EventEnvelope,
+): void {
+  const requestId = (envelope.payload as { readonly requestId?: unknown }).requestId;
+  if (typeof requestId !== "string") return;
+  if (envelope.event === "lease.requested") requested.add(requestId);
+  if (ANSWERS.has(envelope.event)) answered.add(requestId);
+}
+
+/**
+ * Keeps `envelope` as the step in force for its event, worker and requester when it is a named
+ * event and no later one is kept already. Ties on time and seq go to the one met last, the one
+ * written last.
+ */
+function keepIfCarried(
+  carried: Map<string, EventEnvelope>,
+  envelope: EventEnvelope,
+  carry: readonly EventName[],
+): void {
+  if (!carry.includes(envelope.event)) return;
+  const { workerId, requester } = envelope.payload as {
+    readonly workerId?: unknown;
+    readonly requester?: unknown;
+  };
+  const key = [envelope.event, workerId, requester]
+    .map((part) => (typeof part === "string" ? part : ""))
+    .join("\u0000");
+  const kept = carried.get(key);
+  if (kept === undefined || byTimeThenSeq(kept, envelope) <= 0) carried.set(key, envelope);
 }
 
 /** The lines of the current file, then of each generation, newest first, until two in a row are missing. */
@@ -142,20 +209,69 @@ export class EventHistory {
 
   /**
    * Without `sinceTs`, the ring, as `simlock events` has always answered. With it, the event
-   * file while the writer is writing; the ring when there is no file to trust.
+   * file while the writer is writing; the ring when there is no file to trust. `carry` adds
+   * the step in force for each named event at `sinceTs` (see `readEventFile`).
    */
-  async replay(input: { readonly sinceTs?: number } = {}): Promise<EventEnvelope[]> {
-    const { bus, filesystem, logger, path } = this.#options;
-    if (input.sinceTs === undefined) return bus.replay();
-    if (!this.#writing) return bus.replay({ sinceTs: input.sinceTs });
+  async replay(
+    input: { readonly sinceTs?: number; readonly carry?: readonly EventName[] } = {},
+  ): Promise<EventEnvelope[]> {
+    if (input.sinceTs === undefined) return this.#options.bus.replay();
+    return (await this.read({ carry: input.carry ?? [], sinceTs: input.sinceTs })).events;
+  }
+
+  /**
+   * What `replay` answers for `sinceTs`, with the oldest timestamp the history holds -- not only
+   * what is newer than `sinceTs` -- so a reader can say how far back the history reaches (ADR
+   * 0016 §5). From the ring when there is no file to trust, and then it is the ring's oldest.
+   */
+  async read(input: {
+    readonly sinceTs: number;
+    readonly carry: readonly EventName[];
+  }): Promise<EventHistoryRead> {
+    const { filesystem, logger, path } = this.#options;
+    if (!this.#writing) return this.#readRing(input);
     try {
-      return await readEventFile(filesystem, path, { sinceTs: input.sinceTs });
+      return await readEventHistory(filesystem, path, input);
     } catch (error: unknown) {
       logger.warn("Event file read failed; replaying from memory", {
         error: error instanceof Error ? error.message : String(error),
         path,
       });
-      return bus.replay({ sinceTs: input.sinceTs });
+      return this.#readRing(input);
     }
+  }
+
+  /** The id of the event published last, `undefined` before the first. */
+  latestId(): string | undefined {
+    return this.#options.bus.latestId();
+  }
+
+  #readRing({
+    sinceTs,
+    carry,
+  }: {
+    readonly sinceTs: number;
+    readonly carry: readonly EventName[];
+  }): EventHistoryRead {
+    const ring = this.#options.bus.replay();
+    const carried = new Map<string, EventEnvelope>();
+    const before = { answered: new Set<string>(), requested: new Set<string>() };
+    let oldestTs: number | undefined;
+    for (const envelope of ring) {
+      oldestTs = Math.min(oldestTs ?? envelope.timestamp, envelope.timestamp);
+      if (envelope.timestamp > sinceTs) continue;
+      keepIfCarried(carried, envelope, carry);
+      noteRequest(before, envelope);
+    }
+    const newer = ring.filter((envelope) => envelope.timestamp > sinceTs);
+    return {
+      // Every carried envelope is at or before `sinceTs`, so the carried ones, put in time order
+      // (a key keeps its first slot in the map), come before the newer ones, which the ring replays
+      // in order.
+      events: [...[...carried.values()].sort(byTimeThenSeq), ...newer],
+      oldestTs,
+      answeredBefore: before.answered,
+      requestedBefore: before.requested,
+    };
   }
 }

@@ -2113,6 +2113,29 @@ The CLI reads the file itself only for `simlock events --since` when no
 daemon answers; `--follow` subscribes first, replays, and drops replayed
 pushes, so the join neither loses nor repeats an event.
 
+`usage.get` (ADR 0016) is the third reader of that history, and the only one that
+turns it into numbers. `computeUsage` (`src/core/usage/`) is pure: it takes
+the envelopes of a window, with the latest `capacity.changed`, `queue.changed` and
+`daemon.started` at or before the window's start and the latest `lease.requested`
+of each requester, that `EventHistory.read`'s `carry` adds, and the ids of the
+requests made before it (`requestedBefore`, so a rejection of one is in no count)
+and of those answered by then (`answeredBefore`, so a request still waiting when
+the window opens counts in the series' `waiting`), and returns the figures.
+`readEvents` reads them into one fact per request, joined by `requestId` and
+`leaseId`, one per device event and one per `lease.declined`; `compute-usage.ts`
+adds them up by platform, by worker and by requester. On a gateway (`fleet`)
+request facts come from its own events and device facts from the events its
+workers relayed (ADR 0021 §5): a request's outcome is the gateway's own
+`request.granted` or `lease.rejected` for its request id, else its next own
+`daemon.started` ends it as rejected `daemon-restarted`, else it is open; the
+grant's source and held time are the relayed `lease.granted` of the worker and
+lease it names. On a worker a request carrying `fleetRequestId` is a probe,
+counted apart from its requests. That rule is in `readEvents` and nowhere else. One
+`UsageReader` serves both dispatchers: it rounds the window down to the series
+bucket at both ends, keeps its last answer by that window and the newest event id, and joins
+token labels, so the daemon's two handlers differ only in `fleet`. `simlock stats`
+prints what the operation returns and computes nothing.
+
 ## Device requests
 
 A request names a device in one of three forms (ADR 0015 §1): an exact

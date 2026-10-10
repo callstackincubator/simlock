@@ -26,6 +26,7 @@ import {
   type OperationDefinition,
   type OperationName,
   type Role,
+  type UsageOutput,
   type leaseProgressSchema,
 } from "../contract/index.js";
 
@@ -388,5 +389,23 @@ function parseDispatchOutput<Output>(
   onMismatch?.(operationName, result.error.issues);
   throw new Error(
     `Internal: ${operationName} produced a response that does not match its contract output schema`,
+  );
+}
+
+/**
+ * What a `usage.get` handler answers with: the figures, or `HISTORY_NOT_KEPT` carrying the oldest
+ * time the history reaches when the window ends before it (ADR 0016 §5). Both dispatchers read
+ * their answer through here, so the one message and the one `details` shape exist once.
+ */
+export function usageAnswer(
+  result: { readonly usage: UsageOutput } | { readonly oldestTs: number },
+): UsageOutput {
+  if ("usage" in result) return result.usage;
+  const oldest = new Date(result.oldestTs);
+  const when = Number.isNaN(oldest.getTime()) ? String(result.oldestTs) : oldest.toISOString();
+  throw new DispatchError(
+    "HISTORY_NOT_KEPT",
+    `The event history does not reach back to the end of that window; its oldest event is from ${when}.`,
+    { oldestTs: result.oldestTs },
   );
 }

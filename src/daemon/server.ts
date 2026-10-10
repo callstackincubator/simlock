@@ -150,7 +150,7 @@ export interface DaemonServerEngineOptions {
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
   readonly leases: LeaseCommands;
   /** `status.get`'s host block (ADR 0008 §5); see `DispatcherOptions.hostFacts`. */
   readonly hostFacts: () => HostFacts;
@@ -1102,6 +1102,12 @@ export class DaemonServer {
       case "events.replay":
         return this.#dispatcher.dispatch(
           "events.replay",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "usage.get":
+        return this.#dispatcher.dispatch(
+          "usage.get",
           frame.payload ?? {},
           this.#session(connection),
         );

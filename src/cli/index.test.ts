@@ -29,7 +29,12 @@ import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { AdminSecretManager } from "../daemon/admin-secret.js";
 import { createCredentialRoleResolver } from "../daemon/session.js";
-import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
+import {
+  fromWireError,
+  SimlockError,
+  type AnySimlockError,
+  type UsageOutput,
+} from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -5089,6 +5094,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     replayEvents: () => Promise.resolve([]),
+    usage: (window) => Promise.resolve(usageAnswer(window)),
     subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
     createToken: (input) =>
       Promise.resolve({
@@ -5705,6 +5711,236 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
 
     expect(output.stdout).toBe(
       "Request req_1: a, ios class phone >=18 <26, queued at 1, waiting 0s\n",
+    );
+  });
+});
+
+/** A `usage.get` answer with nothing counted, for the window it was asked for. */
+function usageAnswer(
+  window: { readonly from: number; readonly to: number },
+  overrides: Partial<UsageOutput> = {},
+): UsageOutput {
+  const samples = { count: 0, max: null, p50: null, p95: null };
+  const figures = {
+    boot: samples,
+    bySource: { booted: 0, provisioned: 0, warm: 0 },
+    declined: 0,
+    failures: { byEvent: {} },
+    granted: 0,
+    held: samples,
+    incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+    provisioning: samples,
+    queue: { meanDepth: null, peakDepth: null },
+    rejected: { byReason: {}, total: 0 },
+    requests: 0,
+    turnaround: samples,
+    utilisation: { slots: { max: null, mean: null, peak: null } },
+    wait: samples,
+  };
+  return {
+    bucketMs: 60_000,
+    coversFrom: window.from,
+    partial: false,
+    platforms: { android: figures, ios: figures },
+    requesters: [],
+    series: [],
+    totals: figures,
+    window,
+    workers: [],
+    ...overrides,
+  };
+}
+
+describe("CLI: stats", () => {
+  const NOW = Date.parse("2026-10-05T12:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  function statsRun(argv: readonly string[], usage: SimlockAdminClient["usage"]) {
+    const output = outputCapture();
+    const asked: { from: number; to: number }[] = [];
+    const run = runCli(
+      ["stats", ...argv],
+      output.environmentWith({
+        clock: new FakeClock(NOW),
+        connectAdmin: async () =>
+          fakeClient({
+            usage: async (window) => {
+              asked.push(window);
+              return usage(window);
+            },
+          }),
+      }),
+    );
+    return { asked, output, run };
+  }
+
+  it("simlock stats rejects --since with --from, and --from later than --to, as usage errors", async () => {
+    // Each flag on its own is accepted, so the refusals below are the combinations'.
+    for (const argv of [["--since", "1h"], ["--from", "2026-10-05T10:00:00Z"], ["--json"]]) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+      await expect(run, argv.join(" ")).resolves.toBe(0);
+      expect(output.stderr, argv.join(" ")).not.toContain("USAGE");
+    }
+    for (const argv of [
+      ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T10:00:00Z"],
+      ["--to", "2026-10-04T10:00:00Z"],
+      ["--since", "1h", "--to", "2026-10-04T10:00:00Z"],
+      ["--since", "soon"],
+      ["--from", "last tuesday"],
+    ]) {
+      const { asked, output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain('"code":"USAGE"');
+      expect(asked, argv.join(" ")).toEqual([]);
+      expect(output.stdout).toBe("");
+    }
+  });
+
+  it("simlock stats names the flag combination or the time it refused in the usage error", async () => {
+    for (const [argv, message] of [
+      [
+        ["--since", "1h", "--from", "2026-10-05T10:00:00Z"],
+        "stats takes --since or --from, not both",
+      ],
+      [["--to", "2026-10-04T10:00:00Z"], "--to needs --from"],
+      [
+        ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-03T10:00:00Z"],
+        "--from must be earlier than --to, or than now when --to is left out",
+      ],
+      [["--from", "last tuesday"], "Invalid time: last tuesday"],
+    ] as const) {
+      const { output, run } = statsRun(argv, async (window) => usageAnswer(window));
+
+      await expect(run, argv.join(" ")).resolves.toBe(2);
+      expect(output.stderr, argv.join(" ")).toContain(`"message":"${message}"`);
+    }
+  });
+
+  it("simlock stats --json prints the operation's output unchanged", async () => {
+    const answer = usageAnswer(
+      { from: NOW - HOUR, to: NOW },
+      {
+        partial: true,
+        requesters: [
+          { granted: 1, heldTotalMs: 5, id: "tok_a", label: "ci", rejected: 0, requests: 1 },
+        ],
+      },
+    );
+    const { output, run } = statsRun(["--since", "1h", "--json"], async () => answer);
+
+    await expect(run).resolves.toBe(0);
+
+    expect(JSON.parse(output.stdout)).toEqual(answer);
+    expect(output.stdout.endsWith("\n")).toBe(true);
+  });
+
+  it("asks for the last 24 hours by default, and for --since up to now", async () => {
+    const byDefault = statsRun([], async (window) => usageAnswer(window));
+    const since = statsRun(["--since", "90m"], async (window) => usageAnswer(window));
+
+    await byDefault.run;
+    await since.run;
+
+    expect(byDefault.asked).toEqual([{ from: NOW - 24 * HOUR, to: NOW }]);
+    expect(since.asked).toEqual([{ from: NOW - 90 * 60_000, to: NOW }]);
+  });
+
+  it("asks for the ISO window --from and --to name, and for --from up to now", async () => {
+    const both = statsRun(
+      ["--from", "2026-10-04T10:00:00Z", "--to", "2026-10-04T12:00:00Z"],
+      async (window) => usageAnswer(window),
+    );
+    const open = statsRun(["--from", "2026-10-05T10:00:00Z"], async (window) =>
+      usageAnswer(window),
+    );
+
+    await both.run;
+    await open.run;
+
+    expect(both.asked).toEqual([
+      { from: Date.parse("2026-10-04T10:00:00Z"), to: Date.parse("2026-10-04T12:00:00Z") },
+    ]);
+    expect(open.asked).toEqual([{ from: Date.parse("2026-10-05T10:00:00Z"), to: NOW }]);
+  });
+
+  it("prints the figures as a table, with the partial note above them", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async (window) =>
+      usageAnswer(window, { coversFrom: NOW - 60_000, partial: true }),
+    );
+
+    await expect(run).resolves.toBe(0);
+
+    const lines = output.stdout.split("\n");
+    expect(lines[0]).toBe("Usage from 2026-09-05T12:00:00.000Z to 2026-10-05T12:00:00.000Z");
+    expect(lines[1]).toContain("Figures cover from 2026-10-05T11:59:00.000Z");
+    expect(lines).toContain("Totals");
+  });
+
+  it("prints the HISTORY_NOT_KEPT message and exits with its code when the window ends before the history", async () => {
+    const { output, run } = statsRun(["--since", "30d"], async () => {
+      throw new SimlockError(
+        "HISTORY_NOT_KEPT",
+        "domain",
+        "The event history does not reach back to the end of that window; its oldest event is from 2026-10-05T11:59:00.000Z.",
+        { oldestTs: NOW - 60_000 },
+      );
+    });
+
+    await expect(run).resolves.toBe(12);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain('"code":"HISTORY_NOT_KEPT"');
+    expect(output.stderr).toContain("oldest event is from 2026-10-05T11:59:00.000Z");
+  });
+
+  it("closes the connection after the answer, and after a failure", async () => {
+    let closed = 0;
+    const output = outputCapture();
+    const connect = (usage: SimlockAdminClient["usage"]) => async () =>
+      fakeClient({
+        close: async () => {
+          closed += 1;
+        },
+        usage,
+      });
+
+    await runCli(
+      ["stats"],
+      output.environmentWith({ connectAdmin: connect(async (window) => usageAnswer(window)) }),
+    );
+    await runCli(
+      ["stats"],
+      output.environmentWith({
+        connectAdmin: connect(async () => {
+          throw new Error("boom");
+        }),
+      }),
+    );
+
+    expect(closed).toBe(2);
+  });
+
+  it("prints its usage on --help without connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+
+    const exitCode = await runCli(
+      ["stats", "--help"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe(
+      "Usage: simlock stats [--since <duration> | --from <ISO> [--to <ISO>]] [--json]\n",
     );
   });
 });

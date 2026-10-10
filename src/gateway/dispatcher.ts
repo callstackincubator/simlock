@@ -46,9 +46,11 @@ import {
   runDispatch,
   type DispatchSession,
   type ErasedHandler,
+  usageAnswer,
 } from "../daemon/dispatch.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
+import { tokenLabelMap, UsageReader } from "../core/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -96,7 +98,7 @@ export interface GatewayDispatcherOptions {
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
   readonly workers: WorkerRegistry;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
@@ -148,22 +150,34 @@ export interface GatewayDispatcherOptions {
    * (`FleetLeaseIndex#project`/`#all`) -- kept separate from `coordinator` because this
    * dispatcher only ever *reads* it, never mutates it. `isGatewayRequester` marks the requests
    * this gateway sent a worker, which `list.get`'s `requests` already lists as its own. */
-  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "isGatewayRequester">;
+  readonly leaseIndex: Pick<
+    FleetLeaseIndex,
+    "project" | "all" | "isGatewayRequester" | "requesterPrefix"
+  >;
 }
 
 export class GatewayDispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
   readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, ErasedHandler>;
+  /** Answers `usage.get` as the fleet, from the gateway's own merged history (ADR 0016 §6). */
+  readonly #usage: UsageReader;
 
   constructor(private readonly options: GatewayDispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#usage = new UsageReader({
+      fleet: { requesterPrefix: options.leaseIndex.requesterPrefix },
+      history: options.eventHistory,
+      tokenLabels: async () => tokenLabelMap((await options.tokens?.list()) ?? []),
+      workers: () => options.workers.views().map((view) => ({ id: view.id, label: view.label })),
+    });
     this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
       "status.get": this.#statusGet,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -267,6 +281,8 @@ export class GatewayDispatcher {
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+
+  #usageGet: Handler<"usage.get"> = async (input) => usageAnswer(await this.#usage.get(input));
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

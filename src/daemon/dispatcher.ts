@@ -21,6 +21,8 @@ import {
   RuntimeMissingError,
   transitionEnteredAt,
   UnknownLeaseError,
+  tokenLabelMap,
+  UsageReader,
   type CapacityReader,
   type WarmPoolReader,
   type CatalogReader,
@@ -57,6 +59,7 @@ import {
   runDispatch,
   type DispatchSession,
   type ErasedHandler,
+  usageAnswer,
 } from "./dispatch.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
@@ -108,7 +111,7 @@ export interface DispatcherOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
-  readonly eventHistory: Pick<EventHistory, "replay">;
+  readonly eventHistory: Pick<EventHistory, "latestId" | "read" | "replay">;
   /** Answers whether a device's pool is the one a request naming no mode draws from. */
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
@@ -239,9 +242,16 @@ export class Dispatcher {
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
   /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
   readonly #unsubscribe: (() => void)[] = [];
+  /** Answers `usage.get` from the event history, as this host's own entry (ADR 0016, ADR 0012). */
+  readonly #usage: UsageReader;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#usage = new UsageReader({
+      history: options.eventHistory,
+      tokenLabels: async () => tokenLabelMap((await options.tokens?.list()) ?? []),
+      workers: () => [{ id: options.instanceId, label: options.config.gateway.label }],
+    });
     // Observers only (architecture rule 5): dropping a kept read decides nothing.
     for (const event of WORKER_VIEW_CATALOG_EVENTS) {
       const unsubscribe = options.eventBus?.subscribe(event, () => {
@@ -267,6 +277,7 @@ export class Dispatcher {
       "nuke.run": this.#nukeRun,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
+      "usage.get": this.#usageGet,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
@@ -664,6 +675,8 @@ export class Dispatcher {
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
     this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+
+  #usageGet: Handler<"usage.get"> = async (input) => usageAnswer(await this.#usage.get(input));
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

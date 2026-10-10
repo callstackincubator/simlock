@@ -41,6 +41,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, role: "admin" },
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -112,6 +113,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "events.replay", input: {}, effect: "read" },
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, effect: "read" },
   { name: "token.create", input: { role: "agent" }, effect: "write" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
   {
@@ -1246,5 +1248,96 @@ describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () =
     expect(requestedClass({ class: "tv" })).toBe("tv");
     expect(requestedClass({})).toBe("phone");
     expect(requestedClass({ model: "iPhone 16" })).toBeUndefined();
+  });
+});
+
+describe("usage.get input", () => {
+  const parse = (input: unknown) => OPERATIONS["usage.get"].input.safeParse(input);
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("takes epoch milliseconds with from before to, up to ninety days apart", () => {
+    expect(parse({ from: 0, to: 1 }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_000 + 90 * DAY }).success).toBe(true);
+    expect(parse({ from: 1_000, to: 1_001 + 90 * DAY }).success).toBe(false);
+    expect(parse({ from: 5, to: 5 }).success).toBe(false);
+    expect(parse({ from: 6, to: 5 }).success).toBe(false);
+  });
+
+  it("refuses a bound that is not an integer, is negative, or no date can hold", () => {
+    expect(parse({ from: 0.5, to: 10 }).success).toBe(false);
+    expect(parse({ from: -1, to: 10 }).success).toBe(false);
+    expect(parse({ from: 0, to: 8.64e15 + 1 }).success).toBe(false);
+    expect(parse({ from: 8.64e15 - 1, to: 8.64e15 }).success).toBe(true);
+    expect(parse({ from: "0", to: 10 }).success).toBe(false);
+    expect(parse({ from: 0 }).success).toBe(false);
+  });
+});
+
+describe("usage.get contract details", () => {
+  const issues = (input: unknown) => {
+    const result = OPERATIONS["usage.get"].input.safeParse(input);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+
+  it("usage.get names the bound it refused: from before to, and no more than ninety days", () => {
+    expect(issues({ from: 6, to: 5 })).toEqual(["from must be before to"]);
+    expect(issues({ from: 0, to: 91 * 24 * 60 * 60 * 1000 })).toEqual([
+      "the window must not be longer than 90 days",
+    ]);
+  });
+
+  it("every operation carries the name it is registered under", () => {
+    for (const [key, operation] of Object.entries(OPERATIONS)) expect(operation.name).toBe(key);
+  });
+
+  it("usage.get output keeps the RAM figures of a scope and the RAM use of a series point", () => {
+    const samples = { count: 0, max: null, p50: null, p95: null };
+    const figures = {
+      boot: samples,
+      bySource: { booted: 0, provisioned: 0, warm: 0 },
+      declined: 0,
+      failures: { byEvent: {} },
+      granted: 0,
+      held: samples,
+      incidents: { crashRecovered: 0, lost: 0, quarantineRecovered: 0, quarantined: 0 },
+      provisioning: samples,
+      queue: { meanDepth: null, peakDepth: null },
+      rejected: { byReason: {}, total: 0 },
+      requests: 0,
+      turnaround: samples,
+      utilisation: {
+        ram: { limitBytes: 100, meanBytes: 40, peakBytes: 60 },
+        slots: { max: 2, mean: 1, peak: 2 },
+      },
+      wait: samples,
+    };
+    const point = {
+      at: 60_000,
+      queueDepth: 0,
+      ramUsedBytes: 60,
+      slotsMax: 2,
+      slotsUsed: 1,
+      waiting: 0,
+    };
+    const output = {
+      bucketMs: 60_000,
+      coversFrom: 0,
+      partial: false,
+      platforms: { android: figures, ios: figures },
+      requesters: [],
+      series: [point],
+      totals: figures,
+      window: { from: 0, to: 60_000 },
+      workers: [],
+    };
+
+    const parsed = OPERATIONS["usage.get"].output.parse(output);
+
+    expect(parsed.totals.utilisation.ram).toEqual({
+      limitBytes: 100,
+      meanBytes: 40,
+      peakBytes: 60,
+    });
+    expect(parsed.series).toEqual([point]);
   });
 });

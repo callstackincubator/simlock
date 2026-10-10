@@ -163,11 +163,13 @@
                   "LeaseRequestFailure",
                   "LeaseRequestLimits",
                   "SerializedDecision",
+                  "UsageReader",
                   "findCatalogModel",
                   "fits",
                   "modelClass",
                   "newLeaseRequestId",
-                  "pairedRuntimes"
+                  "pairedRuntimes",
+                  "tokenLabelMap"
                 ],
                 "message": "the gateway may import only the names its allow-list gives"
               },

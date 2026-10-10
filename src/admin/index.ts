@@ -66,6 +66,8 @@ export type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  UsageGetInput,
+  UsageGetOutput,
   WorkerComponentProgress,
   WorkerDrainInput,
   WorkerDrainOutput,

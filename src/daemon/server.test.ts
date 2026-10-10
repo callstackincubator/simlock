@@ -438,6 +438,19 @@ describe("DaemonServer", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
 
+  it("routes usage.get to the dispatcher with the window the frame carries", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const answer = await client.request("usage.get", { from: 0, to: 3_600_000 });
+
+    expect(answer).toMatchObject({
+      ok: true,
+      payload: { totals: { requests: 0 }, window: { from: 0, to: 3_600_000 } },
+    });
+  });
+
   it("serves the device catalog, omitting platforms with no registered driver", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);

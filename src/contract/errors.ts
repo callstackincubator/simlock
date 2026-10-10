@@ -93,6 +93,11 @@ export interface ErrorDetailsMap {
   COMPONENT_IN_USE: { readonly devices: number; readonly foreignDevices: number };
   /** ADR 0010 §8: a `component.remove` while an install or removal runs or waits on the platform. */
   COMPONENT_BUSY: Record<string, never>;
+  /**
+   * ADR 0016 §5: a `usage.get` window that ends before the oldest event the history holds.
+   * `oldestTs` is the oldest time the history reaches, so a caller can ask for a window it has.
+   */
+  HISTORY_NOT_KEPT: { readonly oldestTs: number };
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** A `simlock <tool>` verb the owning driver will not proxy (ADR 0001, decision 7). Carries
    * the tool so a caller can say which wrapper refused without re-parsing the message. */
@@ -203,6 +208,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   DOWNLOAD_TIMEOUT: true,
   DOWNLOADS_DISABLED: true,
   COMPONENT_IN_USE: true,
+  HISTORY_NOT_KEPT: true,
   UNKNOWN_LEASE: true,
   PASSTHROUGH_REFUSED: true,
   UNKNOWN_PASSTHROUGH_TOOL: true,
@@ -390,6 +396,8 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 2, httpStatus: 409 },
   // Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
   // branches on differently from "the fleet is busy" or "that cannot apply here".
+  // Exit 12 and 422, with the other "what you asked for is not there" codes (ADR 0016 §5).
+  HISTORY_NOT_KEPT: { code: "HISTORY_NOT_KEPT", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 12, httpStatus: 404 },
   WORKER_UNREACHABLE: {
     code: "WORKER_UNREACHABLE",
