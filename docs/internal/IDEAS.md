@@ -33,12 +33,6 @@ Device-to-device tests need two devices at once; sequential acquisition by
 multiple agents can deadlock. Requires atomic all-or-nothing acquisition in
 the queue. v1 rule is one lease per agent.
 
-## Physical-device driver
-
-A third driver (devicectl / adb-over-USB) where `provision` is a no-op and
-`reclaim` is uninstall-and-reset. Also the litmus test that the core/driver
-boundary held.
-
 ## Clone-from-golden baseline option (iOS)
 
 `simctl clone` is as cheap as erase but preserves a *provisioned* baseline
