@@ -394,8 +394,9 @@ run only by hand; delivery reports them as needing hardware.
 - Safety rule 8 gains: "A physical device is Simlock's because an admin
   enrolled it; `listPresentPhysical()` answers only for enrolled IDs."
 - Safety rule 9 gains: "Physical Android devices are reached through the
-  host's default adb server, never Simlock's; Simlock never stops it and
-  never restarts one of another protocol version."
+  host's default adb server, never Simlock's. Simlock never stops it, and
+  sends no physical command while its last check, at most one health
+  interval old, saw another protocol version or no answer."
 - Architecture rule 3 is unchanged: no driver is added, and platform
   knowledge stays in the driver modules. A new device type is not a new
   driver; the core learns that a device may be physical, and that is a
