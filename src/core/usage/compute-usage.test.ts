@@ -514,15 +514,17 @@ describe("computeUsage", () => {
     const usage = computeUsage(
       [
         requested(T0 + 1_000, "gw-r1"),
-        // The worker's own copy of the same request, relayed.
+        // The worker's own copy of the same request, relayed from a worker the grant is not on.
         at(T0 + 1_300, "lease.requested", {
           fleetRequestId: "gw-r1",
           requestId: "w-r1",
           requestSpec: { platform: "ios" },
           requester: "gw:g1:agent-a",
           waitPolicy: "noWait",
-          workerId: "w1",
+          workerId: "w9",
         }),
+        // A grant on that other worker under the same lease id: not the one the request got.
+        granted(T0 + 3_900, "w9-r", "l1", "warm", "gw:g1:agent-b", { workerId: "w9" }),
         granted(T0 + 4_000, "w-r1", "l1", "booted", "gw:g1:agent-a", { workerId: "w1" }),
         handed(T0 + 4_200, "gw-r1", "w1", "l1"),
         released(T0 + 9_000, "l1", { workerId: "w1" }),
@@ -533,7 +535,7 @@ describe("computeUsage", () => {
 
     expect(usage.totals.requests).toBe(1);
     expect(usage.totals.granted).toBe(1);
-    expect(usage.totals.bySource.booted).toBe(1);
+    expect(usage.totals.bySource).toEqual({ booted: 1, provisioned: 0, unknown: 0, warm: 0 });
     expect(usage.workers).toHaveLength(1);
     expect(usage.workers[0]).toMatchObject({ granted: 1, id: "w1", requests: 1 });
   });
@@ -705,11 +707,15 @@ describe("computeUsage", () => {
     const usage = computeUsage(
       [
         requested(T0 + 1_000, "g1", "a"),
-        // The same lease id on three workers: only (w2, l1) is the one g1 names.
+        // The same lease id on w1 and w2, and other leases on w2: only (w2, l1) is the one g1 names.
+        granted(T0 + 1_050, "w2-r0", "l0", "warm", "gw:g1:z", { workerId: "w2" }),
         granted(T0 + 1_100, "w1-r", "l1", "warm", "gw:g1:a", { workerId: "w1" }),
         granted(T0 + 1_200, "w2-r", "l1", "provisioned", "gw:g1:a", { workerId: "w2" }),
+        granted(T0 + 1_300, "w2-r2", "l2", "booted", "gw:g1:y", { workerId: "w2" }),
         handed(T0 + 1_500, "g1", "w2", "l1"),
+        released(T0 + 4_000, "l0", { workerId: "w2" }),
         released(T0 + 6_200, "l1", { workerId: "w2" }),
+        released(T0 + 7_300, "l2", { workerId: "w2" }),
         released(T0 + 9_000, "l1", { workerId: "w1" }),
         requested(T0 + 2_000, "g2", "b"),
         handed(T0 + 2_400, "g2", "w3", "l9"),
@@ -726,6 +732,47 @@ describe("computeUsage", () => {
     expect(usage.requesters.map((requester) => [requester.id, requester.heldTotalMs])).toEqual([
       ["a", 5_000],
       ["b", 0],
+    ]);
+  });
+
+  it("gives a lease id chosen again after its release the end of its own lease on a worker, not the later one's", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 100_000, "r1"),
+        granted(T0 + 120_000, "r1", "ci-1"),
+        released(T0 + 130_000, "ci-1"),
+        requested(T0 + 140_000, "r2"),
+        granted(T0 + 150_000, "r2", "ci-1"),
+        released(T0 + 190_000, "ci-1"),
+      ],
+      WINDOW,
+      WORKER,
+    );
+
+    expect(usage.totals.held).toEqual({ count: 2, max: 40_000, p50: 10_000, p95: 40_000 });
+  });
+
+  it("with fleet: true gives two fleet requests granted on one worker under one lease id each their own source and held time", () => {
+    const usage = computeUsage(
+      [
+        requested(T0 + 100_000, "g1", "a"),
+        granted(T0 + 120_000, "w-r1", "ci-1", "warm", "gw:g1:a", { workerId: "w1" }),
+        handed(T0 + 120_100, "g1", "w1", "ci-1"),
+        released(T0 + 130_000, "ci-1", { workerId: "w1" }),
+        requested(T0 + 140_000, "g2", "b"),
+        granted(T0 + 150_000, "w-r2", "ci-1", "booted", "gw:g1:b", { workerId: "w1" }),
+        handed(T0 + 150_100, "g2", "w1", "ci-1"),
+        released(T0 + 190_000, "ci-1", { workerId: "w1" }),
+      ],
+      WINDOW,
+      FLEET,
+    );
+
+    expect(usage.totals.bySource).toEqual({ booted: 1, provisioned: 0, unknown: 0, warm: 1 });
+    expect(usage.totals.held).toEqual({ count: 2, max: 40_000, p50: 10_000, p95: 40_000 });
+    expect(usage.requesters.map((requester) => [requester.id, requester.heldTotalMs])).toEqual([
+      ["a", 10_000],
+      ["b", 40_000],
     ]);
   });
 

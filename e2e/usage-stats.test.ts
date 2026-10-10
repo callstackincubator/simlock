@@ -41,33 +41,19 @@ interface Usage {
   readonly requesters: readonly { readonly id: string; readonly requests: number }[];
 }
 
-const HOUR_MS = 3_600_000;
-const MINUTE_MS = 60_000;
-
-/**
- * The last hour up to `to`, asked with `--from` and `--to`. The window is rounded down to the
- * series bucket (a minute here), so what happened in the minute now running is counted once the
- * minute is over; a test that names the end itself does not wait the minute out.
- */
-async function stats(
-  env: { cli: (args: string[]) => Promise<{ code: number | null; json?: unknown }> },
-  to: number,
-): Promise<Usage> {
-  const result = await env.cli([
-    "stats",
-    "--from",
-    new Date(to - HOUR_MS).toISOString(),
-    "--to",
-    new Date(to).toISOString(),
-    "--json",
-  ]);
+/** The last hour, asked with `--since 1h`, as JSON. */
+async function stats(env: {
+  cli: (args: string[]) => Promise<{ code: number | null; json?: unknown }>;
+}): Promise<Usage> {
+  const result = await env.cli(["stats", "--since", "1h", "--json"]);
   expect(result.code).toBe(0);
   return result.json as Usage;
 }
 
 /**
- * The figures for a window that closes over the newest event: its end is the first minute
- * boundary after that event, or `at` when given (so two calls compare the same window).
+ * The figures for the last hour once the minute that holds the newest event has closed: the
+ * window is rounded down to the series bucket (a minute here), so what happened in the minute now
+ * running is counted when that minute is over. Waits for it, up to a minute.
  */
 async function settledStats(
   env: {
@@ -75,17 +61,15 @@ async function settledStats(
     events: () => Promise<readonly RecordedEvent[]>;
   },
   until: (usage: Usage) => boolean = () => true,
-  at?: number,
 ): Promise<Usage> {
   let usage: Usage | undefined;
   await waitFor(
     async () => {
       const newest = Math.max(...(await env.events()).map((event) => event.timestamp));
-      const to = at ?? (Math.floor(newest / MINUTE_MS) + 1) * MINUTE_MS;
-      usage = await stats(env, to);
-      return (at !== undefined || usage.window.to >= newest) && until(usage);
+      usage = await stats(env);
+      return usage.window.to >= newest && until(usage);
     },
-    { interval: 500, label: "the window closed over the newest event", timeout: 30_000 },
+    { interval: 1_000, label: "the window closed over the newest event", timeout: 90_000 },
   );
   return usage as Usage;
 }
@@ -105,7 +89,7 @@ function payload(event: RecordedEvent): Record<string, string> {
 }
 
 describe("simlock stats", () => {
-  it("after a scripted run of leases against the fake driver, simlock stats --json for the last hour, named with --from and --to, reports the counts a test derives independently from the same hour of simlock events", async () => {
+  it("after a scripted run of leases against the fake driver, simlock stats --since 1h --json reports the counts a test derives independently from the same hour of simlock events --since 1h", async () => {
     const env = await withDaemon({
       configOverrides: { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } },
     });
@@ -192,7 +176,7 @@ describe("simlock stats", () => {
     expect(table.code).toBe(0);
     expect(table.stdout).toContain("Totals");
     expect(table.stdout).toContain("Requests:");
-  });
+  }, 240_000);
 
   it("after a --no-wait refusal, requests and rejected.byReason.no-wait each rise by one and granted is unchanged", async () => {
     const env = await withDaemon({
@@ -217,9 +201,9 @@ describe("simlock stats", () => {
       (before.totals.rejected.byReason["no-wait"] ?? 0) + 1,
     );
     expect(after.totals.granted).toBe(before.totals.granted);
-  });
+  }, 240_000);
 
-  it("simlock stats for the last hour, named with --from and --to, returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
+  it("simlock stats --since 1h returns the same figures before and after simlock daemon stop and simlock daemon start", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -232,7 +216,8 @@ describe("simlock stats", () => {
     expect(before.totals.granted).toBe(1);
 
     await env.restartDaemon();
-    const after = await settledStats(env, () => true, before.window.to);
+    const after = await stats(env);
+    expect(after.window.to).toBeGreaterThanOrEqual(before.window.to);
 
     expect(after.totals).toMatchObject({
       boot: before.totals.boot,
@@ -247,7 +232,7 @@ describe("simlock stats", () => {
       wait: before.totals.wait,
     });
     expect(after.requesters).toEqual(before.requesters);
-  });
+  }, 240_000);
 
   it("on a gateway with two workers, simlock stats has fleet totals and one row per worker, and each worker's own simlock stats covers itself only", async () => {
     const port = await freeLoopbackPort();

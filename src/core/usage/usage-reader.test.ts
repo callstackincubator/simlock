@@ -160,6 +160,14 @@ describe("UsageReader", () => {
     expect(result.totals.requests).toBe(1);
   });
 
+  it("says the figures cover the window when the history reaches before it, though no event falls in its first minutes", async () => {
+    const { usage } = reader(history([requested(T0 + 30 * MINUTE, "a")], T0 - HOUR).source);
+
+    const result = answer(await usage.get({ from: T0, to: T0 + HOUR }));
+
+    expect(result).toMatchObject({ coversFrom: T0, partial: false });
+  });
+
   it("keeps its answer while the window and the newest event are the same, and reads again when either changes", async () => {
     const { source, state } = history();
     const { usage } = reader(source);

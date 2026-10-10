@@ -67,7 +67,11 @@ export type CapacityStep = Step<
 
 export interface ReadEvents {
   readonly requests: readonly RequestFact[];
-  /** Requests made before the window and still open when it began; only the series counts them. */
+  /**
+   * Requests with no outcome by the window's start, which only the series counts: ones made
+   * before the window and still open when it began, and a gateway's requests that a restart
+   * before the window's end ended (outcome `daemon-restarted`).
+   */
   readonly carried: readonly RequestFact[];
   readonly devices: readonly DeviceFact[];
   readonly declines: readonly DeclineFact[];
@@ -127,6 +131,12 @@ const platformOf = (value: unknown): Platform | undefined =>
 const objectOf = (value: unknown): Payload | undefined =>
   typeof value === "object" && value !== null ? (value as Payload) : undefined;
 
+interface RelayedGrant {
+  readonly at: number;
+  readonly index: number;
+  readonly source: string;
+}
+
 interface Request {
   readonly index: number;
   readonly at: number;
@@ -178,16 +188,25 @@ class Reader {
   /** A worker's own grants by request id: the lease each served. */
   readonly #grants = new Map<
     string,
-    { readonly at: number; readonly leaseId: string; readonly source: string }
+    {
+      readonly at: number;
+      readonly index: number;
+      readonly leaseId: string;
+      readonly source: string;
+    }
   >();
   /** A gateway's `request.granted` by request id (ADR 0021 §4). */
   readonly #handed = new Map<
     string,
     { readonly at: number; readonly worker: string; readonly workerLeaseId: string }
   >();
-  /** The grants workers relayed to a gateway, by worker and the worker's lease id. */
-  readonly #relayedGrants = new Map<string, { readonly at: number; readonly source: string }>();
-  readonly #ends = new Map<string, number>();
+  /**
+   * The grants workers relayed to a gateway, by worker and the worker's lease id, in event order.
+   * A lease id is unique only while its lease is active (ADR 0020), so one key can hold several.
+   */
+  readonly #relayedGrants = new Map<string, RelayedGrant[]>();
+  /** The ends of leases, by worker and lease id, in event order: a key can hold several. */
+  readonly #ends = new Map<string, { readonly at: number; readonly index: number }[]>();
   /** Where the gateway's own `daemon.started` events fall, in event order (ADR 0021 §5). */
   readonly #restarts: { readonly index: number; readonly at: number }[] = [];
   readonly #handlers: Record<string, (seen: Seen) => void> = {
@@ -322,22 +341,25 @@ class Reader {
     const source = text(seen.payload, "source") ?? "";
     if (this.options.fleet) {
       if (seen.worker !== undefined) {
-        this.#relayedGrants.set(this.#key(seen.worker, leaseId), {
-          at: seen.event.timestamp,
-          source,
-        });
+        const key = this.#key(seen.worker, leaseId);
+        const earlier = this.#relayedGrants.get(key) ?? [];
+        earlier.push({ at: seen.event.timestamp, index: seen.index, source });
+        this.#relayedGrants.set(key, earlier);
       }
       return;
     }
     const requestId = text(seen.payload, "requestId");
     if (requestId === undefined) return;
-    this.#grants.set(requestId, { at: seen.event.timestamp, leaseId, source });
+    this.#grants.set(requestId, { at: seen.event.timestamp, index: seen.index, leaseId, source });
   }
 
   #ended(seen: Seen): void {
     const leaseId = text(seen.payload, "leaseId");
     if (!this.#counts(seen) || leaseId === undefined) return;
-    this.#ends.set(this.#key(seen.worker, leaseId), seen.event.timestamp);
+    const key = this.#key(seen.worker, leaseId);
+    const earlier = this.#ends.get(key) ?? [];
+    earlier.push({ at: seen.event.timestamp, index: seen.index });
+    this.#ends.set(key, earlier);
   }
 
   #provisioned(seen: Seen): void {
@@ -461,7 +483,7 @@ class Reader {
     handed: { readonly at: number; readonly worker: string; readonly workerLeaseId: string },
   ): RequestFact {
     this.#workers.add(handed.worker);
-    const relayed = this.#relayedGrants.get(this.#key(handed.worker, handed.workerLeaseId));
+    const relayed = this.#relayedGrantFor(handed);
     const outcome: Granted = {
       at: handed.at,
       kind: "granted",
@@ -473,10 +495,33 @@ class Reader {
       : this.#withHeld(fact, this.#heldFor(handed.worker, handed.workerLeaseId, relayed));
   }
 
-  /** How long a lease was held, from its grant to the end the window saw. */
-  #heldFor(worker: string, leaseId: string, grant: { readonly at: number }): number | undefined {
-    const endedAt = this.#ends.get(this.#key(worker, leaseId));
-    return endedAt === undefined ? undefined : endedAt - grant.at;
+  /** Of the grants a worker relayed under one lease id, the one nearest in time to the handover. */
+  #relayedGrantFor(handed: {
+    readonly at: number;
+    readonly worker: string;
+    readonly workerLeaseId: string;
+  }): RelayedGrant | undefined {
+    const candidates = this.#relayedGrants.get(this.#key(handed.worker, handed.workerLeaseId));
+    let nearest: RelayedGrant | undefined;
+    for (const candidate of candidates ?? []) {
+      if (
+        nearest === undefined ||
+        Math.abs(candidate.at - handed.at) < Math.abs(nearest.at - handed.at)
+      ) {
+        nearest = candidate;
+      }
+    }
+    return nearest;
+  }
+
+  /** How long a lease was held, from its grant to the first end after it the window saw. */
+  #heldFor(
+    worker: string,
+    leaseId: string,
+    grant: { readonly at: number; readonly index: number },
+  ): number | undefined {
+    const end = this.#ends.get(this.#key(worker, leaseId))?.find((e) => e.index > grant.index);
+    return end === undefined ? undefined : end.at - grant.at;
   }
 
   #withHeld(fact: RequestFact, heldMs: number | undefined): RequestFact {

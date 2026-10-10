@@ -2000,8 +2000,9 @@ What the figures count:
   `provisioned` was created for the request.
 - **Rejected** are the requests that ended without a device, by reason
   (`timeout`, `no-wait`, `cancelled`, ...), plus the requests refused before
-  they were stored (a requester that already holds a lease, or one that asked
-  for a lease ID that is taken). Those are in the window their rejection falls
+  they were stored (a requester that already holds a lease, one that asked
+  for a lease ID that is taken, or one that came while admission was closed
+  for `nuke` or maintenance). Those are in the window their rejection falls
   in and are not requests, so granted plus rejected can be more than requests.
 - **Wait** is the time from the request to its grant or rejection. **Held** is
   the time from the grant to the release or expiry of the lease. **Turnaround**
@@ -2039,9 +2040,8 @@ with the reason `daemon-restarted`. How the device came to be ready and how long
 the lease was held come from the worker's record of the lease; a grant whose
 worker's record the gateway never received counts as `unknown` and has no held
 time. A worker's row has the requests granted on it or that failed on it
-(`worker-failed`), its declined count and its device figures; a request that
-ended any other way, or is still waiting, is in the totals and the platform rows
-only. The queue figure is the fleet queue's.
+(`worker-failed`) and its device figures; a request that ended any other way,
+or is still waiting, is in the totals and the platform rows only. The queue figure is the fleet queue's.
 
 A worker's own `simlock stats` covers that worker only: its row is itself. A
 request that a gateway sent it is not one of the worker's requests: it is counted

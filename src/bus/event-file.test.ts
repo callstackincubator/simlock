@@ -240,6 +240,30 @@ describe("EventHistory", () => {
     ]);
   });
 
+  it("reads the ring with the carried envelopes in time order, though the earlier of two kinds was first set", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events = history({ bus, path: "/data/events.jsonl", filesystem: new MemoryFilesystem() });
+    bus.emit("queue.changed", { depth: 1 }, "wait-queue");
+    clock.advance(1_000);
+    const figures = { maxRunning: 2, reserved: 0, running: 1, warm: 0 };
+    const capacity = bus.emit(
+      "capacity.changed",
+      { android: figures, global: figures, ios: figures },
+      "capacity",
+    );
+    clock.advance(1_000);
+    const queue = bus.emit("queue.changed", { depth: 3 }, "wait-queue");
+
+    const read = await events.read({
+      carry: ["queue.changed", "capacity.changed"],
+      sinceTs: 5_000,
+    });
+
+    expect(read.events.map((envelope) => envelope.timestamp)).toEqual([2_000, 3_000]);
+    expect(read.events).toEqual([capacity, queue]);
+  });
+
   it("reads the ring with an event at exactly sinceTs as the step in force and not as a newer event", async () => {
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);

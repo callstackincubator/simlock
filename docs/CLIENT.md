@@ -589,7 +589,7 @@ usage.totals.wait.p95;       // milliseconds, or null when nothing waited
 usage.totals.failures.byEvent; // a count per failure event, e.g. "device.purge-failed"
 usage.workers[0]?.label;     // one entry for each worker; a worker lists itself
 usage.series;                // one point per bucket, for a chart; `waiting` counts every
-                             // request open at the bucket's end
+                             // request open at the bucket's end, leaving out a gateway's probes
 ```
 
 The daemon computes the figures from its event history, so they cover only what
