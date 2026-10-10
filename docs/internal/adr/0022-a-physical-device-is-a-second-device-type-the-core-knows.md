@@ -10,7 +10,7 @@
   physical device's class is recorded at enrollment, not read from the
   catalog (§6). Amends [ADR
   0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) §1–2
-  for physical devices (§7). Amends the agent rules listed in §11.
+  for physical devices (§7). Amends the agent rules listed in §12.
 - **Depends on:** ADR 0001, 0003, 0015, 0017, 0018, 0019.
 
 ## Context
@@ -59,8 +59,16 @@ type PhysicalState = SharedState | "absent" | "deleted";
 ```
 
 `physical` is part of the spec, so `sameSpec` never matches a physical
-device with a virtual one. A stored record with no `physical` field loads
-as virtual. `PhysicalSpec` carries platform, model, OS version and class;
+device with a virtual one. In memory `physical` is always a boolean.
+
+`state.json` keeps physical records in their own top-level list,
+`physicalDevices`, beside `devices`. A record in `devices` is virtual: one
+that carries `physical: true` or a class fails the load. A record in
+`physicalDevices` must be physical, with class `phone` or `tablet`. An
+older Simlock keeps the unknown key untouched and never sees physical
+devices, so a rollback cannot treat a phone as a simulator. A lease on a
+physical device then looks to the older daemon like a lease whose device is
+missing, and it ends that lease. `PhysicalSpec` carries platform, model, OS version and class;
 it has no mode and no image tag.
 
 A physical device's canonical ID (§6) is its `driverDeviceId` and its
@@ -198,8 +206,11 @@ is `devicectl`: the iOS driver runs `xcrun devicectl` and adds `--device
 <UDID>` where the verb takes one; `devicectl` on a virtual lease, and
 `simctl` on a physical one, are refused. Locally an agent runs plain
 `adb` or `devicectl`; no wrapper is needed. Each physical handler has its
-own refusal list, and `devicectl` arguments that read or write host files
-(`--json-output`, `device copy`) are refused over `device.exec`. There is
+own rules. `devicectl` over `device.exec` runs only a reviewed list of
+commands (installing, launching and inspecting apps, and similar reads);
+every other command, any global option before the command, and every flag
+that names a path on the host is refused. A list of allowed commands, not
+of refused ones, because every Xcode adds commands. There is
 no isolation between lease holders: a command that names another device's
 ID is not stopped.
 
@@ -213,12 +224,16 @@ emulator server; for a physical iOS device it sets `SIMLOCK_DEVICE_UDID`.
 **adb.** Emulators keep Simlock's own server, unchanged (port 5038, USB
 off). Physical Android devices go through the host's default server (port
 5037), always with `-s <serial>`. Simlock's call may start that server, as
-any `adb` command does; Simlock never stops it. Before its physical calls
-Simlock reads the server's protocol version with `host:version` over the
-socket, which does not restart the server. That protocol version is what
-makes an adb client kill a server. If it differs from Simlock's adb,
-Simlock sends no physical command, the devices read as not present, and
-`doctor` names both protocol versions.
+any `adb` command does; Simlock never stops it. Simlock reads the server's
+protocol version with `host:version` over the socket on every presence read
+and before every other physical call it makes itself; that read does not
+restart the server. That protocol version is what makes an adb client kill
+a server. If it differs from Simlock's adb, or the server does not answer
+(only a refused connection means nothing is listening), Simlock sends no
+physical command, the devices read as not present, and `doctor` names both
+protocol versions. `device.exec` uses the latest result, at most one
+`health.probeIntervalMs` old. Simlock's own adb protocol is read again when
+its adb binary changes.
 
 Every physical call has a time limit: 30 seconds for one read, 60 seconds
 for one uninstall. A call past its limit fails as "not present" for a
@@ -261,7 +276,8 @@ Otherwise it waits, or with `noWait` fails `NO_CAPACITY` as today.
 `--os` matches exactly, as for virtual requests; "18.x" is the range
 `>=18 <19`. `--device` ignores letter case.
 
-Physical and virtual requests wait in separate lines. Virtual requests keep
+Physical and virtual requests wait in separate lines, and queue positions
+count only the same line. Virtual requests keep
 today's order exactly. A device that becomes ready goes to the oldest
 waiting physical request it matches, so a request for one model never waits
 behind a request for another, and no virtual request waits behind a
@@ -360,7 +376,14 @@ holds the lease; the gateway adds nothing to it. There is no `simlock
 devicectl` command: a remote iOS agent runs devicectl through exec over
 HTTP or the client.
 
-### 11. Rules amended
+### 11. Physical lane
+
+Tests on real physical devices are a lane of their own. Tests that need no
+person (enroll, lease, install, release) run unattended when an environment
+variable names a device. Tests that need a person (lock, unplug, replug)
+run only by hand; delivery reports them as needing hardware.
+
+### 12. Rules amended
 
 - Safety rule 1 gains: "A physical device is Simlock's to act on only
   through its enrollment record, and the only destructive act it allows is
