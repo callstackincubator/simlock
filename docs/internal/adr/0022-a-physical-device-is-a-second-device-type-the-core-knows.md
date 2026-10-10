@@ -10,7 +10,7 @@
   physical device's class is recorded at enrollment, not read from the
   catalog (§6). Amends [ADR
   0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) §1–2
-  for physical devices (§7). Amends the agent rules listed in §10.
+  for physical devices (§7). Amends the agent rules listed in §11.
 - **Depends on:** ADR 0001, 0003, 0015, 0017, 0018, 0019.
 
 ## Context
