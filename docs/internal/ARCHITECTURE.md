@@ -1031,8 +1031,11 @@ estimate(op)         -> ETA for progress events
 listManaged()        -> device/process reality inside this driver's owned root, for doctor
 ```
 
-The litmus test for the boundary: adding a third driver (e.g. physical
-devices) must require **no core changes**. If it does, the interface leaked.
+The litmus test for the boundary: adding a third driver must require **no
+core changes**. If it does, the interface leaked. Physical devices are not a
+third driver: each platform's driver serves both its virtual and its
+physical devices, and the core knows a device may be physical
+([ADR 0022](adr/0022-a-physical-device-is-a-second-device-type-the-core-knows.md)).
 
 A request may name an image tag (#214). The core carries `imageTag` from
 the request to `resolveSpec` and onto the spec without reading it: `sameSpec`

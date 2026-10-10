@@ -39,7 +39,7 @@ the status is stale.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — not yet implemented |
@@ -53,10 +53,11 @@ the status is stale.
 | [0012](0012-a-worker-answers-the-fleet-operations-as-a-fleet-of-one.md) | A worker answers the fleet operations as a fleet of one | Accepted — not yet implemented |
 | [0013](0013-the-console-reads-routes-and-follows-the-event-stream.md) | The console reads the routes and follows the event stream | Accepted — not yet implemented |
 | [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Accepted; §6 narrowed by 0021 |
-| [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted — not yet implemented |
+| [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted — not yet implemented; §3 narrowed by 0022 for physical devices |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — not yet implemented; §6's fleet join and a Consequence superseded by 0021 |
 | [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — not yet implemented |
 | [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — not yet implemented |
-| [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted — not yet implemented |
+| [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted — not yet implemented; §1–2 narrowed by 0022 for physical devices |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted — not yet implemented |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — not yet implemented |
+| [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed |

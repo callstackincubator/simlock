@@ -9,6 +9,14 @@ never enforce them only inside an individual rule or driver.
    (i.e. that simlock created). Everything else on the machine is strictly
    read-only. This includes `doctor --fix` and `nuke`.
 
+   A physical device is the one kind of registry device Simlock did not
+   create. It is Simlock's to act on only through its enrollment record,
+   and the only destructive act that record allows is uninstalling a
+   user-installed app that is not on its enrollment app list. Simlock never
+   erases, reboots, shuts down or unpairs a physical device, and never runs
+   a command on one that is not enrolled
+   ([ADR 0022](../adr/0022-a-physical-device-is-a-second-device-type-the-core-knows.md) §3).
+
    A component (an iOS simulator runtime or an Android system image) is
    removed only through its record: `ComponentInstaller.remove`, from an
    admin's explicit `component.remove`, and only when a component record's
@@ -78,20 +86,28 @@ never enforce them only inside an individual rule or driver.
    registry entries whose device vanished are marked, not silently recreated
    or re-deleted. "Reality" means the contents of Simlock's own device roots,
    scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
-   default device locations.
+   default device locations. For a physical device, reality is the platform
+   tool's list of USB devices, read only for enrolled IDs.
 8. **Ownership is proven, never inferred.** A device is Simlock's because it
    lives inside a validly-marked Simlock root, not because of what it is
    called. `Driver.listManaged()` must answer from root membership; the
    `simlock-` / `simlock_` naming is a cosmetic label with no authority behind
    it. Never treat a name, a prefix, or a serial-to-name attribution as
-   evidence of ownership — a user can create a device with any name.
+   evidence of ownership — a user can create a device with any name. A
+   physical device is Simlock's because an admin enrolled it;
+   `listPresentPhysical()` answers only for enrolled IDs.
 9. **Root validation fails closed.** If a device root is missing its marker,
    carries another instance's marker, is a symlink, or has the wrong owner or
    permissions, that platform's driver does not start and Simlock reports why.
    Never fall back to the default device location, and never adopt or mark a
    root Simlock did not create empty itself. The same applies to Simlock's adb
    server port: if it is occupied, the Android driver fails rather than
-   attaching to whatever server is already listening there.
+   attaching to whatever server is already listening there. Physical Android
+   devices are the one exception, and they never use Simlock's server: they
+   are reached through the host's default adb server, which Simlock never
+   stops. Simlock sends no physical command while its last check of that
+   server, at most two health intervals old, saw another adb protocol
+   version or no answer.
 10. **Anything that arrives over the wire is a claim, not a fact.** A peer's
     stated identity, an echoed owner, a lease id, a tool name, a command's
     arguments: validate shape and bounds *before* authenticating on them,
