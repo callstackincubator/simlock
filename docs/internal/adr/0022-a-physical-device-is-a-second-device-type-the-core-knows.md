@@ -68,7 +68,9 @@ that carries `physical: true` or a class fails the load. A record in
 older Simlock keeps the unknown key untouched and never sees physical
 devices, so a rollback cannot treat a phone as a simulator. A lease on a
 physical device then looks to the older daemon like a lease whose device is
-missing, and it ends that lease. `PhysicalSpec` carries platform, model, OS version and class;
+missing, and it cannot end that lease: its expiry, a release and `nuke`
+fail on it. Leases on physical devices are released before a rollback; the
+upgrade notes say so. `PhysicalSpec` carries platform, model, OS version and class;
 it has no mode and no image tag.
 
 A physical device's canonical ID (§6) is its `driverDeviceId` and its
@@ -102,8 +104,10 @@ stays, like every deleted record, and nothing on the device changed.
 `ready`, `absent` and `quarantined`; it ends in `ready` (from `absent` only
 once the device is present), and from `quarantined` it stops the retries.
 `device add` and `device remove` are refused from `leased` and
-`reclaiming`. Each holds the device's operation claim from its first read
-to its write, so a grant, a reclaim or a retry cannot interleave.
+`reclaiming`. `device add` first reads the device once with no claim, to learn its
+canonical ID; that read changes nothing. Each then holds the device's
+operation claim from its read under the claim to its write, so a grant, a
+reclaim or a retry cannot interleave.
 
 Ending a lease because its device is not present is one registry write
 that ends the lease and moves the device to `absent`, as today's "end the
@@ -224,16 +228,19 @@ emulator server; for a physical iOS device it sets `SIMLOCK_DEVICE_UDID`.
 **adb.** Emulators keep Simlock's own server, unchanged (port 5038, USB
 off). Physical Android devices go through the host's default server (port
 5037), always with `-s <serial>`. Simlock's call may start that server, as
-any `adb` command does; Simlock never stops it. Simlock reads the server's
-protocol version with `host:version` over the socket on every presence read
-and before every other physical call it makes itself; that read does not
-restart the server. That protocol version is what makes an adb client kill
+any `adb` command does; Simlock never stops it. Right before every physical
+`adb` command it sends, `device.exec` included, Simlock reads the server's
+protocol version with `host:version` over the socket (5 seconds at most);
+that read does not restart the server. That protocol version is what makes an adb client kill
 a server. If it differs from Simlock's adb, or the server does not answer
 (only a refused connection means nothing is listening), Simlock sends no
 physical command, the devices read as not present, and `doctor` names both
-protocol versions. `device.exec` uses the latest result, and refuses
-("try again") when it is older than two `health.probeIntervalMs`. Simlock's own adb protocol is read again when
-its adb binary changes.
+protocol versions. No result is kept: each command has its own check, so
+`Driver.passthrough` returns a promise. A server of another protocol that
+starts between a check and its command is restarted by Simlock's adb; that
+window is one command long. The default server runs in its own process
+group, so stopping a timed-out `adb` client never stops it. Simlock's own
+adb protocol is read again when its adb binary changes.
 
 Every physical call has a time limit: 30 seconds for one read, 60 seconds
 for one uninstall. A call past its limit fails as "not present" for a
@@ -287,8 +294,9 @@ then, with the same `UNKNOWN_MODEL`. `mode`, `imageTag` and
 `allowDownload: true` are refused with `physical` by the contract; the
 platform's default mode does not apply.
 
-On a gateway, `device add` and `device remove` carry a `worker` field
-(`--worker` on the CLI) and are forwarded to that worker.
+`device add` and `device remove` run on the host the device is plugged
+into. A gateway refuses them with `UNSUPPORTED_IN_GATEWAY_MODE`: an operator
+enrolls a device on its worker.
 
 ### 7. Presence: read at grant, watched always
 
@@ -367,7 +375,14 @@ Extended:
 A gateway matches a physical request against the physical devices in its
 workers' views, in any state but `deleted`. It fails at once with
 `UNKNOWN_MODEL` when no worker's device could match. It sends the request
-only to a worker with a matching `ready` device, and otherwise waits. The
+only to a worker with a matching `ready` device that its latest presence
+read does not say is gone (a device not read yet counts), and otherwise
+waits. A worker's view carries each physical
+device's latest presence read, and that read is part of the key a
+`NO_CAPACITY` refusal is remembered against (ADR 0009 §5, unchanged). So a
+device plugged back in changes the view, and the request is offered again
+on the next refresh. A physical request and a virtual one never take each
+other's turn in a dispatch pass. The
 routing stages that count free slots, RAM and free capacity are skipped for
 a physical request, and a physical pick counts as a warm hit. A worker that
 is restarting stays known by its last-read physical devices, as it stays
@@ -394,9 +409,10 @@ run only by hand; delivery reports them as needing hardware.
 - Safety rule 8 gains: "A physical device is Simlock's because an admin
   enrolled it; `listPresentPhysical()` answers only for enrolled IDs."
 - Safety rule 9 gains: "Physical Android devices are reached through the
-  host's default adb server, never Simlock's. Simlock never stops it, and
-  sends no physical command while its last check, at most two health
-  intervals old, saw another protocol version or no answer."
+  host's default adb server, never Simlock's. Simlock never stops it.
+  Right before each physical command it checks that server's protocol
+  version, and sends nothing when it differs or the server does not
+  answer."
 - Architecture rule 3 is unchanged: no driver is added, and platform
   knowledge stays in the driver modules. A new device type is not a new
   driver; the core learns that a device may be physical, and that is a
