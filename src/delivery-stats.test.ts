@@ -24,12 +24,17 @@ const input = {
     {
       number: 10,
       title: "this week, two rounds",
+      createdAt: "2026-10-03T03:00:00Z",
       mergedAt: "2026-10-03T09:00:00Z",
+      additions: 100,
+      deletions: 20,
+      changedFiles: 3,
       body:
         "### Status\nImplement: done  Review: round 2, 0 open\n\n" +
         review(
           [
             "Spec review: 4 findings, 1 fixed. Code review: 2 findings, 2 fixed.",
+            "Rounds: 2. Tokens: 12.5M.",
             "Mutate: 12 mutants, 1 alive.",
             "",
             "Rejected:",
@@ -169,7 +174,7 @@ function section(output: string, heading: string): string[] {
 }
 
 describe("delivery-stats.mjs", () => {
-  it("counts each week's merged PRs, their review findings, fixes, notes, second rounds, alive mutants and handoffs", () => {
+  it("counts each week's merged PRs, their review findings (comment findings under claims), fixes, notes, second rounds, median hours, rounds and tokens, and handoffs", () => {
     const output = run(["--weeks", "2"]);
 
     expect(row(output, "2026-09-27")).toEqual([
@@ -178,12 +183,13 @@ describe("delivery-stats.mjs", () => {
       "7",
       "2/10 (20%)",
       "4/4 (100%)",
-      "2/3 (67%)",
-      "3/4 (75%)",
+      "5/7 (71%)",
       "8",
       "2",
       "1",
-      "1/12",
+      "6.0",
+      "1",
+      "12.5",
       "1",
     ]);
     expect(row(output, "2026-09-20")).toEqual([
@@ -193,11 +199,12 @@ describe("delivery-stats.mjs", () => {
       "1/1 (100%)",
       "1/3 (33%)",
       "0/0",
-      "0/0",
       "0",
       "0",
       "0",
-      "0/0",
+      "-",
+      "1",
+      "-",
       "1",
     ]);
     expect(output, "a PR merged before the first week counts nowhere").not.toContain("9 findings");
@@ -218,6 +225,37 @@ describe("delivery-stats.mjs", () => {
       "- #22 a why comment — it names an upstream bug",
     ]);
     expect(section(output, "### untagged")).toEqual(["- #10 an untagged claim — its reason"]);
+  });
+
+  it("lists one row per PR merged this week with its hours, size, rounds and tokens, and their medians", () => {
+    const output = run(["--weeks", "2"]);
+    const rows = output.split("\n").filter((l) => l.startsWith("| #"));
+
+    expect(rows).toContain("| #10 | 6.0 | 3 | 120 | 2 | 12.5M | this week, two rounds |");
+    expect(rows).toContain("| #12 | - | - | - | - | - | this week, a person's PR |");
+    expect(rows, "a PR merged the week before is not a row").not.toContainEqual(
+      expect.stringContaining("| #13 |"),
+    );
+    expect(output).toContain("Medians: 6.0 hours, 120 lines, 1 rounds, 12.5M tokens.");
+  });
+
+  it("with --calibration, prints the last four weeks' rejected findings by review, comment ones under claims, and no table", () => {
+    const output = run(["--calibration"]);
+
+    expect(section(output, "## spec review")).toEqual([
+      "- #10 first spec claim — first reason",
+      "- #10 second spec claim — second reason",
+      "- #17 a blocking spec claim — not blocking: nothing breaks",
+    ]);
+    expect(section(output, "## code review")).toEqual([
+      "- #10 a code claim — its reason",
+      "- #13 last week's claim — reason",
+    ]);
+    expect(section(output, "## claims review")).toEqual([
+      "- #19 a stale claim — the doc is right",
+      "- #22 a why comment — it names an upstream bug",
+    ]);
+    expect(output).not.toContain("| Week from |");
   });
 
   it("lists this week's handoffs by what they are blocked on, and the open PRs waiting on hardware", () => {

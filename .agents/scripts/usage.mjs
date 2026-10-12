@@ -51,8 +51,8 @@ export function scan(file, s) {
   for (const line of appended(file, s).split("\n")) {
     const rec = parsed(line);
     if (rec === null) continue;
-    if (rec.type === "assistant") noteAssistant(rec, s);
-    else if (rec.type === "user") noteResults(rec, s);
+    if (rec.message?.usage || rec.type === "assistant") noteAssistant(rec, s);
+    else noteResults(rec, s);
   }
   return s;
 }

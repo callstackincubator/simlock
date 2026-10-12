@@ -23,7 +23,12 @@ interface Fleet {
   readonly flakyIssues: string;
   /** Whether the check passes after a re-run. */
   readonly passesOnRerun: boolean;
+  readonly body?: string;
 }
+
+const VALID_BODY =
+  "## Review\n\nSpec review: skipped. Code review: skipped. Claims review: skipped.\n" +
+  "Rounds: 0. Tokens: n/a.\n\n*Written by an agent.*\n";
 
 /**
  * Runs the gate on PR 7 against a fake `gh` whose one CI check, Quality (Actions run 77), is
@@ -35,6 +40,7 @@ function gate(fleet: Fleet) {
   const write = (name: string, text: string) => writeFileSync(join(dir, name), text);
   write("log", fleet.log);
   write("flaky", fleet.flakyIssues);
+  write("body", fleet.body ?? VALID_BODY);
   const after = fleet.passesOnRerun ? "pass" : fleet.bucket;
   // The fake answers by the --json fields asked for; it ignores the -q filter, so each answer
   // is already in the shape the filter would print.
@@ -47,7 +53,8 @@ case "$*" in
   "pr view 7 --json state"*) echo OPEN ;;
   "pr view 7 --json isDraft"*) echo false ;;
   "pr view 7 --json labels"*) ;;
-  "pr view 7 --json body"*) printf '## Review\\nSpec review: 0 blocking\\n' ;;
+  "pr view 7 --json body"*) cat "$d/body" ;;
+  "pr view 7 --json headRefName"*) echo chore/x ;;
   "pr view 7 --json mergeable"*) echo MERGEABLE ;;
   "pr checks 7 --json name,bucket"*) echo "$(state) Quality" ;;
   "pr checks 7 --json bucket,link"*)
@@ -89,6 +96,23 @@ const FLAKY_LOG =
   "Quality\tQuality checks\t2026-10-06T10:00:00Z  ✓ e2e/lease-lifecycle.test.ts (12 tests)\n";
 const FLAKY_ISSUE =
   "Fails under load on main.\nTest: `e2e/gateway-fast-fail.test.ts` > a gateway fails fast\n";
+
+describe("merge-pr.sh body gate", () => {
+  it("does not merge a PR whose body fails pr-body-check.mjs, before it looks at CI", () => {
+    const result = gate({
+      bucket: "fail",
+      log: "",
+      flakyIssues: "",
+      passesOnRerun: true,
+      body: "## Review\n\nLooks good.\n\n*Written by an agent.*\n",
+    });
+    expect(result.merged).toBe(false);
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("counts line");
+    expect(result.output).toContain("fails pr-body-check.mjs");
+    expect(result.output).not.toContain("CI not green");
+  });
+});
 
 describe("merge-pr.sh re-run of red CI", () => {
   it("re-runs a job that failed only in a test an open flaky-test issue names, once, and merges when the re-run passes", () => {

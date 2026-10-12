@@ -39,11 +39,13 @@ if (fileAt !== -1) {
     console.error("usage: pr-body-check.mjs <pr> [--draft-ok] | --body-file <f> [--branch <b>]");
     process.exit(64);
   }
-  const view = JSON.parse(
-    execFileSync("gh", ["pr", "view", pr, "--json", "body,headRefName"], { encoding: "utf8" }),
-  );
-  body = view.body ?? "";
-  branch = view.headRefName ?? "";
+  // why: one field per call, with -q, is the shape merge-pr.sh and its test's fake gh answer.
+  const view = (field) =>
+    execFileSync("gh", ["pr", "view", pr, "--json", field, "-q", `.${field}`], {
+      encoding: "utf8",
+    });
+  body = view("body");
+  branch = view("headRefName").trim();
 }
 body = body.replace(/\r/g, "");
 

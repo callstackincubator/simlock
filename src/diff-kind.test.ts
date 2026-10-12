@@ -67,7 +67,7 @@ describe("diff-kind.mjs", () => {
         },
         before,
       ),
-    ).toBe("small");
+    ).toBe("full");
   });
 
   it("calls tests plus docs tests-only, and tests plus one source line not tests-only", () => {
@@ -77,8 +77,8 @@ describe("diff-kind.mjs", () => {
     expect(kindOf({ "src/a.test.ts": lines(300), "src/a.ts": lines(1) })).toBe("full");
   });
 
-  it("calls 100 changed lines small and 101 full, not counting pnpm-lock.yaml", () => {
-    expect(kindOf({ "src/a.ts": lines(100), "pnpm-lock.yaml": lines(500) })).toBe("small");
-    expect(kindOf({ "src/a.ts": lines(101) })).toBe("full");
+  it("calls 1500 changed lines full and 1501 large, not counting pnpm-lock.yaml", () => {
+    expect(kindOf({ "src/a.ts": lines(1500), "pnpm-lock.yaml": lines(500) })).toBe("full");
+    expect(kindOf({ "src/a.ts": lines(1501) })).toBe("large");
   });
 });
