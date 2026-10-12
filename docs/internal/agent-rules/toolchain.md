@@ -19,12 +19,15 @@ command of their own: they take every command from here.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm fallow`,
-`pnpm mutate` (outside the `harden-tests` routine), the whole e2e suite, the console lane in every browser
-(`pnpm test:console`), `tsc`, `oxlint`, `oxfmt`, `fallow`, `stryker`.
+`pnpm typecheck`, `pnpm lint`, `pnpm lint:comments`, `pnpm format:check`,
+`pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
+e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
+`oxlint`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
+(outside the `garden-comments` routine).
 
 - **Commit hook:** formats the staged files and stages the result, then
-  lint and typecheck. Errors show in its output.
+  lint, the comment lint (architecture rule 17) and typecheck. Errors show
+  in its output.
 - **Push hook:** Fallow, then the e2e typecheck.
 - **CI:** `pnpm check` and Fallow on every push. The console lane runs on
   every push to `main`, and on a pull request when it changes a source, UI,
@@ -43,10 +46,11 @@ opens one tests-only PR.
 Claude Code routines run these skills on a schedule, each opening one PR
 that goes through the reviews its diff's kind gets and the merge gate:
 
-| Routine           | Skill             | When   |
-| ----------------- | ----------------- | ------ |
-| Test hardening    | `harden-tests`    | weekly |
-| Comment gardening | `garden-comments` | weekly |
+| Routine            | Skill               | When   |
+| ------------------ | ------------------- | ------ |
+| Test hardening     | `harden-tests`      | weekly |
+| Comment gardening  | `garden-comments`   | weekly |
+| Review calibration | `calibrate-reviews` | weekly |
 
 ## Slow lane
 

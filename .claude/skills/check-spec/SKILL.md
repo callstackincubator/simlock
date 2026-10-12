@@ -1,6 +1,6 @@
 ---
 name: check-spec
-description: Check a feature or task spec as posted on GitHub, with a fresh context, before its approval box is ticked or its ready label is set — one spec-checker per task plus one for the feature — and report, with a status for every category, contradictions, lines nobody could check, behaviour no test pins, failure modes no line answers, existing code on the same state no line names, lists the code contradicts, overlapping tasks without a Depends on, slow-lane lines with no test, and undefined terms. Read-only. Use when spec-session reaches the end of technical or split mode, or when the user says "check the spec of #N".
+description: Check a feature or task spec as posted on GitHub, with a fresh context, before its approval box is ticked or its ready label is set — one spec-checker per task plus one for the feature — and report, with a status for every category, contradictions, lines nobody could check, behaviour no test pins, failure modes no line answers, existing code on the same state no line names, lists the code contradicts, overlapping tasks without a Depends on, slow-lane lines with no test, undefined terms, and tasks too big for one agent and two review rounds. Read-only. Use when spec-session reaches the end of technical or split mode, or when the user says "check the spec of #N".
 ---
 
 Arguments: $ARGUMENTS

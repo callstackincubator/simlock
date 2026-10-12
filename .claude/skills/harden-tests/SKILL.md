@@ -74,8 +74,8 @@ its reason, the dead-code issue's link, and `*Written by an agent.*`.
 ## 4. Review and merge
 
 `reviewer` with the PR number, round 1. Fix each Fix line yourself, tests
-only, then the next round as rule 14 says: `reviewer` with `round <n+1>`,
-its Rerun value, `previous <Commit>` and the Fix lines. `Rerun: none` with
+only, then the check its Rerun names, as rule 14 says: `reviewer` with
+that name, `previous <Commit>` and the Fix lines. `Rerun: none` with
 findings open: leave the PR in draft and report them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,

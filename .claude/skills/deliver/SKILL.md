@@ -125,7 +125,8 @@ they name; never build again or restart review at round 1.
    `green` with its `map`; then `mode: audit`. `spec needs` under `open`
    in any report: park (step 6).
 2. **Review**: `reviewer` with the PR number. The diff's kind sets which
-   reviews run (rule 14): a small, tests-only or docs-only diff gets fewer.
+   reviews run (rule 14): a tests-only or docs-only diff gets fewer, a
+   large one two code reviewers.
    Before every review round
    and every fix run, run `node .agents/scripts/ci-failures.mjs <M>` and
    `gh pr view <M> --json mergeable` once. The script reads the newest
@@ -135,34 +136,34 @@ they name; never build again or restart review at round 1.
    asking to merge the base branch. With no fix run due, they get one
    before the round.
 3. **Decide** on the review report:
-   - Fix lines: one `implementer` run with `mode: fix` and the Fix lines
-     pasted under `fixes`, then the next round: `reviewer` with `round <n+1>`, the
-     report's Rerun value, `previous <Commit>`, and the Fix lines pasted.
-   - `Rerun: claims-only`: the same, with `claims-only` as the Rerun value,
-     once per PR. Claims Fix lines it still reports: one more `implementer`
-     fix run, told to edit comments and docs only, no review; list them in
-     the PR body's `## Review` section as fixed unreviewed.
-   - A commit after a round that passed (a merge of the base branch, a fix
-     the gate needed): `reviewer` with the same round, `previous <Commit>`
-     and `after-pass`, then the hardware check again if one ran, before
-     the gate. Its Fix lines get one fix run and an `after-pass 2` review;
-     findings that one confirms park.
-   - After every round, add its counts and Rejected lines to the PR body's
+   - Fix lines with `Rerun: round 2`, `claims-only` or `fix-check`: one
+     `implementer` run with `mode: fix` and the Fix lines pasted under
+     `fixes` (for `claims-only`, told to edit tests, comments and docs
+     only), then `reviewer` with that check's name, `previous <Commit>` and
+     the Fix lines pasted.
+   - `Rerun: none` with Fix lines, after `claims-only`: one more
+     `implementer` fix run, told to edit tests, comments and docs only, no
+     review; list them in the PR body's `## Review` section as fixed
+     unreviewed. After `fix-check`: the findings are open; park (step 6).
+   - A commit after the reviews passed (a merge of the base branch, a fix
+     the gate needed): `reviewer` with `fix-check`, `previous <Commit>` and
+     no Fix lines, then the hardware check again if one ran, before the
+     gate.
+   - After every check, add its counts and Rejected lines to the PR body's
      `## Review` section (step 4), and its Notes under `Notes so far:`
      there; step 5 moves them into one comment.
    - Out of scope lines: open one `bug:new` issue each, naming the PR. They
      do not block it.
-   - Spec needs, or a blocking finding reported open with `Rerun: none`:
-     park. When a person answers a Spec needs, write the answer into the
-     issue body, with a Tests line that pins it (delivery rule 3), before
-     the fix run.
+   - Spec needs: park. When a person answers a Spec needs, write the answer
+     into the issue body, with a Tests line that pins it (delivery rule 3),
+     before the fix run.
    - No Fix lines, and the audit reported `hardware` lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`: one `implementer` fix
-     run with the Evidence lines, then `reviewer` with the next round,
-     `Rerun: code`, `previous <Commit>` and the Evidence lines as Fix lines,
-     then `hardware-verifier` again on the commit that review passes.
-   - Hardware `busy` or `unavailable`: finish the review rounds, do steps 4
+     run with the Evidence lines, then `reviewer` with `fix-check`,
+     `previous <Commit>` and the Evidence lines as Fix lines, then
+     `hardware-verifier` again on the commit that check passes.
+   - Hardware `busy` or `unavailable`: finish the checks, do steps 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
      and park instead of running the gate.
    - Notes never start a round. Keep every Notes and Rejected line.
@@ -173,23 +174,27 @@ they name; never build again or restart review at round 1.
    ```markdown
    ## Review
 
-   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes. Comment review: <b> blocking, <m> fixed, <k> notes.
+   Spec review: <b> blocking, <m> fixed, <k> notes. Code review: <b> blocking, <m> fixed, <k> notes. Claims review: <b> blocking, <m> fixed, <k> notes.
+   Rounds: <n>. Tokens: <t>M.
 
    Rejected:
 
-   - spec|code|claims|comments: <claim> — <reason>
+   - spec|code|claims: <claim> — <reason>
    ```
 
-   `<b>` counts the blocking findings that review raised over all rounds,
-   `<m>` those confirmed and fixed, `<k>` its notes. Every blocking finding
-   not fixed is a Rejected line; omit "Rejected:" when there is none. Keep
-   the counts line in exactly this shape, with `skipped` for each review
-   the diff's kind left out (for an ADR-only diff:
-   `Code review: skipped. Claims review: skipped. Comment review: skipped.`), and the Rejected lines
-   with their tags:
-   `.agents/scripts/delivery-stats.mjs` parses both. Rule 12 budget: 200
-   words plus the checklist, Assumptions and Review, ending with
-   `*Written by an agent.*`.
+   `<b>` counts the blocking findings that review raised over all checks,
+   `<m>` those confirmed and fixed, `<k>` its notes; `skipped` in place of
+   the counts for a review the diff's kind left out (for an ADR-only diff:
+   `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
+   rounds, 1 or 2; a claims-only check or a fix check adds none. `<t>` is
+   `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
+   far. Every blocking finding not fixed is a Rejected line; omit
+   "Rejected:" when there is none. Then run
+   `node .agents/scripts/pr-body-check.mjs <M>`: it checks the shape
+   `.agents/scripts/delivery-stats.mjs` parses, the footer
+   `*Written by an agent.*`, and the rule 12 budget of 200 words outside
+   the checklist, Status, Assumptions and Review. Fix what it fails on; cut
+   what it says is over budget.
 
 5. **Notes: one comment.** If the reports carried Notes lines, post them
    once, after the last round, and remove `Notes so far:` from the PR body:
@@ -199,14 +204,13 @@ they name; never build again or restart review at round 1.
 
    Not blocking, not verified. Each is one reviewer's claim.
 
-   - spec|code|claims|comments: <path:line what could be better>
+   - spec|code|claims: <path:line what could be better>
 
    _Written by an agent._
    ```
 
-   A note that is a separate piece of work (a defect outside this diff, a
-   refactor across modules) becomes one `bug:new` issue instead, linked from
-   that comment.
+   Notes never become issues on their own: a person opens one when a note
+   deserves it.
 
 6. **Ready and merge.** `gh pr ready <M>`, then run the gate in the
    background and wait for its notification, without asking first:
@@ -217,7 +221,7 @@ they name; never build again or restart review at round 1.
 
    Exit 0: merged. A conflict: an `implementer` fix run that merges the
    base branch. Red CI: one `implementer` fix run with the failing test
-   titles and the run id. Either way, the `after-pass` review in step 3,
+   titles and the run id. Either way, the `fix-check` review in step 3,
    then the gate again. Any other exit, or red CI a second time: park with the
    line it printed.
 
@@ -227,9 +231,9 @@ stage works on, if any.
 
 ```
 ### Status
-Implement: done (5/5 green)  Review: round 2, 2 open  Hardware: n/a  Gate: not run
-Next: implement fix, then review round 3
-- code: src/x.ts:12 <defect> [testing 2]
+Implement: done (5/5 green)  Review: round 1, 2 src open  Hardware: n/a  Gate: not run
+Next: implement fix, then review round 2
+- code: src/x.ts:12 <defect> [testing 2] src
 ```
 
 ## 4. Walk a feature's tasks

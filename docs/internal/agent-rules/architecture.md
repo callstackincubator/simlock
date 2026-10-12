@@ -129,16 +129,21 @@ grounds for rejecting a change even if it works.
     and nothing else; swapping it is a name in config, not an edit to the
     executor. `src/gateway/routing/`, `src/core/cleanup/` and
     `src/core/capacity/strategies/` are the precedents.
-17. **A comment says why, or it goes.** Code carries a comment only to say
-    why it does something a reader would not expect: a workaround for an
-    upstream bug or unexpected behaviour (link it), a platform quirk, or an
-    invariant the types cannot express (a lock to hold, an order to keep).
-    Never what the code does, a list of other places, fields or callers, a
-    pointer to another declaration, an ADR citation, history or plans. A
-    test's claim goes in its title. Also allowed: a doc comment on a
-    declaration `simlock/client` or `simlock/admin` exports (`src/client/index.ts`, `src/admin/index.ts`),
-    a script's usage header, and tool directives (`@ts-expect-error`,
-    `oxlint-disable`, `fallow-ignore`, `Stryker disable`). This rule
-    overrides the comment density of the code around you. Every comment a
-    change adds or edits meets it; `node .agents/scripts/comments.mjs <base>`
-    lists them. Older comments are the weekly `garden-comments` routine's.
+17. **A comment says why, or it goes.** A comment starts with `why:` and
+    says why the code does something a reader would not expect: a
+    workaround for an upstream bug or unexpected behaviour (link it), a
+    platform quirk, or an invariant the types cannot express (a lock to
+    hold, an order to keep). Never what the code does, a list of other
+    places, fields or callers, a pointer to another declaration, an ADR
+    citation, history or plans. A test's claim goes in its title. Also
+    allowed: a doc comment on a declaration `simlock/client` or
+    `simlock/admin` exports (`src/client/index.ts`, `src/admin/index.ts`), a
+    script's usage header, a comment that carries a link, and tool
+    directives (`@ts-expect-error`, `oxlint-disable`, `fallow-ignore`,
+    `Stryker disable`). This rule overrides the comment density of the code
+    around you. `.agents/scripts/comment-lint.mjs` enforces the shape: the
+    commit hook and CI reject every comment a change adds or edits that is
+    none of these. The shape is not the whole rule: a `why:` that says what
+    the code does is still a comment to delete, and a `why:` that is false
+    is a claims finding (rule 13). Older comments are the weekly
+    `garden-comments` routine's.

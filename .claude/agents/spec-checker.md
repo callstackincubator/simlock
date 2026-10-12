@@ -117,6 +117,10 @@ what goes wrong because of it.
    today" when the change could still alter it: name the inputs `main`
    accepts now (run the command or search the parser) and which of them the
    new rule would reject or reinterpret.
+10. **size.** A task over about 30 Tests lines or about 20 modules in
+    Modules touched, with no line under Scope saying why it cannot split
+    (spec-session's split mode sizes tasks so). Every stage of delivery
+    grows with the task, and a big one costs review rounds and parks.
 
 In `feature` scope, also: a Completion condition no task delivers is a
 finding under unverifiable.
@@ -132,7 +136,7 @@ End with exactly this block, nothing after it:
 
 ```
 Issue: #N  Scope: task | feature  Checked: <#N and each issue read>  Findings: n
-Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n>
+Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n> · size <ok|n|n/a>
 - [<category>] #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
 Verdict: ready | fix first
 ```

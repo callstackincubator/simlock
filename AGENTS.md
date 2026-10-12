@@ -30,7 +30,7 @@ changes in this repo:
   `*:ready` and `bug:triage`, the body is the spec and comments are
   discussion, reporters' issues are never rewritten, handoffs are one
   `## Handoff` comment per stop, every PR
-  gets a spec, a code, a claims and a comment review before it leaves draft, agents merge
+  gets a spec, a code and a claims review before it leaves draft, agents merge
   only through `.agents/scripts/merge-pr.sh`, and the slow lane runs one
   at a time through its script.
 - [coding.md](docs/internal/agent-rules/coding.md) — what an agent

@@ -45,8 +45,9 @@ spec says otherwise in its own words, the spec wins.
    — gets its entry in `.fallowrc.json`, and so does a new dependency
    nothing imports. `main` takes no change whose Fallow check failed
    (DELIVERY.md, "`main` and releases").
-11. **Comments say why.** Every comment the change adds or edits says why or
-   is deleted (architecture rule 17).
+11. **Comments say why.** Every comment the change adds or edits starts with
+   `why:` and says why, or is deleted; the commit hook and CI reject the
+   rest (architecture rule 17).
 
 **CI proves the suite.** CI runs the checks [toolchain.md](toolchain.md)
 lists on every push, and the merge gate refuses a PR whose checks are not

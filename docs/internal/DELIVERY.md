@@ -154,8 +154,9 @@ agent per phase, so no context grows past one phase: one commits the spec's
 tests red and opens a draft PR, so CI runs from the first push; the next
 turns them green in commits that each lower the failing count, starting
 from a map of which files each test needs; the last audits the diff with
-fresh eyes, and has the comment reviewer below sweep its comments. Agents
-pass each other `key: value` lines, not prose. It
+fresh eyes. Agents pass each other `key: value` lines, not prose; each
+stage agent's steps are a brief in `.agents/briefs/`, read on demand, so
+the agent's own instructions stay short. It
 runs only the tests its change can reach — `pnpm test:changed` and the e2e
 files it touched. Every other check runs on its own: format, lint and
 typecheck on commit; Fallow and the e2e typecheck on push; the full suite
@@ -181,9 +182,13 @@ ADR, or a choice a user would notice that nobody made.
 
 A PR leaves draft reviewed; it is not reviewed on arrival. The `review`
 skill builds the reviewers' inputs with `.agents/scripts/review-inputs.sh`
-and spawns reviewer agents from `.claude/agents/`, which pin Opus and limit
-the tools each may use. None has seen the delivering session, and none sees
-what another sees.
+(rules, ADRs and briefs from `main`, so a PR cannot rewrite what it is
+judged by) and spawns reviewer agents from `.claude/agents/`, each reading
+its brief from `.agents/briefs/`, with its model pinned and its tools
+limited. None has seen the delivering session, the PR body or another
+reviewer's findings, and each reads first `.agents/briefs/calibration.md`,
+the findings rejected in the last four weeks, which the weekly
+`calibrate-reviews` routine regenerates.
 
 - The spec reviewer gets the issue, its parent, its ADRs,
   `always-in-scope.md`, the PR's `Assumption:` lines, the diff, and every
@@ -192,54 +197,62 @@ what another sees.
   answers whether every line of the spec is delivered, whether the diff
   does anything the spec did not ask for, whether each test proves the
   claim in its title, and whether each assumption is the conservative one.
-- Two code reviewers get the agent rules, the ADR index and the diff, never
-  the issue, each in its own worktree. One looks for the input, state or
-  interleaving that makes a changed function wrong, and for other code
-  acting on the same state. The other looks for tests that cannot fail for
-  the reason their title gives, breaking code up to six times to see what
-  stays green, and for broken rules. `pnpm check` and the browser and slow
-  lanes are left to the git hooks and CI.
+- The code reviewer gets the same specification, the agent rules, the ADR
+  index and the diff, in its own worktree, and holds two lenses. One looks
+  for the input, state or interleaving that makes a changed function wrong,
+  and for other code acting on the same state. The other looks for tests
+  that cannot fail for the reason their title gives, breaking code to see
+  what stays green, and for broken rules. It may write one test of its own
+  to prove an interleaving. A diff over 1,500 changed lines gets two
+  reviewers, one per lens. `pnpm check` and the browser and slow lanes are
+  left to the git hooks and CI.
 - The claims reviewer gets the diff and the output of
   `.agents/scripts/stale-refs.sh`, which lists every line in the repo that
   still names a path, declaration or quoted string the diff removed. It
   checks that comments, docs, test titles and messages are true of the code.
-- The comment reviewer, on Haiku, gets the comment rule and the output of
-  `.agents/scripts/comments.mjs`: every comment the diff adds or edits. It
-  says whether the rule allows each one. A comment says why the code does
-  something unexpected, or it goes. Older comments are the weekly
-  `garden-comments` routine's: in round 1 of two tasks, two thirds of the
-  comment findings were old comments near the diff, not the diff's own.
+
+Whether a comment may exist at all is not a review's question any more. A
+comment starts with `why:` or goes (architecture rule 17), and
+`.agents/scripts/comment-lint.mjs` rejects the rest in the commit hook and
+in CI. A Haiku reviewer used to judge that rule: on one PR it raised 155
+findings, each verified by Opus and fixed by Sonnet, and a third of its
+findings on another were rejected as "gives a why". Older comments are the
+weekly `garden-comments` routine's.
 
 How many of these reviews a PR gets depends on its diff's kind
 (`.agents/scripts/diff-kind.mjs`): an ADR-only diff gets the spec review
-alone; a docs-only diff the spec and claims reviews; a comments-only diff
-those and the comment review; a tests-only diff all but the behaviour lens;
-a small diff (at most 100 changed lines) all of them with one code reviewer
-holding both lenses; any other diff all of them.
+alone; a docs-only or comments-only diff the spec and claims reviews; a
+tests-only diff all three with the tests lens only; any other diff all
+three, and a large one (over 1,500 changed lines) two code reviewers.
 
-The spec and code reviewers are blind to each other on purpose: a reviewer
-holding both the spec and the rules resolves a conflict between them
-silently, and the maintainer wants to see that conflict, because it usually
-means the spec is missing a line.
+The code reviewer sees the spec as well as the rules. It used to be blind
+to the issue so that a conflict between the spec and a rule would surface
+rather than be resolved silently; what it produced instead was findings
+about intent ("the spec decides this interim on purpose", "spec line 179
+asks for it as a guard"), each verified and rejected. The conflict still
+surfaces: it is a finding of its own class, never resolved by the reviewer,
+and the maintainer sees it under Spec needs.
 
 Every finding is blocking — it breaks behaviour, leaves wrong state, states
 something false, or breaches a rule, an ADR or the spec — or a note, and
-names its class: the general rule it breaks. Only blocking findings are
+names its class: the general rule it breaks. A review returns at most five
+notes, each a possible wrong behaviour or state. Only blocking findings are
 verified: the agent reproduces each against the code, has the implementer
 fix it and every other instance of its class, and lists what it rejects in
-the PR body under `## Review`, one line each, tagged `spec:`, `code:`,
-`claims:` or `comments:`, with the reason. Round 1 reviews the whole diff; later rounds
-review only the fix, so the rounds converge instead of sampling the whole
-diff again. A defect a later round finds outside the fix becomes a `bug:new`
-issue rather than a blocker. Rounds go on, up to five, while each confirms
-fewer spec and code findings than the one before; a spec or code finding
-still open when they stop converging is a contested change: the agent hands
-off with it and leaves the PR in draft. A finding fixed by editing only a
-comment or a doc is a stale claim, whichever review raised it. Stale claims
-never park a PR: the claims and comment reviews check their fix once, and what it still
-finds is fixed, in comments and docs only, without another review. Notes are not verified and never start a round; they
-reach you once, as one "Review notes" comment on the PR. An ADR-only PR
-gets the spec review alone.
+the PR body under `## Review`, one line each, tagged `spec:`, `code:` or
+`claims:`, with the reason. A confirmed finding is *src* when its fix must
+change production source and *text* when a test, a comment, a doc or an
+assumption line is enough. Rounds are at most two, plus one fix check.
+Round 1 reviews the whole diff. Round 2 runs only after a confirmed *src*
+finding and reviews the fix alone; a *src* finding it confirms gets one fix
+and one fix check of that fix; one still confirmed then is a contested
+change: the agent hands off with it and leaves the PR in draft. *Text*
+findings never park a PR: the claims review checks their fix once, and what
+it still finds is fixed, in tests, comments and docs only, without another
+review. Five rounds used to be allowed; rounds 3 to 5 confirmed almost
+nothing a person then kept. Notes are not verified and never start a round;
+they reach you once, as one "Review notes" comment on the PR, and become
+issues only when you open one.
 
 A Done when line that needs a real simulator or emulator runs through the
 `verify-hardware` skill and `scripts/slow-e2e.sh`, one lane per machine, on
@@ -247,8 +260,9 @@ the commit the last review round passed. A hardware failure gets one fix
 run, then the code review and the lane run again. A PR whose hardware check
 could not run gets `needs-hardware` and waits for you. Everything else that
 passes is merged by the agent through `.agents/scripts/merge-pr.sh`, which
-refuses a draft, a `needs-hardware` label, a missing Review section, a
-"spec needs" line, red CI, or a conflict. Red CI gets one automatic re-run
+refuses a draft, a `needs-hardware` label, a body
+`.agents/scripts/pr-body-check.mjs` fails (no Review section with its counts
+line, a "spec needs" line, no agent footer), red CI, or a conflict. Red CI gets one automatic re-run
 first when no failure is the PR's own: a job GitHub cancelled because no
 runner came, or a failing test an open `flaky-test` issue names. The same reviews run on a
 person's PR when the maintainer asks; there the agent posts the findings as
@@ -276,6 +290,9 @@ evidence in code blocks, nothing that does not change the reader's next
 decision. Each has a word budget in the rule, and each ends with the line
 `*Written by an agent.*`, because agents post under a maintainer's account
 and readers and automation need to tell the two apart.
+`.agents/scripts/pr-body-check.mjs` checks a PR body's shape and budget; the
+issue-state workflow runs it on every PR, as warnings while it is a draft
+and a failed check once it is ready.
 
 ## What is automated and what is not
 
@@ -302,15 +319,20 @@ fourth, except for the tasks of a `feature:ready` feature, where your
 
 `node .agents/scripts/delivery-stats.mjs` turns the PRs merged in the last
 five weeks into one row per week: for each review, how many blocking
-findings it raised and how many were confirmed and fixed; the notes both
-raised; how many PRs needed no fix, or a second round; mutants left alive;
-handoffs. PRs from before the blocking/note split count every finding they
-raised. Below the table it lists
-this week's rejected findings, handoffs and PRs waiting on hardware. A
-weekly routine runs it and suggests at most one change. A review whose
-blocking findings are mostly rejected costs a verification each and
-changes nothing: tune its brief, or what `always-in-scope.md` lists. A rejection that keeps coming back for the same
-reason is a missing rule or a missing spec line.
+findings it raised and how many were confirmed and fixed; the notes raised;
+how many PRs needed no fix, or a second round; the median hours from
+opening to merge, review rounds and session tokens (the `Rounds: <n>.
+Tokens: <n>M.` line each PR body carries; `.agents/scripts/usage.mjs` reads
+the tokens from the session's transcripts); handoffs. PRs from before the
+blocking/note split count every finding they raised. Below the table it
+lists one row per PR merged this week (`--since <date>` widens it) with its
+hours, size, rounds and tokens, then this week's rejected findings,
+handoffs and PRs waiting on hardware. Change one thing in the pipeline at a
+time and compare the rows before and after. A review whose blocking
+findings are mostly rejected costs a verification each and changes nothing:
+tune its brief, or what `always-in-scope.md` lists. A rejection that keeps
+coming back for the same reason is a missing rule or a missing spec line;
+`--calibration` prints the recent ones as the brief every reviewer reads.
 
 ## `main` and releases
 
@@ -350,15 +372,17 @@ a fixed layout:
 - `docs/internal/adr/` with a `README.md` index, and
   `docs/internal/templates/` with `feature.md` and `task.md`.
 - `.agents/scripts/`: `worktree.sh`, `review-inputs.sh`, `diff-kind.mjs`,
-  `stale-refs.sh`, `comments.mjs`, `ci-failures.mjs`, `merge-pr.sh`,
-  `delivery-stats.mjs`, `budget-guard.mjs` (a token cap per sub-agent and
-  per session) and `report-guard.mjs` (a stage agent may not stop before
-  its report block). `worktree.sh` and
-  `ensure-pnpm.sh` are this project's (they install its dependencies); the
-  others are not.
+  `stale-refs.sh`, `comments.mjs`, `comment-lint.mjs`, `ci-failures.mjs`,
+  `merge-pr.sh`, `pr-body-check.mjs`, `delivery-stats.mjs`, `usage.mjs`,
+  `session-env.sh`, `budget-guard.mjs` (a token and turn cap per sub-agent,
+  a token and time cap per session, and a stall check) and
+  `report-guard.mjs` (a stage agent may not stop before its report block).
+  `worktree.sh` and `ensure-pnpm.sh` are this project's (they install its
+  dependencies); the others are not. `.agents/briefs/`: the stage agents'
+  and reviewers' briefs, and `calibration.md`.
 - `.github/workflows/issue-state.yml` and the labels in `.github/labels.json`.
 
-To move it: copy the agents, skills, scripts, workflow, labels,
+To move it: copy the agents, skills, briefs, scripts, workflow, labels,
 `delivery.md`, `testing.md` and the templates; write the new project's
 `toolchain.md`, `always-in-scope.md` and its own rules; and rewrite
 `worktree.sh` for its package manager.
@@ -377,20 +401,25 @@ To move it: copy the agents, skills, scripts, workflow, labels,
   `.claude/skills/deliver` (orchestrator), and the stage wrappers
   `.claude/skills/check-spec`, `.claude/skills/implement`,
   `.claude/skills/review`, `.claude/skills/verify-hardware`, and the
-  weekly routines `.claude/skills/harden-tests` and
-  `.claude/skills/garden-comments`
+  weekly routines `.claude/skills/harden-tests`,
+  `.claude/skills/garden-comments` and `.claude/skills/calibrate-reviews`
 - Agents: `.claude/agents/` — `implementer`, `reviewer`,
   `hardware-verifier`, `spec-checker`, `bug-triager` (the stage
-  instructions), and `spec-reviewer`, `code-reviewer`, `claims-reviewer`,
-  `comment-reviewer`
+  instructions), and `spec-reviewer`, `code-reviewer`, `claims-reviewer`
+- Briefs: `.agents/briefs/` — `implement-<mode>.md`, `review-spec.md`,
+  `review-code.md`, `review-claims.md`, `review-later-round.md`,
+  `calibration.md`
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
-  `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` (the session-start
-  hook; installs the pinned pnpm into a cache when PATH lacks it),
+  `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` and
+  `.agents/scripts/session-env.sh` (the session-start hooks: the pinned
+  pnpm, and the session's transcript path in the environment),
   `.agents/scripts/review-inputs.sh`, `.agents/scripts/stale-refs.sh`,
-  `.agents/scripts/comments.mjs`, `.agents/scripts/ci-failures.mjs`,
+  `.agents/scripts/comments.mjs`, `.agents/scripts/comment-lint.mjs` (the
+  commit hook and `pnpm lint:comments`), `.agents/scripts/ci-failures.mjs`,
   `.agents/scripts/diff-kind.mjs`, `.agents/scripts/report-guard.mjs`
   (a SubagentStop hook in `.claude/settings.json`),
-  `.agents/scripts/merge-pr.sh`,
-  `.agents/scripts/delivery-stats.mjs`,
+  `.agents/scripts/budget-guard.mjs` (a PreToolUse hook),
+  `.agents/scripts/merge-pr.sh`, `.agents/scripts/pr-body-check.mjs`,
+  `.agents/scripts/delivery-stats.mjs`, `.agents/scripts/usage.mjs`,
   `scripts/slow-e2e.sh`, `scripts/mutate.mjs` (`pnpm mutate`)
 - Releases: `.github/workflows/release.yml`

@@ -6,11 +6,11 @@
 //   docs-only      every path is a Markdown file
 //   comments-only  every line changed outside Markdown is a comment or blank
 //   tests-only     every path is a test or a Markdown file, at least one a test
-//   small          at most 100 changed lines, pnpm-lock.yaml left out
+//   large          more than 1500 changed lines, pnpm-lock.yaml left out
 //   full           anything else
 import { execFileSync } from "node:child_process";
 
-const SMALL = 100;
+const LARGE = 1500;
 const [base, head] = process.argv.slice(2);
 if (base === undefined || head === undefined) {
   console.error("usage: diff-kind.mjs <base> <head>");
@@ -61,5 +61,5 @@ else if (paths.length > 0 && paths.every(isDoc)) kind = "docs-only";
 else if (commentOnly) kind = "comments-only";
 else if (paths.some(isTest) && paths.every((path) => isTest(path) || isDoc(path)))
   kind = "tests-only";
-else if (changed <= SMALL) kind = "small";
+else if (changed > LARGE) kind = "large";
 console.log(kind);

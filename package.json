@@ -52,11 +52,12 @@
     "typecheck": "tsc --noEmit && tsc -p ui/tsconfig.json",
     "typecheck:e2e": "pnpm run build && tsc -p e2e/tsconfig.typecheck.json",
     "lint": "oxlint src e2e ui",
+    "lint:comments": "node .agents/scripts/comment-lint.mjs --base origin/main",
     "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "prepare": "lefthook install",
-    "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run format:check && pnpm run test",
+    "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run lint:comments && pnpm run format:check && pnpm run test",
     "release": "release-it",
     "mutate": "node scripts/mutate.mjs"
   },

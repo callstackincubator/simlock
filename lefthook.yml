@@ -11,6 +11,11 @@ pre-commit:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+    # A comment the commit adds or edits starts with "why:" or goes (architecture rule 17).
+    comments:
+      glob: "*.{ts,tsx,js,mjs,mts,cts,sh}"
+      run: node .agents/scripts/comment-lint.mjs --base HEAD {staged_files}
+      fail_text: "Delete the comment, or start it with 'why:' when it says why the code does something unexpected."
     # A change can break the files that call it, so this checks the whole project; it takes seconds.
     typecheck:
       glob: "*.{ts,tsx,mts,cts}"

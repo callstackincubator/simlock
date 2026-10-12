@@ -9,14 +9,14 @@
 #   diff.patch             the PR's diff against its base, as GitHub shows it
 #   commit                 the PR head the directory was built from
 #   kind                   what .agents/scripts/diff-kind.mjs calls the diff: adr-only,
-#                          docs-only, comments-only, tests-only, small or full; it sets which
+#                          docs-only, comments-only, tests-only, full or large; it sets which
 #                          reviews run
 #   fix.patch              with a previous commit: the diff from it to the head
 #   stale-refs.txt         what .agents/scripts/stale-refs.sh finds for the PR: lines anywhere in
 #                          the repo that still name something the diff removed
-#   comments.txt           what .agents/scripts/comments.mjs lists for the diff: every comment it
-#                          adds or edits
-#   comments-fix.txt       with a previous commit: the same for fix.patch
+#   briefs/                every file in .agents/briefs/ as the base has it: each reviewer's
+#                          brief, and calibration.md, the findings reviews raised lately that
+#                          were rejected, which every reviewer reads first
 #   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch,
 #                          else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line
@@ -30,8 +30,8 @@
 #                          red tests, or a bug's reproduction) between that commit and the head
 #   assumptions.md         the PR body's `Assumption:` lines (coding rule 2)
 #
-# Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules and
-# ADRs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
+# Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
+# and briefs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
 # for and cannot find, it says on stderr, with one summary line at the end.
 set -eu
 
@@ -69,7 +69,6 @@ node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
   if git cat-file -e "$previous^{commit}" 2>/dev/null; then
     git diff "$previous" "$head" >"$out/fix.patch"
-    node "$(dirname "$0")/comments.mjs" "$previous" "$head" >"$out/comments-fix.txt"
   else
     say "previous commit $previous is not in this clone; no fix.patch"
   fi
@@ -77,7 +76,10 @@ fi
 "$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
 # Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
 [ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
-node "$(dirname "$0")/comments.mjs" "$fork" "$head" >"$out/comments.txt"
+mkdir "$out/briefs"
+for f in $(git ls-tree --name-only "$base" .agents/briefs/); do
+  git show "$base:$f" >"$out/briefs/$(basename "$f")"
+done
 
 for f in $(git ls-tree --name-only "$base" docs/internal/agent-rules/); do
   git show "$base:$f" >"$out/rules/$(basename "$f")"

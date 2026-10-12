@@ -4,8 +4,8 @@
 #   .agents/scripts/merge-pr.sh <pr>
 #
 # Gates, in order: the PR is open and not a draft; it carries no needs-hardware label; its body
-# has a `## Review` section and no "spec needs" line; every CI check passed or was skipped; and
-# GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
+# passes pr-body-check.mjs (a `## Review` section with its counts line, no "spec needs" line,
+# the agent footer); every CI check passed or was skipped; and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
 # that fails and exits 1, or exits 2 when checks are still pending at the deadline.
 #
 # Red CI gets one re-run of its failed jobs when no failure is this PR's to fix: every red
@@ -28,9 +28,7 @@ view() { gh pr view "$pr" --json "$1" -q "$2"; }
 [ "$(view state .state)" = OPEN ] || fail "PR #$pr is not open"
 [ "$(view isDraft .isDraft)" = false ] || fail "PR #$pr is still a draft"
 view labels '.labels[].name' | grep -qx needs-hardware && fail "PR #$pr is labelled needs-hardware"
-body=$(view body .body)
-printf '%s\n' "$body" | grep -q '^## Review' || fail "PR #$pr has no ## Review section"
-printf '%s\n' "$body" | grep -qi 'spec needs' && fail "PR #$pr says the spec needs a change"
+node "$(dirname "$0")/pr-body-check.mjs" "$pr" || fail "PR #$pr body fails pr-body-check.mjs (above)"
 
 poll=${MERGE_PR_POLL_SECONDS:-30}
 
