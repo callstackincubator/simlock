@@ -32,7 +32,9 @@ refused at admission when either holds:
 - the requester already holds `lease.maxPerRequester` active leases.
 
 Physical and virtual leases count the same. With the default, every answer
-is what it is today, message included.
+is what it is today, message included. A requester that holds more leases
+than the limit, because the operator lowered it and restarted, keeps them;
+the limit only refuses new requests.
 
 The refusal stays `REQUESTER_ALREADY_LEASED` (exit 13, HTTP 409), with the
 event reason `already-leased`. At the lease limit it names the requester's
@@ -50,15 +52,18 @@ before it, so a keyed repeat gets its stored answer at the limit.
 ```mermaid
 flowchart LR
   A[agent a] --> G[gateway<br/>counts a's fleet leases]
-  G -- probe, gw:id:a --> W1[worker 1<br/>no count for probes]
-  G -- probe, gw:id:a --> W2[worker 2<br/>no count for probes]
+  G -- probe, gw:id:a --> W1[worker 1<br/>no lease count for probes]
+  G -- probe, gw:id:a --> W2[worker 2<br/>no lease count for probes]
   B[local agent b] --> W1
 ```
 
-A worker does not run the check for a probe: a request that carries the
-gateway's `fleetRequestId`, which only the worker's own uplink to its
-configured gateway may send. The gateway already counted it, fleet-wide,
-from its own index. Every other request on a worker is checked as in §1,
+For a probe, a worker skips the held-lease count. A probe is a request that
+carries the gateway's `fleetRequestId`, which only the worker's own uplink
+to its configured gateway may send. The gateway already counted the
+agent's leases, fleet-wide, from its own index. The waiting-request check
+still applies to probes, as today: a gateway that re-sends a request after
+its own timeout, while the first probe is still being set up on that
+worker, is declined. Every other request on a worker is checked as in §1,
 against the worker's own limit. So the gateway's limit is the one a fleet
 agent sees, and gateway and worker limits never have to agree.
 
@@ -74,7 +79,8 @@ drops another.
 - Above a limit of 1, a client that lost its grant and asks again without
   an idempotency key gets a new lease, not a refusal naming the lost one.
   The lost lease lives until its TTL.
-- A worker no longer declines a probe as `already-leased`. A gateway bug
+- A worker declines a probe as `already-leased` only for a waiting probe,
+  no longer for a held lease. A gateway bug
   could hand one agent more leases on a worker than intended; the worker's
   capacity limits still hold.
 
