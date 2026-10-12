@@ -1,6 +1,6 @@
 # 0023. A requester may hold up to a configured number of leases
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-12
 - **Issue:** [#464](https://github.com/callstackincubator/simlock/issues/464)
 - **Supersedes:** nothing. Narrows [ADR 0005](0005-gateway-and-worker-modes.md)
