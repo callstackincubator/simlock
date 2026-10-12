@@ -1,6 +1,8 @@
 # 0005. Gateway and worker modes
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — not yet implemented. §14's one lease per requester
+  is narrowed by [ADR 0023](0023-a-requester-may-hold-up-to-a-configured-number-of-leases.md):
+  the count is configurable, and a worker leaves it to its gateway.
 - **Date:** 2026-09-05
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)
