@@ -1,6 +1,8 @@
 # 0003. One typed daemon contract behind every frontend
 
-- **Status:** Accepted
+- **Status:** Accepted. §9 and §10's cancel by requester id are narrowed by
+  [ADR 0023](0023-a-requester-may-hold-up-to-a-configured-number-of-leases.md):
+  a cancel may name its request.
 - **Date:** 2026-09-03
 - **Issue:** [#71](https://github.com/callstackincubator/simlock/issues/71)
   (part of [#70](https://github.com/callstackincubator/simlock/issues/70))
