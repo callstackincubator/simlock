@@ -41,7 +41,7 @@ the status is stale.
 |---|---|---|
 | [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
-| [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted; §9–10 cancel by requester id narrowed by 0023 |
+| [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — not yet implemented |
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — not yet implemented; §14 narrowed by 0023 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted |
@@ -61,4 +61,4 @@ the status is stale.
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted — not yet implemented |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — not yet implemented |
 | [0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) | A physical device is a second device type the core knows | Proposed |
-| [0023](0023-a-requester-may-hold-up-to-a-configured-number-of-leases.md) | A requester may hold up to a configured number of leases, and a cancel names its request | Proposed |
+| [0023](0023-a-requester-may-hold-up-to-a-configured-number-of-leases.md) | A requester may hold up to a configured number of leases | Proposed |
