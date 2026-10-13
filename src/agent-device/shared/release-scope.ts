@@ -9,7 +9,7 @@ export interface ReleaseScope {
 const SCOPE_VALUE = /^[A-Za-z0-9._-]{1,128}$/;
 const OPTIONAL_KEYS = ["leaseProvider", "clientId", "deviceKey"] as const;
 
-function valid(value: unknown): value is string {
+export function validScopeValue(value: unknown): value is string {
   return typeof value === "string" && SCOPE_VALUE.test(value);
 }
 
@@ -18,12 +18,16 @@ export function readReleaseScope(lease: unknown): ReleaseScope | undefined {
   const fields = lease as Record<string, unknown>;
   const tenantId = fields["tenantId"];
   const runId = fields["runId"];
-  if (!valid(tenantId) || !valid(runId)) return undefined;
+  if (!validScopeValue(tenantId) || !validScopeValue(runId)) return undefined;
   const optional: { -readonly [K in (typeof OPTIONAL_KEYS)[number]]?: string } = {};
   for (const key of OPTIONAL_KEYS) {
     const value = fields[key];
+    if (key === "deviceKey") {
+      if (validScopeValue(value)) optional[key] = value;
+      continue;
+    }
     if (value === undefined) continue;
-    if (!valid(value)) return undefined;
+    if (!validScopeValue(value)) return undefined;
     optional[key] = value;
   }
   return { ...optional, runId, tenantId };

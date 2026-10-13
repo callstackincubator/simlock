@@ -1100,6 +1100,22 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(params).not.toHaveProperty("deviceKey");
   });
 
+  it("an allocate reply whose lease `deviceKey` is not 1 to 128 characters still succeeds and keeps the lease, with the device key left unset: no release is sent and a command naming the lease with a `deviceKey` is refused", async () => {
+    const rig = await setUp();
+    rig.fake.nameDeviceKeyInNextReply("x".repeat(129));
+
+    const answer = await envelopeOf(await allocate(rig, 1));
+
+    expect(answer.error).toBeUndefined();
+    expect(rig.fake.rpcRequests("agent_device.lease.release")).toHaveLength(0);
+    expect((await leases(rig)).map((lease) => lease.id)).toContain(hex(1));
+    await refused(
+      rig,
+      () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: "x".repeat(129) } }),
+      simlockPicks,
+    );
+  });
+
   it("a CLI that hangs up while agent-device makes its lease leaves neither lease: the agent-device lease is released with the reply's scope, then the simlock lease; when that release fails, the simlock lease stays until its TTL", async () => {
     const rig = await setUp();
     rig.fake.holdAllocate();

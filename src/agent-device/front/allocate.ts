@@ -6,6 +6,7 @@ import { mapError } from "../../http/errors.js";
 import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
 import { frontReply, failure, refusal, type FrontReply } from "../shared/replies.js";
+import { validScopeValue } from "../shared/release-scope.js";
 import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
 import { addressField, asRecord } from "../shared/selectors.js";
 import {
@@ -324,7 +325,7 @@ function replyFacts(result: Record<string, unknown>) {
   return {
     ...(device === undefined ? {} : { target: stringOr(device["target"], "mobile") }),
     ...(typeof device?.["name"] === "string" ? { name: device["name"] } : {}),
-    ...(typeof deviceKey === "string" ? { deviceKey } : {}),
+    ...(validScopeValue(deviceKey) ? { deviceKey } : {}),
   };
 }
 
