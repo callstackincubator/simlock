@@ -3242,6 +3242,20 @@ describe("the agent-device front's request rules", () => {
       );
       expect(commandsReceived(rig)).toHaveLength(before);
     });
+
+    it("a batch with an upload in `meta` still refuses its `install` step, and forwards when it has no install step", async () => {
+      const rig = await setUp();
+      const withUpload = (steps: readonly Record<string, unknown>[]) =>
+        runCommand(rig, "batch", undefined, {
+          flags: { batchSteps: steps },
+          meta: { uploadedArtifactId: "art-1" },
+        });
+      await forwarded(rig, () => withUpload([{ command: "snapshot" }]));
+      const before = commandsReceived(rig).length;
+
+      await refused(rig, () => withUpload([{ command: "install" }]), uploadOnly);
+      expect(commandsReceived(rig)).toHaveLength(before);
+    });
   });
 
   describe("rule 9, batch devices", () => {
@@ -3297,7 +3311,7 @@ describe("the agent-device front's request rules", () => {
       expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([idOf(rig, 2)]);
     });
 
-    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB and a non-JSON body each answer an empty list; `devices` with `meta.requestProgress` is refused", async () => {
+    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer an empty list; `devices` with `meta.requestProgress` is refused", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       rig.fake.listDevices([{ id: idOf(rig, 1) }]);
@@ -3324,6 +3338,11 @@ describe("the agent-device front's request rules", () => {
           result: { data: { devices: [], pad: "x".repeat(1024 * 1024) }, ok: true },
         }),
         "not json",
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          result: { data: { devices: [{ id: idOf(rig, 1) }, "stray"] }, ok: true },
+        }),
       ];
       for (const body of unusable) {
         rig.fake.answerDevicesWith(body);
