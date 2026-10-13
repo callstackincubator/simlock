@@ -87,7 +87,6 @@ export const catalogGet = defineOperation({
 
 // ---- status.get ---------------------------------------------------------------------------
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const statusGet = defineOperation({
   name: "status.get",
   role: "agent",

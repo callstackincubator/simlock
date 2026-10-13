@@ -1016,6 +1016,7 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
  * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
  */
+// fallow-ignore-next-line unused-export -- exported on its own so the tasks that name a capability reuse it (#513).
 export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
 // why: \p{Cc} is exactly U+0000-U+001F and U+007F-U+009F, the spec's control characters.
