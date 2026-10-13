@@ -9,7 +9,7 @@ export interface ReleaseScope {
 const SCOPE_VALUE = /^[A-Za-z0-9._-]{1,128}$/;
 const OPTIONAL_KEYS = ["leaseProvider", "clientId", "deviceKey"] as const;
 
-export function validScopeValue(value: unknown): value is string {
+function validScopeValue(value: unknown): value is string {
   return typeof value === "string" && SCOPE_VALUE.test(value);
 }
 
