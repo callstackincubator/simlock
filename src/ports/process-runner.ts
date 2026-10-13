@@ -175,11 +175,8 @@ export interface ProcessRunner {
 }
 
 export interface NodeProcessRunnerOptions {
-  /** How long `run()` waits after a timeout-triggered SIGTERM before sending SIGKILL. */
   readonly sigkillGraceMs?: number;
-  /** The most the runner defers settling after a child's `exit` while output or a delivery is outstanding. */
   readonly exitDeferralCapMs?: number;
-  /** How long the pipes must stay quiet after a child's `exit` before the runner stops waiting for `close`. */
   readonly exitGraceMs?: number;
 }
 

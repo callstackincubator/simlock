@@ -3393,7 +3393,7 @@ describe("Dispatcher: device.exec", () => {
         Promise.resolve({ args: ["-e", script], command: process.execPath, env: {} }),
       );
     }
-    // The 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
+    // why: the 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
     // cases pass a 100 ms exit deferral cap to the real runner instead of waiting out its 5 s
     // default, and a short guard would leave one slow child-process spawn on a busy machine
     // between it and a false failure.

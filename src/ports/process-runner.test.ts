@@ -277,7 +277,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       },
     );
 
-    // Comfortably past the child's own exit (20ms) and past the exit-to-close grace window
+    // why: 400 ms is comfortably past the child's own exit (20ms) and past the exit-to-close grace window
     // (100ms here) the old code settled on, while the first chunk's delivery is deliberately still
     // unresolved.
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -357,7 +357,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   });
 
   it("settles wait() on the pipe's close, without waiting out the exit grace window", async () => {
-    // A grace far longer than the bound below: only `close` can settle in time.
+    // why: a grace far longer than the bound below: only `close` can settle in time.
     const runner = new NodeProcessRunner({ exitGraceMs: 30_000 });
 
     const handle = runner.spawnStreaming(process.execPath, ["-e", "process.exitCode = 4"], {
@@ -591,7 +591,7 @@ describe("NodeProcessRunner", () => {
     ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
   });
 
-  // Real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
+  // why: real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
   // no-op SIGTERM handler survives the initial signal `run()` sends on timeout, so this only
   // resolves at all if the follow-up SIGKILL actually lands once the grace period elapses.
   // The grace is shortened through the constructor; the child is still real.
@@ -599,7 +599,7 @@ describe("NodeProcessRunner", () => {
     const runner = new NodeProcessRunner({ sigkillGraceMs: 100 });
     const startedAt = Date.now();
 
-    // The child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
+    // why: the child outlives the 2 s bound below by exiting on its own after 4 s, so a missing
     // SIGKILL fails on the assertion instead of waiting out vitest's timeout or leaking it.
     const outcome = await Promise.race([
       runner.run(
@@ -682,7 +682,7 @@ describe("NodeProcessRunner", () => {
 
   it("keeps waiting while output is still arriving after the process exits", async () => {
     const runner = new NodeProcessRunner({ exitGraceMs: 300 });
-    // Same shape as above, but the pipe is still delivering when the process goes:
+    // why: same shape as above, but the pipe is still delivering when the process goes:
     // the grandchild emits a chunk every 100ms for well over a 300ms grace window, then
     // goes quiet. Settling on a bare post-exit timer would cut the capture off at
     // the first chunk -- a truncated capture surfaces later as a parse error, far
