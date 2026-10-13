@@ -422,7 +422,8 @@ interface DevicesXmlProfile {
 }
 
 /**
- * why: `avdmanager -d` is not available for a devices.xml profile, so this maps a `<d:device>` element to the `config.ini` hardware properties `avdmanager -d` would
+ * why: there is no official store to create an AVD from a devices.xml profile directly, so this
+ * maps a `<d:device>` element to the `config.ini` hardware properties `avdmanager -d` would
  * otherwise have produced. Mapped:
  *
  * - `<d:name>`               -> `hw.device.name`
