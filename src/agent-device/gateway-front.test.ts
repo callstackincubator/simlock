@@ -1236,4 +1236,32 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await envelopeOf(made)).error?.message).toBe(missing);
     await expect.poll(async () => (await workerLeases(member)).length).toBe(1);
   });
+
+  it("a heartbeat for a lease the front's memory lacks, whose release relay then fails with `RELAY_TARGET_MISSING`, answers the notAvailable reply with that message and leaves the simlock lease", async () => {
+    const rig = await setUp();
+    const member = first(rig);
+    await granted(rig, 1);
+    const held = member.fake.leases.get(hex(1));
+    expect(held).toBeDefined();
+    member.fake.leases.set(hex(2), { ...(held as NonNullable<typeof held>), leaseId: hex(2) });
+    await rig.gateway.dispatch(
+      "lease.request",
+      { leaseId: hex(2), platform: "ios", requesterId: hex(2), requires: ["agent-device"] },
+      sessionFor(principals.one),
+    );
+    interceptRelay(rig, async ({ request }) => {
+      const body = (await request.clone().json()) as { method?: string };
+      if (body.method === "agent_device.lease.release") {
+        throw new DispatchError(
+          "RELAY_TARGET_MISSING",
+          "no relay target agent-device on this worker",
+        );
+      }
+    });
+
+    const beat = await envelopeOf(await heartbeat(rig, 2));
+
+    expect(beat.error?.message).toBe(`${notAvailable}no relay target agent-device on this worker`);
+    expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(2));
+  });
 });
