@@ -3109,7 +3109,7 @@ describe("the agent-device front's request rules", () => {
   });
 
   describe("rule 5, device set and allowlist", () => {
-    it("`--ios-simulator-device-set` naming simlock's own device set is refused with the disconnect-and-reconnect message, on a command and on an allocate", async () => {
+    it("`--ios-simulator-device-set` naming any directory is refused with the disconnect-and-reconnect message, on a command and on an allocate", async () => {
       const rig = await setUp();
       await forwarded(rig, () => runCommand(rig, "snapshot", undefined));
       const set = "/var/simlock/devices";
@@ -3296,7 +3296,7 @@ describe("the agent-device front's request rules", () => {
       expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([idOf(rig, 1)]);
     });
 
-    it("`devices` for an agent holding two devices answers both, and after `simlock release --all` ended one lease (no heartbeat sent since), only the other", async () => {
+    it("`devices` for an agent holding two devices answers both, and after simlock released one of the two leases (no heartbeat sent since), only the other", async () => {
       const rig = await setUp();
       await granted(rig, 1, { ttlMs: 60_000 });
       await granted(rig, 2, { ttlMs: 600_000 });
@@ -3335,7 +3335,10 @@ describe("the agent-device front's request rules", () => {
         JSON.stringify({
           id: 1,
           jsonrpc: "2.0",
-          result: { data: { devices: [], pad: "x".repeat(1024 * 1024) }, ok: true },
+          result: {
+            data: { devices: [{ id: idOf(rig, 1) }], pad: "x".repeat(1024 * 1024) },
+            ok: true,
+          },
         }),
         "not json",
         JSON.stringify({
@@ -3374,6 +3377,20 @@ describe("the agent-device front's request rules", () => {
       expect(rig.fake.requests.length).toBe(before);
     });
 
+    it("a `devices` whose lease check fails answers `COMMAND_FAILED` with `could not check your leases; try again`, not an empty list", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      rig.fake.listDevices([{ id: idOf(rig, 1) }]);
+      const tap = tapDispatch(rig);
+      tap.rejectNext("lease.list");
+
+      const answer = await envelopeOf(await runCommand(rig, "devices", 1));
+
+      expect(answer.error).toMatchObject({
+        data: { code: "COMMAND_FAILED", message: "could not check your leases; try again" },
+      });
+    });
+
     it("a batch whose `batchSteps` is not a list is refused with `refused: malformed batchSteps`", async () => {
       const rig = await setUp();
       await forwarded(rig, () => batch(rig, undefined, [{ command: "snapshot" }]));
@@ -3382,6 +3399,31 @@ describe("the agent-device front's request rules", () => {
         rig,
         () => runCommand(rig, "batch", undefined, { flags: { batchSteps: "snapshot" } }),
         "refused: malformed batchSteps",
+      );
+    });
+
+    it("a `flags`, `input` or `runtime` that is not an object, a batch step that is not an object or whose `command` is not a string, and a `meta.deviceKey` that is not a string are each refused with their `malformed` message", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: {} }));
+
+      for (const key of ["flags", "input", "runtime"]) {
+        await refused(
+          rig,
+          () => runCommand(rig, "snapshot", 1, { [key]: "text" }),
+          `refused: malformed ${key}`,
+        );
+      }
+      await refused(
+        rig,
+        () => batch(rig, 1, ["snapshot"] as unknown as Record<string, unknown>[]),
+        "refused: malformed batchSteps",
+      );
+      await refused(rig, () => batch(rig, 1, [{ command: 5 }]), "refused: malformed command");
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: 5 } }),
+        "refused: malformed deviceKey",
       );
     });
   });
@@ -3399,6 +3441,33 @@ describe("the agent-device front's request rules", () => {
           "refused: name the device with --udid <id>; run devices to see yours",
         );
       }
+    });
+
+    it("`capabilities` naming no lease is filled with the token's only device; with two devices it is refused unless `platform` leaves one, and then it gets that device's `serial` on Android", async () => {
+      const rig = await setUp({ drivers: bothDrivers });
+      await granted(rig, 1, {}, { token: secrets.two });
+      const only = await forwarded(rig, () =>
+        runCommand(rig, "capabilities", undefined, {}, { token: secrets.two }),
+      );
+      expect(flagsOf(only)["udid"]).toBe(idOf(rig, 1));
+
+      await granted(rig, 2, { device: "Pixel 8", platform: "android" }, { token: secrets.two });
+      await refused(
+        rig,
+        () => runCommand(rig, "capabilities", undefined, {}, { token: secrets.two }),
+        "refused: name the device with --udid <id>; run devices to see yours",
+      );
+      const android = await forwarded(rig, () =>
+        runCommand(
+          rig,
+          "capabilities",
+          undefined,
+          { flags: { platform: "android" } },
+          { token: secrets.two },
+        ),
+      );
+      expect(flagsOf(android)["serial"]).toBe(idOf(rig, 2));
+      expect(flagsOf(android)).not.toHaveProperty("udid");
     });
   });
 

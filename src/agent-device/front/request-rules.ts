@@ -5,6 +5,7 @@ import { failure, refusal, type FrontReply } from "../shared/replies.js";
 import { isKnownRpcMethod } from "../shared/routes.js";
 import { commandLeaseId, methodName, type RpcRead } from "../shared/rpc.js";
 import {
+  addressField,
   asRecord,
   commandName,
   deviceList,
@@ -185,10 +186,6 @@ async function ruleDevice(check: Check, place: Fields): Promise<boolean> {
   return true;
 }
 
-function leasedAddressField(device: TokenDevice): "udid" | "serial" {
-  return device.platform === "android" ? "serial" : "udid";
-}
-
 function wrongDeviceKey(check: Check, source: Fields): boolean {
   if (check.leaseId === undefined || !present(source["deviceKey"])) return false;
   return check.leased?.deviceKey === undefined || source["deviceKey"] !== check.leased.deviceKey;
@@ -215,7 +212,7 @@ async function ruleSelectors(check: Check, unit: Unit): Promise<void> {
     if (await ruleDevice(check, place)) rewritten = true;
   }
   if (rewritten && check.leased !== undefined) {
-    flagsOf(unit)[leasedAddressField(check.leased)] = check.leased.address;
+    flagsOf(unit)[addressField(check.leased.platform)] = check.leased.address;
   }
 }
 
@@ -265,7 +262,7 @@ async function ruleLeaseFree(check: Check, unit: Unit): Promise<void> {
     device = own[0];
   }
   if (device === undefined) throw refuse(NAME_THE_DEVICE);
-  flagsOf(unit)[leasedAddressField(device)] = device.address;
+  flagsOf(unit)[addressField(device.platform)] = device.address;
   check.changed = true;
 }
 

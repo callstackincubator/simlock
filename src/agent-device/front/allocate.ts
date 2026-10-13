@@ -7,7 +7,7 @@ import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
 import { frontReply, failure, refusal, type FrontReply } from "../shared/replies.js";
 import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
-import { asRecord } from "../shared/selectors.js";
+import { addressField, asRecord } from "../shared/selectors.js";
 import {
   ALLOCATE_SCOPE_KEYS,
   REPLY_SCOPE_KEYS,
@@ -212,7 +212,7 @@ function forwardedBody(
     params: {
       ...rest,
       ttlMs: ceiling,
-      ...(plan.platform === "ios" ? { udid: address } : { serial: address }),
+      [addressField(plan.platform)]: address,
     },
   };
 }
@@ -324,9 +324,7 @@ function replyFacts(result: Record<string, unknown>) {
   return {
     ...(device === undefined ? {} : { target: stringOr(device["target"], "mobile") }),
     ...(typeof device?.["name"] === "string" ? { name: device["name"] } : {}),
-    ...(typeof deviceKey === "string" && deviceKey.length >= 1 && deviceKey.length <= 128
-      ? { deviceKey }
-      : {}),
+    ...(typeof deviceKey === "string" ? { deviceKey } : {}),
   };
 }
 

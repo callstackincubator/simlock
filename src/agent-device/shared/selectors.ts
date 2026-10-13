@@ -36,3 +36,7 @@ export function deviceList(value: unknown): readonly string[] {
 export function commandName(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
+
+// why: iOS devices are addressed by `udid` and Android ones by `serial`; the front names the address in both its allocate and its rewrites.
+export const addressField = (platform: string | undefined): "udid" | "serial" =>
+  platform === "android" ? "serial" : "udid";
