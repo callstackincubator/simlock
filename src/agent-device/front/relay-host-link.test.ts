@@ -83,6 +83,22 @@ describe("RelayHostLink", () => {
     });
   });
 
+  it("refuses a bare GET that is not /health, and relays nothing", async () => {
+    const { link, relay } = setUp();
+
+    const answer = await link.forward(
+      new Request("http://gateway.test/v1/agent-device/artifacts/a1"),
+      agent,
+    );
+
+    expect(await answer.json()).toEqual({
+      code: "INVALID_ARGS",
+      error: "refused: this agent-device is too old to use through a gateway; update it",
+      ok: false,
+    });
+    expect(relay).not.toHaveBeenCalled();
+  });
+
   it("answers a body that is not JSON under a null id", async () => {
     const { link } = setUp();
     const broken = new Request("http://gateway.test/v1/agent-device/rpc", {

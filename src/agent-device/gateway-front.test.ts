@@ -707,6 +707,23 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(member.fake.rpcRequests("agent_device.command").length).toBe(before + 1);
   });
 
+  it("a worker that disconnected does not count as capable", async () => {
+    const rig = await setUp();
+    const original = first(rig);
+    expect((await send(rig, "/health")).status).toBe(200);
+    const stopped = await original.daemon;
+    await stopped.stop("test");
+    runningDaemons.splice(runningDaemons.indexOf(stopped), 1);
+    await vi.waitFor(async () =>
+      expect((await viewOf(rig, original.label))?.connection).toBe("disconnected"),
+    );
+
+    const answer = await send(rig, "/health");
+
+    expect(answer.status).toBe(200);
+    expect(await answer.text()).toContain(`${notAvailable}${noWorker}`);
+  });
+
   it("a worker whose view says `available` but whose catalog was not read yet does not count as capable", async () => {
     const rig = await setUp();
     const original = first(rig);
