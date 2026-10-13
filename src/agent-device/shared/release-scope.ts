@@ -13,6 +13,11 @@ export function validScopeValue(value: unknown): value is string {
   return typeof value === "string" && SCOPE_VALUE.test(value);
 }
 
+// why: agent-device's own device keys look like `ios:mobile:<id>`, so only the length is bounded.
+export function validDeviceKey(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 128;
+}
+
 export function readReleaseScope(lease: unknown): ReleaseScope | undefined {
   if (typeof lease !== "object" || lease === null || Array.isArray(lease)) return undefined;
   const fields = lease as Record<string, unknown>;
@@ -23,7 +28,7 @@ export function readReleaseScope(lease: unknown): ReleaseScope | undefined {
   for (const key of OPTIONAL_KEYS) {
     const value = fields[key];
     if (key === "deviceKey") {
-      if (validScopeValue(value)) optional[key] = value;
+      if (validDeviceKey(value)) optional[key] = value;
       continue;
     }
     if (value === undefined) continue;

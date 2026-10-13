@@ -1100,6 +1100,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(params).not.toHaveProperty("deviceKey");
   });
 
+  it("a lease whose allocate reply names device key `ios:mobile:<id>` keeps it: a command naming that lease with that `deviceKey` reaches agent-device", async () => {
+    const rig = await setUp();
+    const key = "ios:mobile:00008110-001A2B3C4D5E";
+    rig.fake.nameDeviceKeyInNextReply(key);
+    await granted(rig, 1);
+
+    await forwarded(rig, () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: key } }));
+  });
+
   it("an allocate reply whose lease `deviceKey` is not 1 to 128 characters still succeeds and keeps the lease, with the device key left unset: no release is sent and a command naming the lease with a `deviceKey` is refused", async () => {
     const rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("x".repeat(129));
@@ -2081,6 +2090,20 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
       ...scope,
       leaseId: hex(1),
       tenantId: principals.one,
+    });
+  });
+
+  it("an allocate reply whose device key is `ios:mobile:<id>` is recorded, and release-all sends that device key in the release", async () => {
+    const rig = await setUp();
+    rig.fake.nameDeviceKeyInNextReply("ios:mobile:00008110-001A2B3C4D5E");
+    await granted(rig, 1);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    expect(releasesReceived(rig)[0]?.params).toMatchObject({
+      deviceKey: "ios:mobile:00008110-001A2B3C4D5E",
+      leaseId: hex(1),
     });
   });
 
