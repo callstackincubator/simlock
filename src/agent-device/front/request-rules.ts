@@ -369,9 +369,18 @@ async function run(
   checkMeta(check);
   for (const unit of units) checkTypes(unit);
   for (const unit of units) await applyRules(check, unit);
+  ruleDevicesAnswer(check, main);
+  return accepted(read, check, body);
+}
+
+function ruleDevicesAnswer(check: Check, main: Unit): void {
   if (main.command === "devices" && Boolean(check.meta["requestProgress"])) {
     throw refuse("refused: devices does not stream through simlock");
   }
+}
+
+function accepted(read: RpcRequest, check: Check, body: Fields): RulesOutcome {
   if (!check.changed) return { kind: "accepted", read };
+  const params = asRecord(body["params"]) ?? {};
   return { kind: "accepted", read: { ...read, body, params, text: JSON.stringify(body) } };
 }
