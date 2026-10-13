@@ -4082,6 +4082,7 @@ live(
   480_000,
 );
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function provisionedHarness(
   options: {
     readonly bootCompleted?: string;
@@ -4446,6 +4447,7 @@ class WriteFailureFilesystem extends MemoryFilesystem {
   }
 }
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function libraryHarness(
   options: {
     readonly devicesXml?: string;
