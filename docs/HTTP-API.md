@@ -1550,8 +1550,9 @@ the status.
   a heartbeat.
 - `lease ended by simlock; run disconnect, then open`: a heartbeat for a lease
   Simlock ended.
-- `refused: simlock leases only plain devices`: `backend`,
-  `retainOnClose: true`, a `provider*` or `aws*` key, or a `leaseProvider`
+- `refused: simlock leases only plain devices`: a `backend` other than
+  `ios-instance` on iOS or `android-instance` on Android (the one
+  `connect proxy` sends), `retainOnClose: true`, a `provider*` or `aws*` key, or a `leaseProvider`
   other than `proxy`.
 - `refused: agent-device through simlock needs an agent token`.
 - `refused: request body over 1 MiB` and `refused: send one JSON-RPC request`

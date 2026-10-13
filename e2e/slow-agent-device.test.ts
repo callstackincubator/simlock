@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 
 import {
+  assertPinnedAgentDevice,
   cleanupAgents,
   freeLoopbackPort,
   makeAgent,
@@ -191,7 +191,14 @@ function defineSuite(target: Target): void {
   let env: SharedTestEnv;
 
   const agent = (name: string): Promise<Agent> => makeAgent(env, name);
-  const open = (who: Agent) => who.run(["open", "--platform", platform], { timeout: 330_000 });
+  // why: an open that fails answers within seconds, so it ends the test there instead of leaving the test to wait on a lease nobody holds.
+  const open = async (who: Agent) => {
+    const result = await who.run(["open", "--platform", platform], { timeout: 330_000 });
+    if (result.code !== 0 && !expectingOpenFailure) {
+      throw new Error(`open failed for ${who.name}: ${result.stdout}\n${result.stderr}`);
+    }
+    return result;
+  };
 
   async function awaitAgentDevice(): Promise<void> {
     const probe = await newAgentToken(env);
@@ -232,14 +239,12 @@ function defineSuite(target: Target): void {
   }
 
   beforeAll(async () => {
-    if (AGENT_DEVICE === undefined || !existsSync(AGENT_DEVICE)) {
-      throw new Error(`SIMLOCK_E2E_AGENT_DEVICE ${String(AGENT_DEVICE)} does not exist`);
-    }
+    const pinned = await assertPinnedAgentDevice();
     env = await withSharedDaemon({
       driver: "real",
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        agentDevice: { enabled: true, command: AGENT_DEVICE },
+        agentDevice: { enabled: true, command: pinned },
         capacity: {
           config: { limits: { [platform]: { maxDevices: 1, maxRunning: 1 } } },
         },

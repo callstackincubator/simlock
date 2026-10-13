@@ -1,11 +1,14 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { afterEach } from "vitest";
 
 import { cli, cliBackground, type CliBackgroundHandle } from "./cli.js";
 import type { SharedTestEnv } from "./env.js";
+import { REPO_ROOT } from "./repo-root.js";
 import { waitFor } from "./wait.js";
 
 export interface AgentDeviceResult {
@@ -41,6 +44,33 @@ const made: MadeAgent[] = [];
 function agentDeviceEntry(): string {
   const entry = process.env.SIMLOCK_E2E_AGENT_DEVICE;
   if (entry === undefined || entry === "") throw new Error("SIMLOCK_E2E_AGENT_DEVICE is not set");
+  return entry;
+}
+
+// why: the slow lane must run the integration build the repo pins, never an agent-device installed on the machine; the pinned version is in the vendored tarball's name.
+export async function assertPinnedAgentDevice(): Promise<string> {
+  const entry = agentDeviceEntry();
+  if (!isAbsolute(entry) || !existsSync(entry)) {
+    throw new Error(
+      `SIMLOCK_E2E_AGENT_DEVICE ${entry} is not an absolute path to an existing file`,
+    );
+  }
+  const manifest = JSON.parse(await readFile(join(REPO_ROOT, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const pinned = /agent-device-proxy-(.+)-[0-9a-f]{7,}\.tgz$/.exec(
+    manifest.dependencies?.["@agent-device/proxy"] ?? "",
+  )?.[1];
+  if (pinned === undefined) throw new Error("package.json does not pin @agent-device/proxy");
+  const actual = execFileSync(process.execPath, [entry, "--version"], {
+    encoding: "utf8",
+    timeout: 60_000,
+  }).trim();
+  if (actual !== pinned) {
+    throw new Error(
+      `SIMLOCK_E2E_AGENT_DEVICE ${entry} is version ${actual}, the pinned build is ${pinned}`,
+    );
+  }
   return entry;
 }
 
@@ -134,19 +164,27 @@ afterEach(async () => {
 }, 120_000);
 
 export async function waitForAgentDevice(env: SharedTestEnv, token: string): Promise<void> {
+  let last = "no answer";
   await waitFor(
     async () => {
       try {
         const response = await fetch(`${proxyUrl(env)}/health`, {
           headers: { authorization: `Bearer ${token}` },
         });
-        if (response.status !== 200) return false;
-        const body = (await response.json()) as { ok?: unknown };
-        return body.ok === true;
+        const text = await response.text();
+        if (response.status < 200 || response.status > 299) {
+          last = `HTTP ${response.status}: ${text}`;
+          return false;
+        }
+        return (JSON.parse(text) as { ok?: unknown }).ok === true;
       } catch {
         return false;
       }
     },
-    { timeout: 60_000, interval: 500, label: "the agent-device daemon answers /health" },
+    {
+      timeout: 60_000,
+      interval: 500,
+      label: () => `the agent-device daemon answers /health (last reply: ${last})`,
+    },
   );
 }

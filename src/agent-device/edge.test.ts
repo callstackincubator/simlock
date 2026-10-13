@@ -763,6 +763,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
       },
       {
         message: plainOnly,
+        params: (n) => allocateParams(n, { backend: "android-instance" }),
+        title: "the Android backend on an iOS allocate",
+      },
+      {
+        message: plainOnly,
         params: (n) => allocateParams(n, { retainOnClose: true }),
         title: "retainOnClose: true",
       },
@@ -804,6 +809,25 @@ describe("the agent-device front, through the whole worker daemon", () => {
         expect(rig.fake.requests).toHaveLength(receivedBefore);
       },
     );
+  });
+
+  it("an allocate in the shape connect proxy sends, with backend ios-instance, is granted and keeps the backend toward the agent-device daemon", async () => {
+    const rig = await setUp();
+
+    const answer = await envelopeOf(
+      await allocate(rig, 1, {
+        backend: "ios-instance",
+        runId: "proxy-1",
+        session: "adc-1",
+        tenantId: "proxy",
+      }),
+    );
+
+    expect(answer.result).toMatchObject({ ok: true });
+    expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+    expect(allocatesReceived(rig, 1).map((received) => received.params?.["backend"])).toEqual([
+      "ios-instance",
+    ]);
   });
 
   it("allocate and release sent as `agent-device.lease.allocate` and `agent-device.lease.release` act exactly as the `agent_device.lease.*` spelling", async () => {

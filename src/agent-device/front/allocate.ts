@@ -44,10 +44,23 @@ interface Plan {
   readonly ttlMs?: number;
 }
 
+// why: connect proxy names the backend that rents the platform (ios-instance, android-instance) on every allocate; any other backend is a different kind of device.
+const BACKEND_OF_PLATFORM: Record<string, string> = {
+  android: "android-instance",
+  ios: "ios-instance",
+};
+
+function foreignBackend(params: Record<string, unknown>): boolean {
+  const backend = params["backend"];
+  if (!present(backend)) return false;
+  const platform = params["platform"];
+  return typeof platform !== "string" || BACKEND_OF_PLATFORM[platform] !== backend;
+}
+
 function notPlain(params: Record<string, unknown>): boolean {
   const provider = params["leaseProvider"];
   return (
-    present(params["backend"]) ||
+    foreignBackend(params) ||
     params["retainOnClose"] === true ||
     (present(provider) && provider !== "proxy") ||
     Object.entries(params).some(
