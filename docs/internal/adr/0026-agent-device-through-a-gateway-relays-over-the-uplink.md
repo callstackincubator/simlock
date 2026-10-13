@@ -110,7 +110,11 @@ headers, the agent-device lease id and the caller's principal.
   on an older version lists no capabilities, so §1 never picks it.
 
 The host on the worker takes a relayed request exactly as it takes an
-in-process one. The agent-device daemon token never leaves the worker.
+in-process one. The agent-device daemon token never leaves the worker, and
+an agent's gateway token never reaches it: the gateway drops the caller's
+`Authorization` and `x-agent-device-token` before relaying, and adds them to
+an upload ticket itself when it answers the preflight. A worker that is
+compromised holds nothing it could use on the gateway.
 
 ```mermaid
 sequenceDiagram
@@ -137,9 +141,12 @@ for, and `status` answers for one lease's host or for the fleet:
 - **In-process link (worker mode):** ignores the lease id; one host, as
   today.
 - **Gateway link:** looks the lease id up in the gateway's lease index,
-  which already maps every lease the gateway issued to its worker, and
-  relays to that worker. A lease id the index does not hold is refused
-  before anything is relayed.
+  which already maps every lease the gateway issued to its worker, checks
+  its owner, and relays to that worker. It remembers each lease's worker for
+  a while after the index drops it (as `simlock release --all` does), so the
+  worker's agent-device still answers for that lease. A lease id it cannot
+  place, or one another principal owns, is refused before anything is
+  relayed.
 
 The front already reads the lease id out of each RPC for its own rules; it
 passes it on. For each kind of request:
@@ -150,7 +157,7 @@ passes it on. For each kind of request:
 | heartbeat, release, command | the one in the RPC body |
 | `devices` | each lease the token holds; the front merges the answers before it filters them |
 | upload, artifact, diagnostics | the agent-device lease header (§4) |
-| `GET /health` | none: answered from the fleet `status` |
+| `GET /health` | none: relayed to any capable worker |
 
 Any other request with no lease id is refused.
 
