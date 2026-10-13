@@ -1,6 +1,6 @@
 ---
 name: harden-tests
-description: Weekly routine — mutation-test the source lines main changed since the last run, kill with tests only the survivors that change what a caller or user can see, and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "harden tests".
+description: Weekly routine — mutation-test the newest source lines main changed since the last run, kill with tests only the survivors that change what a caller or user can see, and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "harden tests".
 model: sonnet
 effort: medium
 ---
@@ -19,8 +19,12 @@ git fetch -q origin
 dir=$(.agents/scripts/worktree.sh chore/harden-tests-$(date +%F)) && cd "$dir"
 base=$(git log -1 --format=%H --grep='^test(harden):' origin/main)
 [ -n "$base" ] || base=$(git rev-list -1 --before='7 days ago' origin/main)
-pnpm mutate "$base" > <scratch>/mutate.txt 2>&1; echo "exit $?"
+pnpm mutate "$base" --max-lines 1500 > <scratch>/mutate.txt 2>&1; echo "exit $?"
 ```
+
+The line budget keeps the run under ~15 minutes, inside the cloud's
+30-minute limit on background commands; the files it skips are not tested
+this run.
 
 Exit 0, or "nothing to mutate": report `PR: none` and stop. Exit 2: report
 the error lines it printed and stop.
@@ -68,7 +72,8 @@ gh api -X POST repos/<owner>/<repo>/pulls -f title="test(harden): kill the mutan
   -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
-The body: `<base>..<head>`, the mutant and survivor counts, then one line
+The body: `<base>..<head>`, the mutant and survivor counts, the number of
+files `mutate.txt` says it skipped, then one line
 per survivor under Killed, Equivalent, Low value and Not killed, each with
 its reason, the dead-code issue's link, and `*Written by an agent.*`.
 

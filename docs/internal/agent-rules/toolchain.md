@@ -43,9 +43,10 @@ list and this one the same.
 ## Mutation testing
 
 Not part of delivery. The weekly `harden-tests` routine runs
-`pnpm mutate <base>` on `main` for the source lines changed since `<base>`,
-kills the survivors that change behaviour a caller or user can see, and
-opens one tests-only PR.
+`pnpm mutate <base> --max-lines 1500` on `main` for the source lines
+changed since `<base>`, newest files first up to that many lines, kills
+the survivors that change behaviour a caller or user can see, and opens
+one tests-only PR.
 
 ## Routines
 
