@@ -93,6 +93,7 @@ export class DeviceProfileRegistry {
     return (await this.catalogWithProfiles()).catalog;
   }
 
+  // fallow-ignore-next-line complexity -- the catalog is one pass over the listed profiles.
   async catalogWithProfiles(): Promise<{
     readonly catalog: DeviceProfileCatalog;
     readonly modelProfiles: ReadonlyMap<string, DeviceProfile>;

@@ -1101,7 +1101,7 @@ function isRange(osVersion: string): boolean {
   return parsed.ok && parsed.constraint.kind === "range";
 }
 
-/** A warm target the last pass could find no runtime or no model for, as a finding. */
+// fallow-ignore-next-line complexity -- one finding per short reason, each a fixed message.
 function unreachableTarget(
   target: WarmTargetFigures,
   catalog: DriverCatalogEntry | undefined,

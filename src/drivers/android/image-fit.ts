@@ -93,6 +93,7 @@ function kindFits(facts: ProfileFacts, image: ImageFitInput): boolean {
   return has([kind]);
 }
 
+// fallow-ignore-next-line complexity -- the four fit checks are one pass over one profile and image.
 function failedChecks(profile: DeviceProfile, image: ImageFitInput): FitCheck[] {
   const facts = factsOf(profile);
   if (facts === undefined) return [];

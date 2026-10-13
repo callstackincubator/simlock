@@ -812,6 +812,7 @@ export class AndroidDriver implements Driver {
     return { model: profile.name, osVersion: apiLevel, physical: false, platform: this.platform };
   }
 
+  // fallow-ignore-next-line complexity -- one refusal builder: each branch is one message the spec lists.
   #noFittingImage(
     profile: DeviceProfile,
     images: readonly SystemImage[],
