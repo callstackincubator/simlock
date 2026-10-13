@@ -702,9 +702,7 @@ The v1 policy (`warm-then-free`) is eight stages:
    worker's own catalog: its own name for an exact model, or the class with
    the worker's `modelClasses` as `classOf`. The OS is the one requested or
    the range requested; with none requested, an exact model needs the runtime
-   the worker would pick (the catalog's `defaultRuntime` when the model pairs
-   with it, otherwise its only paired runtime; none when several pair and no
-   default does) and a class accepts any installed runtime. The mode must
+   the worker would pick (the newest runtime the model pairs with) and a class accepts any installed runtime. The mode must
    fit (ADR 0009 §6): `full` needs a device reporting `mode: "full"`, `slim` one
    reporting `slim`, and a request naming none a device reporting
    `servesDefaultMode`, which the worker computes in

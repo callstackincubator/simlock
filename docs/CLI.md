@@ -909,9 +909,7 @@ matches when its model and runtime fit and its mode fits the request: with
 `--mode full` it must be a `full` device, with `--mode slim` a `slim` one, and
 with no `--mode` it must be one that `status` shows as serving the default mode
 (see [`simlock status`](#simlock-status)). With no `--os`, the runtime must be the one
-the worker would pick: its default runtime when the model pairs with it,
-otherwise the model's only paired runtime. A worker whose model pairs with
-several runtimes and no default has no warm match for such a request. A request
+the worker would pick: the newest runtime the model pairs with. A request
 with no warm match goes to a machine with free capacity, which boots a device.
 Otherwise a
 worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
