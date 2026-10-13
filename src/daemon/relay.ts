@@ -115,6 +115,7 @@ export class RelayConnection {
     private readonly logger: Logger,
   ) {}
 
+  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   async request(input: RelayRequestInput, push: RelayPush): Promise<{ readonly cancelled?: true }> {
     if (this.#active.has(input.relayId)) {
       throw new DispatchError("BAD_REQUEST", `Relay ${input.relayId} is already active`);
@@ -150,6 +151,7 @@ export class RelayConnection {
   }
 
   // why: a relay the worker does not hold answers `{}`; the gateway learns the outcome from `relay.request`.
+  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   body(input: RelayBodyInput): Promise<void> {
     const relay = this.#active.get(input.relayId);
     if (relay === undefined) return Promise.resolve();
@@ -173,6 +175,7 @@ export class RelayConnection {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   cancel(relayId: string): void {
     this.#active.get(relayId)?.controller.abort();
   }

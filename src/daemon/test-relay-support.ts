@@ -40,7 +40,7 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export class RecordingLogger implements Logger {
+class RecordingLogger implements Logger {
   readonly records: { readonly level: string; readonly text: string }[] = [];
   debug(message: string, fields?: Record<string, unknown>): void {
     this.#add("debug", message, fields);
@@ -192,7 +192,7 @@ export async function openUplink(
 }
 
 let relaySequence = 0;
-export function nextRelayId(): string {
+function nextRelayId(): string {
   relaySequence += 1;
   return `relay-${String(relaySequence)}`;
 }
