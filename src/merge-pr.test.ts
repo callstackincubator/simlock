@@ -44,7 +44,10 @@ interface Fleet {
   /** GitHub refuses the REST merge because the PR is stacked. */
   readonly refusedAsStacked?: boolean;
   /** What `GET stacks?pull_request=` answers. */
-  readonly stacks?: readonly { open: boolean; pull_requests: { number: number; state: string }[] }[];
+  readonly stacks?: readonly {
+    open: boolean;
+    pull_requests: { number: number; state: string }[];
+  }[];
   /** Check runs of other PRs in the stack, by number. */
   readonly runsByPr?: Readonly<Record<number, readonly CheckRun[]>>;
   /** The PR the script is asked to merge. */
@@ -152,30 +155,63 @@ const json = JSON.stringify(value);
 process.stdout.write(filter === undefined ? json : execFileSync("jq", ["-r", filter], { input: json, encoding: "utf8" }));
 `;
 
+function fleetFile(fleet: Fleet) {
+  const f = {
+    state: "open",
+    draft: false,
+    labels: [],
+    body: VALID_BODY,
+    mergeableAnswers: [true],
+    runs: [run("success")],
+    runReadsInProgress: 0,
+    statuses: [],
+    statusReadsPending: 0,
+    flakyIssues: [],
+    failedJobLog: "",
+    refusedAsStacked: false,
+    stacks: [],
+    runsByPr: {},
+    target: 7,
+    ...fleet,
+  };
+  return {
+    state: f.state,
+    draft: f.draft,
+    labels: f.labels,
+    body: f.body,
+    mergeable: f.mergeableAnswers,
+    runs: f.runs,
+    runsAfterRerun: f.runsAfterRerun ?? f.runs,
+    pendingReads: f.runReadsInProgress,
+    statuses: f.statuses,
+    statusPendingReads: f.statusReadsPending,
+    flakyIssues: f.flakyIssues,
+    log: f.failedJobLog,
+    refusedAsStacked: f.refusedAsStacked,
+    stacks: f.stacks,
+    runsByPr: f.runsByPr,
+    target: f.target,
+  };
+}
+
+function runScript(target: number, env: NodeJS.ProcessEnv, cwd: string | undefined) {
+  try {
+    const output = execFileSync("sh", [SCRIPT, String(target)], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, output };
+  } catch (error) {
+    const failed = error as { status: number; stdout: string; stderr: string };
+    return { status: failed.status, output: failed.stdout + failed.stderr };
+  }
+}
+
 function gate(fleet: Fleet = {}) {
   const dir = mkdtempSync(join(tmpdir(), "merge-pr-"));
-  const runs = fleet.runs ?? [run("success")];
-  writeFileSync(
-    join(dir, "fleet.json"),
-    JSON.stringify({
-      state: fleet.state ?? "open",
-      draft: fleet.draft ?? false,
-      labels: fleet.labels ?? [],
-      body: fleet.body === undefined ? VALID_BODY : fleet.body,
-      mergeable: fleet.mergeableAnswers ?? [true],
-      runs,
-      runsAfterRerun: fleet.runsAfterRerun ?? runs,
-      pendingReads: fleet.runReadsInProgress ?? 0,
-      statuses: fleet.statuses ?? [],
-      statusPendingReads: fleet.statusReadsPending ?? 0,
-      flakyIssues: fleet.flakyIssues ?? [],
-      log: fleet.failedJobLog ?? "",
-      refusedAsStacked: fleet.refusedAsStacked ?? false,
-      stacks: fleet.stacks ?? [],
-      runsByPr: fleet.runsByPr ?? {},
-      target: fleet.target ?? 7,
-    }),
-  );
+  writeFileSync(join(dir, "fleet.json"), JSON.stringify(fleetFile(fleet)));
   writeFileSync(join(dir, "gh"), FAKE_GH);
   chmodSync(join(dir, "gh"), 0o755);
   const env: NodeJS.ProcessEnv = {
@@ -192,20 +228,7 @@ function gate(fleet: Fleet = {}) {
     execFileSync("git", ["init", "-q", cwd]);
     execFileSync("git", ["remote", "add", "origin", "git@github.com:o/r.git"], { cwd });
   }
-  let status = 0;
-  let output = "";
-  try {
-    output = execFileSync("sh", [SCRIPT, String(fleet.target ?? 7)], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    const failed = error as { status: number; stdout: string; stderr: string };
-    status = failed.status;
-    output = failed.stdout + failed.stderr;
-  }
+  const { status, output } = runScript(fleet.target ?? 7, env, cwd);
   const read = (name: string) =>
     existsSync(join(dir, name)) ? readFileSync(join(dir, name), "utf8") : "";
   return {
