@@ -1040,8 +1040,9 @@ export function capabilityReason(text: string): string {
  * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
  * different facts, and a console that dims one must not read the other as a full machine.
  * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
- * and `host` only, so its view has `health` and `host` and none of `capacity`, `catalog`,
- * `devices`, `installs`, `leases`, `queueDepth` or `waiting` -- never empty ones, which would
+ * and `host` only, so its view has `health` and `host` and none of `capabilities`,
+ * `capacity`, `catalog`, `catalogReadAt`, `devices`, `installs`, `leases`, `physicalQueueDepth`,
+ * `queueDepth`, `waiting` or `warmPool` -- never empty ones, which would
  * read as "nothing is leased" about a registry nobody has checked yet.
  *
  * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
