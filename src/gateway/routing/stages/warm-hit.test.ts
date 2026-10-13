@@ -266,14 +266,14 @@ describe("warm-hit", () => {
       expect(warmHit.score(view(catalog, "26.0"), request)).toBe(0);
     });
 
-    it("gives a request naming no runtime no warm hit when no default runtime pairs and several runtimes do", () => {
+    it("picks the newest paired runtime for a request naming no runtime when no default runtime pairs and several runtimes do", () => {
       const catalog = {
         models: ["iPhone 17"],
         platform: "ios" as const,
         runtimes: ["26.0", "18.0"],
       };
 
-      expect(warmHit.score(view(catalog, "26.0"), request)).toBe(0);
+      expect(warmHit.score(view(catalog, "26.0"), request)).toBe(1);
       expect(warmHit.score(view(catalog, "18.0"), request)).toBe(0);
     });
   });

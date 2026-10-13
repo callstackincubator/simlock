@@ -15,6 +15,7 @@ import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { StartupRead } from "./startup-read.js";
 import {
   type Driver,
+  type DriverCatalogEntry,
   type DriverDevice,
   type DriverRejection,
   type DriverReality,
@@ -253,7 +254,7 @@ export class Doctor {
     const remaining = [
       ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
       ...(await this.#collectPrerequisites(prerequisites)),
-      ...this.#warmPoolFindings(),
+      ...(await this.#warmPoolFindings()),
       ...this.#optionalModuleFindings(),
     ];
 
@@ -578,6 +579,27 @@ export class Doctor {
     }
   }
 
+  async #catalogsOfMissingRuntimes(
+    targets: readonly WarmTargetFigures[],
+  ): Promise<Map<Platform, DriverCatalogEntry>> {
+    const catalogs = new Map<Platform, DriverCatalogEntry>();
+    const platforms = new Set(
+      targets.filter((target) => target.short === "runtime-missing").map((t) => t.platform),
+    );
+    for (const driver of this.options.drivers) {
+      if (!platforms.has(driver.platform)) continue;
+      try {
+        catalogs.set(driver.platform, await driver.listCatalog());
+      } catch (error) {
+        this.#logger.warn("Could not read a catalog for a warm pool finding", {
+          error: errorMessage(error),
+          platform: driver.platform,
+        });
+      }
+    }
+    return catalogs;
+  }
+
   /**
    * The warm pool's targets that cannot be met as configured: those the last pass found a runtime
    * or a model missing for, and the platforms (or the machine) whose targets add up to more than
@@ -585,12 +607,16 @@ export class Doctor {
    * `prerequisite-missing`. A target short for RAM, the device limit or a failed boot is no
    * finding: those pass with time or with an operator's choice of machine. None with the pool off.
    */
-  #warmPoolFindings(): DoctorFinding[] {
+  async #warmPoolFindings(): Promise<DoctorFinding[]> {
     const { warmPool } = this.options;
     const { enabled, targets } = this.options.config.warmPool;
     if (warmPool === undefined || !enabled) return [];
     const limits = warmPool.runningCapacity();
-    const findings = warmPool.figures().targets.flatMap(unreachableTarget);
+    const figures = warmPool.figures().targets;
+    const catalogs = await this.#catalogsOfMissingRuntimes(figures);
+    const findings = figures.flatMap((target) =>
+      unreachableTarget(target, catalogs.get(target.platform)),
+    );
     const reserves = reservedRunning(this.options.config.warmPool, limits);
     let wanted = 0;
     for (const platform of ["ios", "android"] as const) {
@@ -1076,7 +1102,10 @@ function isRange(osVersion: string): boolean {
 }
 
 /** A warm target the last pass could find no runtime or no model for, as a finding. */
-function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
+function unreachableTarget(
+  target: WarmTargetFigures,
+  catalog: DriverCatalogEntry | undefined,
+): DoctorFinding[] {
   const { model, osVersion, platform, short } = target;
   const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
   const name = PLATFORM_NAMES[platform];
@@ -1090,6 +1119,24 @@ function unreachableTarget(target: WarmTargetFigures): DoctorFinding[] {
           platform,
           reason: short,
           remedy: `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version> for one inside ${osVersion}`,
+          target: named,
+        },
+      ];
+    }
+    if (
+      model !== undefined &&
+      osVersion !== undefined &&
+      catalog?.runtimes.includes(osVersion) === true &&
+      catalog.modelRuntimes[model] !== undefined &&
+      !catalog.modelRuntimes[model].includes(osVersion)
+    ) {
+      return [
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `${model} does not pair with ${name} ${osVersion}`,
+          platform,
+          reason: short,
+          remedy: `run simlock catalog --platform ${platform}`,
           target: named,
         },
       ];

@@ -250,6 +250,18 @@ granted.
   leases for the same missing runtime share one download. The whole wait,
   queued download included, counts against `downloads.timeoutMs`; running out
   is `DOWNLOAD_TIMEOUT` (exit 10). Through a gateway the flag has no effect.
+  On Android it downloads only a level with no image installed at all, and
+  only when the `google_apis` image for the host would fit the model: a lease
+  for a TV at an uninstalled level, or for any model at an installed level
+  whose images do not fit it, fails with `RUNTIME_MISSING` (exit 12,
+  `downloadable` `false`) and downloads nothing. The message is `No installed
+  system image fits <model> at Android <level>: <reason>` (without ` at Android
+  <level>` when `--os` is not given). The reason is the first of these that rules
+  out every image: `it needs Android <n> or newer` (or `older`), `it needs a TV
+  image` (or Wear OS, automotive, desktop, XR, AI glasses, `phone or tablet`, or
+  `an image tagged <tag>`), `<model> does not take Play Store images`, `<model>
+  does not take tablet images`, else `none of the installed images fit it`; or
+  `Android <level> is not installed`, or `no system image is installed`.
 - `--ttl <duration>` — the lease's initial TTL, replacing
   `lease.defaultTtlMs` (15m) for this lease. Asking for more than
   `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
@@ -298,8 +310,10 @@ granted.
   the host's ABI first; without `--os` the lease gets the newest API level
   that has one. A lease with `--image-tag` never downloads: if no image of that
   tag is installed for the API level it fails with `RUNTIME_MISSING` (exit 12),
-  `--allow-download` or not. Install other image types with `sdkmanager`. A
-  lease only reuses an idle device created for the same tag, or for no tag
+  `--allow-download` or not. The image must also fit the model: if the image
+  of that tag does not, the lease fails with `RUNTIME_MISSING`, `downloadable`
+  `false`, saying `the <tag> image does not fit it` and why. Install other image
+  types with `sdkmanager`. A lease only reuses an idle device created for the same tag, or for no tag
   when it names none. On iOS the flag is a `BAD_REQUEST` (exit 2). A tag is 1
   to 64 letters, digits, `_`, `.` or `-`. Through a gateway, a lease whose tag
   no worker lists for that API level, an iOS one included, fails at once with
@@ -495,7 +509,10 @@ forward) is gone whether or not recovery succeeds.
 A lease names its device in one of three ways:
 
 - `--device <model>` asks for exactly that model. It is granted an idle device
-  of that model, OS, mode and image tag, as always.
+  of that model, OS, mode and image tag, as always. On Android an idle device on
+  a level that no longer fits the model (a TV made on a phone image) is not
+  reused by a lease that names the model; a class or `--os` range lease can
+  still pick it until idle cleanup removes it.
 - `--class <class>` asks for any model of that class.
 - With neither, the lease asks for a `phone`.
 
@@ -1564,8 +1581,17 @@ installed, which installed runtime is the default (the newest), and for each
 model the installed runtimes it pairs with (`modelRuntimes`). A model and a
 runtime that are both listed can still fail to pair — on iOS, a runtime can
 drop an older model — so pick a pair from `modelRuntimes`. A model with an
-empty list pairs with nothing installed. On Android every model pairs with
-every installed API level.
+empty list pairs with nothing installed. On Android a model pairs with an
+installed API level only when an image there fits the model, as Android Studio
+would offer it: the image is for the same kind of device (a TV takes `android-tv`
+or `google-tv`, a phone takes none of the TV, Wear OS, automotive, desktop, XR,
+glasses or ChromeOS images), its API level is in the model's range (Pixel 9
+needs Android 35 or newer), a Play Store image only goes with a model that
+allows Play Store (Pixel 6 does not), and a `tablet` image only with a tablet
+model. `runtimes`, `defaultRuntime` and `images` still list every installed
+image, so a level can be listed there and absent from every `modelRuntimes`
+list. A custom model made in Android Studio but not listed by `avdmanager` pairs
+with every installed level for now.
 
 `modelAliases` lists, for a model, the other names `--device` accepts for it
 on that machine; a model with no other name has no entry. On Android a

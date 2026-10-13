@@ -1,5 +1,10 @@
 import { requestedClass } from "../../contract/index.js";
-import { type OsConstraint, parseOsConstraint, satisfies } from "../../contract/os-range.js";
+import {
+  compareVersions,
+  type OsConstraint,
+  parseOsConstraint,
+  satisfies,
+} from "../../contract/os-range.js";
 import {
   findCatalogModel,
   modelClass,
@@ -52,13 +57,6 @@ export function deviceFit(
   return (spec) => fits(requirement, spec, (listed) => modelClass(catalog, listed));
 }
 
-/**
- * The OS a device must have. What the request names, exact or a range. With none named: a class
- * accepts any installed runtime, and an exact model needs the runtime the worker would pick -- the
- * catalog's `defaultRuntime` when the model pairs with it, otherwise its only paired runtime. A
- * model with several paired runtimes and no paired default has no answer: the worker's choice then
- * depends on what it would boot, and the gateway compares no versions, so no device fits.
- */
 function osRequirement(
   catalog: PlatformEntry,
   model: string,
@@ -68,9 +66,8 @@ function osRequirement(
   if (constraint !== undefined) return constraint;
   if (request.model === undefined) return { kind: "installed", versions: catalog.runtimes };
   const runtimes = pairedRuntimesOf(catalog, model, request);
-  const picked = runtimes.find((runtime) => runtime === catalog.defaultRuntime);
-  const versions = picked === undefined ? (runtimes.length === 1 ? runtimes : []) : [picked];
-  return { kind: "installed", versions };
+  const newest = [...runtimes].sort(compareVersions).at(-1);
+  return { kind: "installed", versions: newest === undefined ? [] : [newest] };
 }
 
 /**
