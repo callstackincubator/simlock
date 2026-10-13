@@ -3418,8 +3418,8 @@ describe("Dispatcher: device.exec", () => {
         session({
           onOutput: (_stream, chunk) => {
             seen.push(chunk);
-            // Stall only the first chunk's delivery, well past the 1s exit-to-close grace
-            // window this handle used to settle on regardless.
+            // why: only the first chunk's delivery stalls, past the 300 ms exit grace window
+            // this handle used to settle on regardless.
             return seen.length === 1 ? firstDelivery : undefined;
           },
           principal: "tok_agent",
