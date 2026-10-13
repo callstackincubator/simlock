@@ -118,6 +118,11 @@ export function commandLeaseId(params: unknown): string | undefined {
   return leaseIdOf(meta?.["leaseId"] ?? flags?.["leaseId"]);
 }
 
+// why: agent-device answers `{ ok, data: { lease, device, provider } }`, so the lease and the device are one level down from `result`.
+export function replyData(result: Record<string, unknown>): Record<string, unknown> | undefined {
+  return record(result["data"]);
+}
+
 export type ReplyReading =
   | { readonly kind: "success"; readonly result: Record<string, unknown> }
   | {
@@ -150,7 +155,7 @@ export function readReply(text: string, call?: CallClass): ReplyReading {
   }
   const result = record(body["result"]);
   if (result !== undefined && result["ok"] === true && body["error"] === undefined) {
-    if (call === "allocate" && readReleaseScope(result["lease"]) === undefined) {
+    if (call === "allocate" && readReleaseScope(replyData(result)?.["lease"]) === undefined) {
       return { kind: "unusable" };
     }
     return { kind: "success", result };

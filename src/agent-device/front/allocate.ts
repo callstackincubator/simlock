@@ -7,7 +7,7 @@ import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
 import { frontReply, failure, refusal, type FrontReply } from "../shared/replies.js";
 import { validDeviceKey } from "../shared/release-scope.js";
-import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
+import { leaseCallFields, leaseIdOf, replyData, type RpcRead } from "../shared/rpc.js";
 import { addressField, asRecord } from "../shared/selectors.js";
 import {
   ALLOCATE_SCOPE_KEYS,
@@ -301,7 +301,7 @@ async function keepOrRelease(
     });
     return relay(reply);
   }
-  const lease = reading.result["lease"];
+  const lease = replyData(reading.result)?.["lease"];
   const named =
     typeof lease === "object" && lease !== null ? (lease as Record<string, unknown>) : {};
   const ended = await releaseAgentDevice(
@@ -333,8 +333,9 @@ async function settleNoReply(
 }
 
 function replyFacts(result: Record<string, unknown>) {
-  const device = asRecord(result["device"]);
-  const deviceKey = asRecord(result["lease"])?.["deviceKey"];
+  const data = replyData(result);
+  const device = asRecord(data?.["device"]);
+  const deviceKey = asRecord(data?.["lease"])?.["deviceKey"];
   return {
     ...(device === undefined ? {} : { target: stringOr(device["target"], "mobile") }),
     ...(typeof device?.["name"] === "string" ? { name: device["name"] } : {}),

@@ -1,6 +1,6 @@
 import type { EndedLease, LeaseEndParticipant } from "../../leasing/index.js";
 import { readReleaseScope, type ReleaseScope } from "../shared/release-scope.js";
-import { classifyCall, leaseIdOf, readReply, readRpcBody } from "../shared/rpc.js";
+import { classifyCall, leaseIdOf, readReply, readRpcBody, replyData } from "../shared/rpc.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
 
 // why: the ids of ended leases are remembered so a late reply writes nothing; the cap keeps that memory bounded.
@@ -32,7 +32,9 @@ export class ReleaseScopeRecord {
         const text = await response.clone().text();
         const reading = readReply(text, "allocate");
         const read =
-          reading.kind === "success" ? readReleaseScope(reading.result["lease"]) : undefined;
+          reading.kind === "success"
+            ? readReleaseScope(replyData(reading.result)?.["lease"])
+            : undefined;
         if (read !== undefined && !this.#ended.has(leaseId)) this.#scopes.set(leaseId, read);
         return read;
       },

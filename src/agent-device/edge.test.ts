@@ -854,7 +854,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const iosDevice = await grantedDevice(ios);
     const iosParams = receivedAllocate(ios, 1);
 
-    expect(iosAnswer.result).toMatchObject({ lease: { leaseId: hex(1) }, ok: true });
+    expect(iosAnswer.result).toMatchObject({ data: { lease: { leaseId: hex(1) } }, ok: true });
     expect(iosParams["udid"]).toBe(iosDevice.address);
     expect(iosParams).not.toHaveProperty("serial");
     for (const dropped of ["device", "deviceKey", "target"]) {
@@ -868,7 +868,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const androidDevice = await grantedDevice(android);
     const androidParams = receivedAllocate(android, 2);
 
-    expect(androidAnswer.result).toMatchObject({ lease: { leaseId: hex(2) }, ok: true });
+    expect(androidAnswer.result).toMatchObject({ data: { lease: { leaseId: hex(2) } }, ok: true });
     expect(androidParams["serial"]).toBe(androidDevice.address);
     expect(androidParams["serial"]).not.toBe(androidDevice.driverDeviceId);
     expect(androidParams).not.toHaveProperty("udid");
@@ -887,7 +887,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await release(rig, 1);
     const answer = await envelopeOf(await second.promise);
 
-    expect(answer.result).toMatchObject({ lease: { leaseId: hex(2) }, ok: true });
+    expect(answer.result).toMatchObject({ data: { lease: { leaseId: hex(2) } }, ok: true });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2)]);
   });
 

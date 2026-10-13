@@ -418,10 +418,12 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       ttlMs: params["ttlMs"],
     });
     return envelope(id, {
-      ...(picked === "none" || address === undefined
-        ? {}
-        : { device: { id: address, name: `simlock-${address}`, ...picked } }),
-      lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+      data: {
+        ...(picked === "none" || address === undefined
+          ? {}
+          : { device: { id: address, name: `simlock-${address}`, ...picked } }),
+        lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+      },
       ok: true,
     });
   }
@@ -440,7 +442,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         message: reason.toLowerCase().replaceAll("_", " "),
       });
     }
-    return envelope(id, { lease: params, ok: true });
+    return envelope(id, { data: { lease: params }, ok: true });
   }
 
   #claimed(address: string): boolean {

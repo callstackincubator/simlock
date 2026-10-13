@@ -20,6 +20,8 @@ export interface FrontContext {
   readonly logger: Logger;
 }
 
+const BODY_LOG_CHARS = 500;
+
 export interface Exchange {
   readonly response: Response | undefined;
   readonly text: string | undefined;
@@ -35,7 +37,15 @@ export async function exchange(
   try {
     const response = await context.link.forward(request, identity);
     const text = await response.text();
-    return { reading: readReply(text, call), response, text };
+    const reading = readReply(text, call);
+    // why: a 5xx or a body that is not a JSON-RPC reply ends the call as a 502, and its reason is only in what agent-device sent.
+    if (reading.kind === "unusable" || response.status >= 500) {
+      context.logger.warn("agent-device lease call got an unusable or failed reply", {
+        body: text.slice(0, BODY_LOG_CHARS),
+        status: response.status,
+      });
+    }
+    return { reading, response, text };
   } catch (error) {
     context.logger.warn("agent-device lease call got no usable reply", {
       message: error instanceof Error ? error.message : String(error),
