@@ -41,16 +41,12 @@ interface Fleet {
   readonly flakyIssues?: readonly { title: string; body: string; pull_request?: object }[];
   readonly failedJobLog?: string;
   readonly repoFromOrigin?: boolean;
-  /** GitHub refuses the REST merge because the PR is stacked. */
   readonly refusedAsStacked?: boolean;
-  /** What `GET stacks?pull_request=` answers. */
   readonly stacks?: readonly {
     open: boolean;
     pull_requests: { number: number; state: string }[];
   }[];
-  /** Check runs of other PRs in the stack, by number. */
   readonly runsByPr?: Readonly<Record<number, readonly CheckRun[]>>;
-  /** The PR the script is asked to merge. */
   readonly target?: number;
 }
 
