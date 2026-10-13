@@ -262,7 +262,7 @@ export async function allocate(
     headers: leaseCall(request, "agent_device.lease.allocate", {}, null).headers,
     method: "POST",
   });
-  const reply = await exchange(context, forwarded, identity);
+  const reply = await exchange(context, forwarded, identity, "allocate");
   const made = { address, call, grant, identity, plan, request };
   if (reply.reading.kind === "success") return keepOrRelease(context, made, reply, reply.reading);
   if (reply.reading.kind === "error") {

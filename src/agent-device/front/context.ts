@@ -3,7 +3,7 @@ import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock, Logger } from "../../ports/index.js";
 import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
-import { readReply, type ReplyReading } from "../shared/rpc.js";
+import { readReply, type CallClass, type ReplyReading } from "../shared/rpc.js";
 import type { FrontMap } from "./front-map.js";
 import type { HostLink } from "./host-link.js";
 import type { Renewals } from "./renewals.js";
@@ -30,11 +30,12 @@ export async function exchange(
   context: FrontContext,
   request: Request,
   identity: TokenIdentity,
+  call?: CallClass,
 ): Promise<Exchange> {
   try {
     const response = await context.link.forward(request, identity);
     const text = await response.text();
-    return { reading: readReply(text), response, text };
+    return { reading: readReply(text, call), response, text };
   } catch (error) {
     context.logger.warn("agent-device lease call got no usable reply", {
       message: error instanceof Error ? error.message : String(error),

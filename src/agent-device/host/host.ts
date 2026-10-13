@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { TokenIdentity } from "../../http/token-store.js";
 import { FRONT_PREFIX, PROXY_BASE_PATH } from "../shared/paths.js";
+import { recordingFetch, ReleaseScopeRecord } from "./lease-end.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
 
 type ProxyModule = typeof import("@agent-device/proxy");
@@ -28,7 +29,14 @@ export class AgentDeviceHost {
   #loadError: string | undefined;
   #proxy: { readonly generation: number; readonly proxy: DaemonProxy } | undefined;
 
-  constructor(readonly upstream: AgentDeviceUpstream) {}
+  readonly #upstreamFetch: (request: Request) => Promise<Response>;
+
+  constructor(
+    readonly upstream: AgentDeviceUpstream,
+    record: ReleaseScopeRecord = new ReleaseScopeRecord(),
+  ) {
+    this.#upstreamFetch = recordingFetch(upstream, record);
+  }
 
   async status(): Promise<HostStatus> {
     const current = this.upstream.current();
@@ -65,7 +73,7 @@ export class AgentDeviceHost {
         proxy: module.createDaemonProxy({
           authenticate: (tagged) => this.authenticate(tagged),
           upstreamBaseUrl: current.baseUrl,
-          upstreamFetch: (upstream) => this.upstream.fetch(upstream),
+          upstreamFetch: (upstream) => this.#upstreamFetch(upstream),
           upstreamToken: current.token,
         }),
       };

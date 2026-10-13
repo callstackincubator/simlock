@@ -6,6 +6,7 @@ import { createFront } from "./front/front.js";
 import { InProcessHostLink, type HostLink } from "./front/host-link.js";
 import { Renewals } from "./front/renewals.js";
 import { AgentDeviceHost } from "./host/host.js";
+import { AgentDeviceLeaseEnd, ReleaseScopeRecord } from "./host/lease-end.js";
 import type { AgentDeviceUpstream } from "./host/upstream.js";
 
 export { agentDeviceFindings } from "./host/availability-findings.js";
@@ -17,6 +18,7 @@ export { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
 export { type AgentDeviceHealthProbe, NodeAgentDeviceHealthProbe } from "./host/health.js";
 
 export interface AgentDeviceEdgeParts {
+  readonly leaseEnd: AgentDeviceLeaseEnd;
   readonly link: HostLink;
   readonly map: FrontMap;
   readonly renewals: Renewals;
@@ -26,8 +28,10 @@ export function createAgentDeviceEdgeParts(
   upstream: AgentDeviceUpstream,
   clock: Clock,
 ): AgentDeviceEdgeParts {
+  const record = new ReleaseScopeRecord();
   return {
-    link: new InProcessHostLink(new AgentDeviceHost(upstream)),
+    leaseEnd: new AgentDeviceLeaseEnd(upstream, record),
+    link: new InProcessHostLink(new AgentDeviceHost(upstream, record)),
     map: new FrontMap(clock),
     renewals: new Renewals(clock),
   };

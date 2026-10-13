@@ -297,6 +297,33 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     systemStats,
   });
+  const agentDevice = new AgentDeviceSupervisor({
+    baseEnvironment: process.env,
+    clock,
+    config: config.agentDevice,
+    driverEnvironment: Object.assign(
+      {},
+      ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
+    ),
+    filesystem,
+    healthProbe: options.agentDeviceHealth ?? new NodeAgentDeviceHealthProbe(),
+    home: dataDirectory,
+    leaseMaxTtlMs: config.lease.maxTtlMs,
+    logger: logger.child("agent-device"),
+    nodePath: process.execPath,
+    nodeVersion: process.versions.node,
+    platforms: drivers.map((driver) => driver.platform),
+    processRunner,
+    processSupervisor,
+    tcpProbe,
+  });
+  // why: the edge needs nothing from leasing, so it is built here, with the supervisor it reads.
+  const agentDeviceParts = config.agentDevice.enabled
+    ? createAgentDeviceEdgeParts(
+        options.agentDeviceUpstream ?? new SupervisorAgentDeviceUpstream(agentDevice),
+        clock,
+      )
+    : undefined;
   // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
     clock,
@@ -307,6 +334,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
+    leaseEndParticipants: agentDeviceParts === undefined ? [] : [agentDeviceParts.leaseEnd],
     logger,
     modelPreferences,
   });
@@ -414,33 +442,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     }
     leasing.announceQueueDepth();
   };
-  const agentDevice = new AgentDeviceSupervisor({
-    baseEnvironment: process.env,
-    clock,
-    config: config.agentDevice,
-    driverEnvironment: Object.assign(
-      {},
-      ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
-    ),
-    filesystem,
-    healthProbe: options.agentDeviceHealth ?? new NodeAgentDeviceHealthProbe(),
-    home: dataDirectory,
-    leaseMaxTtlMs: config.lease.maxTtlMs,
-    logger: logger.child("agent-device"),
-    nodePath: process.execPath,
-    nodeVersion: process.versions.node,
-    platforms: drivers.map((driver) => driver.platform),
-    processRunner,
-    processSupervisor,
-    tcpProbe,
-  });
-  // why: the edge needs nothing from leasing, so it is built here, with the supervisor it reads.
-  const agentDeviceParts = config.agentDevice.enabled
-    ? createAgentDeviceEdgeParts(
-        options.agentDeviceUpstream ?? new SupervisorAgentDeviceUpstream(agentDevice),
-        clock,
-      )
-    : undefined;
   const daemon = new DaemonServer({
     // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
     beginStop: () => core.closeWarmPool(),

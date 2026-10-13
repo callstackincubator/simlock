@@ -6,6 +6,25 @@ export interface ReleaseScope {
   readonly deviceKey?: string;
 }
 
-export function readReleaseScope(_lease: unknown): ReleaseScope | undefined {
-  return undefined;
+const SCOPE_VALUE = /^[A-Za-z0-9._-]{1,128}$/;
+const OPTIONAL_KEYS = ["leaseProvider", "clientId", "deviceKey"] as const;
+
+function valid(value: unknown): value is string {
+  return typeof value === "string" && SCOPE_VALUE.test(value);
+}
+
+export function readReleaseScope(lease: unknown): ReleaseScope | undefined {
+  if (typeof lease !== "object" || lease === null || Array.isArray(lease)) return undefined;
+  const fields = lease as Record<string, unknown>;
+  const tenantId = fields["tenantId"];
+  const runId = fields["runId"];
+  if (!valid(tenantId) || !valid(runId)) return undefined;
+  const optional: { -readonly [K in (typeof OPTIONAL_KEYS)[number]]?: string } = {};
+  for (const key of OPTIONAL_KEYS) {
+    const value = fields[key];
+    if (value === undefined) continue;
+    if (!valid(value)) return undefined;
+    optional[key] = value;
+  }
+  return { ...optional, runId, tenantId };
 }

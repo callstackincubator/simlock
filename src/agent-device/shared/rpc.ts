@@ -1,3 +1,5 @@
+import { readReleaseScope } from "./release-scope.js";
+
 const MAX_RPC_BODY_BYTES = 1024 * 1024;
 const LEASE_ID = /^[0-9a-f]{32}$/;
 
@@ -118,7 +120,8 @@ export type ReplyReading =
     }
   | { readonly kind: "unusable" };
 
-export function readReply(text: string): ReplyReading {
+// why: an allocate counts as a success only when its release scope passes, so the front and the host never disagree on whether it went through.
+export function readReply(text: string, call?: CallClass): ReplyReading {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -140,6 +143,9 @@ export function readReply(text: string): ReplyReading {
   }
   const result = record(body["result"]);
   if (result !== undefined && result["ok"] === true && body["error"] === undefined) {
+    if (call === "allocate" && readReleaseScope(result["lease"]) === undefined) {
+      return { kind: "unusable" };
+    }
     return { kind: "success", result };
   }
   return { kind: "unusable" };
