@@ -530,6 +530,7 @@ function apiBound(value: string): number | undefined {
   return number >= 1 && number <= MAX_API_LEVEL ? number : undefined;
 }
 
+// fallow-ignore-next-line complexity -- the range forms are one pass over one pattern match.
 function parseApiRange(text: string | undefined): ApiRange | undefined {
   const match = text === undefined ? null : API_LEVEL_PATTERN.exec(text);
   if (match === null) return undefined;
