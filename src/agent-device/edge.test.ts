@@ -112,6 +112,7 @@ function androidDriver(clock: FakeClock): FakeDriver {
     clock,
     defaultModels: { phone: ["Pixel 8"] },
     knownModels: ["Pixel 8"],
+    modelAliases: { "Pixel 8": ["P8"] },
     modelClasses: { "Pixel 8": "phone" },
     platform: "android",
   });
@@ -2605,5 +2606,755 @@ describe("FakeAgentDevice as agent-device behaves", () => {
     expect(
       await codeOf(await call(fake, "agent_device.lease.allocate", allocation(3))),
     ).toBeUndefined();
+  });
+});
+
+const simlockPicks = "refused: simlock picks the device";
+const onlyIosAndAndroid = "refused: only iOS and Android";
+const uploadOnly = "refused: send the app from your machine as an upload";
+const noDeviceLeased = "refused: no device leased; run open first";
+const deviceSetRefusal =
+  "refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set";
+const allowlistRefusal =
+  "refused: simlock chooses the devices; run disconnect, then connect proxy without --android-device-allowlist";
+
+const bothDrivers = (clock: FakeClock): FakeDriver[] => [iosDriver(clock), androidDriver(clock)];
+
+function runCommand(
+  rig: Rig,
+  name: string,
+  n: number | undefined,
+  fields: Record<string, unknown> = {},
+  options: Omit<SendOptions, "body"> = {},
+): Promise<Response> {
+  const { meta, ...rest } = fields;
+  return command(rig, name, undefined, options, {
+    ...(n === undefined && meta === undefined
+      ? {}
+      : { meta: { ...(n === undefined ? {} : { leaseId: hex(n) }), ...(meta as object) } }),
+    ...rest,
+  });
+}
+
+function idOf(rig: Rig, n: number): string {
+  const params = receivedAllocate(rig, n);
+  return String(params["udid"] ?? params["serial"]);
+}
+
+function commandsReceived(rig: Rig) {
+  return rig.fake.rpcRequests("agent_device.command");
+}
+
+// why: a refusal test starts from a request that is accepted, then changes one thing (testing rule 2).
+async function forwarded(
+  rig: Rig,
+  send: () => Promise<Response>,
+): Promise<Record<string, unknown>> {
+  const before = rig.fake.requests.length;
+  const answer = await envelopeOf(await send());
+  expect(answer.error).toBeUndefined();
+  expect(answer.result).toBeDefined();
+  expect(rig.fake.requests.length).toBe(before + 1);
+  return rig.fake.requests.at(-1)?.params as Record<string, unknown>;
+}
+
+async function refused(rig: Rig, send: () => Promise<Response>, message: string): Promise<void> {
+  const before = rig.fake.requests.length;
+  const answer = await envelopeOf(await send());
+  expect(answer.error).toMatchObject(refusal(message));
+  expect(answer.result).toBeUndefined();
+  expect(rig.fake.requests.length).toBe(before);
+}
+
+function flagsOf(params: Record<string, unknown>): Record<string, unknown> {
+  return (params["flags"] ?? {}) as Record<string, unknown>;
+}
+
+function batch(rig: Rig, n: number | undefined, steps: readonly Record<string, unknown>[]) {
+  return runCommand(rig, "batch", n, { flags: { batchSteps: steps } });
+}
+
+describe("the agent-device front's request rules", () => {
+  describe("rule 1, the route", () => {
+    it.each([
+      ["GET", "/health"],
+      ["POST", "/upload"],
+      ["POST", "/upload/preflight"],
+      ["POST", "/upload/finalize"],
+      ["PUT", "/upload/direct/ticket-1"],
+      ["GET", "/artifacts"],
+      ["GET", "/artifacts/"],
+      ["GET", "/artifacts/a.png"],
+      ["GET", "/artifacts/dir/a.png"],
+      ["GET", "/sessions/s1/requests/r1/diagnostics"],
+    ])("%s %s with a token reaches agent-device", async (method, path) => {
+      const rig = await setUp();
+
+      const answer = await send(rig, path, { method, ...(method === "GET" ? {} : { body: "{}" }) });
+
+      await answer.text();
+      expect(rig.fake.requests.map((request) => request.path)).toEqual([path]);
+    });
+
+    it("POST /rpc with a token reaches agent-device", async () => {
+      const rig = await setUp();
+
+      await forwarded(rig, () => runCommand(rig, "snapshot", undefined));
+    });
+
+    it.each([
+      ["GET", "/admin/leases"],
+      ["POST", "/health"],
+      ["POST", "/rpcx"],
+      ["POST", "/rpc/x"],
+      ["PUT", "/upload/direct/a/b"],
+      ["GET", "/sessions/s1/requests/r1/diagnostics/extra"],
+    ])("%s %s is refused 404 and reaches nothing", async (method, path) => {
+      const rig = await setUp();
+      await (await send(rig, "/health")).text();
+      const before = rig.fake.requests.length;
+
+      const answer = await send(rig, path, { method, ...(method === "GET" ? {} : { body: "{}" }) });
+
+      expect(answer.status).toBe(404);
+      expect(await bodyOf(answer)).toEqual({
+        code: "INVALID_ARGS",
+        error: `refused: unknown route ${method} ${path}`,
+        ok: false,
+      });
+      expect(rig.fake.requests.length).toBe(before);
+    });
+
+    it("a route refusal answers 404 with `refused: unknown route POST /rpcx`", async () => {
+      const rig = await setUp();
+
+      const answer = await send(rig, "/rpcx", { body: "{}" });
+
+      expect(answer.status).toBe(404);
+      expect(((await bodyOf(answer)) as { error: string }).error).toBe(
+        "refused: unknown route POST /rpcx",
+      );
+    });
+
+    it("a route outside the list answers 401 without a token, and `agent-device is not available on this simlock` while agent-device is unavailable", async () => {
+      const rig = await setUp();
+      expect((await send(rig, "/admin/leases")).status).toBe(404);
+      const missing = await send(rig, "/admin/leases", { token: null });
+      expect(missing.status).toBe(401);
+      rig.fake.setUnavailable("found 0.20.3, need 0.21.25 or later");
+
+      const unavailable = await send(rig, "/admin/leases");
+
+      expect(await unavailable.text()).toContain(`${notAvailable}found 0.20.3`);
+      expect(rig.fake.requests).toEqual([]);
+    });
+  });
+
+  describe("rule 2, the RPC method", () => {
+    it("an unknown RPC method is refused, and `agent-device.command` with a dash is forwarded", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => rpc(rig, "agent-device.command", { command: "snapshot" }));
+
+      await refused(
+        rig,
+        () => rpc(rig, "agent_device.admin", { command: "snapshot" }),
+        "refused: unknown method agent_device.admin",
+      );
+    });
+  });
+
+  describe("rule 4, the platform", () => {
+    it("a command with `--platform android` is forwarded; with `macos` or `apple`, or `runtime.platform` `harmonyos`, it is refused", async () => {
+      const rig = await setUp({ drivers: bothDrivers });
+      await forwarded(rig, () =>
+        runCommand(rig, "snapshot", undefined, { flags: { platform: "android" } }),
+      );
+
+      for (const platform of ["macos", "apple"]) {
+        await refused(
+          rig,
+          () => runCommand(rig, "snapshot", undefined, { flags: { platform } }),
+          onlyIosAndAndroid,
+        );
+      }
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", undefined, { runtime: { platform: "harmonyos" } }),
+        onlyIosAndAndroid,
+      );
+    });
+
+    it("a command with `--platform ios` while the iOS driver is off is refused with `refused: ios is not available on this simlock`", async () => {
+      const rig = await setUp({ drivers: (clock) => [androidDriver(clock)] });
+      await forwarded(rig, () =>
+        runCommand(rig, "snapshot", undefined, { flags: { platform: "android" } }),
+      );
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", undefined, { flags: { platform: "ios" } }),
+        "refused: ios is not available on this simlock",
+      );
+    });
+
+    it("a batch step whose `runtime.platform` is `web` is refused", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () =>
+        batch(rig, undefined, [{ command: "snapshot", runtime: { platform: "ios" } }]),
+      );
+
+      await refused(
+        rig,
+        () => batch(rig, undefined, [{ command: "snapshot", runtime: { platform: "web" } }]),
+        onlyIosAndAndroid,
+      );
+    });
+
+    it("a batch step with `platform: web` is refused and no step reaches agent-device", async () => {
+      const rig = await setUp();
+      const steps = [{ command: "snapshot", flags: { platform: "ios" } }];
+      await forwarded(rig, () => batch(rig, undefined, steps));
+
+      await refused(
+        rig,
+        () =>
+          batch(rig, undefined, [...steps, { command: "snapshot", flags: { platform: "web" } }]),
+        onlyIosAndAndroid,
+      );
+      expect(commandsReceived(rig)).toHaveLength(1);
+    });
+
+    it("`install_from_source` with a URL source and platform `ios` is forwarded, as today; with platform `web` it is refused", async () => {
+      const rig = await setUp();
+      const params = (platform: string) => ({
+        platform,
+        source: { kind: "url", url: "https://example.com/App.zip" },
+      });
+      await forwarded(rig, () => rpc(rig, "agent_device.install_from_source", params("ios")));
+
+      await refused(
+        rig,
+        () => rpc(rig, "agent_device.install_from_source", params("web")),
+        onlyIosAndAndroid,
+      );
+    });
+  });
+
+  describe("rule 6, device selectors", () => {
+    it("`udid` and `serial` of the agent's own leased device are forwarded; another device's are refused, in `flags` and in `input` alike", async () => {
+      const rig = await setUp({ drivers: bothDrivers });
+      await granted(rig, 1);
+      await granted(rig, 2, { device: "Pixel 8", platform: "android" });
+      await granted(rig, 3, {}, { token: secrets.two });
+      const own = idOf(rig, 1);
+      const ownSerial = idOf(rig, 2);
+      const other = idOf(rig, 3);
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: own } }));
+      await forwarded(rig, () => runCommand(rig, "snapshot", 2, { flags: { serial: ownSerial } }));
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { input: { udid: own } }));
+
+      const attempts: [number, Record<string, unknown>][] = [
+        [1, { flags: { udid: other } }],
+        [1, { input: { udid: other } }],
+        [2, { flags: { serial: other } }],
+        [2, { input: { serial: other } }],
+      ];
+      for (const [lease, fields] of attempts) {
+        await refused(rig, () => runCommand(rig, "snapshot", lease, fields), simlockPicks);
+      }
+    });
+
+    it("`--device` with the leased device's id, and its name with `_` for a space, extra spaces and other letter case, are forwarded unchanged", async () => {
+      const rig = await setUp();
+      rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
+      await granted(rig, 1);
+      const own = idOf(rig, 1);
+
+      for (const device of [own, "Sim Lock Phone", "sim_lock_phone", "  SIM   lock  phone "]) {
+        const params = await forwarded(rig, () =>
+          runCommand(rig, "snapshot", 1, { flags: { device } }),
+        );
+        expect(flagsOf(params)["device"]).toBe(device);
+      }
+    });
+
+    it("`--device` with the leased model, or a catalog alias of it, reaches agent-device as `udid` of the leased device on iOS and `serial` on Android, with no `device`; another model is refused", async () => {
+      const rig = await setUp({ drivers: bothDrivers });
+      await granted(rig, 1, { device: "iPhone 17 Pro" });
+      await granted(rig, 2, { device: "Pixel 8", platform: "android" });
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 1) } }));
+
+      const ios = flagsOf(
+        await forwarded(rig, () =>
+          runCommand(rig, "snapshot", 1, { flags: { device: "iphone 17 pro" } }),
+        ),
+      );
+      const android = flagsOf(
+        await forwarded(rig, () => runCommand(rig, "snapshot", 2, { flags: { device: "p8" } })),
+      );
+
+      expect(ios["udid"]).toBe(idOf(rig, 1));
+      expect(ios).not.toHaveProperty("device");
+      expect(android["serial"]).toBe(idOf(rig, 2));
+      expect(android).not.toHaveProperty("device");
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { device: "iPhone 16" } }),
+        simlockPicks,
+      );
+    });
+
+    it("`--device` with the leased model in `input` is removed from `input` and sent as `flags.udid`", async () => {
+      const rig = await setUp();
+      await granted(rig, 1, { device: "iPhone 17 Pro" });
+
+      const params = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { input: { device: "iPhone 17 Pro" } }),
+      );
+
+      expect(flagsOf(params)["udid"]).toBe(idOf(rig, 1));
+      expect(params["input"] ?? {}).not.toHaveProperty("device");
+    });
+
+    it("`test --device <own udid>,<own name>` is forwarded; for an agent holding two devices, `test --device \"<udid A>, ,<udid B>,\"` is forwarded; a list with an entry naming another token's device, or the leased device's model, is refused", async () => {
+      const rig = await setUp();
+      rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
+      await granted(rig, 1, { device: "iPhone 17 Pro" });
+      await granted(rig, 2);
+      await granted(rig, 3, {}, { token: secrets.two });
+      const [a, b, other] = [idOf(rig, 1), idOf(rig, 2), idOf(rig, 3)];
+      const test = (device: string) => runCommand(rig, "test", 1, { flags: { device } });
+      await forwarded(rig, () => test(`${a},Sim Lock Phone`));
+      await forwarded(rig, () => test(` ${a}, ,${b},`));
+
+      await refused(rig, () => test(`${a},${other}`), simlockPicks);
+      await refused(rig, () => test(`${a},iPhone 17 Pro`), simlockPicks);
+    });
+
+    it("`test --device <own udid>` with no lease named is forwarded; naming the device of the token's own ended lease it is refused", async () => {
+      const rig = await setUp();
+      await granted(rig, 1, { ttlMs: 60_000 });
+      await granted(rig, 2, { ttlMs: 600_000 });
+      const [ended, alive] = [idOf(rig, 1), idOf(rig, 2)];
+      await forwarded(rig, () => runCommand(rig, "test", undefined, { flags: { device: ended } }));
+      await rig.daemon.dispatch("lease.release", { leaseId: hex(1) }, sessionFor(principals.one));
+      await expect.poll(() => listed(rig)).toEqual([hex(2)]);
+
+      await forwarded(rig, () => runCommand(rig, "test", undefined, { flags: { device: alive } }));
+      await refused(
+        rig,
+        () => runCommand(rig, "test", undefined, { flags: { device: ended } }),
+        simlockPicks,
+      );
+    });
+
+    it("with no lease named, a command with `udid`, one with `serial` and one with `device` are each refused", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 1) } }));
+
+      for (const flags of [
+        { udid: idOf(rig, 1) },
+        { serial: "emulator-5554" },
+        { device: "iPhone 16" },
+      ]) {
+        await refused(rig, () => runCommand(rig, "snapshot", undefined, { flags }), simlockPicks);
+      }
+    });
+
+    it("with no lease named and no selector, a command reaches agent-device unchanged", async () => {
+      const rig = await setUp();
+      const fields = { flags: { session: "main" }, positionals: ["a"] };
+
+      const params = await forwarded(rig, () => runCommand(rig, "snapshot", undefined, fields));
+
+      expect(params).toMatchObject({ command: "snapshot", ...fields });
+      expect(Object.keys(flagsOf(params))).toEqual(["session"]);
+    });
+
+    it("a command naming its lease only in `flags.leaseId`, with its own udid, is forwarded", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const own = idOf(rig, 1);
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", undefined, { flags: { udid: own } }),
+        simlockPicks,
+      );
+
+      await forwarded(rig, () =>
+        runCommand(rig, "snapshot", undefined, { flags: { leaseId: hex(1), udid: own } }),
+      );
+    });
+
+    it("a command naming agent B's lease with that lease's udid is refused; an agent holding two devices is refused lease B's udid on a command for lease A", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await granted(rig, 2);
+      await granted(rig, 3, {}, { token: secrets.two });
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 1) } }));
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 3, { flags: { udid: idOf(rig, 3) } }),
+        simlockPicks,
+      );
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 2) } }),
+        simlockPicks,
+      );
+    });
+
+    it("a command naming its lease with that lease's `deviceKey` is forwarded; with another lease's `deviceKey`, in `meta` or only in `flags`, it is refused; with no lease named, a stale `deviceKey` is forwarded", async () => {
+      const rig = await setUp();
+      rig.fake.nameDeviceKeyInNextReply("key-1");
+      await granted(rig, 1);
+      rig.fake.nameDeviceKeyInNextReply("key-2");
+      await granted(rig, 2);
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: "key-1" } }));
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: "key-2" } }),
+        simlockPicks,
+      );
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { deviceKey: "key-2" } }),
+        simlockPicks,
+      );
+      await forwarded(rig, () =>
+        runCommand(rig, "snapshot", undefined, { meta: { deviceKey: "key-2" } }),
+      );
+    });
+
+    it("a batch step with another device's udid is refused and no step reaches agent-device", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await granted(rig, 2, {}, { token: secrets.two });
+      const steps = [{ command: "snapshot", flags: { udid: idOf(rig, 1) } }];
+      await forwarded(rig, () => batch(rig, 1, steps));
+
+      await refused(
+        rig,
+        () => batch(rig, 1, [...steps, { command: "snapshot", flags: { udid: idOf(rig, 2) } }]),
+        simlockPicks,
+      );
+      expect(commandsReceived(rig)).toHaveLength(1);
+    });
+
+    it("in a batch, a step with the leased model reaches agent-device with the leased id, a sharded `test` step is filled as rule 7 says, and a step naming another lease is refused", async () => {
+      const rig = await setUp();
+      await granted(rig, 1, { device: "iPhone 17 Pro" });
+      await granted(rig, 2, {}, { token: secrets.two });
+
+      const params = await forwarded(rig, () =>
+        batch(rig, 1, [
+          { command: "snapshot", flags: { device: "iPhone 17 Pro" } },
+          { command: "test", flags: { shardAll: 2 } },
+        ]),
+      );
+
+      const steps = flagsOf(params)["batchSteps"] as { flags: Record<string, unknown> }[];
+      expect(steps[0]?.flags["udid"]).toBe(idOf(rig, 1));
+      expect(steps[0]?.flags).not.toHaveProperty("device");
+      expect(steps[1]?.flags["device"]).toBe(idOf(rig, 1));
+      await refused(
+        rig,
+        () => batch(rig, 1, [{ command: "snapshot", flags: { leaseId: hex(2) } }]),
+        "refused: a batch step cannot name another lease",
+      );
+    });
+
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { udid: 12 } }),
+        "refused: malformed udid",
+      );
+      await refused(
+        rig,
+        () => runCommand(rig, "test", 1, { flags: { shardAll: "2" } }),
+        "refused: malformed shardAll",
+      );
+    });
+
+    it("after simlock ended the lease, a command with that lease's udid is forwarded and agent-device's answer reaches the CLI; one TTL later the same command is refused with `refused: simlock picks the device`", async () => {
+      const rig = await setUp();
+      await granted(rig, 1, { ttlMs: 60_000 });
+      const own = idOf(rig, 1);
+      await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+      await expect.poll(() => listed(rig)).toEqual([]);
+
+      await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: own } }));
+      await advance(rig, 61_000, 5_000);
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", 1, { flags: { udid: own } }),
+        simlockPicks,
+      );
+    });
+  });
+
+  describe("rule 5, device set and allowlist", () => {
+    it("`--ios-simulator-device-set` naming simlock's own device set is refused with the disconnect-and-reconnect message, on a command and on an allocate", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => runCommand(rig, "snapshot", undefined));
+      const set = "/var/simlock/devices";
+
+      await refused(
+        rig,
+        () => runCommand(rig, "snapshot", undefined, { flags: { iosSimulatorDeviceSet: set } }),
+        deviceSetRefusal,
+      );
+      await refused(rig, () => allocate(rig, 1, { iosSimulatorDeviceSet: set }), deviceSetRefusal);
+      expect(await requestedSpecs(rig, principals.one)).toEqual([]);
+    });
+
+    it("`--android-device-allowlist` is refused with its disconnect-and-reconnect message, on a command and in a batch step", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => batch(rig, undefined, [{ command: "snapshot" }]));
+
+      await refused(
+        rig,
+        () =>
+          runCommand(rig, "snapshot", undefined, {
+            flags: { androidDeviceAllowlist: "emulator-5554" },
+          }),
+        allowlistRefusal,
+      );
+      await refused(
+        rig,
+        () =>
+          batch(rig, undefined, [
+            { command: "snapshot", flags: { androidDeviceAllowlist: "emulator-5554" } },
+          ]),
+        allowlistRefusal,
+      );
+    });
+  });
+
+  describe("rule 7, sharding", () => {
+    const shard = (
+      rig: Rig,
+      n: number | undefined,
+      flags: Record<string, unknown> = {},
+      token: string = secrets.one,
+    ) => runCommand(rig, "test", n, { flags: { shardAll: 2, ...flags } }, { token });
+
+    it("`test --shard-all 2` with no `--device` reaches agent-device with `device` set to the token's leased devices, for an agent holding one device and one holding two, while another token's leased device is left out", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      await granted(rig, 2, {}, { token: secrets.two });
+      await granted(rig, 3, {}, { token: secrets.two });
+
+      const one = await forwarded(rig, () => shard(rig, 1));
+      const two = await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
+
+      expect(flagsOf(one)["device"]).toBe(idOf(rig, 1));
+      expect(String(flagsOf(two)["device"]).split(",").sort()).toEqual(
+        [idOf(rig, 2), idOf(rig, 3)].sort(),
+      );
+    });
+
+    it("`test --platform ios --shard-all 1` gets only the simulator's id, `--target tv` only the TV's id (a device whose reply named no target counts as `mobile`), and `--platform android` from a token holding only the simulator is refused", async () => {
+      const rig = await setUp({ drivers: bothDrivers });
+      await granted(rig, 1);
+      await granted(rig, 2, { device: "Pixel 8", platform: "android" });
+      rig.fake.nameDeviceInNextReply({ target: "tv" });
+      await granted(rig, 3, { device: "Apple TV 4K", target: "tv" });
+
+      const ios = await forwarded(rig, () =>
+        shard(rig, 1, { platform: "ios", shardAll: 1, target: "mobile" }),
+      );
+      const tv = await forwarded(rig, () => shard(rig, 1, { shardAll: 1, target: "tv" }));
+      const android = await forwarded(rig, () =>
+        shard(rig, 2, { platform: "android", shardAll: 1 }),
+      );
+
+      expect(flagsOf(ios)["device"]).toBe(idOf(rig, 1));
+      expect(flagsOf(tv)["device"]).toBe(idOf(rig, 3));
+      expect(flagsOf(android)["device"]).toBe(idOf(rig, 2));
+      const iosOnly = await setUp({ drivers: bothDrivers });
+      await granted(iosOnly, 1);
+      await forwarded(iosOnly, () => shard(iosOnly, 1, { platform: "ios", shardAll: 1 }));
+      await refused(
+        iosOnly,
+        () => shard(iosOnly, 1, { platform: "android", shardAll: 1 }),
+        noDeviceLeased,
+      );
+    });
+
+    it('`test --shard-split 2` with `device: " , "` is filled as if no list were sent; from a token that holds no device it is refused with `refused: no device leased; run open first`', async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const split = (token: string, n: number | undefined) =>
+        runCommand(rig, "test", n, { flags: { device: " , ", shardSplit: 2 } }, { token });
+
+      const params = await forwarded(rig, () => split(secrets.one, 1));
+
+      expect(flagsOf(params)["device"]).toBe(idOf(rig, 1));
+      await refused(rig, () => split(secrets.two, undefined), noDeviceLeased);
+    });
+  });
+
+  describe("rule 8, install", () => {
+    it('`install` with `meta.uploadedArtifactId` is forwarded; without it, with `""` and with `"  "` it is refused with `send the app from your machine as an upload`', async () => {
+      const rig = await setUp();
+      const install = (meta: Record<string, unknown>) =>
+        runCommand(rig, "install", undefined, {
+          meta,
+          positionals: ["MyApp", "remote:/Users/ci/MyApp.app"],
+        });
+      await forwarded(rig, () => install({ uploadedArtifactId: "art-1" }));
+
+      await refused(rig, () => install({}), uploadOnly);
+      await refused(rig, () => install({ uploadedArtifactId: "" }), uploadOnly);
+      await refused(rig, () => install({ uploadedArtifactId: "  " }), uploadOnly);
+    });
+
+    it('`reinstall` without an upload is refused; batch steps `install` and `" Install "` are refused and no step reaches agent-device', async () => {
+      const rig = await setUp();
+      await forwarded(rig, () =>
+        runCommand(rig, "reinstall", undefined, { meta: { uploadedArtifactId: "art-1" } }),
+      );
+      await forwarded(rig, () => batch(rig, undefined, [{ command: "snapshot" }]));
+      const before = commandsReceived(rig).length;
+
+      await refused(rig, () => runCommand(rig, "reinstall", undefined), uploadOnly);
+      await refused(rig, () => batch(rig, undefined, [{ command: "install" }]), uploadOnly);
+      await refused(
+        rig,
+        () => batch(rig, undefined, [{ command: "snapshot" }, { command: " Install " }]),
+        uploadOnly,
+      );
+      expect(commandsReceived(rig)).toHaveLength(before);
+    });
+  });
+
+  describe("rule 9, batch devices", () => {
+    it('batch steps `devices` and `" DEVICES "` are refused', async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => batch(rig, undefined, [{ command: "snapshot" }]));
+
+      for (const step of ["devices", " DEVICES "]) {
+        await refused(
+          rig,
+          () => batch(rig, undefined, [{ command: step }]),
+          "refused: run devices on its own",
+        );
+      }
+    });
+  });
+
+  describe("the devices filter", () => {
+    const three = [{ id: "d-1" }, { id: "d-2" }, { id: "d-3" }];
+    const listedIds = async (response: Response): Promise<unknown> => {
+      const answer = await envelopeOf(response);
+      const data = answer.result?.["data"] as { devices: { id: string }[] } | undefined;
+      expect(Array.isArray(data?.devices), "expected a devices list in result.data").toBe(true);
+      return data?.devices.map((device) => device.id);
+    };
+
+    it("`devices` before open answers an empty list while agent-device lists three devices; after open it answers only the leased device, without agent B's", async () => {
+      const rig = await setUp();
+      await granted(rig, 2, {}, { token: secrets.two });
+      rig.fake.listDevices([...three, { id: idOf(rig, 2) }]);
+      const before = commandsReceived(rig).length;
+
+      expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([]);
+      expect(commandsReceived(rig)).toHaveLength(before + 1);
+      await granted(rig, 1);
+      rig.fake.listDevices([...three, { id: idOf(rig, 2) }, { id: idOf(rig, 1) }]);
+
+      expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([idOf(rig, 1)]);
+    });
+
+    it("`devices` for an agent holding two devices answers both, and after `simlock release --all` ended one lease (no heartbeat sent since), only the other", async () => {
+      const rig = await setUp();
+      await granted(rig, 1, { ttlMs: 60_000 });
+      await granted(rig, 2, { ttlMs: 600_000 });
+      rig.fake.listDevices([...three, { id: idOf(rig, 1) }, { id: idOf(rig, 2) }]);
+
+      expect(
+        ((await listedIds(await runCommand(rig, "devices", undefined))) as string[]).sort(),
+      ).toEqual([idOf(rig, 1), idOf(rig, 2)].sort());
+      await rig.daemon.dispatch("lease.release", { leaseId: hex(1) }, adminSession);
+      await expect.poll(() => listed(rig)).toEqual([hex(2)]);
+
+      expect(await listedIds(await runCommand(rig, "devices", undefined))).toEqual([idOf(rig, 2)]);
+    });
+
+    it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB and a non-JSON body each answer an empty list; `devices` with `meta.requestProgress` is refused", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      rig.fake.listDevices([{ id: idOf(rig, 1) }]);
+      expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([idOf(rig, 1)]);
+
+      const failure = {
+        error: {
+          code: -32000,
+          data: { code: "COMMAND_FAILED", message: "inventory down" },
+          message: "inventory down",
+        },
+        id: 1,
+        jsonrpc: "2.0",
+      };
+      rig.fake.answerDevicesWith(JSON.stringify(failure));
+      expect(await envelopeOf(await runCommand(rig, "devices", 1))).toMatchObject({
+        error: { message: "inventory down" },
+      });
+      const unusable = [
+        JSON.stringify({ id: 1, jsonrpc: "2.0", result: { data: {}, ok: true } }),
+        JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          result: { data: { devices: [], pad: "x".repeat(1024 * 1024) }, ok: true },
+        }),
+        "not json",
+      ];
+      for (const body of unusable) {
+        rig.fake.answerDevicesWith(body);
+        expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([]);
+      }
+      await refused(
+        rig,
+        () => runCommand(rig, "devices", 1, { meta: { requestProgress: true } }),
+        "refused: devices does not stream through simlock",
+      );
+    });
+  });
+
+  describe("rule 10, commands agent-device runs without a lease", () => {
+    it("`capabilities` with no selector reaches agent-device with the leased device's id; from a token holding no device it is refused; `doctor` the same", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      for (const name of ["capabilities", "doctor"]) {
+        const params = await forwarded(rig, () => runCommand(rig, name, 1));
+        expect(flagsOf(params)["udid"]).toBe(idOf(rig, 1));
+        await refused(
+          rig,
+          () => runCommand(rig, name, undefined, {}, { token: secrets.two }),
+          "refused: name the device with --udid <id>; run devices to see yours",
+        );
+      }
+    });
+  });
+
+  describe("commands the policy file refuses", () => {
+    it("`boot` passes the rules and reaches agent-device, as before this PR", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+
+      const params = await forwarded(rig, () => runCommand(rig, "boot", 1));
+
+      expect(params["command"]).toBe("boot");
+    });
   });
 });

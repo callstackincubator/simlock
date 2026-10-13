@@ -60,6 +60,18 @@ interface RunningCommand {
   readonly ended: Promise<void>;
 }
 
+export interface FakeReplyDevice {
+  readonly name?: string;
+  readonly target?: string;
+}
+
+export interface FakeInventoryDevice {
+  readonly id: string;
+  readonly name?: string;
+  readonly platform?: string;
+  readonly target?: string;
+}
+
 export interface FakeAllocateReplyEdit {
   readonly runId?: string;
   readonly clientId?: string;
@@ -162,6 +174,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #hangRelease = false;
   #releaseBody: string | undefined;
   #replyEdit: FakeAllocateReplyEdit | undefined;
+  #replyDevice: FakeReplyDevice | "none" | undefined;
+  #devicesAnswer:
+    | { readonly body: string }
+    | { readonly list: readonly FakeInventoryDevice[] }
+    | undefined;
 
   constructor(options: { readonly leaseMaxTtlMs?: number } = {}) {
     this.leaseMaxTtlMs = options.leaseMaxTtlMs ?? 4 * 60 * 60_000 + 10_000;
@@ -257,6 +274,20 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyEdit = edit;
   }
 
+  // why: agent-device names the device it picked beside the lease in its allocate reply; `"none"` is a reply that names no device.
+  nameDeviceInNextReply(device: FakeReplyDevice | "none"): void {
+    this.#replyDevice = device;
+  }
+
+  // why: the `devices` command answers the daemon's whole inventory, which the front must cut down to the token's own devices.
+  listDevices(devices: readonly FakeInventoryDevice[]): void {
+    this.#devicesAnswer = { list: devices };
+  }
+
+  answerDevicesWith(body: string): void {
+    this.#devicesAnswer = { body };
+  }
+
   streamNextCommand(chunks: readonly string[]): void {
     this.#streamChunks = chunks;
   }
@@ -314,7 +345,10 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       this.uploads.push(await request.text());
       return Response.json({ ok: true });
     }
-    if (url.pathname !== "/rpc") return new Response("Not found", { status: 404 });
+    if (url.pathname !== "/rpc") {
+      this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
+      return new Response("Not found", { status: 404 });
+    }
     return this.#rpc(request, tenantHeader);
   }
 
@@ -373,6 +407,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyDeviceKey = undefined;
     const edit = this.#replyEdit;
     this.#replyEdit = undefined;
+    const picked = this.#replyDevice;
+    this.#replyDevice = undefined;
     this.leases.set(leaseId, {
       address,
       ended: false,
@@ -382,6 +418,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       ttlMs: params["ttlMs"],
     });
     return envelope(id, {
+      ...(picked === "none" || address === undefined
+        ? {}
+        : { device: { id: address, name: `simlock-${address}`, ...picked } }),
       lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
       ok: true,
     });
@@ -510,6 +549,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     const failure = this.#failCommand;
     this.#failCommand = undefined;
     if (failure !== undefined) return errorEnvelope(id, failure);
+    const inventory = this.#devicesAnswer;
+    if (command === "devices" && inventory !== undefined) {
+      if ("body" in inventory) return new Response(inventory.body, { status: 200 });
+      return envelope(id, { data: { devices: inventory.list }, ok: true });
+    }
     if (command === "close" && typeof leaseId === "string") {
       const lease = this.leases.get(leaseId);
       if (lease !== undefined) lease.ended = true;
