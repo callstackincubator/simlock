@@ -366,14 +366,25 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
     throw new Error("withSharedDaemon needs configOverrides.http.port");
   }
   const { testEnv, state } = await buildEnv(options);
-  const restart = async (): Promise<void> => {
+  const restartSteps = async (): Promise<void> => {
     const pids = await pidsHoldingSocket(state.socketPath);
-    await cli(["daemon", "stop"], state.env);
+    await cli(["daemon", "stop"], state.env, { timeout: 30_000 });
     await waitFor(
       async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
       { timeout: 30_000, label: "previous daemon process exited" },
     );
     await testEnv.startDaemon();
+  };
+  const restart = async (): Promise<void> => {
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("shared daemon restart exceeded 90 s")), 90_000);
+    });
+    try {
+      await Promise.race([restartSteps(), limit]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
   return {
     ...testEnv,

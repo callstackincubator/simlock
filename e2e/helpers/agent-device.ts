@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { afterEach } from "vitest";
+
 import { cli, cliBackground, type CliBackgroundHandle } from "./cli.js";
 import type { SharedTestEnv } from "./env.js";
 import { waitFor } from "./wait.js";
@@ -92,7 +94,7 @@ export async function makeAgent(env: SharedTestEnv, name: string): Promise<Agent
     async run(args, options = {}) {
       const result = await cli(["--json", ...args], childEnv, {
         entry,
-        timeout: options.timeout ?? 120_000,
+        timeout: options.timeout ?? 60_000,
       });
       return parseResult(result.code, result.stdout, result.stderr);
     },
@@ -124,6 +126,12 @@ export async function cleanupAgents(): Promise<void> {
     }),
   );
 }
+
+// why: vitest resolves hooks from the call stack active during collection, so this is registered
+// once at module scope; a test that times out never reaches its own cleanup.
+afterEach(async () => {
+  await cleanupAgents();
+}, 120_000);
 
 export async function waitForAgentDevice(env: SharedTestEnv, token: string): Promise<void> {
   await waitFor(

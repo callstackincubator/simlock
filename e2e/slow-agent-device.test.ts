@@ -456,7 +456,7 @@ function defineSuite(target: Target): void {
         (event) =>
           event.event === "lease.granted" &&
           event.timestamp >= startedAt &&
-          (event.payload as { requesterId?: string }).requesterId === requester,
+          (event.payload as { requester?: string }).requester === requester,
       );
       expect(granted).toEqual([]);
     },
