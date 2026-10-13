@@ -176,11 +176,6 @@ export interface AndroidDriverOptions {
   /** This driver's own `drivers.android` block, handed over unread by the core. */
   readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
   /** The environment every scoped invocation is layered on top of; `process.env` in production. */
-  /**
-   * Ordered device-profile sources, first match wins (see `DeviceProfileRegistry`). Defaults
-   * to `[builtin, user]` -- `avdmanager list device` first, then a read-only parse of
-   * `~/.android/devices.xml`, so a name defined in both resolves to the built-in.
-   */
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
@@ -836,11 +831,6 @@ export class AndroidDriver implements Driver {
     const avdName = `simlock_${this.#idGenerator.generate()}`;
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
 
-    // A `builtin` profile already carries the `avdmanager` device id `-d` wants. A
-    // `properties` profile has none -- it never came from `avdmanager list device` -- so
-    // `avdmanager create avd` is seeded with *some* built-in device (only to skip the
-    // interactive "custom hardware profile?" prompt) and the profile's own properties then
-    // overwrite that seed's config.ini values below, before anything reads them.
     if (profile.kind === "library") {
       assertLibraryProfileWritable(profile);
     }
@@ -1733,23 +1723,6 @@ export class AndroidDriver implements Driver {
     await this.#mergeConfigIniLines(avdName, { [DURABLE_MARK_KEY]: token });
   }
 
-  /**
-   * Reads `avdName`'s `config.ini`, merges `entries` into it -- overwriting any key already
-   * present, appending the rest -- and writes it back atomically. Shared by
-   * `#applyHardwareProperties` and `#writeDurableMark`, the driver's two config.ini
-   * read-modify-write sites. A missing file (the AVD's config.ini not created yet) starts the
-   * merge from empty content; any other read failure is rethrown rather than treated as an
-   * empty file -- silently starting from "" on, say, an EACCES or EIO would write back only
-   * `entries` and clobber whatever config.ini already held.
-   *
-   * Defense in depth against a config.ini injection: `#applyHardwareProperties` calls this with
-   * values sourced from a device profile (`avdmanager list device`, or a parsed
-   * `~/.android/devices.xml` -- see `device-profile-source.ts`'s own line-break rejection at the
-   * parse boundary). A key or value containing a line break would let one logical property
-   * inject arbitrary extra `config.ini` lines once joined in -- rejected here unconditionally,
-   * independent of and in addition to that parse-time check, so this merge is never the only
-   * thing standing between untrusted input and config.ini.
-   */
   async #mergeConfigIniLines(
     avdName: string,
     entries: Readonly<Record<string, string>>,
@@ -2542,8 +2515,7 @@ function hasUnacceptedLicense(result: ProcessResult): boolean {
 }
 
 /**
- * `[builtin, user]`: `avdmanager list device` first, then a read-only parse of Android
- * Studio's `~/.android/devices.xml`. `ANDROID_SDK_HOME` (not `ANDROID_AVD_HOME`, which only
+ * why: `ANDROID_SDK_HOME` (not `ANDROID_AVD_HOME`, which only
  * relocates created AVDs) is the historical env var Android tooling uses to relocate the whole
  * `~/.android` directory, including `devices.xml`.
  */

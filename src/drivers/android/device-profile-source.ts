@@ -1,23 +1,6 @@
 import { DriverCrashError, UnknownModelError, type DeviceClass } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 
-/**
- * One device profile a `DeviceProfileSource` can create an AVD from. `builtin` is today's
- * `avdmanager -d <id>` path; `properties` is a hardware descriptor applied to `config.ini`
- * after `avdmanager create avd` (see `AndroidDriver#provision`) -- there is no `avdmanager`
- * device id for it because it never came from `avdmanager list device`. `name` is the
- * source's own canonical spelling of the model (case may differ from what the caller asked
- * for), which `AndroidDriver` needs so `DeviceSpec.model` and cache lookups stay stable.
- *
- * A `properties` profile has no tag and counts as a `phone`.
- *
- * A `builtin` profile is `custom` when `avdmanager` lists it with `OEM : User`: that is how it
- * prints a profile from Android Studio's `devices.xml`, which it reads itself.
- *
- * `names` is every name the profile answers to, `name` first, no two equal ignoring case.
- * `DeviceProfileRegistry` matches a requested model against it and lists the rest as the
- * model's other names, so the two can never disagree.
- */
 export type DeviceProfile =
   | {
       readonly kind: "builtin";

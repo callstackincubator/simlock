@@ -334,7 +334,7 @@ describe("DriverCatalog", () => {
       return (await catalog.listCatalog())[0]?.classDefaults;
     }
 
-    it("is Pixel 9 for Android's built-in phone list when the catalog lists Pixel 9 paired and no Pixel 8", async () => {
+    it("is Pixel 9 for a phone list that starts at Pixel 9 when the catalog lists Pixel 9 paired and no Pixel 8", async () => {
       const driver = new FakeDriver({
         availableOsVersions: ["35"],
         clock: new FakeClock(),

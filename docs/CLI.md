@@ -1584,7 +1584,7 @@ device it is: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or
 from the device profile's tag: `android-tv` is `tv`, `android-wear` is
 `watch`, `android-automotive` and its variants are `auto`, `android-desktop`
 is `desktop`, and a profile with no tag, or a custom profile from
-`devices.xml`, is `phone`. A model whose tooling reports nothing usable has
+`devices.xml`, is `phone`. A profile Simlock ships carries its own class. A model whose tooling reports nothing usable has
 no entry, and is still listed and leasable by name.
 
 `classDefaults` says, for a class, which model Simlock would create for it on

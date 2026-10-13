@@ -2356,6 +2356,7 @@ describe("AndroidDriver", () => {
         "yes",
       );
       expect(await playStoreOf("google_apis_playstore", "")).toBe("yes");
+      expect(await playStoreOf("google_apis_playstore", "Pkg.Revision=1\n")).toBe("yes");
       expect(await playStoreOf("google_apis_playstore", "SystemImage.TagId=google_apis\n")).toBe(
         "no",
       );
