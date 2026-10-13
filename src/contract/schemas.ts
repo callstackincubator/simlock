@@ -997,25 +997,6 @@ export const statusInstallsSchema = boundedInstalls(
  */
 export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
 
-/**
- * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).
- * Rebuilt over the uplink, never persisted: a gateway restart re-derives every field from the
- * workers that reconnect (§30).
- *
- * The optional fields are exactly the ones that come from a `status.get`/`catalog.get` round
- * trip the gateway may not have been able to make: an `incompatible` worker is never asked
- * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
- * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
- * different facts, and a console that dims one must not read the other as a full machine.
- * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
- * and `host` only, so its view has `health` and `host` and none of `capacity`, `catalog`,
- * `devices`, `installs`, `leases`, `queueDepth` or `waiting` -- never empty ones, which would
- * read as "nothing is leased" about a registry nobody has checked yet.
- *
- * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
- * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
- * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
- */
 // fallow-ignore-next-line unused-export -- exported on its own so the tasks that name a capability reuse it (#513).
 export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
@@ -1048,6 +1029,25 @@ export function capabilityReason(text: string): string {
   return cut === "" ? "unknown" : cut;
 }
 
+/**
+ * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).
+ * Rebuilt over the uplink, never persisted: a gateway restart re-derives every field from the
+ * workers that reconnect (§30).
+ *
+ * The optional fields are exactly the ones that come from a `status.get`/`catalog.get` round
+ * trip the gateway may not have been able to make: an `incompatible` worker is never asked
+ * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
+ * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
+ * different facts, and a console that dims one must not read the other as a full machine.
+ * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
+ * and `host` only, so its view has `health` and `host` and none of `capacity`, `catalog`,
+ * `devices`, `installs`, `leases`, `queueDepth` or `waiting` -- never empty ones, which would
+ * read as "nothing is leased" about a registry nobody has checked yet.
+ *
+ * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
+ * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
+ * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
+ */
 export const workerViewSchema = z.object({
   capabilities: capabilityListSchema.optional(),
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
