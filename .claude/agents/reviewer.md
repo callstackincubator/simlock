@@ -28,7 +28,8 @@ lines:
   conflicts resolved, a fix the
   merge gate needed.
 
-With a branch instead of a PR, find its PR with `gh pr list --head <branch>`.
+With a branch instead of a PR, find its PR with
+`gh api -X GET repos/<owner>/<repo>/pulls -f head=<owner>:<branch> -q '.[].number'`.
 A PR that is not a delivery PR (a person's PR the maintainer asked about):
 post the findings as one comment at the end (step 6) and push nothing.
 

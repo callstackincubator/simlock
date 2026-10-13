@@ -1,6 +1,6 @@
 ---
 name: harden-tests
-description: Weekly routine — mutation-test the source lines main changed since the last run, kill with tests only the survivors that change what a caller or user can see, and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "harden tests".
+description: Weekly routine — mutation-test the newest source lines main changed since the last run, kill with tests only the survivors that change what a caller or user can see, and land one tests-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "harden tests".
 model: sonnet
 effort: medium
 ---
@@ -19,8 +19,12 @@ git fetch -q origin
 dir=$(.agents/scripts/worktree.sh chore/harden-tests-$(date +%F)) && cd "$dir"
 base=$(git log -1 --format=%H --grep='^test(harden):' origin/main)
 [ -n "$base" ] || base=$(git rev-list -1 --before='7 days ago' origin/main)
-pnpm mutate "$base" > <scratch>/mutate.txt 2>&1; echo "exit $?"
+pnpm mutate "$base" --max-lines 1500 > <scratch>/mutate.txt 2>&1; echo "exit $?"
 ```
+
+The line budget keeps the run under ~15 minutes, inside the cloud's
+30-minute limit on background commands; the files it skips are not tested
+this run.
 
 Exit 0, or "nothing to mutate": report `PR: none` and stop. Exit 2: report
 the error lines it printed and stop.
@@ -64,10 +68,12 @@ Run each changed test file once more, then:
 ```bash
 git add -A && git commit -m "test(harden): kill the mutants main's changes left alive since <short base>"
 git push -u origin HEAD
-gh pr create --draft --title "test(harden): kill the mutants main's changes left alive since <short base>" --body-file <scratch>/pr.md
+gh api -X POST repos/<owner>/<repo>/pulls -f title="test(harden): kill the mutants main's changes left alive since <short base>" \
+  -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
-The body: `<base>..<head>`, the mutant and survivor counts, then one line
+The body: `<base>..<head>`, the mutant and survivor counts, the number of
+files `mutate.txt` says it skipped, then one line
 per survivor under Killed, Equivalent, Low value and Not killed, each with
 its reason, the dead-code issue's link, and `*Written by an agent.*`.
 
@@ -79,8 +85,11 @@ that name, `previous <Commit>` and the Fix lines. `Rerun: none` with
 findings open: leave the PR in draft and report them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped.`. Then `gh pr ready <M>` and
-`.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
+with `Spec review: skipped.` (edit the body with
+`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`; `gh pr edit`
+is GraphQL, which a cloud session refuses). Then `gh pr ready <M>` (in a cloud session it
+fails with a 403 naming the proxy's ready-for-review route: call that route)
+and `.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
 it once and run the gate again. Anything else: leave the PR open and report.
 
 ## Report

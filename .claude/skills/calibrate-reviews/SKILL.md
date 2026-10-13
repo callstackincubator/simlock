@@ -26,7 +26,8 @@ git diff --quiet -- .agents/briefs/calibration.md && echo unchanged
 git add .agents/briefs/calibration.md
 git commit -m "chore(reviews): calibration brief for the four weeks to $(date +%F)"
 git push -u origin HEAD
-gh pr create --draft --title "chore(reviews): calibration brief for the four weeks to $(date +%F)" --body-file <scratch>/pr.md
+gh api -X POST repos/<owner>/<repo>/pulls -f title="chore(reviews): calibration brief for the four weeks to $(date +%F)" \
+  -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
 The body: how many rejected findings the four weeks had and how many lines
@@ -37,8 +38,9 @@ and `*Written by an agent.*`.
 ## 2. Review and merge
 
 `reviewer` with the PR number, round 1: its kind is `docs-only`, so only the
-claims review runs. Fix each Fix line yourself, then `gh pr ready <M>` and
-`.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR open
+claims review runs. Fix each Fix line yourself, then `gh pr ready <M>` (in
+a cloud session it fails with a 403 naming the proxy's ready-for-review
+route: call that route) and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR open
 and report.
 
 ## Report

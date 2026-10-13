@@ -32,7 +32,8 @@
 #
 # Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
 # and briefs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
-# for and cannot find, it says on stderr, with one summary line at the end.
+# for and cannot find, it says on stderr, with one summary line at the end. The repo is GH_REPO,
+# else the origin remote's owner/name.
 set -eu
 
 pr=${1:-}
@@ -45,10 +46,17 @@ case $pr in
 esac
 say() { echo "review-inputs: $*" >&2; }
 
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-head_ref=$(gh pr view "$pr" --json headRefName -q .headRefName)
-base_ref=$(gh pr view "$pr" --json baseRefName -q .baseRefName)
-pr_body=$(gh pr view "$pr" --json body -q .body | tr -d '\r')
+# why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr`, `gh issue` and
+# `gh repo view` use, so this script calls repo-scoped REST only.
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+api() {
+  at=$1
+  shift
+  gh api -X GET "repos/$nwo/$at" "$@"
+}
+head_ref=$(api "pulls/$pr" -q .head.ref)
+base_ref=$(api "pulls/$pr" -q .base.ref)
+pr_body=$(api "pulls/$pr" -q '.body // ""' | tr -d '\r')
 
 # The PR head through GitHub's pull ref, which outlives a deleted branch. The temporary ref is
 # per PR, so two reviews running at once do not overwrite each other's.
@@ -101,24 +109,31 @@ fi
 
 parent= play= rules= assumed=0
 if [ -n "$issue" ]; then
-  gh issue view "$issue" --json body -q .body | tr -d '\r' >"$out/issue.md"
-  labels=$(gh issue view "$issue" --json labels -q '.labels[].name')
+  api "issues/$issue" -q '.body // ""' | tr -d '\r' >"$out/issue.md"
+  labels=$(api "issues/$issue" -q '.labels[].name')
 
-  parent=$(gh api graphql -F owner="${nwo%/*}" -F repo="${nwo#*/}" -F number="$issue" -f query='
-    query($owner:String!,$repo:String!,$number:Int!){
-      repository(owner:$owner,name:$repo){ issue(number:$number){ parent{ number } } } }' \
-    -q '.data.repository.issue.parent.number // empty' 2>/dev/null || true)
+  parent=$(api "issues/$issue" -q '.parent_issue_url // empty' 2>/dev/null || true)
+  parent=${parent##*/}
   if [ -z "$parent" ]; then
     parent=$(grep -m 1 -oE '^Part of #[0-9]+' "$out/issue.md" | grep -oE '[0-9]+' || true)
   fi
   if [ -n "$parent" ]; then
-    gh issue view "$parent" --json body -q .body | tr -d '\r' >"$out/feature.md"
+    api "issues/$parent" -q '.body // ""' | tr -d '\r' >"$out/feature.md"
   fi
 
   if printf '%s\n' "$labels" | grep -q '^bug:'; then
-    gh issue view "$issue" --json comments \
-      -q '[.comments[] | select(.body | test("(^|\n)## Simplest fix"))] | last | .body // empty' \
-      | tr -d '\r' >"$out/triage.md"
+    # why: `gh api --paginate` follows Link headers to numeric-ID repository URLs, which the
+    # proxy also refuses, so pages are requested by number. Each page prints its length first.
+    page=1 triage=
+    while :; do
+      got=$(api "issues/$issue/comments" -f per_page=100 -f page="$page" -q 'length,
+        ([.[] | select((.body // "") | test("(^|\n)## Simplest fix"))] | last | .body // empty)')
+      last=$(printf '%s\n' "$got" | tail -n +2)
+      [ -z "$last" ] || triage=$last
+      [ "$(printf '%s\n' "$got" | head -n 1)" -ge 100 ] || break
+      page=$((page + 1))
+    done
+    [ -z "$triage" ] || printf '%s\n' "$triage" | tr -d '\r' >"$out/triage.md"
     if [ ! -s "$out/triage.md" ]; then
       rm -f "$out/triage.md"
       say "bug #$issue has no triage report (no comment with a '## Simplest fix' section)"
