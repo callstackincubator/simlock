@@ -67,6 +67,21 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "component.remove", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "device.add", input: { id: "00008110-001A2B3C4D5E", platform: "ios" }, role: "admin" },
   { name: "device.remove", input: { id: "00008110-001A2B3C4D5E" }, role: "admin" },
+  {
+    name: "relay.request",
+    input: {
+      hasBody: false,
+      headers: [],
+      method: "GET",
+      relayId: "r-1",
+      target: "agent-device",
+      tenant: "gw:g:a",
+      url: "http://gateway.test/x",
+    },
+    role: "admin",
+  },
+  { name: "relay.body", input: { end: true, relayId: "r-1" }, role: "admin" },
+  { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -134,6 +149,21 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "component.remove", input: { platform: "ios", version: "26.4" }, effect: "write" },
   { name: "device.add", input: { id: "00008110-001A2B3C4D5E", platform: "ios" }, effect: "write" },
   { name: "device.remove", input: { id: "00008110-001A2B3C4D5E" }, effect: "write" },
+  {
+    name: "relay.request",
+    input: {
+      hasBody: false,
+      headers: [],
+      method: "GET",
+      relayId: "r-1",
+      target: "agent-device",
+      tenant: "gw:g:a",
+      url: "http://gateway.test/x",
+    },
+    effect: "write",
+  },
+  { name: "relay.body", input: { end: true, relayId: "r-1" }, effect: "write" },
+  { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {

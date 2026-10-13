@@ -41,6 +41,7 @@ rule 14); a single-file component's surface is what the file exports.
 | `DaemonEndpointHost` | `src/daemon/connection-host.ts` | Claiming the socket, recovering a stale entry, the listener lifecycle. | Anything after a connection is accepted. |
 | `AdminSecretManager`, session resolver | `src/daemon/admin-secret.ts`, `src/daemon/session.ts` | The per-start admin secret, its hash and persistence; turning a credential into `{ principal, role }`. | Decide what a role may do. |
 | `GatewayUplink` | `src/daemon/gateway-uplink.ts` | When a worker dials its gateway: one outbound connection, redialled with backoff, handed to `DaemonServer`. | What travels over the link. |
+| Relay targets | `src/daemon/relay.ts` | A worker's `relayTargets` (capability name to a function that takes a `Request`, a tenant and a lease id and answers a `Response`), and per uplink connection the relays it carries: the request body fed by `relay.body`, the response sent as `relay-head` and `relay-chunk` pushes, cancel and abort on close. Nothing registers a target yet. | Name a target: the core knows none; modules register through the option. |
 | `OwnerRoutedFactBus` | `src/daemon/owner-routed-facts.ts` | Re-emitting lease-scoped facts with the lease's owner attached, for pushes and HTTP notices. | Emit a business fact of its own. |
 
 ## Core: device management
@@ -153,6 +154,7 @@ typed against and catalog matching (ARCHITECTURE.md, "Boundaries").
 | Routing | `src/gateway/routing.ts`, `src/gateway/routing/` (surface: `index.ts`) | The pure routing policy: an ordered list of stages (`takes-requests`, `can-serve`, `healthy`, `idle-queue`, `warm-hit`, `free-slot`, `ram-budget`, `free-capacity`) over worker views, selected by `gateway.routing`; a physical request skips the stages whose `appliesToPhysical` is `false` (`idle-queue`, `free-slot`, `ram-budget`, `free-capacity`) and matches the enrolled physical devices in each worker's view (`physicalMatch`). | Read anything but views; order stages from config. |
 | `GatewayDispatcher` | `src/gateway/dispatcher.ts` | The second implementation of the contract's handlers (ADR 0005 §32): answered from the fleet, forwarded to one worker, or fanned out to all. | Define a second contract or role check. |
 | Aggregate, component relay | `src/gateway/aggregate.ts`, `src/gateway/component-relay.ts` | The fleet expressed in one machine's shapes, as pure functions over views; asking every worker to install a component and collecting one outcome each. | Decide anything a worker decides. |
+| `GatewayRelay` | `src/gateway/relay.ts` | Handing one HTTP exchange to a relay target on a worker over its uplink (ADR 0026): `relay.request`, the request body as `relay.body` calls (4 unanswered at most), the response from `relay-head` and `relay-chunk` pushes; the deadline, 8 relays per worker, 64 MiB of unread response, cancel and `WORKER_UNREACHABLE` on a lost uplink. | Route to a worker or know which module a target is. |
 | `GatewayOwnerRoutedFacts` | `src/gateway/owner-routed-facts.ts` | The gateway's owner-attributed lease facts, from relayed worker events. | Emit a fact of its own. |
 
 ## Ports

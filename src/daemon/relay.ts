@@ -39,6 +39,8 @@ const NO_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 interface ActiveRelay {
   readonly controller: AbortController;
   readonly feed: RelayBodyFeed | undefined;
+  // why: the Request's signal follows ours through a weak reference, so a target that keeps only the signal would never see an abort once the Request is collected.
+  request: Request | undefined;
 }
 
 // why: a `relay.body` call is answered once the stream has handed its chunk to the target, which is what holds the gateway's sender back.
@@ -137,9 +139,10 @@ export class RelayConnection {
     }
     const controller = new AbortController();
     const feed = input.hasBody ? new RelayBodyFeed() : undefined;
-    this.#active.set(input.relayId, { controller, feed });
+    const active: ActiveRelay = { controller, feed, request: undefined };
+    this.#active.set(input.relayId, active);
     try {
-      return await this.#run(input, target, controller, feed, push);
+      return await this.#run(input, target, active, push);
     } finally {
       feed?.abort();
       this.#active.delete(input.relayId);
@@ -181,10 +184,10 @@ export class RelayConnection {
   async #run(
     input: RelayRequestInput,
     target: RelayTarget,
-    controller: AbortController,
-    feed: RelayBodyFeed | undefined,
+    active: ActiveRelay,
     push: RelayPush,
   ): Promise<{ readonly cancelled?: true }> {
+    const { controller, feed } = active;
     const { signal } = controller;
     const cancelled = new Promise<"cancelled">((resolve) => {
       signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
@@ -203,6 +206,7 @@ export class RelayConnection {
         `The relayed request cannot be built: ${describe(error)}`,
       );
     }
+    active.request = request;
     const answered = target(request, input.tenant, input.leaseId).then(
       (response) => ({ response }),
       (error: unknown) => ({ error }),

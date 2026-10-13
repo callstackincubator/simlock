@@ -889,6 +889,37 @@ This is also what closes the gap that left `dataPlane` reserved: a remote
 HTTP agent gets the same ability against a lone worker, with no gateway
 involved at all.
 
+### Relaying an HTTP exchange to a worker's module (ADR 0026)
+
+A module on a worker (agent-device, from #515) can serve HTTP the gateway
+receives. The gateway's `GatewayRelay` hands one `Request` to the worker's
+**relay target**, a function registered through `startDaemon`'s
+`relayTargets` under the module's capability name, and answers the target's
+`Response` with its body streamed. The core names no target.
+
+Three admin operations carry it over the uplink, and a worker answers them
+only on the gateway's own uplink session (`FORBIDDEN` elsewhere; a gateway
+refuses them from everyone):
+
+- `relay.request` opens a relay (`relayId`, `target`, method, URL, headers,
+  tenant, lease id, `hasBody`) and answers `{}` once the response body has
+  ended, or `{ cancelled: true }` once a cancel took effect. The response
+  leaves as request-scoped `relay-head` and `relay-chunk` pushes keyed by its
+  frame id, each written before the next part of the target's body is read.
+- `relay.body` sends the request body in `seq` order, then `end`. A call is
+  answered once the target's stream has taken the chunk, so the gateway
+  keeps at most 4 unanswered.
+- `relay.cancel` aborts the target's `Request` signal; so does the close of
+  the connection the relay came on.
+
+The gateway bounds every wait: a deadline for the whole exchange
+(`WORKER_UNREACHABLE` when it passes), 8 relays at once per worker, and 64
+MiB of response a caller has not read. A lost uplink fails the call as
+`WORKER_UNREACHABLE` through `isUplinkLost`, the one function the relay, the
+lease coordinator and the component relay all ask. The uplink is shared, so a
+large relay delays the other calls on it (no flow control; #511 accepts
+this).
+
 ### Aggregated reads
 
 `status.get` on a gateway returns the same shape a worker returns — capacity

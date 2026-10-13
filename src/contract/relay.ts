@@ -29,8 +29,6 @@ export const relayHeadersSchema = z
 
 export const relayChunkSchema = z.string().max(RELAY_MAX_CHUNK_CHARACTERS).regex(BASE64);
 
-export type RelayHeaders = z.infer<typeof relayHeadersSchema>;
-
 // why: the relay re-creates these on each side instead of carrying them.
 const FRAMING_HEADERS: ReadonlySet<string> = new Set([
   "connection",
