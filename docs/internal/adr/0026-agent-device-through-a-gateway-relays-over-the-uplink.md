@@ -8,6 +8,9 @@
   part changes for it": the host-link port and the front change as §3 says.
   [ADR 0005](0005-gateway-and-worker-modes.md)'s line that agent-device gets
   fleet support with no change no longer holds; this ADR is that change.
+  [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md): §2's stage list
+  gains `has-capabilities`, which also decides whether a request can be
+  served, and §5's cannot-serve codes gain `CAPABILITY_MISSING` (§1 below).
 - **Builds on:** ADR 0005 (workers dial out; the gateway never reaches in),
   [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) (routing is a list
   of stages, and a request no worker can serve fails at once),
@@ -55,18 +58,24 @@ flowchart LR
 ### 1. Workers advertise capabilities; a lease request may require one
 
 A **capability** is an optional module a worker serves, by name. The worker's
-status lists each capability whose module is turned on, with a state:
-`available`, or `unavailable` with the reason the module gives (for
-agent-device, the reason its `simlock doctor` finding gives). A module that is
-turned off is not listed. The gateway keeps this list in each worker view
-and refreshes it with the rest of the status.
+status lists each capability it knows of, with a state: `available`,
+`unavailable` with the reason the module gives, or `off` when the operator
+turned the module off. For agent-device the reason is the one the front would
+answer an agent with, so what an operator sees always matches what agents
+get. The gateway keeps this list in each worker view and refreshes it with
+the rest of the status.
 
 `lease.request` takes an optional `requires`: a list of capability names.
 The gateway's routing gains one stage, early in the list, that leaves out a
 worker which does not list every required capability as `available`. When
-that leaves no connected worker, the request fails at once, as ADR 0009
-already answers a request no worker can serve. A worker answering a request
-directly applies the same check to itself, as a fleet of one.
+that leaves no connected worker that could serve the request, it fails at
+once with `CAPABILITY_MISSING`, as ADR 0009 answers a request no worker can
+serve; a waiting request is checked again on every pass, like ADR 0009's
+other rows, so it fails too once no capable worker is left. A worker that
+answers `CAPABILITY_MISSING` to a gateway's dispatch (its view was stale)
+is left out and the request goes to the next worker, as for `UNKNOWN_MODEL`.
+A worker answering a request directly applies the same check to itself, as
+a fleet of one.
 
 `simlock worker list`, `simlock status` and the console show each worker's
 capabilities, with the reason when one is unavailable.
@@ -162,15 +171,18 @@ optional, since there is one host.
 
 ### 5. A lease on an unreachable worker is not an ended lease
 
-On a gateway, the front asks one question about a lease, with three
-answers: live, gone, or unreachable. A lease is gone only once its worker
-has said so, through the same worker events and views the gateway already
-uses for ordinary leases. A lease whose worker is disconnected is
-unreachable: the front answers `WORKER_UNREACHABLE` and keeps its entry,
-and the simlock lease runs out on the worker's own clock, as every gateway
-lease does.
+A gateway keeps a disconnected worker's view, leases included, so its
+`lease.list` still lists them. What the front lacks is a way to tell a
+disconnected worker from a failed call. On a gateway, the host link says
+which of three a lease is: live, gone, or unreachable. A lease is gone only
+once its worker has said so, through the same worker events and views the
+gateway already uses for ordinary leases. A lease whose worker is
+disconnected is unreachable: the front answers `WORKER_UNREACHABLE` without
+forwarding and keeps its entry, and the simlock lease runs out on the
+worker's own clock, as every gateway lease does.
 
-After a gateway restart the front has no entries. On the first call for a
+After a gateway restart the front has no entries, and the lease index is
+empty until the workers reconnect. On the first call for a
 lease it does not hold, it rebuilds the entry from the lease index and the
 worker's lease record when the lease is owned by the calling token's
 principal and its requester is the lease id itself (the mark every
@@ -191,11 +203,15 @@ sequenceDiagram
   F-->>CLI: ok
 ```
 
-### 6. The tenant on the worker is the principal
+### 6. The tenant on the worker carries the gateway's prefix
 
-The principal the gateway relays becomes the agent-device tenant on the
-worker, as an in-process request's principal does. It is the same name the
-worker already stores as the simlock lease's owner for a gateway lease.
+A relayed request's agent-device tenant on the worker is
+`gw:<gateway instance id>:<principal>`, the prefix the gateway already puts
+on the requester of every lease it dispatches. Tokens minted on a gateway and
+on a worker are separate, so two agents can share a principal name; with the
+prefix they never share an agent-device tenant, and neither can drive the
+other's device. The simlock lease's owner stays the bare principal, as for
+every gateway lease.
 
 ## Consequences
 
@@ -209,8 +225,8 @@ worker already stores as the simlock lease's owner for a gateway lease.
 - The agent-device change of §4 is one more unreleased agent-device change
   simlock depends on, with those ADR 0023 lists.
 - An agent with a worker-minted token and an agent with a gateway-minted
-  token that share a principal name share an agent-device tenant on that
-  worker, as they already share ownership of its simlock leases.
+  token that share a principal name still share ownership of the worker's
+  simlock leases, as today, but not an agent-device tenant.
 - The gateway's capability list lags the worker by one status refresh. An
   allocate that lands on a worker whose agent-device daemon just stopped
   fails after the grant, and the front releases the simlock lease, as it
