@@ -326,6 +326,16 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
   return testEnv;
 }
 
+export interface SharedTestEnv extends TestEnv {
+  readonly httpPort: number;
+  teardown(): Promise<void>;
+  restart(): Promise<void>;
+}
+
+export function withSharedDaemon(_options: WithDaemonOptions = {}): Promise<SharedTestEnv> {
+  return Promise.reject(new Error("withSharedDaemon is not implemented"));
+}
+
 interface TeardownState {
   readonly backgroundProcesses: ReadonlySet<CliBackgroundHandle>;
   readonly env: NodeJS.ProcessEnv;
