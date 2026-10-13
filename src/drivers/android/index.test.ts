@@ -4430,7 +4430,9 @@ async function fitHarness(
   images: readonly FitImage[],
   options: {
     readonly devicesXml?: string;
+    readonly extraEnv?: Readonly<Record<string, string>>;
     readonly hostAbi?: string;
+    readonly listing?: string;
     readonly profiles?: readonly LibraryDeviceProfile[];
   } = {},
 ) {
@@ -4446,7 +4448,7 @@ async function fitHarness(
     }
   }
   if (options.devicesXml !== undefined) await writeDevicesXml(filesystem, options.devicesXml);
-  const runner = new ListingRunner(fitDevices, [
+  const runner = new ListingRunner(options.listing ?? fitDevices, [
     processResult(binaries.avdmanager, [
       "create",
       "avd",
@@ -4463,6 +4465,7 @@ async function fitHarness(
   const driver = await createDriver(filesystem, runner, {
     hostAbi: options.hostAbi ?? "arm64-v8a",
     ids: ["one"],
+    ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv }),
     ...(options.profiles === undefined
       ? {}
       : { deviceProfileSources: [{ profiles: async () => options.profiles ?? [] }] }),
@@ -5040,6 +5043,7 @@ async function createDriver(
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
+    readonly extraEnv?: Readonly<Record<string, string>>;
     /** The ABI this host runs natively; `arm64-v8a` unless a test says otherwise. */
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
@@ -5061,6 +5065,7 @@ async function createDriver(
     driverConfig,
     env: {
       ANDROID_HOME: sdk,
+      ...options.extraEnv,
       ...(options.avdHome === undefined ? {} : { ANDROID_AVD_HOME: options.avdHome }),
     },
     filesystem,
@@ -5888,3 +5893,261 @@ function driverCrashMessage(error: unknown): { readonly refused: string } {
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+interface CustomFitProfile {
+  readonly apiLevel?: string;
+  readonly diagonal?: string;
+  readonly folded?: boolean;
+  readonly name: string;
+  readonly playStore?: string;
+  readonly tagId?: string;
+}
+
+function customFitXml(profile: CustomFitProfile): string {
+  const screen =
+    profile.diagonal === undefined && profile.folded !== true
+      ? ""
+      : `<d:screen>${profile.diagonal === undefined ? "" : `<d:diagonal-length>${profile.diagonal}</d:diagonal-length>`}` +
+        (profile.folded === true
+          ? "<d:x-folded-dimension>1080</d:x-folded-dimension><d:y-folded-dimension>2400</d:y-folded-dimension>"
+          : "") +
+        "</d:screen>";
+  return (
+    `<d:device><d:name>${profile.name}</d:name>` +
+    (profile.tagId === undefined ? "" : `<d:tag-id>${profile.tagId}</d:tag-id>`) +
+    `<d:hardware>${screen}</d:hardware>` +
+    (profile.apiLevel === undefined
+      ? ""
+      : `<d:software><d:api-level>${profile.apiLevel}</d:api-level></d:software>`) +
+    (profile.playStore === undefined
+      ? ""
+      : `<d:playstore-enabled>${profile.playStore}</d:playstore-enabled>`) +
+    "</d:device>"
+  );
+}
+
+function userListing(...entries: readonly (readonly [name: string, tag?: string])[]): string {
+  return (
+    "Available devices:\n" +
+    entries
+      .map(
+        ([name, tag]) =>
+          `id: 9 or "${name}"\n    Name: ${name}\n    OEM : User\n` +
+          (tag === undefined ? "" : `    Tag : ${tag}\n`) +
+          "---------\n",
+      )
+      .join("")
+  );
+}
+
+describe("AndroidDriver custom profile fit from devices.xml", () => {
+  const wearImage: FitImage = [
+    "34",
+    "android-wear",
+    "arm64-v8a",
+    "SystemImage.TagId=android-wear,google_apis_playstore\n",
+  ];
+
+  it("a custom profile listed by avdmanager gets the API range of its devices.xml entry: api-level 31- drops levels below 31 from its modelRuntimes", async () => {
+    const images: readonly FitImage[] = [
+      ["30", "google_apis", "arm64-v8a"],
+      ["31", "google_apis", "arm64-v8a"],
+      ["30", "android-tv", "arm64-v8a"],
+      ["31", "android-tv", "arm64-v8a"],
+    ];
+    const open = await fitHarness(images, {
+      devicesXml: customFitXml({ name: "Open Phone" }),
+      listing: userListing(["Open Phone"]),
+    });
+    expect((await open.driver.listCatalog()).modelRuntimes["Open Phone"]).toEqual(["30", "31"]);
+    const { driver } = await fitHarness(images, {
+      devicesXml:
+        customFitXml({ apiLevel: "31-", name: "My Phone" }) +
+        customFitXml({ apiLevel: "31-", name: "My TV", tagId: "android-tv" }),
+      listing: userListing(["My Phone"], ["My TV", "android-tv"]),
+    });
+
+    const { modelRuntimes } = await driver.listCatalog();
+
+    expect(modelRuntimes["My Phone"]).toEqual(["31"]);
+    expect(modelRuntimes["My TV"]).toEqual(["31"]);
+  });
+
+  it("a custom profile with playstore-enabled false drops Play Store images", async () => {
+    const images: readonly FitImage[] = [
+      ["34", "google_apis_playstore", "arm64-v8a"],
+      ["35", "google_apis", "arm64-v8a"],
+    ];
+    const allowed = await fitHarness(images, {
+      devicesXml: customFitXml({ name: "My Phone", playStore: "true" }),
+      listing: userListing(["My Phone"]),
+    });
+    expect((await allowed.driver.listCatalog()).modelRuntimes["My Phone"]).toEqual(["34", "35"]);
+    const { driver } = await fitHarness(images, {
+      devicesXml: customFitXml({ name: "My Phone", playStore: "false" }),
+      listing: userListing(["My Phone"]),
+    });
+
+    expect((await driver.listCatalog()).modelRuntimes["My Phone"]).toEqual(["35"]);
+  });
+
+  it("a custom Wear profile with playstore-enabled false keeps an image tagged android-wear,google_apis_playstore, listed by avdmanager or devices.xml-only", async () => {
+    const wear = customFitXml({ name: "My Watch", playStore: "false", tagId: "android-wear" });
+    const listed = await fitHarness([wearImage], {
+      devicesXml: wear,
+      listing: userListing(["My Watch", "android-wear"]),
+    });
+    const only = await fitHarness([wearImage], { devicesXml: wear, listing: userListing() });
+
+    expect((await listed.driver.listCatalog()).modelRuntimes["My Watch"]).toEqual(["34"]);
+    expect((await only.driver.listCatalog()).modelRuntimes["My Watch"]).toEqual(["34"]);
+  });
+
+  it("resolveSpec with --os 30 and provision refuse a custom profile whose api-level is 31-", async () => {
+    const images: readonly FitImage[] = [
+      ["30", "google_apis", "arm64-v8a"],
+      ["31", "google_apis", "arm64-v8a"],
+    ];
+    const { createdPackage, driver, refusal, resolve } = await fitHarness(images, {
+      devicesXml: customFitXml({ apiLevel: "31-", name: "My Phone" }),
+      listing: userListing(["My Phone"]),
+    });
+    await expect(resolve("My Phone", "31")).resolves.toMatchObject({ osVersion: "31" });
+
+    expect(await refusal("My Phone", "30")).toMatchObject({ name: "RuntimeMissingError" });
+    await expect(
+      driver.provision({
+        model: "My Phone",
+        osVersion: "30",
+        physical: false,
+        platform: "android",
+      }),
+    ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+    expect(createdPackage()).toBeUndefined();
+  });
+
+  it("a custom profile with no type and a 10.1-inch screen that does not fold fits tablet images; a 6-inch one, one with folded dimensions and one with no diagonal do not", async () => {
+    const images: readonly FitImage[] = [
+      ["35", "google_apis", "arm64-v8a"],
+      ["36", "tablet", "arm64-v8a"],
+    ];
+    const { driver } = await fitHarness(images, {
+      devicesXml:
+        customFitXml({ diagonal: "10.1", name: "Big" }) +
+        customFitXml({ diagonal: "6", name: "Small" }) +
+        customFitXml({ diagonal: "10.1", folded: true, name: "Folds" }) +
+        customFitXml({ name: "NoDiagonal" }),
+      listing: userListing(["Big"], ["Small"], ["Folds"], ["NoDiagonal"]),
+    });
+
+    const { modelRuntimes } = await driver.listCatalog();
+
+    expect(modelRuntimes["Big"]).toEqual(["35", "36"]);
+    expect(modelRuntimes["Small"]).toEqual(["35"]);
+    expect(modelRuntimes["Folds"]).toEqual(["35"]);
+    expect(modelRuntimes["NoDiagonal"]).toEqual(["35"]);
+  });
+
+  it("a custom profile with nothing but a name pairs as after #489", async () => {
+    const { driver } = await fitHarness(HOST_IMAGES, {
+      devicesXml: customFitXml({ name: "Old" }),
+      listing: userListing(["Old"]),
+    });
+
+    expect((await driver.listCatalog()).modelRuntimes["Old"]).toEqual(["35", "36"]);
+  });
+
+  it("a custom profile's class still comes from avdmanager's Tag line", async () => {
+    const { driver } = await fitHarness(HOST_IMAGES, {
+      devicesXml: customFitXml({ name: "My TV", tagId: "android-wear" }),
+      listing: userListing(["My TV", "android-tv"]),
+    });
+
+    expect((await driver.listCatalog()).modelClasses["My TV"]).toBe("tv");
+  });
+
+  it("a devices.xml profile avdmanager does not list fits by its own tag-id, range, Play Store flag and screen, and is classed by its tag-id", async () => {
+    const images: readonly FitImage[] = [
+      ["30", "android-tv", "arm64-v8a"],
+      ["31", "android-tv", "arm64-v8a"],
+      ["30", "google_apis", "arm64-v8a"],
+      ["31", "google_apis_playstore", "arm64-v8a"],
+      ["32", "google_apis", "arm64-v8a"],
+      ["33", "tablet", "arm64-v8a"],
+    ];
+    const { driver } = await fitHarness(images, {
+      devicesXml:
+        customFitXml({ apiLevel: "31-", name: "Only TV", tagId: "android-tv" }) +
+        customFitXml({ name: "Only Phone", playStore: "false" }) +
+        customFitXml({ diagonal: "10.1", name: "Only Tablet" }),
+      listing: userListing(),
+    });
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.modelRuntimes["Only TV"]).toEqual(["31"]);
+    expect(catalog.modelRuntimes["Only Phone"]).toEqual(["30", "32"]);
+    expect(catalog.modelRuntimes["Only Tablet"]).toEqual(["30", "31", "32", "33"]);
+    expect(catalog.modelClasses["Only TV"]).toBe("tv");
+    expect(catalog.modelClasses["Only Phone"]).toBe("phone");
+  });
+
+  it("config.ini for a devices.xml profile holds the same keys as before this PR", async () => {
+    const keysOf = async (xml: string) => {
+      const harness = await libraryHarness({
+        devicesXml: xml,
+        secondList: true,
+      });
+      await harness.provision("Keyed");
+      return [...(await harness.config()).keys()].sort();
+    };
+    const plain = customDeviceXml("Keyed", 4096);
+    const rich = customFitXml({
+      apiLevel: "31-",
+      diagonal: "10.1",
+      name: "Keyed",
+      playStore: "false",
+      tagId: "android-tv",
+    }).replace("</d:hardware>", '<d:ram unit="MiB">4096</d:ram></d:hardware>');
+
+    expect(await keysOf(rich)).toEqual(await keysOf(plain));
+  });
+
+  it("reads devices.xml from ANDROID_USER_HOME, then ANDROID_PREFS_ROOT, then ANDROID_SDK_HOME, then home", async () => {
+    const paths = [
+      "/user-home/devices.xml",
+      "/prefs/.android/devices.xml",
+      "/sdk-home/.android/devices.xml",
+      `${home}/.android/devices.xml`,
+    ];
+    const env = {
+      ANDROID_PREFS_ROOT: "/prefs",
+      ANDROID_SDK_HOME: "/sdk-home",
+      ANDROID_USER_HOME: "/user-home",
+    };
+    const names = ["From user home", "From prefs root", "From sdk home", "From home"];
+    const outcomes: string[][] = [];
+    for (let first = 0; first < paths.length; first++) {
+      const used: Record<string, string> = {};
+      if (first <= 0) used["ANDROID_USER_HOME"] = env.ANDROID_USER_HOME;
+      if (first <= 1) used["ANDROID_PREFS_ROOT"] = env.ANDROID_PREFS_ROOT;
+      if (first <= 2) used["ANDROID_SDK_HOME"] = env.ANDROID_SDK_HOME;
+      const { driver, filesystem } = await fitHarness(HOST_IMAGES, {
+        extraEnv: used,
+        listing: userListing(),
+      });
+      for (const [index, path] of paths.entries()) {
+        await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")));
+        await filesystem.writeFileAtomic(
+          path,
+          `<?xml version="1.0"?><d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">${customFitXml({ name: names[index] as string })}</d:devices>`,
+        );
+      }
+      outcomes.push(
+        (await driver.listCatalog()).models.filter((model) => model.startsWith("From ")),
+      );
+    }
+
+    expect(outcomes).toEqual(names.map((name) => [name]));
+  });
+});

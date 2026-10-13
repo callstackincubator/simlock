@@ -331,6 +331,123 @@ describe("parseDevicesXml", () => {
   });
 });
 
+describe("parseDevicesXml image-fit fields", () => {
+  const deviceXml = (inner: string, name = "Fit Phone") =>
+    `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7"><d:device><d:name>${name}</d:name>${inner}</d:device></d:devices>`;
+  const apiLevel = (range: string) =>
+    `<d:software><d:api-level>${range}</d:api-level></d:software>`;
+  const diagonal = (value: string) =>
+    `<d:hardware><d:screen><d:diagonal-length>${value}</d:diagonal-length></d:screen></d:hardware>`;
+  const first = (xml: string) => parseDevicesXml(xml)[0] as unknown as Record<string, unknown>;
+
+  it("reads tag-id, api-level, playstore-enabled, the diagonal and the fold from a devices.xml profile", () => {
+    const profile = first(
+      deviceXml(
+        "<d:tag-id>android-tv</d:tag-id>" +
+          "<d:hardware><d:screen><d:diagonal-length>55</d:diagonal-length></d:screen></d:hardware>" +
+          apiLevel("31-") +
+          "<d:playstore-enabled>false</d:playstore-enabled>",
+      ),
+    );
+    expect(profile).toMatchObject({
+      apiRange: { min: 31 },
+      imageKind: "android-tv",
+      playStore: false,
+      tablet: false,
+    });
+    const tablet = first(deviceXml(diagonal("10.1")));
+    expect(tablet).toMatchObject({ tablet: true });
+    const folded = first(
+      deviceXml(
+        "<d:hardware><d:screen><d:diagonal-length>10.1</d:diagonal-length>" +
+          "<d:x-folded-dimension>1080</d:x-folded-dimension><d:y-folded-dimension>2400</d:y-folded-dimension>" +
+          "</d:screen></d:hardware>",
+      ),
+    );
+    expect(folded).toMatchObject({ tablet: false });
+  });
+
+  it.each([
+    ["-", undefined],
+    ["", undefined],
+    ["33-", { min: 33 }],
+    ["24-33", { max: 33, min: 24 }],
+    ["-30", { max: 30, min: 1 }],
+    ["33", { max: 33, min: 33 }],
+    ["40-30", undefined],
+    ["abc", undefined],
+    ["0-", undefined],
+    ["1000-", undefined],
+  ])("parses the api-level %j as the range %j", (range, expected) => {
+    expect(first(deviceXml(apiLevel(range))).apiRange).toEqual(expected);
+  });
+
+  it("ignores a tag-id outside the allowed characters or length, a diagonal outside 0.1 to 100, and a playstore-enabled other than true/false", () => {
+    expect(first(deviceXml("<d:tag-id>android-tv</d:tag-id>")).imageKind).toBe("android-tv");
+    expect(first(deviceXml("<d:tag-id>Android TV</d:tag-id>")).imageKind).toBeUndefined();
+    expect(first(deviceXml(`<d:tag-id>${"a".repeat(65)}</d:tag-id>`)).imageKind).toBeUndefined();
+    expect(first(deviceXml(diagonal("10.1"))).tablet).toBe(true);
+    expect(first(deviceXml(diagonal("0.05"))).tablet).toBe(false);
+    expect(first(deviceXml(diagonal("101"))).tablet).toBe(false);
+    expect(first(deviceXml("<d:playstore-enabled>false</d:playstore-enabled>")).playStore).toBe(
+      false,
+    );
+    expect(first(deviceXml("<d:playstore-enabled>maybe</d:playstore-enabled>")).playStore).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["tag-id", "<d:tag-id>android\ntv</d:tag-id>"],
+    ["api-level", apiLevel("abc\n")],
+    ["playstore-enabled", "<d:playstore-enabled>mayb\ne</d:playstore-enabled>"],
+    ["diagonal-length", diagonal("500\n")],
+    [
+      "folded dimension",
+      "<d:hardware><d:screen><d:x-folded-dimension>1\u00002</d:x-folded-dimension></d:screen></d:hardware>",
+    ],
+  ])(
+    "a CR, LF or NUL inside a %s rejects the file through the unreadable-file diagnostic",
+    async (_field, inner) => {
+      const clean = await filesystemWithDevicesXml(deviceXml("<d:tag-id>android-tv</d:tag-id>"));
+      const accepted = new UserDeviceProfileSource(devicesXmlPath, clean);
+      await expect(accepted.profiles()).resolves.toHaveLength(1);
+      const filesystem = await filesystemWithDevicesXml(deviceXml(inner));
+      const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+      const source = new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      await expect(source.profiles()).resolves.toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({ kind: "device-profile-source-unreadable" });
+    },
+  );
+
+  it("a profile with a tag-id and a 10-inch screen is not a tablet", () => {
+    expect(first(deviceXml(`<d:tag-id>android-tv</d:tag-id>${diagonal("10")}`)).tablet).toBe(false);
+    expect(first(deviceXml(diagonal("10"))).tablet).toBe(true);
+  });
+
+  it("gives the properties profile the imageKind, apiRange, playStore and tablet it read", async () => {
+    const filesystem = await filesystemWithDevicesXml(
+      deviceXml(
+        `<d:tag-id>android-wear</d:tag-id>${apiLevel("30-")}<d:playstore-enabled>false</d:playstore-enabled>`,
+      ),
+    );
+
+    const [profile] = await new UserDeviceProfileSource(devicesXmlPath, filesystem).profiles();
+
+    expect(profile).toMatchObject({
+      apiRange: { min: 30 },
+      imageKind: "android-wear",
+      kind: "properties",
+      playStore: true,
+      tablet: false,
+    });
+  });
+});
+
 describe("DeviceProfileRegistry", () => {
   it("resolves the first source's profile when two sources both name the same model", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
