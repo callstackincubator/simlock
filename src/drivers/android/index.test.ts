@@ -5037,14 +5037,14 @@ async function createDriver(
   processRunner: ProcessRunner,
   options: {
     readonly acceptAndroidLicenses?: boolean;
-    /** `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
+    /** why: `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
     readonly avdHome?: string;
     readonly clock?: FakeClock;
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly extraEnv?: Readonly<Record<string, string>>;
-    /** The ABI this host runs natively; `arm64-v8a` unless a test says otherwise. */
+    /** why: the ABI this host runs natively; `arm64-v8a` unless a test says otherwise. */
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
@@ -5082,7 +5082,7 @@ async function createDriver(
   });
 }
 
-/** The options this helper only forwards when a test actually set one -- `AndroidDriver.create`
+/** why: the options this helper only forwards when a test actually set one -- `AndroidDriver.create`
  * declares them optional under `exactOptionalPropertyTypes`, so an absent one must be absent
  * rather than `undefined`. Split out of `createDriver` so that the list can keep growing
  * without the helper itself turning into a pile of conditionals. */
