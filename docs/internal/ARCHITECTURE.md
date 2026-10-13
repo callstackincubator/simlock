@@ -1957,8 +1957,8 @@ fan-out; `GatewayDispatcher`'s handler only calls it.
   `component-progress` update is passed to the session with the worker's id,
   and the socket transport writes it with `workerId` on the push.
 - **One outcome per target** (architecture rule 12). The worker's answer, the
-  gateway's client rejecting with `DAEMON_CONNECTION_LOST` (the uplink
-  closed), and a backstop timer each settle the target, first one wins, and
+  gateway's client rejecting with a `transport` error such as
+  `DAEMON_CONNECTION_LOST` or `DAEMON_STOPPING` (the uplink closed), and a backstop timer each settle the target, first one wins, and
   everything after it is dropped, progress included. The backstop is that
   worker's `downloads.timeoutMs` plus `INSTALL_BACKSTOP_MARGIN_MS` (one
   minute), set on the `Clock` when the call is sent and never restarted

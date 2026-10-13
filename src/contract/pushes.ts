@@ -1,8 +1,9 @@
 /**
- * Server pushes (ADR 0003 §8). Three families, each with its correlation key required by
+ * why: server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `started`, `output`, `component-progress`): carries the
+ * - Request-scoped (`progress`, `started`, `output`, `component-progress`, `relay-head`,
+ *   `relay-chunk`): carries the
  *   originating request's frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
