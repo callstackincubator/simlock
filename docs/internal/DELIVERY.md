@@ -163,8 +163,8 @@ typecheck on commit; Fallow and the e2e typecheck on push; the full suite
 in CI. Mutation testing is not part of delivery: it ran on every push and
 held each push for minutes, and the tests it added in its last weeks were
 mostly details no caller depends on. The weekly `harden-tests` routine runs
-it on what `main` changed, and kills only the survivors a caller or user
-could see. Each push cancels the CI
+it on what `main` changed most recently, and kills only the survivors a
+caller or user could see. Each push cancels the CI
 run before it, so before every review round and fix run the orchestrator
 reads the newest finished run with `.agents/scripts/ci-failures.mjs`, and
 its failed tests go into the next fix run.

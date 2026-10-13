@@ -76,8 +76,8 @@ function repo(): Repo {
   return { dir, log, bin, git, commit };
 }
 
-function mutate(r: Repo, cwd = r.dir, crash = "") {
-  const run = spawnSync(process.execPath, [SCRIPT, "base"], {
+function mutate(r: Repo, cwd = r.dir, crash = "", args: string[] = []) {
+  const run = spawnSync(process.execPath, [SCRIPT, "base", ...args], {
     cwd,
     encoding: "utf8",
     env: { ...process.env, PATH: `${r.bin}:/usr/bin:/bin`, CRASH: crash },
@@ -154,4 +154,97 @@ describe("mutate.mjs", () => {
     expect(strykerRuns(r)).toHaveLength(1);
     expect(output).toContain("Nothing under src/ or ui/src/ changed since this branch's last run");
   });
+
+  it("without --max-lines, mutates every changed range in diff order and prints no skip line", () => {
+    const r = fourFiles(repo());
+
+    const { output } = mutate(r);
+
+    expect(mutated(r)).toEqual(["src/a.ts:2-2,src/b.ts:1-3,src/c.ts:1-2,src/d.ts:1-1"]);
+    expect(output).not.toContain("Skipped");
+    expect(output).toContain("on 4 changed ranges");
+  });
+
+  it("with --max-lines, takes files by their newest commit, newest first, and stops at the first file that would pass the budget", () => {
+    const r = fourFiles(repo());
+
+    const { output } = mutate(r, r.dir, "", ["--max-lines", "4"]);
+
+    expect(mutated(r)).toEqual(["src/a.ts:2-2,src/c.ts:1-2"]);
+    expect(output).toContain("on 2 changed ranges");
+  });
+
+  it("with --max-lines, prints one line naming the skipped files and changed lines, then each skipped file", () => {
+    const r = fourFiles(repo());
+
+    const { output } = mutate(r, r.dir, "", ["--max-lines", "4"]);
+
+    const lines = output.split("\n");
+    const at = lines.indexOf("Skipped 2 files and 4 changed lines past --max-lines 4:");
+    expect(at).not.toBe(-1);
+    expect(lines.slice(at + 1, at + 3)).toEqual(["  src/b.ts", "  src/d.ts"]);
+  });
+
+  it("with --max-lines, ranks a file with uncommitted changes before every committed one", () => {
+    const r = repo();
+    r.commit({ "src/b.ts": "export const x = 1;\n" });
+    writeFileSync(join(r.dir, "src/a.ts"), "export const a = 1;\nexport const b = false;\n");
+
+    const { output } = mutate(r, r.dir, "", ["--max-lines", "1"]);
+
+    expect(mutated(r)).toEqual(["src/a.ts:2-2"]);
+    expect(output).toContain("  src/b.ts");
+  });
+
+  it("with --max-lines, cuts a newest file larger than the budget at the budget and names it as partly skipped", () => {
+    const r = repo();
+    const ten = Array.from({ length: 10 }, (_, i) => `export const v${i + 1} = ${i + 1};`);
+    r.commit({ "src/big.ts": `${ten.join("\n")}\n` });
+    r.git("branch", "-f", "base");
+    r.commit({ "src/c.ts": "export const c = 1;\n" });
+    const edited = ten.map((line, i) =>
+      [1, 2, 5, 6, 7, 8].includes(i) ? line.replace(";", "0;") : line,
+    );
+    r.commit({ "src/big.ts": `${edited.join("\n")}\n` });
+
+    const { output } = mutate(r, r.dir, "", ["--max-lines", "3"]);
+
+    expect(mutated(r)).toEqual(["src/big.ts:2-3,src/big.ts:6-6"]);
+    expect(output).toContain("Skipped 2 files and 4 changed lines past --max-lines 3:");
+    expect(output).toContain("  src/big.ts (past its first 3 changed lines)");
+    expect(output).toContain("  src/c.ts");
+  });
+
+  it("runs Stryker again, not reprinting the last result, when the same sources get another --max-lines selection", () => {
+    const r = fourFiles(repo());
+    mutate(r, r.dir, "", ["--max-lines", "4"]);
+    mutate(r, r.dir, "", ["--max-lines", "4"]);
+
+    const { output } = mutate(r, r.dir, "", ["--max-lines", "1"]);
+
+    expect(mutated(r)).toEqual(["src/a.ts:2-2,src/c.ts:1-2", "src/a.ts:2-2"]);
+    expect(output).not.toContain("its result stands");
+  });
+
+  it("refuses a --max-lines that is not a whole number above 0, without running Stryker", () => {
+    const r = repo();
+    const ok = mutate(r, r.dir, "", ["--max-lines", "1"]);
+    expect(ok.code).toBe(1);
+
+    const { code, output } = mutate(r, r.dir, "", ["--max-lines", "0"]);
+
+    expect(output).toContain("--max-lines takes a whole number of lines above 0.");
+    expect(code).toBe(2);
+    expect(strykerRuns(r)).toHaveLength(1);
+  });
 });
+
+function fourFiles(r: Repo): Repo {
+  r.commit({ "src/d.ts": "export const d = 1;\n" });
+  r.commit({ "src/b.ts": "export const b1 = 1;\nexport const b2 = 2;\nexport const b3 = 3;\n" });
+  r.commit({ "src/c.ts": "export const c1 = 1;\nexport const c2 = 2;\n" });
+  r.commit({ "src/a.ts": "export const a = 1;\nexport const b = false;\n" });
+  return r;
+}
+
+const mutated = (r: Repo) => strykerRuns(r).map((line) => line.split(" ")[4]);

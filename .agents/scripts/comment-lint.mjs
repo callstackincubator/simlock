@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// `node .agents/scripts/comment-lint.mjs [--all] [--base <ref>] [--head <ref>] [<files>...]`:
-// the mechanical half of architecture rule 17. Every comment block the diff from <base>
-// (default origin/main) to <head> (default the working tree) adds or edits must be one of:
+// `node .agents/scripts/comment-lint.mjs [--all] [--limit <n>] [--base <ref>] [--head <ref>]
+// [<files>...]`: the mechanical half of architecture rule 17. Every comment block the diff from
+// <base> (default origin/main) to <head> (default the working tree) adds or edits must be one of:
 //
 //   why       its first words are `why:` (any case)
 //   link      it contains a URL (an upstream bug or a reference)
@@ -14,7 +14,10 @@
 //
 // Anything else is printed as `path:line: ...` and the exit code is 1. `--all` judges every
 // block in the touched files, unchanged ones too (the weekly comment routine). <files> restricts
-// the paths, for the commit hook. Whether a `why:` is true is the claims review's question.
+// the paths, for the commit hook. `--limit <n>` keeps whole files, most listed blocks first (ties
+// by path), while the total stays at or under n (the first file always), and says on stderr how
+// many blocks in how many files it left for later runs. Whether a `why:` is true is the claims
+// review's question.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { listComments, trailingText } from "./comments.mjs";
@@ -29,19 +32,23 @@ const args = process.argv.slice(2);
 let all = false;
 let base = "origin/main";
 let head;
+let limit;
 const files = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--all") all = true;
   else if (args[i] === "--base") base = args[++i];
   else if (args[i] === "--head") head = args[++i];
+  else if (args[i] === "--limit") limit = Number(args[++i]);
   else if (args[i].startsWith("--")) usage();
   else files.push(args[i]);
 }
 if (base === undefined || (args.includes("--head") && head === undefined)) usage();
+if (args.includes("--limit") && !(Number.isInteger(limit) && limit > 0)) usage();
 
 const publicFiles = exportedFrom(ENTRY_POINTS);
 const blocks = listComments({ base, head, all, files: files.length > 0 ? files : null });
-const bad = blocks.filter((b) => !allowed(b)).filter((b) => all || b.state !== "unchanged");
+const listed = blocks.filter((b) => !allowed(b)).filter((b) => all || b.state !== "unchanged");
+const bad = limit === undefined ? listed : withinLimit(listed, limit);
 for (const b of bad) {
   console.log(`${b.path}:${b.start}: a comment starts with "why:" or goes (architecture rule 17)`);
 }
@@ -53,8 +60,30 @@ if (bad.length > 0) {
 }
 
 function usage() {
-  console.error("usage: comment-lint.mjs [--all] [--base <ref>] [--head <ref>] [<files>...]");
+  console.error(
+    "usage: comment-lint.mjs [--all] [--limit <n>] [--base <ref>] [--head <ref>] [<files>...]",
+  );
   process.exit(64);
+}
+
+function withinLimit(list, n) {
+  const counts = new Map();
+  for (const b of list) counts.set(b.path, (counts.get(b.path) ?? 0) + 1);
+  // why: listComments lists files in path order and sort is stable, so ties stay in path order.
+  const order = [...counts].sort((x, y) => y[1] - x[1]);
+  const kept = new Set();
+  let total = 0;
+  for (const [file, count] of order) {
+    if (kept.size > 0 && total + count > n) break;
+    kept.add(file);
+    total += count;
+  }
+  const left = list.length - total;
+  const rest = counts.size - kept.size;
+  console.error(
+    `comment-lint: ${left} more comment${left === 1 ? "" : "s"} in ${rest} file${rest === 1 ? "" : "s"} left for later runs`,
+  );
+  return list.filter((b) => kept.has(b.path));
 }
 
 function allowed(block) {
