@@ -1683,9 +1683,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await rig.daemon.dispatch("lease.release-all", {}, adminSession);
-    const agentRelease = release(rig, 1);
-    rig.fake.releaseCommand();
-    await agentRelease;
+    rig.fake.answerReleaseWhileCommandsRun();
+    await release(rig, 1);
     const received = rig.fake.requests.length;
     const tap = tapDispatch(rig);
 
@@ -1693,6 +1692,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await advance(rig, 120_000, 10_000);
 
     expect(rig.fake.requests).toHaveLength(received);
+    rig.fake.releaseCommand();
     expect(tap.operations).not.toContain("lease.list");
     expect(tap.operations).not.toContain("lease.renew");
   });
@@ -1889,14 +1889,14 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await advance(rig, 5_000, 5_000);
-    const agentRelease = release(rig, 1);
-    rig.fake.releaseCommand();
-    await agentRelease;
+    rig.fake.answerReleaseWhileCommandsRun();
+    await release(rig, 1);
     const tap = tapDispatch(rig);
 
     await advance(rig, 60_000, 5_000);
 
     expect(frontCalls(tap)).toEqual([]);
+    rig.fake.releaseCommand();
   });
 
   it("a lease whose CLI stops sending heartbeats expires one TTL after its last heartbeat, and its device can be leased again", async () => {
@@ -2400,6 +2400,10 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
 
     await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
     expect(releasesReceived(rig)).toHaveLength(1);
+    expect(rig.fake.releaseReplies).toHaveLength(1);
+    expect(JSON.parse(rig.fake.releaseReplies[0] ?? "")).toMatchObject({
+      result: { ok: true, released: false },
+    });
   });
 
   it("after a simlock daemon restart on the same data directory, a lease made before the restart ends at startup with nothing sent to agent-device", async () => {

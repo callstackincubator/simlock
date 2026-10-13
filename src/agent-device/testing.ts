@@ -137,6 +137,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   generation = 1;
   leaseMaxTtlMs: number;
   onRelease: (() => Promise<void>) | undefined;
+  // why: the body of each release answer sent, so a test can read what the daemon said.
+  readonly releaseReplies: string[] = [];
   onHeartbeat: (() => Promise<void>) | undefined;
   #unavailable: string | undefined;
   #unreachable = false;
@@ -153,6 +155,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #streamChunks: readonly string[] | undefined;
   #restarts = 0;
   readonly #running = new Set<RunningCommand>();
+  #releaseWaitsForCommands = true;
   #commandsOutliveRequests = false;
   #hangRelease = false;
   #releaseBody: string | undefined;
@@ -257,6 +260,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#streamChunks = chunks;
   }
 
+  // why: a release answers while a command on the lease still runs, so a test can tell what stopped the front's renewals.
+  answerReleaseWhileCommandsRun(): void {
+    this.#releaseWaitsForCommands = false;
+  }
+
   restart(): void {
     this.#restarts += 1;
     this.generation += 1;
@@ -322,7 +330,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       case "lease.release":
         await this.onRelease?.();
         request.signal.throwIfAborted();
-        return this.#release(request, id, params, tenant);
+        {
+          const reply = await this.#release(request, id, params, tenant);
+          this.releaseReplies.push(await reply.clone().text());
+          return reply;
+        }
       default:
         return this.#command(request, id, params, meta);
     }
@@ -437,7 +449,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     }
     this.leases.delete(lease.leaseId);
     const running = [...this.#running].filter((command) => command.leaseId === leaseId);
-    if (running.length > 0) {
+    if (running.length > 0 && this.#releaseWaitsForCommands) {
       const aborted = untilAborted(request.signal).then(() => {
         this.abortedReleases.push(leaseId);
         throw new Error("aborted");

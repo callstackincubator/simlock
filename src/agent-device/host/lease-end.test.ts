@@ -79,7 +79,7 @@ describe("the host's lease-end participant and recording wrapper", () => {
     expect(record.get(hex(3))).toBeUndefined();
   });
 
-  it("release-all while the allocate for that lease is still in flight waits for it; when it succeeds, the participant sends the release with its scope, and a release reply arriving after the participant started writes nothing to the record", async () => {
+  it("release-all while the allocate for that lease is still in flight waits for it; when it succeeds, the participant sends the release with its scope, and an allocate reply for that lease arriving after the participant started writes nothing to the record", async () => {
     const { fake, leaseEnd, record, through } = setUp();
     fake.holdAllocate();
     const allocating = track(through(rpc(fake, "agent_device.lease.allocate", allocateParams(1))));
