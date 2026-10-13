@@ -85,7 +85,9 @@ that name, `previous <Commit>` and the Fix lines. `Rerun: none` with
 findings open: leave the PR in draft and report them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped.`. Then `gh pr ready <M>` (in a cloud session it
+with `Spec review: skipped.` (edit the body with
+`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`; `gh pr edit`
+is GraphQL, which a cloud session refuses). Then `gh pr ready <M>` (in a cloud session it
 fails with a 403 naming the proxy's ready-for-review route: call that route)
 and `.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
 it once and run the gate again. Anything else: leave the PR open and report.

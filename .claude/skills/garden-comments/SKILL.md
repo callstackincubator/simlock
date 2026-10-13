@@ -62,7 +62,9 @@ Fix line yourself, comments only, then the check its Rerun names, as rule
 them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped. Code review: skipped.`. Then `gh pr ready <M>`
+with `Spec review: skipped. Code review: skipped.` (edit the body with
+`gh api -X PATCH repos/<owner>/<repo>/pulls/<M> -F body=@<file>`; `gh pr edit`
+is GraphQL, which a cloud session refuses). Then `gh pr ready <M>`
 (in a cloud session it fails with a 403 naming the proxy's ready-for-review
 route: call that route) and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR
 open and report.
