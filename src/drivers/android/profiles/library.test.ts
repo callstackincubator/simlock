@@ -42,6 +42,62 @@ function pixel9() {
   return profile;
 }
 
+const TABLE = [
+  ["pixel_8", "Pixel 8", "phone", undefined, 34, true, {}],
+  ["pixel_7", "Pixel 7", "phone", undefined, 33, true, {}],
+  ["pixel_6", "Pixel 6", "phone", undefined, 31, false, {}],
+  ["medium_phone", "Medium Phone", "phone", undefined, 24, true, {}],
+  ["small_phone", "Small Phone", "phone", undefined, 24, true, {}],
+  ["pixel_9_pro_xl", "Pixel 9 Pro XL", "phone", undefined, 35, true, {}],
+  ["medium_tablet", "Medium Tablet", "tablet", undefined, 24, true, {}],
+  ["tv_1080p", "Television (1080p)", "tv", "android-tv", 20, false, {}],
+  ["tv_4k", "Television (4K)", "tv", "android-tv", 31, false, {}],
+  [
+    "wearos_large_round",
+    "Wear OS Large Round",
+    "watch",
+    "android-wear",
+    20,
+    true,
+    { "ro.emulator.circular": "true" },
+  ],
+  [
+    "wearos_small_round",
+    "Wear OS Small Round",
+    "watch",
+    "android-wear",
+    20,
+    true,
+    { "ro.emulator.circular": "true" },
+  ],
+  [
+    "automotive_1080p_landscape",
+    "Automotive (1080p landscape)",
+    "auto",
+    "android-automotive",
+    28,
+    false,
+    {},
+  ],
+  [
+    "automotive_1024p_landscape",
+    "Automotive (1024p landscape)",
+    "auto",
+    "android-automotive-playstore",
+    28,
+    true,
+    {},
+  ],
+  ["desktop_medium", "Medium Desktop", "desktop", "android-desktop", 32, false, {}],
+  ["desktop_large", "Large Desktop", "desktop", "android-desktop", 32, false, {}],
+] as const;
+
+function byId(id: string) {
+  const profile = LIBRARY_PROFILES.find((candidate) => candidate.id === id);
+  if (profile === undefined) throw new Error(`the library has no profile with id ${id}`);
+  return profile;
+}
+
 describe("the Android device profile library", () => {
   it("LIBRARY_HARDWARE_KEYS equals the hw.* and vm.heapSize keys of the Pixel 9 fixture without hw.cpu.arch and hw.device.hash2", () => {
     const expected = [...fixtureConfig().keys()].filter(isLibraryKey).sort();
@@ -68,6 +124,41 @@ describe("the Android device profile library", () => {
     expect(profile.playStore).toBe(true);
     expect(profile.tablet).toBe(false);
     expect(profile.bootProperties).toEqual({});
+  });
+
+  it("the library holds exactly the 16 profiles #485 lists, by name", () => {
+    expect(LIBRARY_PROFILES.map((profile) => profile.name).sort()).toEqual(
+      ["Pixel 9", ...TABLE.map((row) => row[1])].sort(),
+    );
+  });
+
+  it("each profile's class, image kind, API range, Play Store flag and boot properties match the table", () => {
+    for (const [id, name, deviceClass, imageKind, min, playStore, bootProperties] of TABLE) {
+      const profile = byId(id);
+      expect(profile.name, id).toBe(name);
+      expect(profile.deviceClass, id).toBe(deviceClass);
+      expect(profile.imageKind, id).toBe(imageKind);
+      expect(profile.apiRange, id).toEqual({ min });
+      expect(profile.playStore, id).toBe(playStore);
+      expect(profile.bootProperties, id).toEqual(bootProperties);
+    }
+  });
+
+  it("Medium Tablet is the only profile marked tablet", () => {
+    expect(LIBRARY_PROFILES.filter((profile) => profile.tablet).map((p) => p.name)).toEqual([
+      "Medium Tablet",
+    ]);
+  });
+
+  it("each profile answers to its id as its other name", () => {
+    for (const [id, name] of TABLE) {
+      expect(byId(id).names, id).toEqual([name, id]);
+    }
+  });
+
+  it("the two round Wear profiles set hw.lcd.circular=true", () => {
+    expect(byId("wearos_large_round").hardware["hw.lcd.circular"]).toBe("true");
+    expect(byId("wearos_small_round").hardware["hw.lcd.circular"]).toBe("true");
   });
 
   it("the source lists exactly the profiles the library holds", async () => {

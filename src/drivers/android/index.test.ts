@@ -4201,28 +4201,80 @@ async function provisionedHarness(
  * in this file's own `AndroidDriver.create` block.
  */
 describe("AndroidDriver defaultModels", () => {
-  it("lists the built-in Android preference list per class, newest first, with phone starting at Pixel 9", async () => {
+  it("lists the built-in Android preference list per class, newest first, with phone starting at Pixel 9 and tablet holding Medium Tablet", async () => {
     const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
 
     expect(driver.defaultModels).toEqual({
       auto: ["Automotive (1080p landscape)", "Automotive (1024p landscape)"],
       desktop: ["Medium Desktop", "Large Desktop"],
       phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"],
+      tablet: ["Medium Tablet"],
       tv: ["Television (1080p)", "Television (4K)"],
       watch: ["Wear OS Large Round", "Wear OS Small Round"],
     });
   });
 
-  it("has no Android list for tablet or vision", async () => {
+  it("has no Android list for vision", async () => {
     const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
 
     expect(Object.keys(driver.defaultModels).sort()).toEqual([
       "auto",
       "desktop",
       "phone",
+      "tablet",
       "tv",
       "watch",
     ]);
+  });
+});
+
+describe("AndroidDriver library catalog", () => {
+  const classes: Record<string, string> = {
+    "Automotive (1024p landscape)": "auto",
+    "Automotive (1080p landscape)": "auto",
+    "Large Desktop": "desktop",
+    "Medium Desktop": "desktop",
+    "Medium Phone": "phone",
+    "Medium Tablet": "tablet",
+    "Pixel 6": "phone",
+    "Pixel 7": "phone",
+    "Pixel 8": "phone",
+    "Pixel 9": "phone",
+    "Pixel 9 Pro XL": "phone",
+    "Small Phone": "phone",
+    "Television (1080p)": "tv",
+    "Television (4K)": "tv",
+    "Wear OS Large Round": "watch",
+    "Wear OS Small Round": "watch",
+  };
+
+  it("every library model resolves, and the catalog lists all 16 with their table classes, when `avdmanager list device` lists none of them", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], "Available devices:\n"),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(Object.keys(classes).filter((model) => !catalog.models.includes(model))).toEqual([]);
+    for (const [model, deviceClass] of Object.entries(classes)) {
+      expect(catalog.modelClasses[model], model).toBe(deviceClass);
+    }
+    expect(catalog.modelAliases["Television (4K)"]).toEqual(["tv_4k"]);
+  });
+
+  it("the catalog classes Medium Tablet `tablet` when `avdmanager list device` also lists `medium_tablet`", async () => {
+    const listing =
+      'Available devices:\nid: 0 or "medium_tablet"\n    Name: Medium Tablet\n    OEM : Generic\n';
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], listing),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.modelClasses["Medium Tablet"]).toBe("tablet");
+    expect(catalog.models.filter((model) => model === "Medium Tablet")).toHaveLength(1);
   });
 });
 
