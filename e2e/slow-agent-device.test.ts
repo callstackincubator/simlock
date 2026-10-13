@@ -192,9 +192,10 @@ function defineSuite(target: Target): void {
 
   const agent = (name: string): Promise<Agent> => makeAgent(env, name);
   // why: an open that fails answers within seconds, so it ends the test there instead of leaving the test to wait on a lease nobody holds.
+  const tryOpen = (who: Agent) => who.run(["open", "--platform", platform], { timeout: 330_000 });
   const open = async (who: Agent) => {
-    const result = await who.run(["open", "--platform", platform], { timeout: 330_000 });
-    if (result.code !== 0 && !expectingOpenFailure) {
+    const result = await tryOpen(who);
+    if (result.code !== 0) {
       throw new Error(`open failed for ${who.name}: ${result.stdout}\n${result.stderr}`);
     }
     return result;
