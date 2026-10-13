@@ -1582,8 +1582,8 @@ drop an older model — so pick a pair from `modelRuntimes`. A model with an
 empty list pairs with nothing installed. On Android a model pairs with an
 installed API level only when an image there fits the model, as Android Studio
 would offer it: the image is for the same kind of device (a TV takes `android-tv`
-or `google-tv`, a phone takes none of the TV, Wear OS, automotive, desktop, XR,
-glasses or ChromeOS images), its API level is in the model's range (Pixel 9
+or `google-tv`, a phone takes none of the TV, Wear OS, automotive, desktop, XR
+(except `android-xr-ost`), glasses or ChromeOS images), its API level is in the model's range (Pixel 9
 needs Android 35 or newer), a Play Store image only goes with a model that
 allows Play Store (Pixel 6 does not), and a `tablet` image only with a tablet
 model. `runtimes`, `defaultRuntime` and `images` still list every installed

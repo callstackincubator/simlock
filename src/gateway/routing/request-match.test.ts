@@ -282,8 +282,8 @@ describe("deviceFit: the runtime a model with no OS is expected to get", () => {
     const view = worker({
       images: [
         { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
-        { abi: "arm64-v8a", runtime: "35", tag: "google_apis_playstore" },
-        { abi: "arm64-v8a", runtime: "36", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
       ],
       models: ["Pixel 9"],
       platform: "android",
@@ -292,7 +292,8 @@ describe("deviceFit: the runtime a model with no OS is expected to get", () => {
 
     const fit = deviceFit(view, { imageTag: "google_apis", model: "Pixel 9", platform: "android" });
 
-    expect(fit?.({ ...specOf("android", "Pixel 9", "36"), imageTag: "google_apis" })).toBe(true);
+    expect(fit?.({ ...specOf("android", "Pixel 9", "35"), imageTag: "google_apis" })).toBe(true);
     expect(fit?.({ ...specOf("android", "Pixel 9", "34"), imageTag: "google_apis" })).toBe(false);
+    expect(fit?.({ ...specOf("android", "Pixel 9", "36"), imageTag: "google_apis" })).toBe(false);
   });
 });

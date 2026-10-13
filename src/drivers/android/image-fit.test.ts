@@ -62,6 +62,13 @@ describe("fits", () => {
     expect(fits(profile, image("34", "android-tv"))).toBe(false);
   });
 
+  it.each(["android-automotive-playstore", "android-automotive-distantdisplay"])(
+    "the android-automotive tag does not fit an image tagged %s that shares its prefix",
+    (tag) => {
+      expect(fits(builtin("auto", "android-automotive"), image("34", tag))).toBe(false);
+    },
+  );
+
   it.each(NON_PHONE_TAGS)("a profile with no kind does not fit a %s image", (tag) => {
     expect(fits(library("medium_phone"), image("34", "google_apis"))).toBe(true);
     expect(fits(library("medium_phone"), image("34", tag))).toBe(false);

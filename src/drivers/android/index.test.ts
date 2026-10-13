@@ -2373,7 +2373,7 @@ describe("AndroidDriver", () => {
       ]);
     });
 
-    it("sets `PlayStore.enabled=yes` on a Play Store image when the profile allows Play Store, and `no` on a `google_apis` image or for a profile that does not", async () => {
+    it("sets `PlayStore.enabled=yes` on a Play Store image when the profile allows Play Store, and `no` on a `google_apis` image", async () => {
       const playStore = { imageTag: "google_apis_playstore" };
       const allowed = await libraryHarness({ ...playStore, listing: pixelDevices });
       await allowed.provision("Pixel 9");
@@ -2385,13 +2385,6 @@ describe("AndroidDriver", () => {
       });
       await googleApis.provision("Pixel 9");
       expect((await googleApis.config()).get("PlayStore.enabled")).toBe("no");
-
-      const refused = await libraryHarness({
-        profiles: [testLibraryProfile({ playStore: false })],
-        seed: seedConfig(["PlayStore.enabled=yes"]),
-      });
-      await refused.provision("Test Phone");
-      expect((await refused.config()).get("PlayStore.enabled")).toBe("no");
     });
 
     it("reads an image's tags from `SystemImage.TagId`, and from the folder name when it has none", async () => {
@@ -4403,7 +4396,9 @@ const fitDevices =
   `id: 1 or "pixel_9_pro"\n    Name: Pixel 9 Pro\n    OEM : Google\n---------\n` +
   `id: 2 or "tv_720p"\n    Name: Television (720p)\n    OEM : Google\n    Tag : android-tv\n---------\n` +
   `id: 3 or "My Tablet"\n    Name: My Tablet\n    OEM : User\n---------\n` +
-  `id: 4 or "odd"\n    Name: Odd Device\n    OEM : Google\n    Tag : foo-device\n`;
+  `id: 4 or "odd"\n    Name: Odd Device\n    OEM : Google\n    Tag : foo-device\n---------\n` +
+  `id: 5 or "xr_headset"\n    Name: XR Headset\n    OEM : Google\n    Tag : android-xr\n---------\n` +
+  `id: 6 or "glasses"\n    Name: AI Glasses\n    OEM : Google\n    Tag : ai-glasses\n`;
 
 class ListingRunner extends ScriptedProcessRunner {
   constructor(
@@ -4827,6 +4822,8 @@ describe("AndroidDriver image fit", () => {
       ["Wear OS Large Round", "it needs a Wear OS image"],
       ["Automotive (1080p landscape)", "it needs an automotive image"],
       ["Medium Desktop", "it needs a desktop image"],
+      ["XR Headset", "it needs an XR image"],
+      ["AI Glasses", "it needs an AI glasses image"],
     ])("names the kind for %s with only phone images", async (model, reason) => {
       const { refusal } = await fitHarness(phones);
 

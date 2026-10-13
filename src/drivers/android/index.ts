@@ -1333,10 +1333,6 @@ export class AndroidDriver implements Driver {
     await this.#mergeConfigIniLines(avdName, properties);
   }
 
-  /**
-   * The installed image an API level means -- the one `provision` would use -- with its
-   * receipt, or `undefined` when no image of that level is installed. Never installs.
-   */
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
     const image = this.#matchingImage(await this.#installedImages(), component, undefined);
     return image === undefined ? undefined : this.#installedComponent(image);
@@ -1643,12 +1639,6 @@ export class AndroidDriver implements Driver {
     return images;
   }
 
-  /**
-   * The one function that picks the image of an API level, for resolving and for creating. With a
-   * tag it picks among the images of that tag only, the host's ABI first. Without one,
-   * `google_apis` for the host's ABI, then any image for the host's ABI, then any `google_apis`,
-   * then any.
-   */
   #matchingImage(
     images: readonly SystemImage[],
     apiLevel: string,
