@@ -9,6 +9,7 @@ export interface CliOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly input?: string;
   readonly timeout?: number;
+  readonly entry?: string;
 }
 
 export interface CliError {
@@ -36,7 +37,7 @@ export function cli(
   options: CliOptions = {},
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
+    const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
       env: { ...env, ...options.env },
     });
     let stdout = "";
@@ -87,7 +88,7 @@ export function cliBackground(
   env: NodeJS.ProcessEnv,
   options: CliOptions = {},
 ): CliBackgroundHandle {
-  const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
+  const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
     env: { ...env, ...options.env },
   });
   let stdout = "";

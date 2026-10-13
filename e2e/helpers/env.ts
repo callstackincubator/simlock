@@ -178,6 +178,14 @@ export interface TestEnv {
  * it itself (e.g. `waitForLeaseCount(env, 0)`).
  */
 export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestEnv> {
+  const { testEnv, state } = await buildEnv(options);
+  activeEnvs.add(state);
+  return testEnv;
+}
+
+async function buildEnv(
+  options: WithDaemonOptions,
+): Promise<{ testEnv: TestEnv; state: TeardownState }> {
   const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
   const socketPath = join(home, "daemon.sock");
   const logPath = join(home, "daemon.log");
@@ -315,15 +323,17 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     await testEnv.startDaemon();
   }
 
-  activeEnvs.add({
-    backgroundProcesses,
-    env,
-    home,
-    mcpClients,
-    realDrivers: options.driver === "real",
-    socketPath,
-  });
-  return testEnv;
+  return {
+    testEnv,
+    state: {
+      backgroundProcesses,
+      env,
+      home,
+      mcpClients,
+      realDrivers: options.driver === "real",
+      socketPath,
+    },
+  };
 }
 
 export interface SharedTestEnv extends TestEnv {
@@ -332,8 +342,18 @@ export interface SharedTestEnv extends TestEnv {
   restart(): Promise<void>;
 }
 
-export function withSharedDaemon(_options: WithDaemonOptions = {}): Promise<SharedTestEnv> {
-  return Promise.reject(new Error("withSharedDaemon is not implemented"));
+export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise<SharedTestEnv> {
+  const port = (options.configOverrides?.http as { port?: unknown } | undefined)?.port;
+  if (typeof port !== "number") {
+    throw new Error("withSharedDaemon needs configOverrides.http.port");
+  }
+  const { testEnv, state } = await buildEnv(options);
+  return {
+    ...testEnv,
+    httpPort: port,
+    restart: () => testEnv.restartDaemon(),
+    teardown: () => teardown(state),
+  };
 }
 
 interface TeardownState {
@@ -404,12 +424,39 @@ async function teardown(state: TeardownState): Promise<void> {
   // simulator keeps writing into its device directory while `rm` below walks it (`ENOTEMPTY`),
   // then outlives the home. The daemon is stopped by now, so nothing boots another one.
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
+  await killLeftoverAgentDevice(home);
   await rm(home, { force: true, recursive: true });
 
   if (strayPids.length > 0) {
     throw new Error(
       `withDaemon teardown found stray daemon process(es) that outlived \`daemon stop\` for ${socketPath}: ${strayPids.join(", ")}`,
     );
+  }
+}
+
+async function killLeftoverAgentDevice(home: string): Promise<void> {
+  const text = await readFileIfExists(join(home, "agent-device-daemon.json"));
+  if (text === undefined) return;
+  let record: { pid?: unknown; entry?: unknown };
+  try {
+    record = JSON.parse(text) as { pid?: unknown; entry?: unknown };
+  } catch {
+    return;
+  }
+  if (typeof record.pid !== "number" || typeof record.entry !== "string") return;
+  if (!(await isProcessAlive(record.pid))) return;
+  const { stdout } = await execFileAsync("ps", [
+    "-ww",
+    "-o",
+    "args=",
+    "-p",
+    String(record.pid),
+  ]).catch(() => ({ stdout: "" }));
+  if (!stdout.includes(record.entry)) return;
+  try {
+    process.kill(record.pid, "SIGKILL");
+  } catch {
+    // why: the record may name a process that exited since the check.
   }
 }
 
