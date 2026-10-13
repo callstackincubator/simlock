@@ -3485,6 +3485,100 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
   });
 });
 
+describe("FleetLeaseCoordinator: requires", () => {
+  const available = [{ name: "agent-device", state: "available" }] as const;
+  const off = [{ name: "agent-device", state: "off" }] as const;
+  const missing = () =>
+    fromWireError("CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+  it("sends requires to the worker on every dispatch, beside the request and not inside it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capabilities: [...available] });
+
+    await coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] }));
+
+    expect(client.lastRequestLeaseInput).toMatchObject({ requires: ["agent-device"] });
+  });
+
+  it("leaves a worker whose own check answers CAPABILITY_MISSING out for this request and tries the next, and gives the caller that error when no worker is left", async () => {
+    const { coordinator, directory, workers } = harness();
+    const stale = new ScriptedWorkerClient();
+    const next = new ScriptedWorkerClient();
+    stale.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    next.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    directory.add("wrk_a", stale);
+    directory.add("wrk_b", next);
+    for (const id of ["wrk_a", "wrk_b"]) {
+      connectWorker(workers, id);
+      workers.refresh(id, { capabilities: [...available] });
+    }
+
+    await expect(
+      coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] })),
+    ).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+    expect(stale.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+
+    stale.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    next.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    await expect(
+      coordinator.request(
+        REQUEST,
+        requestOptions({ ownerId: "agent-2", requesterId: "agent-2", requires: ["agent-device"] }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      message: "This worker cannot serve agent-device",
+    });
+  });
+
+  it("fails a request waiting only on the capable worker with CAPABILITY_MISSING when that worker's view turns starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { capabilities: [...available] });
+    const waiting = coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] }));
+    const outcome = { settled: false };
+    waiting.then(
+      () => (outcome.settled = true),
+      () => (outcome.settled = true),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+    expect(outcome.settled).toBe(false);
+
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+    await tick();
+
+    expect(outcome.settled).toBe(true);
+    await expect(waiting).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
+  });
+
+  it("keeps a request with requires waiting for a busy capable worker while a free worker lists the capability off", async () => {
+    const { coordinator, directory, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    const free = new ScriptedWorkerClient();
+    directory.add("wrk_b", free);
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { capabilities: [...available] });
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_b", { capabilities: [...off] });
+
+    void coordinator
+      .request(REQUEST, requestOptions({ requires: ["agent-device"] }))
+      .catch(() => undefined);
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(1);
+    expect(free.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+});
+
 describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   const gatewayLease = {
     deviceId: "dev_1",

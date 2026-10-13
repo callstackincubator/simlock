@@ -86,3 +86,24 @@ describe("SimlockError", () => {
     }
   });
 });
+
+describe("CAPABILITY_MISSING", () => {
+  it("maps CAPABILITY_MISSING to HTTP 422 and CLI exit 12 as a domain error whose details name the capabilities", () => {
+    const table: Record<string, unknown> = ERROR_TABLE;
+    const error = fromWireError("CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+    expect(table["CAPABILITY_MISSING"]).toEqual({
+      cliExitCode: 12,
+      code: "CAPABILITY_MISSING",
+      httpStatus: 422,
+      kind: "domain",
+    });
+    expect(error).toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      kind: "domain",
+    });
+  });
+});

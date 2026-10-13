@@ -116,3 +116,17 @@ describe("MCP contracts", () => {
     expect(leaseStatusOutputSchema.parse({ held: false })).toEqual({ held: false });
   });
 });
+
+describe("MCP contracts: requires", () => {
+  it("rejects requires -- the MCP lease tool has no capability parameter, and the contract's field list has it", () => {
+    expect(Object.keys(leaseRequestFields.shape)).toContain("requires");
+    expect(Object.keys(leaseSimulatorInputSchema.shape)).not.toContain("requires");
+    expect(
+      leaseSimulatorInputSchema.safeParse({
+        model: "iPhone 17 Pro",
+        platform: "ios",
+        requires: ["agent-device"],
+      }).success,
+    ).toBe(false);
+  });
+});

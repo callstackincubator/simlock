@@ -28,6 +28,7 @@ export type WorkerView = z.infer<typeof workerViewSchema>;
  * state, connection state -- is this registry's own bookkeeping, never a worker's to report. */
 export type WorkerViewSnapshot = Pick<
   WorkerView,
+  | "capabilities"
   | "capacity"
   | "catalog"
   | "devices"

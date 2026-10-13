@@ -1107,6 +1107,34 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
   });
 });
 
+describe("requestLease requires", () => {
+  it("sends requires on the lease.request frame and rejects with CAPABILITY_MISSING, its details naming the capabilities, when the worker lacks the capability", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const pending = client.requestLease({
+      model: "iPhone 17",
+      platform: "ios",
+      requires: ["agent-device"],
+    });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("lease.request")!;
+    connection.fail(call.id, "CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+    expect(call.payload).toMatchObject({ requires: ["agent-device"] });
+    await expect(pending).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      kind: "domain",
+    });
+  });
+});
+
 describe("simlock/admin", () => {
   it("exposes the admin operations and sends daemon.stop like any other request", async () => {
     const connection = new ScriptedConnection();

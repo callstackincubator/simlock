@@ -1476,3 +1476,53 @@ describe("device.add and device.remove ids (ADR 0022 §2)", () => {
     expect(OPERATIONS["device.remove"].input.safeParse({}).success).toBe(false);
   });
 });
+
+describe("lease.request requires", () => {
+  const base = { model: "iPhone 17", platform: "ios" } as const;
+  const parse = (extra: Record<string, unknown>) =>
+    OPERATIONS["lease.request"].input.safeParse({ ...base, ...extra });
+  const names = (count: number) =>
+    Array.from({ length: count }, (_, index) => `cap-${String(index)}`);
+
+  it.each([
+    ["one name", ["agent-device"]],
+    ["an empty list", []],
+    ["8 names", names(8)],
+  ])("accepts %s", (_label, requires) => {
+    expect(parse({ requires }).success).toBe(true);
+  });
+
+  it("accepts a request without requires, and one with requires: [] parses to the same device", () => {
+    expect(parse({}).success).toBe(true);
+    const input = parse({ requires: [] });
+    expect(input.success && requestedDevice(input.data)).toEqual({
+      model: "iPhone 17",
+      platform: "ios",
+    });
+  });
+
+  it.each([
+    ["an upper-case name", ["Agent-Device"]],
+    ["a duplicate name", ["agent-device", "agent-device"]],
+    ["9 names", names(9)],
+  ])("refuses requires with %s with BAD_REQUEST-shaped issues on requires", (_label, requires) => {
+    const parsed = parse({ requires });
+
+    expect(parsed.success).toBe(false);
+    expect(
+      !parsed.success && parsed.error.issues.every((issue) => issue.path[0] === "requires"),
+    ).toBe(true);
+  });
+
+  it("refuses requires together with idempotencyKey, naming both, where each alone is accepted", () => {
+    expect(parse({ idempotencyKey: "key-1" }).success).toBe(true);
+    expect(parse({ requires: ["agent-device"] }).success).toBe(true);
+
+    const both = parse({ idempotencyKey: "key-1", requires: ["agent-device"] });
+
+    expect(both.success).toBe(false);
+    expect(!both.success && both.error.issues.map((issue) => issue.message)).toContain(
+      "requires cannot be combined with idempotencyKey",
+    );
+  });
+});

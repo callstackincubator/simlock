@@ -4083,3 +4083,182 @@ describe("Dispatcher: status.get capabilities", () => {
     );
   });
 });
+
+describe("Dispatcher: lease.request requires", () => {
+  const IOS = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+  const REQUIRES = { ...IOS, requires: ["agent-device"] } as const;
+  type SourceState = { state: "available" | "off" | "unavailable" };
+
+  function sources(initial: SourceState["state"]) {
+    const current: SourceState = { state: initial };
+    return {
+      current,
+      list: [{ name: "agent-device", read: async () => ({ state: current.state }) }] as NonNullable<
+        DispatcherOptions["capabilitySources"]
+      >,
+    };
+  }
+
+  it("refuses a request on a worker whose agent-device is off with CAPABILITY_MISSING, message `This worker cannot serve agent-device`, details naming it, stores nothing and emits no event", async () => {
+    const capability = sources("available");
+    const { dispatcher, eventBus, registry } = await buildDispatcher({
+      capabilitySources: capability.list,
+    });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { ...REQUIRES, requesterId: "a" },
+      session(),
+    );
+    await dispatcher.dispatch("lease.release", { leaseId: grant.lease.id }, session());
+    capability.current.state = "off";
+    const requestsBefore = registry.leaseRequests().length;
+    const eventsBefore = eventBus.replay().length;
+
+    await expect(
+      dispatcher.dispatch("lease.request", { ...REQUIRES, requesterId: "b" }, session()),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      message: "This worker cannot serve agent-device",
+    });
+
+    expect(registry.leaseRequests()).toHaveLength(requestsBefore);
+    expect(eventBus.replay()).toHaveLength(eventsBefore);
+  });
+
+  it("refuses the same request from the gateway uplink as a probe, the same way, with no lease.declined", async () => {
+    const capability = sources("unavailable");
+    const { dispatcher, eventBus, registry } = await buildDispatcher({
+      capabilitySources: capability.list,
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...REQUIRES, fleetRequestId: "req_gw1", noWait: true },
+        session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
+
+    expect(registry.leaseRequests()).toEqual([]);
+    expect(eventBus.replay().map((event) => event.event)).not.toContain("lease.declined");
+  });
+
+  it("names only x-other when requires is [x-other, agent-device] and only agent-device is available", async () => {
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...IOS, requires: ["x-other", "agent-device"] },
+        session(),
+      ),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["x-other"] },
+      message: "This worker cannot serve x-other",
+    });
+  });
+
+  it("refuses within 1.5 s with CAPABILITY_MISSING when the capability source takes 2 s", async () => {
+    const clock = new FakeClock(1_000);
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: [
+        {
+          name: "agent-device",
+          read: () =>
+            new Promise((resolve) => clock.setTimer(2_000, () => resolve({ state: "available" }))),
+        },
+      ],
+      clock,
+    });
+    let settled = false;
+    const answer = dispatcher.dispatch("lease.request", REQUIRES, session()).then(
+      () => "granted",
+      (error: unknown) => error,
+    );
+    void answer.then(() => {
+      settled = true;
+    });
+
+    for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(settled).toBe(true);
+    expect(await answer).toMatchObject({ code: "CAPABILITY_MISSING" });
+  });
+
+  it("grants a queued request with requires once a device frees, even though the capability turned unavailable while it waited", async () => {
+    const capability = sources("available");
+    const { dispatcher, engine } = await buildDispatcher({ capabilitySources: capability.list });
+    const first = await dispatcher.dispatch(
+      "lease.request",
+      { ...IOS, requesterId: "h1" },
+      session(),
+    );
+    await dispatcher.dispatch("lease.request", { ...IOS, requesterId: "h2" }, session());
+    const waiting = dispatcher.dispatch(
+      "lease.request",
+      { ...REQUIRES, requesterId: "w" },
+      session(),
+    );
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    capability.current.state = "unavailable";
+
+    await dispatcher.dispatch("lease.release", { leaseId: first.lease.id }, session());
+
+    await expect(waiting).resolves.toMatchObject({ lease: { requesterId: "w" } });
+  });
+
+  it("refuses requires together with idempotencyKey with BAD_REQUEST and stores nothing", async () => {
+    const { dispatcher, registry } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    await expect(
+      dispatcher.dispatch("lease.request", { ...REQUIRES, idempotencyKey: "key-1" }, session()),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("requires cannot be combined with idempotencyKey"),
+    });
+
+    expect(registry.leaseRequests()).toEqual([]);
+    expect(registry.snapshot.leases).toEqual([]);
+  });
+
+  it.each([
+    ["absent", {}],
+    ["[]", { requires: [] }],
+  ])(
+    "a request with requires %s is granted on a worker whose agent-device is off, and lease.requested's requestSpec has no requires",
+    async (_label, extra) => {
+      const { dispatcher, eventBus } = await buildDispatcher({
+        capabilitySources: sources("off").list,
+      });
+
+      await dispatcher.dispatch("lease.request", { ...IOS, ...extra }, session());
+
+      const requested = eventBus.replay().find((event) => event.event === "lease.requested");
+      expect(requested?.payload).toMatchObject({ requestSpec: IOS });
+      expect(JSON.stringify(requested?.payload)).not.toContain("requires");
+    },
+  );
+
+  it("a request with requires is granted as today on a worker with the capability, and its requestSpec has no requires", async () => {
+    const { dispatcher, eventBus } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    const grant = await dispatcher.dispatch("lease.request", REQUIRES, session());
+
+    expect(grant.device.spec).toMatchObject({ model: "iPhone 17 Pro", platform: "ios" });
+    const requested = eventBus.replay().find((event) => event.event === "lease.requested");
+    expect(requested?.payload).toMatchObject({ requestSpec: IOS });
+    expect(JSON.stringify(requested?.payload)).not.toContain("requires");
+  });
+});

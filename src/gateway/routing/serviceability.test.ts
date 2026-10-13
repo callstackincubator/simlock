@@ -367,3 +367,77 @@ describe("assess for a physical request", () => {
     expect(rejectionOf(views, PHYSICAL).code).toBe("UNKNOWN_MODEL");
   });
 });
+
+describe("assess with requires", () => {
+  const AGENT_DEVICE = { ...REQUEST, requires: ["agent-device"] };
+  const available = [{ name: "agent-device", state: "available" }] as const;
+  const off = [{ name: "agent-device", state: "off" }] as const;
+  const message = "No worker connected to this gateway can serve agent-device for this request";
+
+  it("routes or waits when a worker that can serve the request lists every required name as available", () => {
+    const views = [
+      view("wrk_a", IOS, { capabilities: [...off] }),
+      view("wrk_b", IOS, { capabilities: [...available] }),
+    ];
+
+    expect(assess(AGENT_DEVICE, views).kind).toBe("route-or-wait");
+    expect(
+      assess({ ...AGENT_DEVICE, requires: [] }, [view("wrk_a", IOS, { capabilities: [...off] })])
+        .kind,
+    ).toBe("route-or-wait");
+  });
+
+  it("answers CAPABILITY_MISSING, reason unresolvable-spec, naming the required names in the order requested, when no worker that can serve the request has them available", () => {
+    const views = [view("wrk_a", IOS, { capabilities: [...off] })];
+
+    expect(rejectionOf(views, AGENT_DEVICE)).toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      message,
+      reason: "unresolvable-spec",
+    });
+    expect(
+      rejectionOf(views, { ...AGENT_DEVICE, requires: ["agent-device", "x-other"] }),
+    ).toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device", "x-other"] },
+      message: expect.stringContaining("agent-device, x-other"),
+    });
+  });
+
+  it("answers CAPABILITY_MISSING when only a worker without the capability lists the model", () => {
+    const views = [
+      view(
+        "wrk_a",
+        { models: ["iPhone 16"], platform: "ios", runtimes: ["26.0"] },
+        { capabilities: [...available] },
+      ),
+      view("wrk_b", IOS, { capabilities: [...off] }),
+    ];
+
+    expect(rejectionOf(views, AGENT_DEVICE)).toMatchObject({ code: "CAPABILITY_MISSING" });
+  });
+
+  it("keeps the first table's rejection when it rejects: UNKNOWN_MODEL and NO_CAPACITY stand", () => {
+    const unknown = { ...AGENT_DEVICE, model: "iPhone 99" };
+
+    expect(rejectionOf([view("wrk_a", IOS, { capabilities: [...off] })], unknown)).toMatchObject({
+      code: "UNKNOWN_MODEL",
+    });
+    expect(rejectionOf([], AGENT_DEVICE)).toMatchObject({
+      code: "NO_CAPACITY",
+      reason: "no-worker",
+    });
+  });
+
+  it("answers CAPABILITY_MISSING for a request waiting only on a capable worker once that worker's view is starting, because a starting view has no capability list", () => {
+    const running = view("wrk_a", IOS, { capabilities: [...available], health: "running" });
+    const { capabilities: _dropped, ...restarted } = { ...running, health: "starting" as const };
+
+    expect(assess(AGENT_DEVICE, [running]).kind).toBe("route-or-wait");
+    expect(rejectionOf([restarted as WorkerView], AGENT_DEVICE)).toMatchObject({
+      code: "CAPABILITY_MISSING",
+      reason: "unresolvable-spec",
+    });
+  });
+});

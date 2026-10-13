@@ -13,6 +13,7 @@ import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { parseOsConstraint } from "./os-range.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
+  capabilityNameSchema,
   cleanupRuleSummarySchema,
   configSchema,
   daemonHealthSchema,
@@ -177,6 +178,7 @@ const leaseRequestBaseSchema = z
      * Bounded as `idempotencyKey` is, because the worker stores it.
      */
     fleetRequestId: z.string().min(1).max(200).optional(),
+    requires: z.array(capabilityNameSchema).optional(),
   })
   .strict();
 

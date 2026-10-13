@@ -11,6 +11,7 @@ export interface LeaseRequestOptions {
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
+  readonly requires?: readonly string[];
   readonly onProgress?: (progress: LeaseProgress) => void;
   /** ADR 0004 §4: this lease's initial TTL, accepted on every request. Omitted means
    * `lease.defaultTtlMs`; the cap against `lease.maxTtlMs` is applied at the daemon boundary

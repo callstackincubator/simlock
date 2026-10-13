@@ -10,6 +10,7 @@ export interface RoutableRequest {
   readonly imageTag?: string;
   readonly mode?: "slim" | "full";
   readonly physical?: boolean;
+  readonly requires?: readonly string[];
 }
 
 export interface FilterStage {
