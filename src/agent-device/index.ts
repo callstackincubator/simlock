@@ -12,7 +12,7 @@ import { AgentDeviceHost } from "./host/host.js";
 import { AgentDeviceLeaseEnd, ReleaseScopeRecord } from "./host/lease-end.js";
 import type { AgentDeviceUpstream } from "./host/upstream.js";
 
-export type { FleetPort, FleetWorker, PlacedLease } from "./front/relay-host-link.js";
+export type { FleetPort, FleetWorker } from "./front/relay-host-link.js";
 export { agentDeviceFindings } from "./host/availability-findings.js";
 export { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
 // fallow-ignore-next-line unused-type -- the shape `AgentDeviceSupervisor.availability()` returns, which `agentDeviceFindings` reads.

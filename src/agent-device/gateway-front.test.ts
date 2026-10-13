@@ -219,6 +219,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   } as StartDaemonOptions);
   runningDaemons.push(gateway);
   const members: Member[] = [];
+  // fallow-ignore-next-line complexity -- one worker daemon with its own token, directory, fake agent-device and optional direct port.
   const addWorker = async (spec: WorkerSpec, existing?: Member): Promise<Member> => {
     const secret =
       existing?.secret ??

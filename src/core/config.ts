@@ -510,27 +510,38 @@ function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
         warn(`Ignoring "${key}": it configures a worker, and this daemon runs in gateway mode.`);
       }
     }
-    const gateway = object["gateway"];
-    if (gateway !== undefined) {
-      for (const key of Object.keys(requireObject(gateway, "gateway"))) {
-        if (WORKER_ONLY_GATEWAY_KEYS.includes(key)) {
-          warn(
-            `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
-              `and this daemon runs in gateway mode.`,
-          );
-        }
-      }
-    }
-    const agentDevice = object["agentDevice"];
-    if (agentDevice === undefined) continue;
-    for (const key of Object.keys(requireObject(agentDevice, "agentDevice"))) {
-      if (WORKER_ONLY_AGENT_DEVICE_KEYS.includes(key)) {
-        warn(
-          `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
-            `and this daemon runs in gateway mode.`,
-        );
-      }
-    }
+    warnWorkerOnlySubKeys(
+      object,
+      "gateway",
+      WORKER_ONLY_GATEWAY_KEYS,
+      warn,
+      (key) =>
+        `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
+        `and this daemon runs in gateway mode.`,
+    );
+    warnWorkerOnlySubKeys(
+      object,
+      "agentDevice",
+      WORKER_ONLY_AGENT_DEVICE_KEYS,
+      warn,
+      (key) =>
+        `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
+        `and this daemon runs in gateway mode.`,
+    );
+  }
+}
+
+function warnWorkerOnlySubKeys(
+  layer: Record<string, unknown>,
+  section: string,
+  workerOnly: readonly string[],
+  warn: Warn,
+  message: (key: string) => string,
+): void {
+  const value = layer[section];
+  if (value === undefined) return;
+  for (const key of Object.keys(requireObject(value, section))) {
+    if (workerOnly.includes(key)) warn(message(key));
   }
 }
 

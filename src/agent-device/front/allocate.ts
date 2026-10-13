@@ -136,6 +136,11 @@ async function stillWaiting(
   return Promise.race([ready, gone]);
 }
 
+function requiresOf(context: FrontContext): { readonly requires?: string[] } {
+  const required = context.link.leaseRequires ?? [];
+  return required.length === 0 ? {} : { requires: [...required] };
+}
+
 async function requestLease(
   context: FrontContext,
   identity: TokenIdentity,
@@ -189,9 +194,7 @@ async function requestLease(
         ...(plan.model === undefined ? {} : { model: plan.model }),
         ...(plan.class === undefined ? {} : { class: plan.class }),
         ...(plan.ttlMs === undefined ? {} : { ttlMs: plan.ttlMs }),
-        ...(context.link.leaseRequires === undefined || context.link.leaseRequires.length === 0
-          ? {}
-          : { requires: [...context.link.leaseRequires] }),
+        ...requiresOf(context),
       },
       buildHttpSession(identity, {
         onRequestAdmitted: () => {
