@@ -43,10 +43,14 @@ function lint(dir: string, ...args: string[]) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { status: 0, lines: stdout.split("\n").filter((l) => l !== "") };
+    return { status: 0, lines: stdout.split("\n").filter((l) => l !== ""), stderr: "" };
   } catch (error) {
-    const failed = error as { status: number; stdout: string };
-    return { status: failed.status, lines: failed.stdout.split("\n").filter((l) => l !== "") };
+    const failed = error as { status: number; stdout: string; stderr: string };
+    return {
+      status: failed.status,
+      lines: failed.stdout.split("\n").filter((l) => l !== ""),
+      stderr: failed.stderr,
+    };
   }
 }
 
@@ -126,8 +130,70 @@ describe("comment-lint.mjs", () => {
       { "src/a.ts": "// old what\nconst a = 1;\n", "src/b.ts": "// new what\nconst b = 1;\n" },
     );
 
-    expect(lint(dir, "src/a.ts")).toEqual({ status: 0, lines: [] });
-    expect(lint(dir)).toEqual({ status: 1, lines: [`src/b.ts:1: ${REASON}`] });
+    expect(lint(dir, "src/a.ts")).toMatchObject({ status: 0, lines: [] });
+    expect(lint(dir)).toMatchObject({ status: 1, lines: [`src/b.ts:1: ${REASON}`] });
     expect(lint(dir, "--all").lines).toEqual([`src/a.ts:1: ${REASON}`, `src/b.ts:1: ${REASON}`]);
+  });
+
+  describe("--limit", () => {
+    const what = (count: number) => "// what\nconst x = 1;\n".repeat(count);
+    const lines = (path: string, count: number) =>
+      Array.from({ length: count }, (_, i) => `${path}:${2 * i + 1}: ${REASON}`);
+    const threeFiles = () =>
+      repo({}, { "src/a.ts": what(1), "src/b.ts": what(3), "src/c.ts": what(2) });
+
+    it("keeps the files with the most listed blocks first, and says on stderr how many blocks in how many files it left", () => {
+      const result = lint(threeFiles(), "--all", "--limit", "5");
+
+      expect(result.status).toBe(1);
+      expect(result.lines).toEqual([...lines("src/b.ts", 3), ...lines("src/c.ts", 2)]);
+      expect(result.stderr).toContain(
+        "comment-lint: 1 more comment in 1 file left for later runs\n",
+      );
+    });
+
+    it("keeps whole files, breaking a tie by path, and never part of one", () => {
+      const dir = repo({}, { "src/b.ts": what(2), "src/a.ts": what(2) });
+
+      const result = lint(dir, "--all", "--limit", "3");
+
+      expect(result.status).toBe(1);
+      expect(result.lines).toEqual(lines("src/a.ts", 2));
+      expect(result.stderr).toContain(
+        "comment-lint: 2 more comments in 1 file left for later runs\n",
+      );
+    });
+
+    it("keeps the first file even when it alone lists more blocks than the limit", () => {
+      const dir = repo({}, { "src/a.ts": what(3), "src/b.ts": what(1) });
+
+      const result = lint(dir, "--all", "--limit", "2");
+
+      expect(result.status).toBe(1);
+      expect(result.lines).toEqual(lines("src/a.ts", 3));
+      expect(result.stderr).toContain(
+        "comment-lint: 1 more comment in 1 file left for later runs\n",
+      );
+    });
+
+    it("refuses a limit that is not a positive whole number with exit 64", () => {
+      const dir = repo({}, { "src/a.ts": what(1) });
+
+      expect(lint(dir, "--all", "--limit", "1").status).toBe(1);
+      expect(lint(dir, "--all", "--limit", "0").status).toBe(64);
+      expect(lint(dir, "--all", "--limit", "x").status).toBe(64);
+    });
+
+    it("without --limit lists every file and says nothing is left for later runs", () => {
+      const result = lint(threeFiles(), "--all");
+
+      expect(result.status).toBe(1);
+      expect(result.lines).toEqual([
+        ...lines("src/a.ts", 1),
+        ...lines("src/b.ts", 3),
+        ...lines("src/c.ts", 2),
+      ]);
+      expect(result.stderr).not.toContain("left for later runs");
+    });
   });
 });

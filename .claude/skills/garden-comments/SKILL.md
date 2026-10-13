@@ -1,6 +1,6 @@
 ---
 name: garden-comments
-description: Weekly routine — run the comment lint (architecture rule 17) over every comment in the code files main changed since the last run, prefix with `why:` the ones that say why and delete the rest, and land one comments-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "garden comments".
+description: Weekly routine — run the comment lint (architecture rule 17) over the comments in the code files main changed since the last run, up to 300 blocks a run, prefix with `why:` the ones that say why and delete the rest, and land one comments-only PR through the reviews and the merge gate. Use when a Claude Code routine or the user says "garden comments".
 model: sonnet
 effort: low
 ---
@@ -19,12 +19,13 @@ git fetch -q origin
 dir=$(.agents/scripts/worktree.sh chore/garden-comments-$(date +%F)) && cd "$dir"
 base=$(git log -1 --format=%H --grep='^chore(comments):' origin/main)
 [ -n "$base" ] || base=$(git rev-list -1 --before='7 days ago' origin/main)
-node .agents/scripts/comment-lint.mjs --all --base "$base" --head HEAD > <scratch>/comments.txt || true
+node .agents/scripts/comment-lint.mjs --all --limit 300 --base "$base" --head HEAD > <scratch>/comments.txt || true
 ```
 
 Each line names a comment block in a file `main` changed since `<base>`
-whose shape the rule does not allow. An empty list: report `PR: none` and
-stop.
+whose shape the rule does not allow; whole files, up to 300 blocks. Its
+stderr says how many blocks it left for later runs. An empty list: report
+`PR: none` and stop.
 
 ## 2. Judge and edit
 
@@ -32,10 +33,11 @@ Read each block. One that says why the code does something a reader would
 not expect (an upstream bug, a platform quirk, an invariant the types
 cannot express) keeps its text and gains `why:` as its first word. Every
 other block is deleted whole: never reworded into a new comment, and no
-code line changes. Then the lint prints nothing:
+code line changes. Then the lint prints nothing for the same files (no
+`--head`: it reads the working tree, not the last commit):
 
 ```bash
-node .agents/scripts/comment-lint.mjs --all --base "$base" --head HEAD
+node .agents/scripts/comment-lint.mjs --all --base "$base" $(cut -d: -f1 <scratch>/comments.txt | sort -u)
 ```
 
 ## 3. Commit
@@ -68,6 +70,6 @@ open and report.
 ## Report
 
 ```
-Routine: garden-comments  Base: <short sha>  Listed: <n>  Deleted: <d>  Prefixed: <p>
+Routine: garden-comments  Base: <short sha>  Listed: <n>  Deleted: <d>  Prefixed: <p>  Left: <l>
 PR: #M merged | #M open (<why>) | none
 ```
