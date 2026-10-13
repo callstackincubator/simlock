@@ -1504,9 +1504,22 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   with status 200.
 - A worker that is draining takes no new `open`, and keeps serving the leases
   it holds.
-- A request that names no lease, other than `/health`, is refused with
+- Uploads, artifact downloads and diagnostics name their lease in the
+  `x-agent-device-lease-id: <lease id>` header, which agent-device sends once
+  it holds a lease. The request goes to the worker holding that lease. An
+  upload ticket works through the gateway: it carries your own `authorization`
+  and `x-agent-device-token`, so the `PUT` that follows reaches the gateway
+  with them, and the worker never sees your token. A header that is not 32
+  lower-case hex characters is refused with `refused: the
+  x-agent-device-lease-id header is not a lease id` (status 400). `/health`
+  does not read the header.
+- A request that names no lease, or sends the header empty, other than
+  `/health`, is refused with
   `refused: this agent-device is too old to use through a gateway; update it`.
-  That includes `devices`, uploads, artifact downloads and diagnostics.
+  That includes an upload, an artifact download or a diagnostics request with
+  no header, and the artifact list.
+- `devices` lists your devices across every worker that holds one of your
+  leases, and answers an empty list when you hold none.
 - A request that names a lease the token does not hold, or the gateway does not
   know, is refused with `refused: lease <id> is not one of yours on this
   gateway` (status 403). A lease `simlock release --all` ended stays known for

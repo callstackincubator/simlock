@@ -16,6 +16,7 @@ describe("disposeAgentDeviceEdge", () => {
       },
       forward: () => Promise.reject(new Error("unused")),
       leaseRequires: [],
+      readsLeaseHeader: false,
       status: () => Promise.resolve({ reason: "unused", state: "unavailable" }),
     };
     const parts: AgentDeviceFrontParts = { link, map: new FrontMap(clock), renewals };

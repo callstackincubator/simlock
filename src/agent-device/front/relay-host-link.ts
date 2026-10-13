@@ -76,6 +76,7 @@ function refuseRequest(request: Request, message: string, status?: number): Prom
 
 export class RelayHostLink implements HostLink {
   readonly leaseRequires: readonly string[] = ["agent-device"];
+  readonly readsLeaseHeader = true;
   readonly #kept = new Map<string, Kept>();
   #sweep: TimerHandle | undefined;
   #disposed = false;

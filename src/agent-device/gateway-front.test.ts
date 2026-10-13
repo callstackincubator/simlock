@@ -1345,7 +1345,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(named("x-agent-device-token")).toBe("caller-token");
     const seen = target.fake.preflightHeaders[0] ?? {};
     expect(seen["authorization"]).toBe(`Bearer ${target.fake.token}`);
-    expect(seen["x-agent-device-token"]).toBeUndefined();
+    // why: the proxy sends its own daemon token in both headers, never the caller's.
+    expect(seen["x-agent-device-token"]).toBe(target.fake.token);
 
     const put = await fetch(ticket.url, {
       body: "artifact bytes",
@@ -1363,9 +1364,12 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     const target = holderOf(rig, 2);
     const other = holderOf(rig, 1);
     const before = pathsReceived(other);
-    const diagnostics = `/sessions/${principals.one}:s1/requests/r1/diagnostics`;
 
     await send(rig, "/upload/finalize", { body: "{}", headers: leased(2) });
+    // why: the proxy confines diagnostics to sessions under the caller's tenant, which the gateway names.
+    const tenant = target.fake.requests.at(-1)?.tenant;
+    expect(tenant).toBeDefined();
+    const diagnostics = `/sessions/${String(tenant)}:s1/requests/r1/diagnostics`;
     await send(rig, "/upload", { body: "{}", headers: leased(2) });
     await send(rig, "/artifacts/a.png", { headers: leased(2) });
     await send(rig, diagnostics, { headers: leased(2) });

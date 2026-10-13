@@ -12,6 +12,8 @@ export type LinkStatus =
   | { readonly state: "unavailable"; readonly reason: string };
 
 export interface HostLink {
+  // why: only a link that serves many hosts routes non-RPC requests by the lease header and fans out `devices`; a worker never reads the header.
+  readonly readsLeaseHeader: boolean;
   // why: capabilities a lease request must require so it lands on a host that can serve agent-device; none means any worker.
   readonly leaseRequires?: readonly string[];
   status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus>;
@@ -20,6 +22,8 @@ export interface HostLink {
 }
 
 export class InProcessHostLink implements HostLink {
+  readonly readsLeaseHeader = false;
+
   constructor(private readonly host: AgentDeviceHost) {}
 
   status(): ReturnType<HostLink["status"]> {
