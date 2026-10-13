@@ -1325,6 +1325,29 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
   });
 
+  it("on a worker, an `x-agent-device-lease-id` header naming another token's lease, a malformed one and no header are each forwarded, as today", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const other = { "x-agent-device-lease-id": hex(1) };
+    const malformed = { "x-agent-device-lease-id": "NOT-A-LEASE-ID".repeat(4) };
+    const preflights = () =>
+      rig.fake.requests.filter((request) => request.path === "/upload/preflight").length;
+
+    const answers: Response[] = [];
+    for (const headers of [other, malformed, {}]) {
+      const before = preflights();
+      const answer = await send(rig, "/upload/preflight", {
+        body: "{}",
+        headers,
+        token: secrets.two,
+      });
+      answers.push(answer);
+      expect(preflights()).toBe(before + 1);
+    }
+
+    expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200]);
+  });
+
   it("an `/rpc` body over 1 MiB, one that is not JSON, a JSON array, and an object with no `method` are each refused with their message and `id: null`, also while agent-device is unavailable, and neither simlock nor the agent-device daemon sees them", async () => {
     const rig = await setUp();
     expect((await command(rig, "snapshot", undefined)).status).toBe(200);

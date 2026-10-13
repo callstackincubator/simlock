@@ -146,6 +146,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly hungUpReleases: string[] = [];
   readonly refused: string[] = [];
   readonly uploads: string[] = [];
+  // why: the headers the proxy sent the daemon with each upload preflight, so a test can see which of the caller's credentials reached it.
+  readonly preflightHeaders: Record<string, string>[] = [];
   baseUrl = "http://127.0.0.1:47001";
   token = "daemon-token-1";
   generation = 1;
@@ -339,6 +341,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       return Response.json({ ok: true, rpcProtocolVersion: 2, service: "agent-device-daemon" });
     }
     if (url.pathname === "/upload/preflight") {
+      this.preflightHeaders.push(Object.fromEntries(request.headers));
       this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
       return Response.json({
         ok: true,

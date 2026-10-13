@@ -1265,3 +1265,355 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(2));
   });
 });
+
+const LEASE_HEADER = "x-agent-device-lease-id";
+const notYoursOnGateway = (n: number): string =>
+  `refused: lease ${hex(n)} is not one of yours on this gateway`;
+const notALeaseId = "refused: the x-agent-device-lease-id header is not a lease id";
+
+function leased(n: number): Record<string, string> {
+  return { [LEASE_HEADER]: hex(n) };
+}
+
+function holderOf(rig: Rig, n: number): Member {
+  const member = rig.members.find((candidate) => candidate.fake.leases.has(hex(n)));
+  if (member === undefined) throw new Error(`no worker holds the agent-device lease ${hex(n)}`);
+  return member;
+}
+
+// why: a worker with room for one lease each puts two leases on two workers.
+async function twoLeasesOnTwoWorkers(): Promise<Rig> {
+  const rig = await setUp({
+    workers: [
+      { label: "w1", maxRunning: 1 },
+      { label: "w2", maxRunning: 1 },
+    ],
+  });
+  await granted(rig, 1);
+  await granted(rig, 2);
+  expect(holderOf(rig, 1)).not.toBe(holderOf(rig, 2));
+  return rig;
+}
+
+function addressOfLease(rig: Rig, n: number): string {
+  const address = holderOf(rig, n).fake.leases.get(hex(n))?.address;
+  expect(address).toBeDefined();
+  return address as string;
+}
+
+function pathsReceived(member: Member): string[] {
+  return member.fake.requests.map((request) => request.path);
+}
+
+async function listedNames(response: Response): Promise<string[]> {
+  const answer = await envelopeOf(response);
+  const data = answer.result?.["data"] as { devices?: { name?: string }[] } | undefined;
+  expect(Array.isArray(data?.devices), "expected a devices list in result.data").toBe(true);
+  return (data?.devices ?? []).map((device) => String(device.name)).sort();
+}
+
+describe("the agent-device front, through a gateway: the lease header", { timeout: 60_000 }, () => {
+  it("through the gateway, an upload preflight with the header naming the token's lease on W2 reaches W2's agent-device daemon and not W1's", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const target = holderOf(rig, 2);
+    const other = holderOf(rig, 1);
+    const before = pathsReceived(other);
+
+    const preflight = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+
+    expect(preflight.status).toBe(200);
+    expect(pathsReceived(target)).toContain("/upload/preflight");
+    expect(pathsReceived(other)).toEqual(before);
+  });
+
+  it("the preflight's ticket URL names the gateway's origin, its `upload.headers` carry the caller's own `authorization`, W2 received no `authorization` or `x-agent-device-token`, and a `PUT` to it with the lease header and those headers reaches W2", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const target = holderOf(rig, 2);
+
+    const preflight = await send(rig, "/upload/preflight", {
+      body: "{}",
+      headers: { ...leased(2), "x-agent-device-token": "caller-token" },
+    });
+
+    const ticket = (
+      (await preflight.json()) as { upload: { url: string; headers: Record<string, string> } }
+    ).upload;
+    expect(ticket.url.startsWith(`${rig.origin}/v1/agent-device/upload/direct/`)).toBe(true);
+    const named = (name: string) =>
+      Object.entries(ticket.headers).find(([key]) => key.toLowerCase() === name)?.[1];
+    expect(named("authorization")).toBe(`Bearer ${secrets.one}`);
+    expect(named("x-agent-device-token")).toBe("caller-token");
+    const seen = target.fake.preflightHeaders[0] ?? {};
+    expect(seen["authorization"]).toBe(`Bearer ${target.fake.token}`);
+    expect(seen["x-agent-device-token"]).toBeUndefined();
+
+    const put = await fetch(ticket.url, {
+      body: "artifact bytes",
+      headers: { ...ticket.headers, ...leased(2) },
+      method: "PUT",
+    });
+
+    expect(put.status).toBe(200);
+    expect(target.fake.uploads).toEqual(["artifact bytes"]);
+    expect(holderOf(rig, 1).fake.uploads).toEqual([]);
+  });
+
+  it("a finalize, a `POST /upload`, a `GET artifacts/<id>` and a diagnostics `GET`, each with the header, reach the lease's worker", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const target = holderOf(rig, 2);
+    const other = holderOf(rig, 1);
+    const before = pathsReceived(other);
+    const diagnostics = `/sessions/${principals.one}:s1/requests/r1/diagnostics`;
+
+    await send(rig, "/upload/finalize", { body: "{}", headers: leased(2) });
+    await send(rig, "/upload", { body: "{}", headers: leased(2) });
+    await send(rig, "/artifacts/a.png", { headers: leased(2) });
+    await send(rig, diagnostics, { headers: leased(2) });
+
+    const paths = pathsReceived(target);
+    expect(paths).toContain("/upload/finalize");
+    expect(paths).toContain("/upload");
+    expect(paths).toContain("/artifacts/a.png");
+    expect(paths).toContain(diagnostics);
+    expect(pathsReceived(other)).toEqual(before);
+  });
+
+  it("through the gateway, the same requests without the header, or with an empty one, and a `GET artifacts` list, are refused with `refused: this agent-device is too old to use through a gateway; update it`", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const diagnostics = `/sessions/${principals.one}:s1/requests/r1/diagnostics`;
+    const calls: readonly { path: string; body?: string }[] = [
+      { body: "{}", path: "/upload/preflight" },
+      { body: "{}", path: "/upload/finalize" },
+      { body: "{}", path: "/upload" },
+      { path: "/artifacts/a.png" },
+      { path: diagnostics },
+    ];
+    for (const call of calls) {
+      const accepted = await send(rig, call.path, {
+        ...(call.body === undefined ? {} : { body: call.body }),
+        headers: leased(2),
+      });
+      expect(await accepted.text()).not.toContain(tooOld);
+    }
+    const before = rig.members.map((member) => member.fake.requests.length);
+
+    for (const call of calls) {
+      for (const headers of [{}, { [LEASE_HEADER]: "" }]) {
+        const answer = await send(rig, call.path, {
+          ...(call.body === undefined ? {} : { body: call.body }),
+          headers,
+        });
+        expect(await answer.text()).toContain(tooOld);
+      }
+    }
+    const list = await send(rig, "/artifacts");
+    expect(await list.text()).toContain(tooOld);
+
+    expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
+  });
+
+  it("through the gateway, a header naming another token's lease is refused `refused: lease <id> is not one of yours on this gateway` with status 403, and no agent-device daemon receives it", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const own = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+    expect(own.status).toBe(200);
+    const before = rig.members.map((member) => member.fake.requests.length);
+
+    const other = await send(rig, "/upload/preflight", {
+      body: "{}",
+      headers: leased(2),
+      token: secrets.two,
+    });
+
+    expect(other.status).toBe(403);
+    expect(await other.text()).toContain(notYoursOnGateway(2));
+    expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
+  });
+
+  it("through the gateway, a header of 40 characters, and one with upper-case hex, are refused `refused: the x-agent-device-lease-id header is not a lease id` with status 400, and the reply does not contain the value", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const accepted = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+    expect(accepted.status).toBe(200);
+    const before = rig.members.map((member) => member.fake.requests.length);
+
+    for (const value of ["a".repeat(40), `ABCDEF${"0".repeat(26)}`]) {
+      const answer = await send(rig, "/upload/preflight", {
+        body: "{}",
+        headers: { [LEASE_HEADER]: value },
+      });
+      const text = await answer.text();
+      expect(answer.status).toBe(400);
+      expect(text).toContain(notALeaseId);
+      expect(text).not.toContain(value);
+    }
+
+    expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
+  });
+
+  it("through the gateway, a header naming the token's lease whose worker stopped being capable answers the notAvailable reply naming that reason", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const accepted = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+    expect(accepted.status).toBe(200);
+    const target = holderOf(rig, 2);
+    await turn(rig, target, "unavailable");
+    const before = pathsReceived(target);
+
+    const answer = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+
+    expect(await answer.text()).toContain(`${notAvailable}${holderCannot}`);
+    expect(pathsReceived(target)).toEqual(before);
+  });
+
+  it("through the gateway, `/health` with a header naming another token's lease answers the proxy's health", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+
+    const health = await send(rig, "/health", { headers: leased(2), token: secrets.two });
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ service: "agent-device-proxy" });
+  });
+
+  it("through the gateway, an upload naming the token's lease after `simlock release --all` reaches that lease's worker", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const target = holderOf(rig, 2);
+    await rig.gateway.dispatch("lease.release-all", {}, adminSession);
+    await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
+    const before = pathsReceived(target).filter((path) => path === "/upload/preflight").length;
+
+    const preflight = await send(rig, "/upload/preflight", { body: "{}", headers: leased(2) });
+
+    expect(await preflight.text()).not.toContain(notYoursOnGateway(2));
+    expect(pathsReceived(target).filter((path) => path === "/upload/preflight").length).toBe(
+      before + 1,
+    );
+  });
+
+  it("through the gateway, `devices` with no lease held answers an empty list and no agent-device daemon receives it", async () => {
+    const rig = await setUp({ workers: [{ label: "w1" }, { label: "w2" }] });
+    for (const member of rig.members) member.fake.listDevices([{ id: "stray", name: "stray" }]);
+
+    const answer = await envelopeOf(await command(rig, "devices", undefined));
+
+    expect(answer.result).toMatchObject({ data: { devices: [] }, ok: true });
+    for (const member of rig.members) {
+      expect(member.fake.rpcRequests("agent_device.command")).toEqual([]);
+    }
+  });
+
+  it("through the gateway, `devices` with leases on W1 and W2 answers both devices, each once, and no device of another token", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    for (const [index, n] of [1, 2].entries()) {
+      holderOf(rig, n).fake.listDevices([
+        { id: addressOfLease(rig, n), name: `mine-${String(index)}` },
+        { id: "another-token-device", name: "foreign" },
+      ]);
+    }
+
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual([
+      "mine-0",
+      "mine-1",
+    ]);
+  });
+
+  it("through the gateway, `devices` with leases on W1 and W2 whose emulators are both `emulator-5554` answers both, each from its own worker", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    expect(addressOfLease(rig, 1)).toBe(addressOfLease(rig, 2));
+    holderOf(rig, 1).fake.listDevices([{ id: addressOfLease(rig, 1), name: "from-first" }]);
+    holderOf(rig, 2).fake.listDevices([{ id: addressOfLease(rig, 2), name: "from-second" }]);
+
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual([
+      "from-first",
+      "from-second",
+    ]);
+  });
+
+  it("through the gateway, `devices` with two leases on one worker answers both devices, each once", async () => {
+    const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
+    await granted(rig, 1);
+    await granted(rig, 2);
+    const member = first(rig);
+    member.fake.listDevices([
+      { id: addressOfLease(rig, 1), name: "first" },
+      { id: addressOfLease(rig, 2), name: "second" },
+      { id: "another-token-device", name: "foreign" },
+    ]);
+
+    expect(await listedNames(await command(rig, "devices", undefined))).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("through the gateway, `devices` when W2's agent-device answers an error passes that error on; when W2 answers a body with no list, it answers `could not read the device list from the worker holding lease <id>` with status 502", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    holderOf(rig, 1).fake.listDevices([{ id: addressOfLease(rig, 1), name: "first" }]);
+    const second = holderOf(rig, 2).fake;
+    second.answerDevicesWith(
+      JSON.stringify({
+        error: {
+          code: -32000,
+          data: { code: "COMMAND_FAILED", message: "inventory down" },
+          message: "inventory down",
+        },
+        id: 1,
+        jsonrpc: "2.0",
+      }),
+    );
+
+    const failed = await envelopeOf(await command(rig, "devices", undefined));
+
+    expect(failed.error?.message).toBe("inventory down");
+
+    second.answerDevicesWith(
+      JSON.stringify({ id: 1, jsonrpc: "2.0", result: { data: {}, ok: true } }),
+    );
+    const unreadable = await command(rig, "devices", undefined);
+
+    expect(unreadable.status).toBe(502);
+    expect((await envelopeOf(unreadable)).error?.message).toBe(
+      `could not read the device list from the worker holding lease ${hex(2)}`,
+    );
+  });
+
+  it("through the gateway, a CLI that hangs up during `devices` aborts every forward", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    for (const member of rig.members) member.fake.holdCommand();
+    const hangUp = new AbortController();
+    const held = track(command(rig, "devices", undefined, { signal: hangUp.signal }));
+    await expect
+      .poll(() =>
+        rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
+      )
+      .toEqual([1, 1]);
+
+    hangUp.abort();
+    await held.promise.catch(() => undefined);
+
+    await expect
+      .poll(() => rig.members.map((member) => member.fake.abortedCommands))
+      .toEqual([["devices"], ["devices"]]);
+  });
+
+  it("through the gateway, `release_materialized_paths` is refused `refused: this agent-device is too old to use through a gateway; update it`, and an `install_from_source` naming the token's lease reaches its worker", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const target = holderOf(rig, 2);
+    const before = rig.members.map((member) => member.fake.requests.length);
+
+    const released = await envelopeOf(
+      await rpc(rig, "agent_device.release_materialized_paths", {
+        materializationId: "m-1",
+      }),
+    );
+
+    expect(released.error?.message).toBe(tooOld);
+    expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
+
+    await rpc(rig, "agent_device.install_from_source", {
+      meta: { leaseId: hex(2) },
+      platform: "ios",
+      source: { kind: "url", url: "https://example.com/App.zip" },
+    });
+
+    expect(target.fake.rpcRequests("agent_device.install_from_source")).toHaveLength(1);
+    expect(holderOf(rig, 1).fake.rpcRequests("agent_device.install_from_source")).toHaveLength(0);
+  });
+});
