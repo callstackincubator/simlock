@@ -101,7 +101,8 @@ from `process.platform`, as it does for `NodeHostInfo`, and a
   - CPU: when `cpu.max` sets a quota, `cpu.stat` `usage_usec` against
     quota ÷ period cores, `limited`. Otherwise the `cpu` line of
     `/proc/stat` against the machine's cores.
-  - Memory: when `memory.max` is a number, total is that limit, available
+  - Memory: when `memory.max` is a number below `MemTotal`, total is that
+    limit, available
     is the limit minus `memory.current` plus `inactive_file` from
     `memory.stat` (never below zero), swap is `memory.swap.current`,
     `limited`. Otherwise `MemTotal`, `MemAvailable` and `SwapTotal −
