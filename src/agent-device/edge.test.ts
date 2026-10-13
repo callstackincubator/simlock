@@ -79,6 +79,7 @@ interface Rig {
   readonly driver: FakeDriver;
   readonly fake: FakeAgentDevice;
   readonly filesystem: MemoryFilesystem;
+  readonly logs: MemoryLogSink;
   readonly origin: string;
   readonly statePath: string;
   readonly started: Promise<DaemonServer>;
@@ -157,6 +158,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const fake = options.upstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];
   const statePath = join(directory, "state.json");
+  const logs = new MemoryLogSink();
   const launch = () =>
     startDaemon({
       agentDeviceUpstream: fake,
@@ -178,7 +180,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       dataDirectory: directory,
       drivers,
       filesystem,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
       statePath,
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
@@ -195,6 +197,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       driver: drivers[0] as FakeDriver,
       fake,
       filesystem,
+      logs,
       origin,
       restart: () => Promise.reject(new Error("restart needs a started daemon")),
       started,
@@ -207,6 +210,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     driver: drivers[0] as FakeDriver,
     fake,
     filesystem,
+    logs,
     origin,
     restart: async (between) => {
       await daemon.stop("test");
@@ -1816,6 +1820,20 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await advance(rig, 29_000, 5_000);
 
     expect(await deadlineOf(rig, 1)).toBe(final);
+  });
+
+  it("a command agent-device answers with a 5xx reaches the CLI unchanged, and simlock logs a warning with that status and the start of the body", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.failNextCommandWithStatus(500, "snapshot runner crashed");
+
+    const response = await command(rig, "snapshot", 1);
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("snapshot runner crashed");
+    await expect
+      .poll(() => rig.logs.records.find((record) => record.message.includes("5xx"))?.fields)
+      .toEqual({ body: "snapshot runner crashed", status: 500 });
   });
 
   it("a command that fails, and one whose CLI hangs up, stop the renewals the same way", async () => {

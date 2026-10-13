@@ -53,6 +53,8 @@ function untilHangUp(signal: AbortSignal, work: Promise<Response | undefined>): 
   return Promise.race([work.then((response) => response ?? gone), gone]);
 }
 
+const FAILED_BODY_LOG_CHARS = 500;
+
 async function handleRpc(
   context: FrontContext,
   request: Request,
@@ -172,6 +174,32 @@ async function forwardCommand(
   return isDevices ? filterDevices(context, identity, response, read) : response;
 }
 
+// why: a 5xx from agent-device reaches the CLI as it is, so the reason is only in the body; a copy is read in the background and cut short, so the stream the CLI waits on is not held.
+function logFailedReply(context: FrontContext, response: Response): void {
+  const status = response.status;
+  void readStart(response.clone(), FAILED_BODY_LOG_CHARS)
+    .catch(() => "")
+    .then((body) => {
+      context.logger.warn("agent-device answered a passed-through call with a 5xx", {
+        body,
+        status,
+      });
+    });
+}
+
+async function readStart(response: Response, chars: number): Promise<string> {
+  if (response.body === null) return "";
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let text = "";
+  while (text.length < chars) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += value;
+  }
+  await reader.cancel().catch(() => undefined);
+  return text.slice(0, chars);
+}
+
 async function passThrough(
   context: FrontContext,
   request: Request,
@@ -179,7 +207,9 @@ async function passThrough(
   rpc: { readonly id: unknown } | undefined,
 ): Promise<Response> {
   try {
-    return await context.link.forward(request, identity);
+    const response = await context.link.forward(request, identity);
+    if (response.status >= 500) logFailedReply(context, response);
+    return response;
   } catch (error) {
     return frontReply(notAvailable(error instanceof Error ? error.message : String(error)), rpc);
   }
