@@ -332,10 +332,10 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with this working agent-device, simlock doctor --json reports no agent-device-unavailable finding and no finding whose message names agent-device",
+    "with this working agent-device, simlock doctor reports no agent-device-unavailable finding and no finding whose message names agent-device",
     { timeout: 600_000 },
     async () => {
-      const doctor = await env.cli(["doctor", "--json"], { timeout: 60_000 });
+      const doctor = await env.cli(["doctor"], { timeout: 60_000 });
       const findings = (doctor.json as { findings: { kind: string; message?: string }[] }).findings;
       expect(findings.map((finding) => finding.kind)).not.toContain("agent-device-unavailable");
       expect(findings.filter((finding) => /agent-device/i.test(finding.message ?? ""))).toEqual([]);
@@ -363,6 +363,8 @@ function defineSuite(target: Target): void {
       const a = await agent("a");
       ok(await open(a));
       ok(await a.run(["install", "Appduct", target.app]));
+      // why: an iOS snapshot needs an app session on the device (ios_app_session_required).
+      ok(await a.run(["open", target.bundleId]));
       ok(await a.run(["snapshot"]));
       const [lease] = await listLeases(env);
       const driverId = (await listDevices(env)).find((device) => device.id === lease?.deviceId)
@@ -657,7 +659,7 @@ function defineSuite(target: Target): void {
         let finding: { kind: string; message: string } | undefined;
         await waitFor(
           async () => {
-            const doctor = await env.cli(["doctor", "--json"], { timeout: 60_000 });
+            const doctor = await env.cli(["doctor"], { timeout: 60_000 });
             finding = (
               doctor.json as { findings: { kind: string; message: string }[] }
             ).findings.find((row) => row.kind === "agent-device-unavailable");
@@ -726,6 +728,11 @@ function defineSuite(target: Target): void {
         const b = await agent("b");
         ok(await open(a));
         ok(await open(b));
+        // why: an iOS snapshot needs an app session on the device (ios_app_session_required).
+        for (const who of [a, b]) {
+          ok(await who.run(["install", "Appduct", target.app]));
+          ok(await who.run(["open", target.bundleId]));
+        }
         const leases = await listLeases(env);
         expect(new Set(leases.map((lease) => lease.deviceId)).size).toBe(2);
         const devices = await listDevices(env);
