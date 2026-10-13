@@ -21,7 +21,7 @@ export function isPlayStoreImage(image: ImageFitInput): boolean {
   );
 }
 
-export type FitCheck = "apiRange" | "kind" | "playStore" | "tablet";
+type FitCheck = "apiRange" | "kind" | "playStore" | "tablet";
 
 const FIT_CHECK_ORDER: readonly FitCheck[] = ["apiRange", "kind", "playStore", "tablet"];
 
@@ -75,7 +75,7 @@ function factsOf(profile: DeviceProfile): ProfileFacts | undefined {
   }
 }
 
-export function imageApiLevel(image: ImageFitInput): number | undefined {
+function imageApiLevel(image: ImageFitInput): number | undefined {
   for (const candidate of [image.sourceApiLevel, image.apiLevel]) {
     const match = /^(\d+)/.exec(candidate ?? "");
     if (match?.[1] !== undefined) return Number(match[1]);
@@ -93,7 +93,7 @@ function kindFits(facts: ProfileFacts, image: ImageFitInput): boolean {
   return has([kind]);
 }
 
-export function failedChecks(profile: DeviceProfile, image: ImageFitInput): FitCheck[] {
+function failedChecks(profile: DeviceProfile, image: ImageFitInput): FitCheck[] {
   const facts = factsOf(profile);
   if (facts === undefined) return [];
   const failed = new Set<FitCheck>();
