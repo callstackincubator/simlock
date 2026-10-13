@@ -85,6 +85,8 @@ const ANDROID: Target = {
 interface DeviceRow {
   readonly id: string;
   readonly driverDeviceId: string;
+  // why: the address agent-device names the device by (an iOS UDID, an Android adb serial); on Android it is not the driver's device id.
+  readonly address: string;
   readonly state: string;
 }
 interface LeaseRow {
@@ -275,7 +277,7 @@ function defineSuite(target: Target): void {
   }
 
   beforeAll(async () => {
-    const pinned = await assertPinnedAgentDevice();
+    const pinned = await assertPinnedAgentDevice(platform);
     env = await withSharedDaemon({
       driver: "real",
       configOverrides: {
@@ -371,8 +373,8 @@ function defineSuite(target: Target): void {
       ok(await a.run(["open", target.bundleId]));
       ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
       const [lease] = await listLeases(env);
-      const driverId = (await listDevices(env)).find((device) => device.id === lease?.deviceId)
-        ?.driverDeviceId as string;
+      const address = (await listDevices(env)).find((device) => device.id === lease?.deviceId)
+        ?.address as string;
       const dir = await mkdtemp(join(tmpdir(), "simlock-ad-set-"));
       onTestFinished(() => rm(dir, { force: true, recursive: true }));
 
@@ -383,7 +385,7 @@ function defineSuite(target: Target): void {
         expect(denied.error?.code).toBe("UNAUTHORIZED");
         expect(denied.error?.details?.reason).toBe("DAEMON_POLICY_DENIED");
       }
-      for (const flags of target.forbiddenFlags(driverId, dir)) {
+      for (const flags of target.forbiddenFlags(address, dir)) {
         refused(await a.run(["snapshot", ...flags]));
       }
 
@@ -719,7 +721,7 @@ function defineSuite(target: Target): void {
         const after = await a.run(["devices"]);
         ok(after);
         expect(listField(after, "devices").map((device) => (device as { id: string }).id)).toEqual([
-          bound?.driverDeviceId,
+          bound?.address,
         ]);
       },
     );
@@ -740,17 +742,17 @@ function defineSuite(target: Target): void {
         const leases = await listLeases(env);
         expect(new Set(leases.map((lease) => lease.deviceId)).size).toBe(2);
         const devices = await listDevices(env);
-        const driverIdOf = (who: Agent): string => {
+        const addressOf = (who: Agent): string => {
           // why: a lease's requesterId is the lease's own ID when the agent chose it; the token is its ownerId.
           const lease = leases.find((row) => row.ownerId === who.tokenId);
-          const driverId = devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId;
-          if (driverId === undefined)
+          const address = devices.find((device) => device.id === lease?.deviceId)?.address;
+          if (address === undefined)
             throw new Error(`no leased device found for agent ${who.name}`);
-          return driverId;
+          return address;
         };
 
-        ok(await b.run(["snapshot", target.deviceFlag, driverIdOf(b)], FIRST_SNAPSHOT));
-        refused(await b.run(["snapshot", target.deviceFlag, driverIdOf(a)]));
+        ok(await b.run(["snapshot", target.deviceFlag, addressOf(b)], FIRST_SNAPSHOT));
+        refused(await b.run(["snapshot", target.deviceFlag, addressOf(a)]));
         ok(await b.run(["close"]));
         ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
       },

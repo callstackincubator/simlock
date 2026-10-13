@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import { afterEach } from "vitest";
 
@@ -48,7 +48,9 @@ function agentDeviceEntry(): string {
 }
 
 // why: the slow lane must run the integration build the repo pins, never an agent-device installed on the machine; the pinned version is in the vendored tarball's name.
-export async function assertPinnedAgentDevice(): Promise<string> {
+export async function assertPinnedAgentDevice(
+  platform: "ios" | "android" = "ios",
+): Promise<string> {
   const entry = agentDeviceEntry();
   if (!isAbsolute(entry) || !existsSync(entry)) {
     throw new Error(
@@ -70,6 +72,22 @@ export async function assertPinnedAgentDevice(): Promise<string> {
     throw new Error(
       `SIMLOCK_E2E_AGENT_DEVICE ${entry} is version ${actual}, the pinned build is ${pinned}`,
     );
+  }
+  if (platform === "android") {
+    // why: an Android snapshot needs the helper APK `pnpm build:android` packages into the checkout; without it every snapshot fails mid-test.
+    const manifest = join(
+      dirname(entry),
+      "..",
+      "android",
+      "snapshot-helper",
+      "dist",
+      `agent-device-android-snapshot-helper-${actual}.manifest.json`,
+    );
+    if (!existsSync(manifest)) {
+      throw new Error(
+        `the Android snapshot helper is not built (${manifest} is missing); run \`pnpm build:android\` with ANDROID_HOME set in the agent-device checkout`,
+      );
+    }
   }
   return entry;
 }
