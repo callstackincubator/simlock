@@ -129,4 +129,77 @@ describe("the host's lease-end participant and recording wrapper", () => {
     expect(fake.rpcRequests("agent_device.lease.release")).toEqual([]);
     expect(record.get(hex(1))).toBeUndefined();
   });
+
+  it("a release the agent's CLI hung up on counts as aborted even when the daemon answered it, so the participant still sends the release and the record keeps the scope until then", async () => {
+    const { fake, record, through } = setUp();
+    await through(rpc(fake, "agent_device.lease.allocate", allocateParams(1)));
+    const hangUp = new AbortController();
+    const release = rpc(fake, "agent_device.lease.release", { ...scope, leaseId: hex(1) });
+    const body = await release.text();
+    // why: this upstream ignores the hang-up and answers success, as a daemon slow to notice would.
+    const deaf = {
+      current: () => fake.current(),
+      fetch: async (request: Request) => {
+        const answer = await fake.fetch(
+          new Request(request.url, { body, headers: request.headers, method: "POST" }),
+        );
+        hangUp.abort();
+        return answer;
+      },
+    };
+    const sending = recordingFetch(
+      deaf,
+      record,
+    )(
+      new Request(release.url, {
+        body,
+        headers: release.headers,
+        method: "POST",
+        signal: hangUp.signal,
+      }),
+    );
+    await sending;
+    await sleep(20);
+    expect(record.get(hex(1))).toBeDefined();
+
+    await new AgentDeviceLeaseEnd(fake, record).leaseEnded(ended(1), new AbortController().signal);
+
+    expect(fake.rpcRequests("agent_device.lease.release")).toHaveLength(2);
+  });
+
+  it("a release the agent's CLI hung up on counts as aborted at once when the daemon has not answered, so the participant does not wait for that answer", async () => {
+    const { fake, record } = setUp();
+    await recordingFetch(fake, record)(rpc(fake, "agent_device.lease.allocate", allocateParams(1)));
+    const hangUp = new AbortController();
+    const release = rpc(fake, "agent_device.lease.release", { ...scope, leaseId: hex(1) });
+    const body = await release.text();
+    const silent = {
+      current: () => fake.current(),
+      fetch: () => new Promise<Response>(() => undefined),
+    };
+    const sending = track(
+      recordingFetch(
+        silent,
+        record,
+      )(
+        new Request(release.url, {
+          body,
+          headers: release.headers,
+          method: "POST",
+          signal: hangUp.signal,
+        }),
+      ),
+    );
+    await sleep(10);
+    const ending = track(
+      new AgentDeviceLeaseEnd(fake, record).leaseEnded(ended(1), new AbortController().signal),
+    );
+    await sleep(10);
+    expect(ending.done()).toBe(false);
+    hangUp.abort();
+    await ending.promise;
+
+    expect(sending.done()).toBe(false);
+    expect(fake.rpcRequests("agent_device.lease.release")).toHaveLength(1);
+  });
 });
