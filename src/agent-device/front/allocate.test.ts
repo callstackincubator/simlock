@@ -50,7 +50,6 @@ function setUp() {
         text: "",
       },
       identity: agent,
-      leaseMaxTtlMs: 600_000,
       request: new Request("http://front.test/rpc", { method: "POST", signal: hangUp.signal }),
     });
   const requests = () => calls.filter((call) => call.operation === "lease.request");

@@ -5,7 +5,7 @@ import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
 import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
-import { frontReply, failure, refusal, type FrontReply } from "../shared/replies.js";
+import { frontReply, failure, notAvailable, refusal, type FrontReply } from "../shared/replies.js";
 import { validDeviceKey } from "../shared/release-scope.js";
 import { leaseCallFields, leaseIdOf, replyData, type RpcRead } from "../shared/rpc.js";
 import { addressField, asRecord } from "../shared/selectors.js";
@@ -25,6 +25,7 @@ import { chosenTtl } from "./ttl.js";
 
 type Grant = z.infer<(typeof OPERATIONS)["lease.request"]["output"]>;
 
+const NO_CEILING = "agent-device reported no lease ceiling for this lease";
 const QUEUE_WAIT_MS = 330_000;
 const CANCEL_RETRY_MS = 1_000;
 const LEASE_GONE = new Set(["LEASE_NOT_FOUND", "LEASE_EXPIRED", "LEASE_REVOKED"]);
@@ -188,6 +189,9 @@ async function requestLease(
         ...(plan.model === undefined ? {} : { model: plan.model }),
         ...(plan.class === undefined ? {} : { class: plan.class }),
         ...(plan.ttlMs === undefined ? {} : { ttlMs: plan.ttlMs }),
+        ...(context.link.leaseRequires === undefined || context.link.leaseRequires.length === 0
+          ? {}
+          : { requires: [...context.link.leaseRequires] }),
       },
       buildHttpSession(identity, {
         onRequestAdmitted: () => {
@@ -235,7 +239,6 @@ export interface AllocateArguments {
   readonly request: Request;
   readonly identity: TokenIdentity;
   readonly call: RpcRead & { readonly kind: "request" };
-  readonly leaseMaxTtlMs: number;
 }
 
 interface Granted {
@@ -249,7 +252,7 @@ interface Granted {
 
 export async function allocate(
   context: FrontContext,
-  { request, identity, call, leaseMaxTtlMs }: AllocateArguments,
+  { request, identity, call }: AllocateArguments,
 ): Promise<Response | undefined> {
   const refused = refusalFor(call.params);
   if (refused !== undefined) return frontReply(refused, call);
@@ -267,12 +270,20 @@ export async function allocate(
       ? undefined
       : frontReply(failure("simlock granted a device with no address; nothing was leased"), call);
   }
+  const holder = await context.link.status(plan.leaseId, identity);
+  if (holder.state === "unavailable" || holder.leaseMaxTtlMs === undefined) {
+    await releaseSimlock(context, identity, plan.leaseId);
+    return frontReply(
+      notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING),
+      call,
+    );
+  }
   const forwarded = new Request(request.url, {
-    body: JSON.stringify(forwardedBody(call, plan, address, leaseMaxTtlMs)),
+    body: JSON.stringify(forwardedBody(call, plan, address, holder.leaseMaxTtlMs)),
     headers: leaseCall(request, "agent_device.lease.allocate", {}, null).headers,
     method: "POST",
   });
-  const reply = await exchange(context, forwarded, identity, "allocate");
+  const reply = await exchange(context, forwarded, identity, "allocate", plan.leaseId);
   const made = { address, call, grant, identity, plan, request };
   if (reply.reading.kind === "success") return keepOrRelease(context, made, reply, reply.reading);
   if (reply.reading.kind === "error") {

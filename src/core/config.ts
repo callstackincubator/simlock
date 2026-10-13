@@ -482,12 +482,16 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "eventBuffer",
   "eventLog",
   "gateway",
+  "agentDevice",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
  * `disconnectedRetentionMs`, `execTimeoutMs`, and `leaseRequestTimeoutMs` are the ones the
  * gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
+
+// why: `command` names the program a worker runs, and a gateway runs none.
+const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
 
 /**
  * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -507,11 +511,22 @@ function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
       }
     }
     const gateway = object["gateway"];
-    if (gateway === undefined) continue;
-    for (const key of Object.keys(requireObject(gateway, "gateway"))) {
-      if (WORKER_ONLY_GATEWAY_KEYS.includes(key)) {
+    if (gateway !== undefined) {
+      for (const key of Object.keys(requireObject(gateway, "gateway"))) {
+        if (WORKER_ONLY_GATEWAY_KEYS.includes(key)) {
+          warn(
+            `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
+              `and this daemon runs in gateway mode.`,
+          );
+        }
+      }
+    }
+    const agentDevice = object["agentDevice"];
+    if (agentDevice === undefined) continue;
+    for (const key of Object.keys(requireObject(agentDevice, "agentDevice"))) {
+      if (WORKER_ONLY_AGENT_DEVICE_KEYS.includes(key)) {
         warn(
-          `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
+          `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
             `and this daemon runs in gateway mode.`,
         );
       }

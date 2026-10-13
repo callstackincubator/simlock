@@ -61,6 +61,7 @@ export class FleetLeaseIndex {
   readonly #byGatewayId = new Map<string, FleetLeaseEntry>();
   readonly #byRequester = new Map<string, Set<string>>();
   readonly #byWorkerLease = new Map<string, string>();
+  readonly #removalListeners: ((entry: FleetLeaseEntry) => void)[] = [];
   /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
    * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
    * from this snapshot" apart from "missing for a whole extra snapshot in a row" without
@@ -354,11 +355,17 @@ export class FleetLeaseIndex {
     if (ids?.size === 0) this.#byRequester.delete(entry.requesterId);
   }
 
+  // why: every way the index drops a lease (a release, an expiry, a reconciled miss, a forgotten worker) tells the listener after the entry is gone.
+  onRemoved(listener: (entry: FleetLeaseEntry) => void): void {
+    this.#removalListeners.push(listener);
+  }
+
   #forget(entry: FleetLeaseEntry): void {
     this.#byGatewayId.delete(entry.gatewayLeaseId);
     this.#dropRequesterLink(entry);
     this.#byWorkerLease.delete(workerKey(entry.workerId, entry.workerLeaseId));
     this.#missingSince.delete(entry.gatewayLeaseId);
+    for (const listener of this.#removalListeners) listener(entry);
   }
 }
 

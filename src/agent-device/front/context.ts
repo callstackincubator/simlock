@@ -33,9 +33,10 @@ export async function exchange(
   request: Request,
   identity: TokenIdentity,
   call?: CallClass,
+  leaseId?: string,
 ): Promise<Exchange> {
   try {
-    const response = await context.link.forward(request, identity);
+    const response = await context.link.forward(request, identity, leaseId);
     const text = await response.text();
     const reading = readReply(text, call);
     // why: the reason for a 5xx or a body that is not a JSON-RPC reply is only in what agent-device sent.
@@ -132,6 +133,8 @@ export async function releaseAgentDevice(
     context,
     leaseCall(request, "agent_device.lease.release", { ...scope, leaseId }, "simlock-release"),
     identity,
+    undefined,
+    leaseId,
   );
 }
 

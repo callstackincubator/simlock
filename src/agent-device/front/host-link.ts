@@ -2,16 +2,21 @@ import type { TokenIdentity } from "../../http/token-store.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import type { AgentDeviceHost } from "../host/host.js";
 
+export type LinkStatus =
+  | {
+      readonly state: "running";
+      // why: a link that serves many hosts names the ceiling only for a lease it can place; the front reads it from `status(leaseId)`.
+      readonly leaseMaxTtlMs?: number;
+      readonly platforms: readonly AgentDevicePlatform[];
+    }
+  | { readonly state: "unavailable"; readonly reason: string };
+
 export interface HostLink {
-  status(): Promise<
-    | {
-        readonly state: "running";
-        readonly leaseMaxTtlMs: number;
-        readonly platforms: readonly AgentDevicePlatform[];
-      }
-    | { readonly state: "unavailable"; readonly reason: string }
-  >;
-  forward(request: Request, identity: TokenIdentity): Promise<Response>;
+  // why: capabilities a lease request must require so it lands on a host that can serve agent-device; none means any worker.
+  readonly leaseRequires?: readonly string[];
+  status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus>;
+  forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response>;
+  dispose?(): void;
 }
 
 export class InProcessHostLink implements HostLink {

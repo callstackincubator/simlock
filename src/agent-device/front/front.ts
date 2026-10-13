@@ -7,6 +7,8 @@ import { commandName, asRecord } from "../shared/selectors.js";
 import {
   classifyCall,
   commandLeaseId,
+  leaseCallFields,
+  leaseIdOf,
   methodName,
   readRpcBody,
   type CallClass,
@@ -24,13 +26,26 @@ type RpcRequest = RpcRead & { readonly kind: "request" };
 interface Routed {
   readonly identity: TokenIdentity;
   readonly kind: CallClass;
-  readonly leaseMaxTtlMs: number;
+  readonly leaseMaxTtlMs: number | undefined;
   readonly read: RpcRequest;
   readonly request: Request;
 }
 
+// why: the one place the front reads the lease id a call names; a new lease has none yet, so its status is read without one.
+function leaseOf(
+  kind: CallClass,
+  read: RpcRead & { readonly kind: "request" },
+): string | undefined {
+  if (kind === "heartbeat" || kind === "release") {
+    return leaseIdOf(leaseCallFields(read.params).leaseId);
+  }
+  return kind === "command" ? commandLeaseId(read.params) : undefined;
+}
+
 const AGENT_TOKEN_ONLY = "refused: agent-device through simlock needs an agent token";
 const CLIENT_GONE = 499;
+// why: the agent-device CLI counts a /health answer of 500 or more as an unreachable daemon and prints only "Remote daemon is unavailable"; a lower status lets its first RPC run and print the reason.
+const HEALTH_STATUS = 200;
 
 function carry(request: Request, body: string): Request {
   const headers = new Headers(request.headers);
@@ -67,9 +82,9 @@ async function handleRpc(
   if (read.kind === "malformed") {
     return frontReply(refusal("refused: send one JSON-RPC request"), { id: null });
   }
-  const status = await context.link.status();
-  if (status.state === "unavailable") return frontReply(notAvailable(status.reason), read);
   const kind = classifyCall(read.method, read.params);
+  const status = await context.link.status(leaseOf(kind, read), identity);
+  if (status.state === "unavailable") return frontReply(notAvailable(status.reason), read);
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
   }
@@ -89,14 +104,12 @@ async function routeCall(
   { identity, kind, leaseMaxTtlMs, read, request }: Routed,
 ): Promise<Response> {
   if (kind === "allocate") {
-    const work = allocate(context, { call: read, identity, leaseMaxTtlMs, request }).catch(
-      (error: unknown) => {
-        context.logger.error("agent-device allocate failed", {
-          message: error instanceof Error ? error.message : String(error),
-        });
-        return frontReply(failure("agent-device allocate failed"), read);
-      },
-    );
+    const work = allocate(context, { call: read, identity, request }).catch((error: unknown) => {
+      context.logger.error("agent-device allocate failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return frontReply(failure("agent-device allocate failed"), read);
+    });
     return untilHangUp(request.signal, work);
   }
   const forwarded = carry(request, read.text);
@@ -104,8 +117,8 @@ async function routeCall(
     return heartbeat(context, { call: read, identity, leaseMaxTtlMs, request: forwarded });
   }
   if (kind === "release") return release(context, identity, read, forwarded);
-  const leaseId = kind === "command" ? commandLeaseId(read.params) : undefined;
-  if (leaseId === undefined) return forwardCommand(context, forwarded, identity, read);
+  const leaseId = leaseOf(kind, read);
+  if (leaseId === undefined) return forwardCommand(context, forwarded, identity, read, leaseId);
   return runCommand(context, request, identity, read, leaseId);
 }
 
@@ -120,7 +133,7 @@ async function runCommand(
   request.signal.addEventListener("abort", end, { once: true });
   let response: Response;
   try {
-    response = await forwardCommand(context, carry(request, read.text), identity, read);
+    response = await forwardCommand(context, carry(request, read.text), identity, read, leaseId);
   } catch (error) {
     end();
     throw error;
@@ -166,8 +179,9 @@ async function forwardCommand(
   request: Request,
   identity: TokenIdentity,
   read: RpcRequest,
+  leaseId: string | undefined,
 ): Promise<Response> {
-  const response = await passThrough(context, request, identity, read);
+  const response = await passThrough(context, request, identity, read, leaseId);
   const isDevices =
     methodName(read.method) === "command" &&
     commandName(asRecord(read.params)?.["command"]) === "devices";
@@ -205,13 +219,16 @@ async function passThrough(
   request: Request,
   identity: TokenIdentity,
   rpc: { readonly id: unknown } | undefined,
+  leaseId?: string,
+  probe = false,
 ): Promise<Response> {
   try {
-    const response = await context.link.forward(request, identity);
+    const response = await context.link.forward(request, identity, leaseId);
     if (response.status >= 500) logFailedReply(context, response);
     return response;
   } catch (error) {
-    return frontReply(notAvailable(error instanceof Error ? error.message : String(error)), rpc);
+    const reply = notAvailable(error instanceof Error ? error.message : String(error));
+    return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, rpc);
   }
 }
 
@@ -226,11 +243,10 @@ export function createFront(context: FrontContext): HttpMount {
       if (isRpc) return handleRpc(context, request, identity);
       const status = await context.link.status();
       const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
+      const probe = request.method === "GET" && path === "/health";
       if (status.state === "unavailable") {
-        // why: the agent-device CLI counts a /health answer of 500 or more as an unreachable daemon and prints only "Remote daemon is unavailable"; a lower status lets its first RPC run and print the reason.
         const reply = notAvailable(status.reason);
-        const probe = request.method === "GET" && path === "/health";
-        return frontReply(probe ? { ...reply, status: 200 } : reply, undefined);
+        return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
       }
       if (!isKnownRoute(request.method, path)) {
         return frontReply(
@@ -238,7 +254,7 @@ export function createFront(context: FrontContext): HttpMount {
           undefined,
         );
       }
-      return passThrough(context, request, identity, undefined);
+      return passThrough(context, request, identity, undefined, undefined, probe);
     },
     prefix: FRONT_MOUNT,
   };

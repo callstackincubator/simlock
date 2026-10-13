@@ -9,11 +9,11 @@ export async function release(
   call: RpcRead & { readonly kind: "request" },
   forwarded: Request,
 ): Promise<Response> {
-  const reply = await exchange(context, forwarded, identity);
+  const leaseId = leaseIdOf(leaseCallFields(call.params).leaseId);
+  const reply = await exchange(context, forwarded, identity, undefined, leaseId);
   if (reply.response === undefined) {
     return frontReply(failure("agent-device did not answer the release"), call);
   }
-  const leaseId = leaseIdOf(leaseCallFields(call.params).leaseId);
   if (leaseId === undefined || reply.reading.kind !== "success") return relay(reply);
   const entry = context.map.get(leaseId);
   if (entry === undefined || entry.identity.requesterId !== identity.requesterId) {

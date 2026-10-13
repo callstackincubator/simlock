@@ -5,14 +5,18 @@ import { pathToFileURL } from "node:url";
 import {
   agentDeviceCapabilitySource,
   agentDeviceFindings,
+  agentDeviceRelayTarget,
   AgentDeviceSupervisor,
   cancelWaitingAllocates,
   createAgentDeviceEdgeParts,
   disposeAgentDeviceEdge,
   createAgentDeviceFront,
+  createGatewayAgentDeviceFrontParts,
   SupervisorAgentDeviceUpstream,
   type AgentDeviceHealthProbe,
   type AgentDeviceUpstream,
+  type FleetPort,
+  type FleetWorker,
   NodeAgentDeviceHealthProbe,
 } from "../agent-device/index.js";
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
@@ -101,6 +105,7 @@ import {
   GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
+  type FleetViews,
 } from "../gateway/index.js";
 import {
   WebSocketUplinkConnector,
@@ -157,11 +162,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
+  const configWarnings: string[] = [];
   const config = await loadConfig({
     configPath,
     filesystem,
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     systemStats,
+    warn: (message) => configWarnings.push(message),
   });
   const logger =
     options.logger ??
@@ -173,6 +180,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         path: join(dataDirectory, "daemon.log"),
       }),
     });
+  // why: the logger needs the config's log level, so what the config load found to warn about is told once the logger exists.
+  for (const message of configWarnings) logger.warn(message);
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
   // ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
   // missing `sw_vers` costs a fallback value, not the daemon.
@@ -490,7 +499,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     queue: leasing,
     presence: latestPresence,
     reaper,
-    relayTargets: options.relayTargets ?? {},
+    relayTargets: {
+      ...(agentDeviceParts === undefined
+        ? {}
+        : { "agent-device": agentDeviceRelayTarget(agentDeviceParts) }),
+      ...options.relayTargets,
+    },
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
     nuke,
     registry,
@@ -781,8 +795,21 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // `GatewayOwnerRoutedFacts`'s own doc comment for why the fleet's lease index, not a worker's
   // relayed payload, is what a fleet lease's push has to be routed by.
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
+  const gatewayRelay = new GatewayRelay({ directory: gatewayService });
   // why: a test reaches the gateway's relay through this callback.
-  options.gatewayRelay?.(new GatewayRelay({ directory: gatewayService }));
+  options.gatewayRelay?.(gatewayRelay);
+  const agentDeviceParts = config.agentDevice.enabled
+    ? createGatewayAgentDeviceFrontParts(
+        agentDeviceFleetPort({
+          instanceId,
+          leaseIndex,
+          relay: gatewayRelay,
+          views: gatewayService.workers,
+        }),
+        clock,
+        config.lease.maxTtlMs,
+      )
+    : undefined;
 
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;
@@ -848,6 +875,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {
+      if (agentDeviceParts !== undefined) {
+        disposeAgentDeviceEdge(agentDeviceParts);
+        await cancelWaitingAllocates(agentDeviceParts, (id) => fleetCoordinator.cancelPending(id));
+      }
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
     },
@@ -865,15 +896,32 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
   async function startHttpFrontend(): Promise<void> {
     const httpLogger = logger.child("http");
+    // why: looked up at each call, so a wrapper placed on the daemon's dispatch sits between the front and leasing.
+    const dispatch: HttpDispatch = (operation, input, session) =>
+      daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
       config,
-      dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
+      dispatch,
       eventBus,
       idGenerator,
       // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
+      mounts:
+        agentDeviceParts === undefined
+          ? []
+          : [
+              createAgentDeviceFront(agentDeviceParts, {
+                clock,
+                dispatch,
+                logger: logger.child("agent-device"),
+                maxRunMs: config.lease.maxTtlMs,
+                ...(config.agentDevice.leaseTtlCapMs === undefined
+                  ? {}
+                  : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
+              }),
+            ],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
       ownerRoutedFacts: daemon.ownerRoutedFacts,
@@ -919,6 +967,72 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   if (daemonResult.status === "rejected") throw daemonResult.reason;
   if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
+}
+
+interface FleetPortParts {
+  readonly instanceId: string;
+  readonly leaseIndex: FleetLeaseIndex;
+  readonly relay: GatewayRelay;
+  readonly views: FleetViews;
+}
+
+const AGENT_DEVICE = "agent-device";
+
+type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
+
+// why: the agent-device edge imports nothing from the gateway, so this is the one place the gateway's parts become its port.
+function agentDeviceFleetPort({ instanceId, leaseIndex, relay, views }: FleetPortParts): FleetPort {
+  const serving = (view: WorkerView, withDrained: boolean): FleetWorker | undefined => {
+    const maxTtlMs = view.lease?.maxTtlMs;
+    const available = view.capabilities?.some(
+      (entry) => entry.name === AGENT_DEVICE && entry.state === "available",
+    );
+    if (
+      view.connection !== "connected" ||
+      (view.drained && !withDrained) ||
+      available !== true ||
+      view.catalogReadAt === undefined ||
+      maxTtlMs === undefined
+    ) {
+      return undefined;
+    }
+    const platforms = (view.catalog ?? []).flatMap((entry) =>
+      entry.platform === "ios" || entry.platform === "android" ? [entry.platform] : [],
+    );
+    return { id: view.id, leaseMaxTtlMs: maxTtlMs, platforms };
+  };
+  return {
+    capableWorkers: () =>
+      views.views().flatMap((view) => {
+        const worker = serving(view, false);
+        return worker === undefined ? [] : [worker];
+      }),
+    holder: (workerId) => {
+      const view = views.view(workerId);
+      return view === undefined ? undefined : serving(view, true);
+    },
+    instanceId,
+    leaseOf: (leaseId) => {
+      const entry = leaseIndex.resolve(leaseId);
+      return entry === undefined ? undefined : { ownerId: entry.ownerId, workerId: entry.workerId };
+    },
+    onLeaseRemoved: (listener) =>
+      leaseIndex.onRemoved((entry) =>
+        listener({
+          leaseId: entry.gatewayLeaseId,
+          ownerId: entry.ownerId,
+          workerId: entry.workerId,
+        }),
+      ),
+    // why: looked up at each call, so a test that replaces the relay's method sits between the link and the worker.
+    relay: (workerId, request, tenant, leaseId) =>
+      relay.relay(workerId, {
+        request,
+        target: AGENT_DEVICE,
+        tenant,
+        ...(leaseId === undefined ? {} : { leaseId }),
+      }),
+  };
 }
 
 function errorMessage(error: unknown): string {

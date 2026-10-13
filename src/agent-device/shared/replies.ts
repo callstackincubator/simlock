@@ -1,3 +1,5 @@
+import { FRONT_PREFIX } from "./paths.js";
+
 export type ReplyCode = "INVALID_ARGS" | "COMMAND_FAILED" | "UNAUTHORIZED";
 
 export interface FrontReply {
@@ -58,4 +60,18 @@ export function frontReply(reply: FrontReply, rpc: { readonly id: unknown } | un
     },
     { status: reply.status },
   );
+}
+
+// why: a reply made for a request the front did not read itself answers a JSON-RPC call under that call's id, and any other request in the flat shape.
+export async function frontReplyFor(request: Request, reply: FrontReply): Promise<Response> {
+  if (request.method !== "POST" || new URL(request.url).pathname !== `${FRONT_PREFIX}/rpc`) {
+    return frontReply(reply, undefined);
+  }
+  try {
+    const body: unknown = await request.clone().json();
+    const id = typeof body === "object" && body !== null && "id" in body ? body.id : null;
+    return frontReply(reply, { id });
+  } catch {
+    return frontReply(reply, { id: null });
+  }
 }
