@@ -149,9 +149,10 @@ export class DeviceProfileRegistry {
   }
 
   /**
-   * Reads sources in order and stops at the first one with a match, so a built-in model never
-   * opens devices.xml. The first match in the first source that has one is the first match in
-   * the whole list, so this agrees with `catalog`.
+   * why: sources are read in order and stop at the first match, so a model that matches an
+   * SDK profile never opens devices.xml. A custom built-in match also reads every later source,
+   * for the devices.xml details it fits by. The first match in the first source that has one is
+   * the first match in the whole list, so this agrees with `catalog`.
    */
   async resolve(model: string): Promise<DeviceProfile> {
     for (const [index, source] of this.#sources.entries()) {
@@ -184,9 +185,9 @@ function withDevicesXmlDetails(
   candidates: readonly DeviceProfile[],
 ): DeviceProfile {
   if (profile.kind !== "builtin" || !profile.custom) return profile;
-  const name = profile.name.toLocaleLowerCase();
-  const details = candidates.find(
-    (candidate) => candidate.kind === "properties" && candidate.name.toLocaleLowerCase() === name,
+  const details = matchProfile(
+    candidates.filter((candidate) => candidate.kind === "properties"),
+    profile.name,
   );
   if (details?.kind !== "properties") return profile;
   return {
@@ -421,7 +422,7 @@ interface DevicesXmlProfile {
 }
 
 /**
- * Maps a `<d:device>` element to the `config.ini` hardware properties `avdmanager -d` would
+ * why: `avdmanager -d` is not available for a devices.xml profile, so this maps a `<d:device>` element to the `config.ini` hardware properties `avdmanager -d` would
  * otherwise have produced. Mapped:
  *
  * - `<d:name>`               -> `hw.device.name`
@@ -433,12 +434,15 @@ interface DevicesXmlProfile {
  *
  * Deliberately skipped, because `config.ini`'s AVD-identity hash and the emulator's own
  * defaults cover them well enough that mirroring them exactly is not worth the parsing
- * surface: `<d:screen-size>` / `<d:diagonal-length>` / `<d:screen-ratio>` (physical form
- * factor, not a rendering input), `<d:xdpi>` / `<d:ydpi>` (physical DPI, distinct from the
+ * surface: `<d:screen-size>` / `<d:screen-ratio>` (physical form factor, not a rendering
+ * input), `<d:xdpi>` / `<d:ydpi>` (physical DPI, distinct from the
  * rendering `pixel-density` bucket this already maps), `<d:buttons-type>`, `<d:keyboard>`,
  * `<d:nav>`, `<d:camera>`, `<d:sensors>`, `<d:cpu>`, `<d:gpu>`, `<d:abi>` (the system image
- * the caller picked already determines the ABI), `<d:storage>`, and the whole `<d:software>`
- * block (API-level / feature compatibility simlock resolves separately via the system image).
+ * the caller picked already determines the ABI), `<d:storage>`, and the rest of `<d:software>`.
+ *
+ * Read for the system image a profile fits, not for the AVD: `<d:tag-id>`,
+ * `<d:software><d:api-level>`, `<d:playstore-enabled>`, `<d:diagonal-length>` and the
+ * `<d:x-folded-dimension>` / `<d:y-folded-dimension>` pair.
  * A device with multiple `<d:state>` hardware variants (e.g. a foldable's postures) is read
  * from whichever `<d:hardware>` block appears first in the file, matching `<d:screen>` /
  * `<d:ram>` textually rather than per-state.
@@ -538,7 +542,9 @@ function parseApiRange(text: string | undefined): ApiRange | undefined {
   const min = apiBound(low);
   const max = apiBound(high);
   const bounded = (low === "" || min !== undefined) && (high === "" || max !== undefined);
-  if (!bounded || (low === "" && high === "")) return undefined;
+  if (!bounded || (low === "" && high === "") || (dash === undefined && high !== "")) {
+    return undefined;
+  }
   if (dash === undefined) return { max: min as number, min: min as number };
   const range = { ...(max === undefined ? {} : { max }), min: min ?? 1 };
   return max !== undefined && range.min > max ? undefined : range;

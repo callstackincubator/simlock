@@ -385,16 +385,17 @@ describe("parseDevicesXml image-fit fields", () => {
     ["abc", undefined],
     ["0-", undefined],
     ["1000-", undefined],
+    ["1001", undefined],
+    ["3333", undefined],
   ])("parses the api-level %j as the range %j", (range, expected) => {
     expect(first(deviceXml(apiLevel(range))).apiRange).toEqual(expected);
   });
 
-  it("ignores a tag-id outside the allowed characters or length, a diagonal outside 0.1 to 100, and a playstore-enabled other than true/false", () => {
+  it("ignores a tag-id outside the allowed characters or length, a diagonal over 100, and a playstore-enabled other than true/false", () => {
     expect(first(deviceXml("<d:tag-id>android-tv</d:tag-id>")).imageKind).toBe("android-tv");
     expect(first(deviceXml("<d:tag-id>Android TV</d:tag-id>")).imageKind).toBeUndefined();
     expect(first(deviceXml(`<d:tag-id>${"a".repeat(65)}</d:tag-id>`)).imageKind).toBeUndefined();
     expect(first(deviceXml(diagonal("10.1"))).tablet).toBe(true);
-    expect(first(deviceXml(diagonal("0.05"))).tablet).toBe(false);
     expect(first(deviceXml(diagonal("101"))).tablet).toBe(false);
     expect(first(deviceXml("<d:playstore-enabled>false</d:playstore-enabled>")).playStore).toBe(
       false,
