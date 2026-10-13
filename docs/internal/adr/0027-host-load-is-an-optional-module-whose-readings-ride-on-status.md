@@ -117,7 +117,11 @@ both modes build the same probe. `FakeHostLoadProbe` serves tests.
 - **Linux limits.** Simlock's cgroup is the `0::` line of
   `/proc/self/cgroup`. Its limit files are read in that cgroup's folder
   under `/sys/fs/cgroup` and in every parent folder up to `/sys/fs/cgroup`,
-  and the lowest limit wins, because that is the one that binds.
+  and the lowest limit wins, because that is the one that binds. CPU limits
+  compare as cores. Usage is read in the folder that holds the winning
+  limit, because the limit caps that folder's usage, siblings included. A
+  cgroup path outside Simlock's cgroup namespace (a `..` segment) reads
+  `/sys/fs/cgroup` alone.
   - CPU: a `cpu.max` quota below the machine's cores is a limit. CPU is
     then `cpu.stat` `usage_usec` against elapsed time × quota ÷ period
     cores, `limited`.
