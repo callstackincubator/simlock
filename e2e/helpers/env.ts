@@ -183,18 +183,14 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
   return testEnv;
 }
 
-async function buildEnv(
+function processEnv(
   options: WithDaemonOptions,
-): Promise<{ testEnv: TestEnv; state: TeardownState }> {
-  const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
-  const socketPath = join(home, "daemon.sock");
-  const logPath = join(home, "daemon.log");
-  const configPath = join(home, "config.json");
-  const scriptPath = join(home, "fake-driver-script.json");
-  const logCallPath = join(home, "fake-driver-calls.jsonl");
-
+  home: string,
+  scriptPath: string,
+  logCallPath: string,
+): NodeJS.ProcessEnv {
   const useFakeDriver = options.driver === undefined || options.driver === "fake";
-  const env: NodeJS.ProcessEnv = {
+  return {
     ...process.env,
     SIMLOCK_HOME: home,
     ...(useFakeDriver
@@ -209,13 +205,35 @@ async function buildEnv(
       : {}),
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
   };
+}
+
+function seedConfig(
+  options: WithDaemonOptions,
+  adbServerPort: number | undefined,
+): Record<string, unknown> | undefined {
+  if (options.driver === undefined || options.driver === "fake") {
+    return mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {});
+  }
+  if (options.driver === "real") {
+    return mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {});
+  }
+  return options.configOverrides;
+}
+
+async function buildEnv(
+  options: WithDaemonOptions,
+): Promise<{ testEnv: TestEnv; state: TeardownState }> {
+  const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
+  const socketPath = join(home, "daemon.sock");
+  const logPath = join(home, "daemon.log");
+  const configPath = join(home, "config.json");
+  const scriptPath = join(home, "fake-driver-script.json");
+  const logCallPath = join(home, "fake-driver-calls.jsonl");
+
+  const env = processEnv(options, home, scriptPath, logCallPath);
 
   const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
-  const seededConfig = useFakeDriver
-    ? mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {})
-    : options.driver === "real"
-      ? mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {})
-      : (options.configOverrides ?? {});
+  const seededConfig = seedConfig(options, adbServerPort);
   if (seededConfig !== undefined) {
     await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
