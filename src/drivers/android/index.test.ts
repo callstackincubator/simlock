@@ -2039,6 +2039,14 @@ describe("AndroidDriver", () => {
       expect(advisories).toEqual([]);
     });
 
+    it("reports nothing for a library name the SDK also lists", async () => {
+      const sdkListing = `Available devices:\nid: 0 or "pixel_9"\n    Name: Pixel 9\n    OEM : Google\n`;
+
+      const { advisories } = await advisoriesFor(undefined, sdkListing);
+
+      expect(advisories).toEqual([]);
+    });
+
     it("reports one advisory per profile when `avdmanager list device` also lists it with `OEM : User`, and runs no `avdmanager`", async () => {
       const userListing = `Available devices:\nid: 0 or "Pixel 9"\n    Name: Pixel 9\n    OEM : User\n`;
 
