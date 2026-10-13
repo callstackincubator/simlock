@@ -1,4 +1,4 @@
-# 0026. Host load is an optional module whose readings ride on status
+# 0027. Host load is an optional module whose readings ride on status
 
 - **Status:** Proposed
 - **Date:** 2026-10-13
@@ -10,7 +10,8 @@
   reads the new block.
 - **Depends on:** ADR 0005 (worker views, the uplink refresh), ADR 0008
   (host facts in status and in the view), ADR 0013 §4 (the console corrects
-  for clock skew with the `Date` header), architecture rules 9, 14 and 15.
+  for clock skew with the `Date` header), architecture rules 9, 11, 14
+  and 15.
 
 ## Context
 
@@ -43,22 +44,29 @@ already polls `GET /v1/workers` every second.
 `src/host-load/`, entered through its `index.ts`, holds the sampler and the
 reading's types. It depends on ports only: `Clock`, `Logger` and the new
 `HostLoadProbe` (§2). It imports nothing from `core`, `leasing`, `gateway`,
-`drivers` or any frontend. A boundary test, modelled on
+`drivers`, `contract` or any frontend, and none of `core`, `leasing`,
+`drivers`, `gateway` or `contract` imports it. Lint enforces both
+directions. A boundary test, modelled on
 `src/core/warm-pool/boundary.test.ts`, keeps every file outside the
-directory off everything but `index.ts`, and a lint override keeps `fs` and
-`child_process` out of it.
+directory off everything but `index.ts`.
 
 It sits outside `src/core/` because a gateway runs it too, and a gateway
 has no core.
 
-`src/daemon/main.ts` builds it in both modes and hands each status
-handler a function, `load: () => HostLoadReading | undefined`. No other
-file imports it. Built or left out, the daemon behaves the same apart from
-the `load` block (architecture rule 15).
+`src/daemon/main.ts` builds it in both modes. `DaemonServer` starts and
+disposes it (§3). Each status handler gets a function, `load: () =>
+StatusLoad | undefined`, which main.ts builds as `fitHostLoad(sampler.current())`.
+`fitHostLoad` lives beside the schema in `src/contract/schemas.ts`, as
+`fitHostFacts` does, so the wire bounds are written once.
+
+`startDaemon`'s `hostLoadProbe` option set to `null` leaves the module out.
+The daemon then behaves the same apart from the `load` block (architecture
+rule 15), and a test proves it.
 
 ```mermaid
 flowchart LR
   main["daemon/main.ts"] --> HL["host-load/ (new)"]
+  main --> SRV["daemon/server.ts (start, dispose)"]
   main --> WD["daemon/dispatcher.ts (status.get)"]
   main --> GD["gateway/dispatcher.ts (status.get)"]
   HL --> P["ports/host-load.ts (new)"]
@@ -85,29 +93,43 @@ interface HostLoadProbe {
 `HostLoadCounters` holds raw figures, not percentages: cumulative CPU busy
 and total time with the core count, memory total, available and swap used,
 the macOS pressure level, and disk free and total. CPU and memory each say
-whether a limit applies (`limited`). The composition root picks the adapter
-from `process.platform`, as it does for `NodeHostInfo`, and a
-`FakeHostLoadProbe` serves tests.
+whether a limit applies (`limited`). Busy time is all CPU time except idle
+and iowait, which is what `top` counts as used.
+
+One factory in the same file, `productionHostLoadProbe({ platform,
+dataDirectory })`, builds the adapter for `process.platform` with its
+production inputs, so the composition root holds no adapter detail and
+both modes build the same probe. `FakeHostLoadProbe` serves tests.
 
 - **macOS** (`DarwinHostLoadProbe`). CPU from Node's `os.cpus()` times.
   Memory from one bounded `sysctl -n hw.memsize kern.memorystatus_level
   kern.memorystatus_vm_pressure_level vm.swapusage` call: available is
   `hw.memsize` times the free percentage `kern.memorystatus_level` reports,
   the figure macOS's own `memory_pressure` tool prints. Pressure 1, 2 and 4
-  are `normal`, `warn` and `critical`. Never `limited`.
+  are `normal`, `warn` and `critical`. Never `limited`. The factory gives
+  it a process runner of its own, not the daemon's logging one, so a call
+  every 15 s writes nothing to the daemon log.
 - **Linux** (`LinuxHostLoadProbe`), through the `Filesystem` port so tests
-  seed `/proc` and `/sys` files. The cgroup comes from the `0::` line of
-  `/proc/self/cgroup`, and its files from under `/sys/fs/cgroup`.
-  - CPU: when `cpu.max` sets a quota, `cpu.stat` `usage_usec` against
-    quota ÷ period cores, `limited`. Otherwise the `cpu` line of
-    `/proc/stat` against the machine's cores.
-  - Memory: when `memory.max` is a number below `MemTotal`, total is that
-    limit, available
-    is the limit minus `memory.current` plus `inactive_file` from
-    `memory.stat` (never below zero), swap is `memory.swap.current`,
-    `limited`. Otherwise `MemTotal`, `MemAvailable` and `SwapTotal −
-    SwapFree` from `/proc/meminfo`.
-  - No `0::` line (cgroup v1), a missing file, or `max` means no limit.
+  seed `/proc` and `/sys` files. Without a limit, CPU is the `cpu` line of
+  `/proc/stat` against `os.cpus().length` cores (every CPU, as that line
+  covers), and memory is `MemTotal`, `MemAvailable` and `SwapTotal −
+  SwapFree` from `/proc/meminfo`.
+- **Linux limits.** Simlock's cgroup is the `0::` line of
+  `/proc/self/cgroup`. Its limit files are read in that cgroup's folder
+  under `/sys/fs/cgroup` and in every parent folder up to `/sys/fs/cgroup`,
+  and the lowest limit wins, because that is the one that binds.
+  - CPU: a `cpu.max` quota below the machine's cores is a limit. CPU is
+    then `cpu.stat` `usage_usec` against elapsed time × quota ÷ period
+    cores, `limited`.
+  - Memory: a `memory.max` below `MemTotal` is a limit. Total is that
+    limit, available is the limit minus `memory.current` plus
+    `inactive_file` from `memory.stat` (never below zero), swap is
+    `memory.swap.current`, `limited`.
+  - A limit that is found, with usage that cannot be read, leaves that part
+    out. It does not fall back to the machine's figures, which would be
+    wrong under the limit.
+  - No `0::` line (cgroup v1), no limit file, `max`, or a limit at or above
+    the machine's figure means no limit.
 - **Disk**, both adapters: free and total from one `statfs` of the data
   folder, the folder the cleanup reaper's `diskFree` reads. The
   `Filesystem` port gains `diskSpace(path)`, returning both, beside
@@ -119,27 +141,35 @@ Simlock can actually use.
 
 ### 3. The sampler reads every 15 seconds, one read at a time
 
-- The sampler starts when the daemon starts, before startup convergence,
-  so a starting daemon already has a reading. The first read is
-  immediate. After that, a `Clock` timer fires every 15 s, re-armed each
-  time it fires. The interval is fixed, with no config key.
-- One read is in flight at most. A tick that finds one still running is
-  skipped. Each read is bounded at 10 s, after which that read counts as
-  failed. The `sysctl` call has its own process timeout below that.
+- `DaemonServer` starts the sampler once the daemon holds its socket,
+  before startup convergence, so a starting daemon already has a reading.
+  It disposes the sampler on every way out: a stop, and a start that fails
+  after the sampler was built. A daemon that loses the start race must
+  exit, and an armed timer would keep it alive.
+- The first read is immediate. After that, a `Clock` timer fires every
+  15 s, re-armed each time it fires. The interval is fixed, with no config
+  key.
+- One read is in flight at most. A tick that finds one is skipped. Each
+  read is bounded at 10 s: after that the reading treats it as failed, but
+  it still counts as in flight until it settles. A read that hangs for
+  ever (a stalled mount) then costs one stuck call, not a new one every
+  15 s, and the age of the last reading keeps growing.
 - Busy % is the difference between this read's CPU counters and the
   previous successful read's. With no previous read, or after a change of
   `limited` or core count, CPU is absent from that reading.
 - A part absent from a read is absent from the reading. The sampler does
   not carry an older value forward: "unavailable" is shown rather than a
-  stale figure. A part that starts or stops failing is logged once per
-  change, at warn.
+  stale figure. A part that stops being readable, or becomes readable
+  again, is logged once per change, at warn. A part that has never been
+  read logs nothing.
 - The reading records when it was taken, on the sampler's clock.
-- `dispose()` cancels the timer, and the daemon's stop sequence calls it.
+  `current()` reports its age, clamped at zero because the wall clock can
+  step back.
 
 ### 4. On the wire, `status.get` carries the age, not a timestamp
 
 `status.get` gains an optional `load` block, on the starting answer and the
-running one alike:
+running one alike, in both modes:
 
 ```json
 "load": { "ageMs": 4120,
@@ -155,12 +185,13 @@ running one alike:
   where the operating system reports one.
 - The block is absent when no reading has finished yet, and when the
   module is not wired.
-- Every number is finite and not negative, `busyPercent` is at most 100,
-  `cores` is above zero (a cgroup quota can allow half a core), and
-  `pressure` is one of `normal`, `warn` and `critical`. A gateway parses
-  every worker's answer, so the schema bounds all of it. The sampler
-  leaves out a part whose figures break these bounds, so a bad read never
-  fails `status.get`.
+- `ageMs` is a whole number from 0 to one day. Every other number is
+  finite and not negative, `busyPercent` is at most 100, `cores` is above
+  zero (a cgroup quota can allow half a core), and `pressure` is one of
+  `normal`, `warn` and `critical`. A gateway parses every worker's answer,
+  so the schema bounds all of it. `fitHostLoad` caps `ageMs` at one day and
+  drops a part whose figures break the bounds, so a bad read never fails
+  `status.get`.
 - The protocol moves up by one. The CLI and the console read the block
   only when it is present.
 
@@ -193,12 +224,15 @@ sequenceDiagram
   G-->>C: view without load ("no reading while disconnected")
 ```
 
-The worker registry owns the rule that a view not `connected` carries no
-`load`. It drops `load` when a worker disconnects or turns incompatible, as
-it already drops `installs` and `waiting`. A refresh never adds `load` to
-such a view, even when a `status.get` answer lands after the disconnect.
-A refresh that carries no `load` removes the old one rather than keeping
-it. A reconnect fills `load` in again on the next refresh.
+The worker registry owns the rule that only a `connected` view carries
+`load`, through one helper:
+
+- It drops `load` when a worker disconnects or turns incompatible, as it
+  already drops `installs` and `waiting`, and when a worker connects anew,
+  so a new session never shows the old session's reading.
+- A refresh never adds `load` to a view that is not `connected`.
+- A refresh sets `load` to exactly what the refresh carries, and so
+  removes it when the worker sent none.
 
 ### 6. A gateway reports its own machine, and sums nothing
 
@@ -228,8 +262,9 @@ bytes to each gateway refresh.
 - The disk pressure cleanup is unchanged. It still reads `diskFree`
   itself, on its own tick, against its own threshold. The two numbers come
   from the same `statfs` call, at different moments.
-- An older worker sends no `load`. Its view has none, and the console and
-  the CLI show nothing for it.
+- An older worker sends no `load`, and its view has none. The CLI prints
+  no Load line for it. The console says `Not reported`, as it does for
+  every other fact a worker did not send.
 
 ## Alternatives considered
 
@@ -255,5 +290,10 @@ bytes to each gateway refresh.
 - **Detect containers and say `in container`.** Rejected: no reliable
   signal exists across container runtimes, and a systemd service limit is
   the same constraint without a container. See §2.
+- **Only the leaf cgroup's limits.** Rejected: a container running systemd
+  puts the container's limit on a parent of Simlock's own cgroup, and
+  `MemoryMax=` is often set on a slice rather than a service.
 - **Node's `os.freemem()`.** Rejected: on macOS it counts only free pages,
-  so a healthy Mac looks nearly full.
+  so a healthy Mac looks nearly full. **`os.availableParallelism()` for the
+  machine's cores**: rejected, it follows CPU affinity and, in Node 22, a
+  cgroup quota, while `/proc/stat` covers every CPU.
