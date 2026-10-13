@@ -2134,8 +2134,7 @@ findings above — there is no `--fix` for it.
 name one of Simlock's own Android profiles answers to, in the file's order. The
 message names the `devices.xml` profile and the Simlock profile that is used
 instead; Simlock reads its own profile first, so the one in `devices.xml` is
-never used. A name that Simlock's profile shares with the SDK is not reported,
-because the two agree. Rename the profile in `devices.xml` to use it. Advisory
+never used. Rename the profile in `devices.xml` to use it. Advisory
 only — there is no `--fix` for it.
 
 `doctor` also checks the [prerequisites](#prerequisites) of each platform
