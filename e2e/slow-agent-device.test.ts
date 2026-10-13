@@ -635,7 +635,7 @@ function defineSuite(target: Target): void {
         expect(released.code, released.stderr).toBe(0);
         await waitForFree(env);
 
-        const opened = await open(a);
+        const opened = await tryOpen(a);
         expect(opened.code).not.toBe(0);
         expect(failureText(opened)).toContain(
           `agent-device is not available on this simlock: ${message}`,
