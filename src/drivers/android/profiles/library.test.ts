@@ -244,3 +244,20 @@ describe("isPlayStoreImage", () => {
     expect(isPlayStoreImage(image("google-tv", ["google-tv", "google_apis"]))).toBe(false);
   });
 });
+
+describe("the Android device profile library, automotive second display", () => {
+  it("both automotive profiles carry the SDK's hw.display6 lines: density 120, flag 0, height 600, width 400", () => {
+    for (const id of ["automotive_1024p_landscape", "automotive_1080p_landscape"]) {
+      const hardware = byId(id).hardware;
+      expect(
+        [
+          hardware["hw.display6.density"],
+          hardware["hw.display6.flag"],
+          hardware["hw.display6.height"],
+          hardware["hw.display6.width"],
+        ],
+        id,
+      ).toEqual(["120", "0", "600", "400"]);
+    }
+  });
+});

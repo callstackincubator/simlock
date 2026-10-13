@@ -4274,7 +4274,12 @@ describe("AndroidDriver library catalog", () => {
     const driver = await createDriver(await androidFilesystem(), runner);
 
     const catalog = await driver.listCatalog();
+    const resolved: string[] = [];
+    for (const model of Object.keys(classes)) {
+      resolved.push((await driver.resolveSpec({ model, platform: "android" })).model);
+    }
 
+    expect(resolved).toEqual(Object.keys(classes));
     expect(Object.keys(classes).filter((model) => !catalog.models.includes(model))).toEqual([]);
     for (const [model, deviceClass] of Object.entries(classes)) {
       expect(catalog.modelClasses[model], model).toBe(deviceClass);
