@@ -3337,6 +3337,36 @@ describe("the agent-device front's request rules", () => {
     });
   });
 
+  describe("the token's leased devices", () => {
+    it("a `test` shard fill whose lease check fails answers `COMMAND_FAILED` with `could not check your leases; try again` and reaches nothing", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const tap = tapDispatch(rig);
+      const sharded = () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } });
+      await forwarded(rig, sharded);
+      tap.rejectNext("lease.list");
+      const before = rig.fake.requests.length;
+
+      const answer = await envelopeOf(await sharded());
+
+      expect(answer.error).toMatchObject({
+        data: { code: "COMMAND_FAILED", message: "could not check your leases; try again" },
+      });
+      expect(rig.fake.requests.length).toBe(before);
+    });
+
+    it("a batch whose `batchSteps` is not a list is refused with `refused: malformed batchSteps`", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => batch(rig, undefined, [{ command: "snapshot" }]));
+
+      await refused(
+        rig,
+        () => runCommand(rig, "batch", undefined, { flags: { batchSteps: "snapshot" } }),
+        "refused: malformed batchSteps",
+      );
+    });
+  });
+
   describe("rule 10, commands agent-device runs without a lease", () => {
     it("`capabilities` with no selector reaches agent-device with the leased device's id; from a token holding no device it is refused; `doctor` the same", async () => {
       const rig = await setUp();

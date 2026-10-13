@@ -18,7 +18,7 @@ import { LeaseCheckFailed, tokenDevices, type TokenDevice } from "./token-device
 
 type RpcRequest = Extract<RpcRead, { kind: "request" }>;
 
-export type RulesOutcome =
+type RulesOutcome =
   | { readonly kind: "accepted"; readonly read: RpcRequest }
   | { readonly kind: "refused"; readonly reply: FrontReply };
 

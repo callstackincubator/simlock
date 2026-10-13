@@ -3,7 +3,7 @@ import type { Clock } from "../../ports/index.js";
 
 const MAX_PRINCIPALS_PER_REFRESH = 100;
 
-export interface DeviceFacts {
+interface DeviceFacts {
   readonly platform?: "ios" | "android";
   readonly model?: string;
   readonly name?: string;

@@ -1481,6 +1481,8 @@ URL answers `404`.
   token's principal, and the lease ID is the 32-hex ID the CLI chose. `close`
   ends the agent-device lease and then frees the Simlock lease, so Simlock
   wipes the device for the next agent.
+- **`devices` lists only the agent's own devices.** Before `open` it answers
+  an empty list; after, the devices Simlock leased to that token.
 - **Heartbeats keep the lease.** The CLI sends one before every command except
   `devices`. Once agent-device answers it, Simlock renews the lease to now plus
   its TTL, unless the lease already runs longer (a longer renewal by the agent
@@ -1516,8 +1518,30 @@ the status.
 - `timed out waiting for a device; nothing was leased`.
 - `refused by simlock: <message>`: Simlock refused the lease request, for
   example a model it does not know, or a `ttlMs` above `lease.maxTtlMs`.
-- `refused: only iOS and Android`, `refused: name --platform ios or android`.
-- `refused: simlock picks the device`: `--udid` or `--serial` on `open`.
+- `refused: only iOS and Android`, `refused: name --platform ios or android`,
+  and `refused: <platform> is not available on this simlock` for a platform
+  whose driver is off on this worker.
+- `refused: simlock picks the device`: a `--udid`, `--serial`, `--device` or
+  device key that is not the device Simlock leased to the agent. A
+  `--device` naming the leased device's model is sent on as that device's ID.
+- `refused: simlock chooses the device set; run disconnect, then connect proxy
+  without --ios-simulator-device-set` and `refused: simlock chooses the
+  devices; run disconnect, then connect proxy without
+  --android-device-allowlist`: on any command.
+- `refused: send the app from your machine as an upload`: `install` or
+  `reinstall` of a path on the worker.
+- `refused: no device leased; run open first`: a sharded `test` with no
+  `--device` from an agent holding no matching device. With a device leased,
+  Simlock adds the agent's leased devices as `--device`.
+- `refused: name the device with --udid <id>; run devices to see yours`:
+  `capabilities` or `doctor` that names no device from an agent not holding
+  exactly one.
+- `refused: run devices on its own`, `refused: devices does not stream through
+  simlock`, `refused: a batch step cannot name another lease`,
+  `refused: malformed <field>`, `refused: unknown method <method>`, and
+  `refused: unknown route <method> <path>` (answered `404`).
+- `could not check your leases; try again`: Simlock could not list the
+  agent's leases within 5 seconds.
 - `refused: this agent-device is too old for simlock; upgrade it`: the CLI
   sent no lease ID.
 - `refused: send lease calls as lease RPCs`: a lease call inside
