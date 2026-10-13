@@ -90,6 +90,13 @@ export class DeviceProfileRegistry {
    * always has. A profile's other names are listed only where they resolve to that profile.
    */
   async catalog(): Promise<DeviceProfileCatalog> {
+    return (await this.catalogWithProfiles()).catalog;
+  }
+
+  async catalogWithProfiles(): Promise<{
+    readonly catalog: DeviceProfileCatalog;
+    readonly modelProfiles: ReadonlyMap<string, DeviceProfile>;
+  }> {
     const profiles = await this.#profiles();
     const listed = new Map<string, DeviceProfile>();
     for (const profile of profiles) {
@@ -119,7 +126,15 @@ export class DeviceProfileRegistry {
       const deviceClass = profile.kind === "properties" ? "phone" : profile.deviceClass;
       if (deviceClass !== undefined) modelClasses[profile.name] = deviceClass;
     }
-    return { customModels, modelAliases, modelClasses, models };
+    const modelProfiles = new Map<string, DeviceProfile>();
+    for (const model of models) {
+      const profile = matchProfile(profiles, model);
+      if (profile !== undefined) modelProfiles.set(model, profile);
+    }
+    return {
+      catalog: { customModels, modelAliases, modelClasses, models },
+      modelProfiles,
+    };
   }
 
   /**
@@ -201,6 +216,7 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
           profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
             ? [profile.name]
             : [profile.name, profile.id],
+        tag: profile.tag,
       }),
     );
     return [

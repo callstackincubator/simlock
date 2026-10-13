@@ -69,7 +69,7 @@ import {
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
-import { isPlayStoreImage } from "./image-fit.js";
+import { fits, isPlayStoreImage, misfitReason } from "./image-fit.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
@@ -253,6 +253,7 @@ interface SystemImage {
   readonly abi: string;
   readonly apiLevel: string;
   readonly path: string;
+  readonly sourceApiLevel?: string | undefined;
   readonly tag: string;
   readonly tags: readonly string[];
   readonly version: string;
@@ -782,11 +783,6 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  /**
-   * Never installs: a missing API level throws, naming it as the component to install. A request
-   * naming an image tag resolves only to an installed image of that tag, and never names a
-   * component, so it can never lead to a download.
-   */
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
@@ -795,7 +791,7 @@ export class AndroidDriver implements Driver {
     const profile = await this.#deviceProfiles.resolve(request.model);
     const images = await this.#installedImages();
     if (request.imageTag !== undefined) {
-      const apiLevel = this.#taggedApiLevel(images, request.imageTag, request.osVersion);
+      const apiLevel = this.#taggedApiLevel(profile, images, request.imageTag, request.osVersion);
       this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
       return {
         imageTag: request.imageTag,
@@ -806,26 +802,52 @@ export class AndroidDriver implements Driver {
       };
     }
 
-    const installed = installedApiLevels(images);
-    const apiLevel = request.osVersion ?? installed.at(-1);
-    if (apiLevel === undefined) {
-      throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
-    }
-
-    // Every model pairs with every installed API level, whatever the image's ABI -- the same
-    // list `listCatalog` reports for each model (ADR 0008 §3).
-    if (!installed.includes(apiLevel)) {
-      throw new RuntimeMissingError(this.platform, apiLevel, { component: apiLevel });
+    const levels = fittingApiLevels(profile, images);
+    const apiLevel = request.osVersion ?? levels.at(-1);
+    if (apiLevel === undefined || !levels.includes(apiLevel)) {
+      throw this.#noFittingImage(profile, images, request.osVersion);
     }
 
     this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
     return { model: profile.name, osVersion: apiLevel, physical: false, platform: this.platform };
   }
 
+  #noFittingImage(
+    profile: DeviceProfile,
+    images: readonly SystemImage[],
+    level: string | undefined,
+    imageTag?: string,
+  ): RuntimeMissingError {
+    const considered = level === undefined ? images : images.filter((i) => i.apiLevel === level);
+    const where = level === undefined ? "" : ` at Android ${level}`;
+    const tagged = imageTag === undefined ? [] : considered.filter((i) => i.tag === imageTag);
+    const downloadable =
+      level !== undefined &&
+      imageTag === undefined &&
+      considered.length === 0 &&
+      fits(profile, { apiLevel: level, tag: "google_apis", tags: ["google_apis"] });
+    const error = downloadable
+      ? new RuntimeMissingError(this.platform, level, { component: level })
+      : new RuntimeMissingError(this.platform, level ?? "default", { downloadable: false });
+    let reason: string;
+    if (imageTag !== undefined) {
+      const why = misfitReason(profile, tagged);
+      reason = `the ${imageTag} image does not fit it${why === undefined ? "" : `: ${why}`}`;
+    } else if (images.length === 0) {
+      reason = "no system image is installed";
+    } else if (considered.length === 0) {
+      reason = `Android ${level} is not installed`;
+    } else {
+      reason = misfitReason(profile, considered) ?? "none of the installed images fit it";
+    }
+    error.message = `No installed system image fits ${profile.name}${where}: ${reason}`;
+    return error;
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
     const profile = await this.#profileFor(spec.model);
-    const image = await this.#requireImage(spec.osVersion, spec.imageTag);
+    const image = await this.#requireImage(profile, spec.osVersion, spec.imageTag);
     // Cosmetic only, and worth saying so: the prefix is a label that makes an emulator
     // recognisable in `adb devices` and in its window title. Nothing reads it back as
     // evidence of anything -- ownership comes from the root this AVD is created in.
@@ -1219,21 +1241,26 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [{ customModels, modelAliases, modelClasses, models }, images] = await Promise.all([
-      this.#deviceProfiles.catalog(),
+    const [{ catalog, modelProfiles }, images] = await Promise.all([
+      this.#deviceProfiles.catalogWithProfiles(),
       this.#installedImages(),
     ]);
+    const { customModels, modelAliases, modelClasses, models } = catalog;
     const runtimes = installedApiLevels(images);
     return {
       ...(customModels.length === 0 ? {} : { customModels: [...customModels] }),
       defaultRuntime: runtimes.at(-1),
-      // Installed only, a foreign ABI included: the same images `installedApiLevels` reads.
       images: images
         .map((image) => ({ abi: image.abi, runtime: image.apiLevel, tag: image.tag }))
         .sort(compareCatalogImages),
       modelAliases,
       modelClasses,
-      modelRuntimes: Object.fromEntries(models.map((model) => [model, [...runtimes]])),
+      modelRuntimes: Object.fromEntries(
+        models.map((model) => {
+          const profile = modelProfiles.get(model);
+          return [model, profile === undefined ? [] : fittingApiLevels(profile, images)];
+        }),
+      ),
       models: [...models],
       runtimes,
     };
@@ -1598,12 +1625,15 @@ export class AndroidDriver implements Driver {
         const tagPath = `${apiPath}/${tag}`;
         for (const abi of (await this.#filesystem.readdir(tagPath)).filter(isVisibleEntry)) {
           const path = `${tagPath}/${abi}`;
+          const properties = await readSourceProperties(this.#filesystem, path);
+          const sourceApiLevel = sourcePropertyValue(properties, "AndroidVersion.ApiLevel");
           images.push({
             abi,
             apiLevel: apiMatch[1],
             path,
+            ...(sourceApiLevel === undefined ? {} : { sourceApiLevel }),
             tag,
-            tags: await systemImageTags(this.#filesystem, path, tag),
+            tags: systemImageTags(properties, tag),
             version: await systemImageVersion(this.#filesystem, path),
           });
         }
@@ -1636,32 +1666,46 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async #requireImage(apiLevel: string, imageTag: string | undefined): Promise<SystemImage> {
-    const image = this.#matchingImage(await this.#installedImages(), apiLevel, imageTag);
+  async #requireImage(
+    profile: DeviceProfile,
+    apiLevel: string,
+    imageTag: string | undefined,
+  ): Promise<SystemImage> {
+    const images = await this.#installedImages();
+    const image = this.#matchingImage(
+      images.filter((candidate) => fits(profile, candidate)),
+      apiLevel,
+      imageTag,
+    );
     if (image === undefined) {
-      throw imageTag === undefined
-        ? new RuntimeMissingError(this.platform, apiLevel)
-        : new AndroidImageTagMissingError(apiLevel, imageTag);
+      if (
+        imageTag !== undefined &&
+        !images.some((i) => i.apiLevel === apiLevel && i.tag === imageTag)
+      ) {
+        throw new AndroidImageTagMissingError(apiLevel, imageTag);
+      }
+      throw this.#noFittingImage(profile, images, apiLevel, imageTag);
     }
     return image;
   }
 
-  /**
-   * The API level a request naming `imageTag` gets: the one it names, which must have an image of
-   * that tag, or else the newest that has one. Throws a `RuntimeMissingError` naming no
-   * component when there is none, so no download is ever tried for a tag.
-   */
   #taggedApiLevel(
+    profile: DeviceProfile,
     images: readonly SystemImage[],
     imageTag: string,
     requested: string | undefined,
   ): string {
-    const levels = installedApiLevels(images).filter(
-      (level) => this.#matchingImage(images, level, imageTag) !== undefined,
+    const tagged = images.filter(
+      (image) =>
+        image.tag === imageTag && (requested === undefined || image.apiLevel === requested),
     );
+    if (tagged.length === 0) {
+      throw new AndroidImageTagMissingError(requested ?? "default", imageTag);
+    }
+    const levels = fittingApiLevels(profile, tagged);
     const apiLevel = requested ?? levels.at(-1);
     if (apiLevel === undefined || !levels.includes(apiLevel)) {
-      throw new AndroidImageTagMissingError(apiLevel ?? "default", imageTag);
+      throw this.#noFittingImage(profile, images, requested, imageTag);
     }
     return apiLevel;
   }
@@ -2255,12 +2299,12 @@ class AndroidImageTagMissingError extends RuntimeMissingError {
   }
 }
 
-/**
- * The installed API levels, oldest first, once each -- foreign-ABI images included. Every model
- * pairs with every one of them; `resolveSpec` and `listCatalog` both read this list.
- */
 function installedApiLevels(images: readonly SystemImage[]): string[] {
   return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels);
+}
+
+function fittingApiLevels(profile: DeviceProfile, images: readonly SystemImage[]): string[] {
+  return installedApiLevels(images.filter((image) => fits(profile, image)));
 }
 
 function isVisibleEntry(name: string): boolean {
@@ -2423,26 +2467,32 @@ function assertLibraryProfileWritable(
   }
 }
 
-async function systemImageTags(
+async function readSourceProperties(
   filesystem: Filesystem,
   imagePath: string,
-  folder: string,
-): Promise<readonly string[]> {
+): Promise<string | undefined> {
   try {
-    const properties = await filesystem.readFile(`${imagePath}/source.properties`);
-    const tagId = properties
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("SystemImage.TagId="))
-      ?.slice("SystemImage.TagId=".length)
-      .trim();
-    const tags = (tagId ?? "")
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter((tag) => tag !== "");
-    return tags.length > 0 ? tags : [folder];
+    return await filesystem.readFile(`${imagePath}/source.properties`);
   } catch {
-    return [folder];
+    return undefined;
   }
+}
+
+function sourcePropertyValue(properties: string | undefined, key: string): string | undefined {
+  const value = properties
+    ?.split(/\r?\n/)
+    .find((line) => line.startsWith(`${key}=`))
+    ?.slice(key.length + 1)
+    .trim();
+  return value === undefined || value === "" ? undefined : value;
+}
+
+function systemImageTags(properties: string | undefined, folder: string): readonly string[] {
+  const tags = (sourcePropertyValue(properties, "SystemImage.TagId") ?? "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag !== "");
+  return tags.length > 0 ? tags : [folder];
 }
 
 /**

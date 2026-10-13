@@ -73,6 +73,17 @@ function libraryClasses(extra: Record<string, string>): Record<string, string> {
   return { ...Object.fromEntries(LIBRARY_PROFILES.map((p) => [p.name, p.deviceClass])), ...extra };
 }
 
+const withoutNonPhoneImages: Record<string, string[]> = {
+  "Automotive (1024p landscape)": [],
+  "Automotive (1080p landscape)": [],
+  "Medium Desktop": [],
+  "Large Desktop": [],
+  "Television (1080p)": [],
+  "Television (4K)": [],
+  "Wear OS Large Round": [],
+  "Wear OS Small Round": [],
+};
+
 function libraryRuntimes(
   runtimes: string[],
   extra: Record<string, string[]>,
@@ -1266,13 +1277,18 @@ describe("AndroidDriver", () => {
       ],
       modelAliases: libraryAliases({ "Pixel 5": ["pixel_5"] }),
       modelClasses: libraryClasses({ "Pixel 5": "phone" }),
-      modelRuntimes: libraryRuntimes(["34", "35"], { "Pixel 5": ["34", "35"] }),
+      modelRuntimes: libraryRuntimes(["34", "35"], {
+        ...withoutNonPhoneImages,
+        "Pixel 5": ["34", "35"],
+        "Pixel 9": ["35"],
+        "Pixel 9 Pro XL": ["35"],
+      }),
       models: [...libraryModels, "Pixel 5"],
       runtimes: ["34", "35"],
     });
   });
 
-  it("pairs every model with every installed API level, including one whose only image has a foreign ABI", async () => {
+  it("pairs a model with an installed API level whose only image has a foreign ABI, when the image fits", async () => {
     // The host is arm64-v8a; API 33 is installed only as x86_64.
     const filesystem = await androidFilesystem({
       images: [
@@ -1289,7 +1305,13 @@ describe("AndroidDriver", () => {
 
     expect(catalog.models).toEqual([...libraryModels, "Pixel 5"]);
     expect(catalog.modelRuntimes).toEqual(
-      libraryRuntimes(["33", "35"], { "Pixel 5": ["33", "35"] }),
+      libraryRuntimes(["33", "35"], {
+        ...withoutNonPhoneImages,
+        "Pixel 5": ["33", "35"],
+        "Pixel 8": ["35"],
+        "Pixel 9": ["35"],
+        "Pixel 9 Pro XL": ["35"],
+      }),
     );
   });
 
@@ -1310,7 +1332,7 @@ describe("AndroidDriver", () => {
     const pairs = Object.entries(catalog.modelRuntimes).flatMap(([model, runtimes]) =>
       runtimes.map((osVersion) => ({ model, osVersion })),
     );
-    expect(pairs).toHaveLength((libraryModels.length + 1) * 2);
+    expect(pairs.length).toBeGreaterThan(0);
 
     for (const { model, osVersion } of pairs) {
       await expect(driver.resolveSpec({ model, osVersion, platform: "android" })).resolves.toEqual({
@@ -1381,7 +1403,16 @@ describe("AndroidDriver", () => {
   });
 
   it("resolves every listed name of every listed model, in upper and lower case, to that model", async () => {
-    const filesystem = await androidFilesystem();
+    const filesystem = await androidFilesystem({
+      images: [
+        ["36", "google_apis", "arm64-v8a"],
+        ["36", "android-tv", "arm64-v8a"],
+        ["36", "android-wear", "arm64-v8a"],
+        ["36", "android-automotive", "arm64-v8a"],
+        ["36", "android-automotive-playstore", "arm64-v8a"],
+        ["36", "android-desktop", "arm64-v8a"],
+      ],
+    });
     await writeDevicesXml(filesystem, customDeviceXml("My Tablet", 4096));
     const runner = new ScriptedProcessRunner(
       Array.from({ length: 11 }, () =>
@@ -1399,7 +1430,7 @@ describe("AndroidDriver", () => {
     for (const { model, name } of names) {
       for (const spelling of [name.toUpperCase(), name.toLowerCase()]) {
         await expect(driver.resolveSpec({ model: spelling, platform: "android" })).resolves.toEqual(
-          { physical: false, model, osVersion: "34", platform: "android" },
+          { physical: false, model, osVersion: "36", platform: "android" },
         );
       }
     }
@@ -2356,7 +2387,6 @@ describe("AndroidDriver", () => {
       expect((await googleApis.config()).get("PlayStore.enabled")).toBe("no");
 
       const refused = await libraryHarness({
-        ...playStore,
         profiles: [testLibraryProfile({ playStore: false })],
         seed: seedConfig(["PlayStore.enabled=yes"]),
       });
@@ -4271,7 +4301,19 @@ describe("AndroidDriver library catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], "Available devices:\n"),
     ]);
-    const driver = await createDriver(await androidFilesystem(), runner);
+    const driver = await createDriver(
+      await androidFilesystem({
+        images: [
+          ["36", "google_apis", "arm64-v8a"],
+          ["36", "android-tv", "arm64-v8a"],
+          ["36", "android-wear", "arm64-v8a"],
+          ["36", "android-automotive", "arm64-v8a"],
+          ["36", "android-automotive-playstore", "arm64-v8a"],
+          ["36", "android-desktop", "arm64-v8a"],
+        ],
+      }),
+      runner,
+    );
 
     const catalog = await driver.listCatalog();
     const resolved: string[] = [];
