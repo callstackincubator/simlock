@@ -46,6 +46,7 @@ export interface ErrorDetailsMap {
    * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
   NO_DRIVER: { readonly platform: Platform };
+  CAPABILITY_MISSING: { readonly capabilities: readonly string[] };
   RUNTIME_MISSING: {
     readonly platform: Platform;
     readonly osVersion: string;
@@ -149,6 +150,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   REQUESTER_ALREADY_LEASED: true,
   LEASE_ID_TAKEN: true,
   NO_DRIVER: true,
+  CAPABILITY_MISSING: true,
   RUNTIME_MISSING: true,
   UNKNOWN_MODEL: true,
   INSUFFICIENT_DISK_SPACE: true,
@@ -244,6 +246,12 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 409,
   },
   NO_DRIVER: { code: "NO_DRIVER", kind: "domain", cliExitCode: 12, httpStatus: 422 },
+  CAPABILITY_MISSING: {
+    code: "CAPABILITY_MISSING",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 422,
+  },
   RUNTIME_MISSING: { code: "RUNTIME_MISSING", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   UNKNOWN_MODEL: { code: "UNKNOWN_MODEL", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   INSUFFICIENT_DISK_SPACE: {

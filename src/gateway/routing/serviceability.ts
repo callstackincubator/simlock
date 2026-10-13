@@ -14,9 +14,15 @@ import {
   physicalMatch,
   wantedClass,
 } from "./request-match.js";
+import { hasCapabilities } from "./stages/has-capabilities.js";
 import { takesRequests } from "./stages/takes-requests.js";
 
-export type RejectionCode = "NO_CAPACITY" | "NO_DRIVER" | "UNKNOWN_MODEL" | "RUNTIME_MISSING";
+export type RejectionCode =
+  | "NO_CAPACITY"
+  | "NO_DRIVER"
+  | "UNKNOWN_MODEL"
+  | "RUNTIME_MISSING"
+  | "CAPABILITY_MISSING";
 
 /** What a request the fleet cannot serve is told: the code and details a worker gives the same
  * request, and the `lease.rejected` reason the gateway records it under. */
@@ -24,19 +30,36 @@ export interface Rejection {
   readonly kind: "reject";
   readonly code: RejectionCode;
   readonly message: string;
-  readonly details?: {
-    readonly platform: Platform;
-    readonly model?: string;
-    readonly class?: DeviceClass;
-    readonly osVersion?: string;
-    readonly downloadable?: false;
-  };
+  readonly details?:
+    | {
+        readonly platform: Platform;
+        readonly model?: string;
+        readonly class?: DeviceClass;
+        readonly osVersion?: string;
+        readonly downloadable?: false;
+      }
+    | { readonly capabilities: readonly string[] };
   readonly reason: "no-worker" | "unresolvable-spec";
 }
 
 export type Assessment = { readonly kind: "route-or-wait" } | Rejection;
 
 export function assess(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
+  const answer = assessTable(request, views);
+  const requires = request.requires;
+  if (answer.kind === "reject" || requires === undefined || requires.length === 0) return answer;
+  const capable = views.filter((worker) => hasCapabilities.keeps(worker, request));
+  if (assessTable(request, capable).kind === "route-or-wait") return answer;
+  return {
+    code: "CAPABILITY_MISSING",
+    details: { capabilities: requires },
+    kind: "reject",
+    message: `No worker connected to this gateway can serve ${requires.join(", ")} for this request`,
+    reason: "unresolvable-spec",
+  };
+}
+
+function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
   const takers = views.filter((worker) => takesRequests.keeps(worker, request));
   if (takers.length === 0) return noWorker();
 

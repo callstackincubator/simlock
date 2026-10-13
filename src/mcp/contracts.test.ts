@@ -64,10 +64,10 @@ describe("MCP contracts", () => {
     ).toEqual({ model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 });
   });
 
-  it("is the same schema the contract validates lease.request input against, minus requesterId and fleetRequestId", () => {
+  it("is the same schema the contract validates lease.request input against, minus requesterId, fleetRequestId and requires", () => {
     expect(Object.keys(leaseSimulatorInputSchema.shape).sort()).toEqual(
       Object.keys(leaseRequestFields.shape)
-        .filter((key) => key !== "requesterId" && key !== "fleetRequestId")
+        .filter((key) => key !== "requesterId" && key !== "fleetRequestId" && key !== "requires")
         .sort(),
     );
   });

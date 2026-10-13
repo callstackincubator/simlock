@@ -4,6 +4,7 @@ import {
   canServe,
   freeCapacity,
   freeSlot,
+  hasCapabilities,
   healthy,
   idleQueue,
   ramBudget,
@@ -48,6 +49,7 @@ function composeRoutingPolicy(stages: readonly RoutingStage[]): RoutingPolicy {
 const routingPolicies = {
   "warm-then-free": [
     takesRequests,
+    hasCapabilities,
     canServe,
     healthy,
     idleQueue,

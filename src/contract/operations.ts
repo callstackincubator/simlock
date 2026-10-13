@@ -178,7 +178,11 @@ const leaseRequestBaseSchema = z
      * Bounded as `idempotencyKey` is, because the worker stores it.
      */
     fleetRequestId: z.string().min(1).max(200).optional(),
-    requires: z.array(capabilityNameSchema).optional(),
+    requires: z
+      .array(capabilityNameSchema)
+      .max(8)
+      .refine((names) => new Set(names).size === names.length, "a capability name appears twice")
+      .optional(),
   })
   .strict();
 
@@ -229,6 +233,23 @@ function refusePhysicalWithImageFields(): <
   };
 }
 
+// why: a replay would have to be checked against a capability state that changed since.
+function refuseRequiresWithIdempotencyKey(): <
+  T extends { readonly requires?: unknown; readonly idempotencyKey?: string | undefined },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.requires === undefined || input.idempotencyKey === undefined) return;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "requires cannot be combined with idempotencyKey",
+      path: ["requires"],
+    });
+  };
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -251,7 +272,8 @@ export const leaseRequestFields = leaseRequestBaseSchema;
 const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseModelWithClass())
   .superRefine(refuseBadOsVersion())
-  .superRefine(refusePhysicalWithImageFields());
+  .superRefine(refusePhysicalWithImageFields())
+  .superRefine(refuseRequiresWithIdempotencyKey());
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({

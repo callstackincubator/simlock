@@ -96,6 +96,7 @@ command starts it again) to bring the platform up.
 | 11 | `DEVICE_BUSY` | `device add` or `device remove` of a device that is leased, being reclaimed or held by another operation, such as another `device add`; try again once that ends |
 | 11 | `COMPONENT_BUSY` | `component remove` while a component install or removal runs or waits on that platform; try again once it ends |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
+| 12 | `CAPABILITY_MISSING` | through a gateway, no worker that could serve the request has every capability it requires available; direct to a worker, that worker lacks one (a request names capabilities only through the programmatic client) |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download`, or no installed image of the `--image-tag` asked for |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
@@ -947,6 +948,7 @@ catalog has not arrived, is neither.
 | ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
 | ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
 | A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
+| The request requires capabilities (programmatic client only), and no connected worker that could serve it has all of them available | `CAPABILITY_MISSING` (exit 12) at once; `capabilities` names the required ones |
 | A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
 
 "At once" holds with and without `--no-wait` and `--timeout`, and the same

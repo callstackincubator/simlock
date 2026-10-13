@@ -23,7 +23,7 @@ import {
 // ---- lease_simulator ---------------------------------------------------------------------
 
 /**
- * `lease.request`'s input, minus the two fields this tool never lets the caller set:
+ * why: `lease.request`'s input, minus the fields this tool never lets the caller set (also `requires`, ADR 0026):
  * `requesterId` (session-controlled -- see `main.ts`'s requester resolution, never
  * caller-supplied, for the same reason the daemon never lets a request rename its own
  * principal) and `fleetRequestId` (a gateway's own mark on its dispatch to a worker, ADR 0021).
@@ -40,6 +40,7 @@ import {
 export const leaseSimulatorInputSchema = leaseRequestFields.omit({
   fleetRequestId: true,
   requesterId: true,
+  requires: true,
 });
 
 /**

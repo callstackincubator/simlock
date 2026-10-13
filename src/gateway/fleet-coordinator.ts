@@ -94,6 +94,7 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "UNKNOWN_MODEL",
   "RUNTIME_MISSING",
   "NO_DRIVER",
+  "CAPABILITY_MISSING",
 ]);
 
 export interface FleetExecInput {
@@ -892,6 +893,9 @@ export class FleetLeaseCoordinator {
             // declines a probe it refuses (`lease.declined`) rather than rejecting it, and names
             // the id on the lease events of the dispatch.
             fleetRequestId: waiter.id,
+            ...(waiter.options.requires === undefined
+              ? {}
+              : { requires: [...waiter.options.requires] }),
           },
           {
             onProgress: (progress) => {
@@ -1340,5 +1344,6 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
+    ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
   };
 }

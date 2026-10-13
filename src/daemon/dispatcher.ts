@@ -410,6 +410,25 @@ export class Dispatcher {
     }
   }
 
+  // why: a request that waits in the worker's queue is not checked again; the check runs once, before leasing.
+  async #requireCapabilities(requires: readonly string[] | undefined): Promise<void> {
+    if (requires === undefined || requires.length === 0) return;
+    const sources = this.options.capabilitySources ?? [];
+    const states = await Promise.all(
+      requires.map(async (name) => {
+        const source = sources.find((candidate) => candidate.name === name);
+        return source === undefined ? undefined : this.#readCapability(source);
+      }),
+    );
+    const missing = requires.filter((_name, index) => states[index]?.state !== "available");
+    if (missing.length === 0) return;
+    throw new DispatchError(
+      "CAPABILITY_MISSING",
+      `This worker cannot serve ${missing.join(", ")}`,
+      { capabilities: missing },
+    );
+  }
+
   // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
@@ -440,6 +459,7 @@ export class Dispatcher {
         );
       }
     }
+    await this.#requireCapabilities(input.requires);
     const ownerId = input.owner ?? session.principal;
     try {
       const grant = await this.options.leases.request(request, {
