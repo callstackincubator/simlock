@@ -195,8 +195,13 @@ export function createFront(context: FrontContext): HttpMount {
       }
       if (isRpc) return handleRpc(context, request, identity);
       const status = await context.link.status();
-      if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
       const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
+      if (status.state === "unavailable") {
+        // why: the agent-device CLI counts a /health answer of 500 or more as an unreachable daemon and prints only "Remote daemon is unavailable"; a lower status lets its first RPC run and print the reason.
+        const reply = notAvailable(status.reason);
+        const probe = request.method === "GET" && path === "/health";
+        return frontReply(probe ? { ...reply, status: 200 } : reply, undefined);
+      }
       if (!isKnownRoute(request.method, path)) {
         return frontReply(
           refusal(`refused: unknown route ${request.method} ${path}`, 404),

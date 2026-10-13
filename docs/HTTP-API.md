@@ -1514,7 +1514,10 @@ the status.
 
 - `agent-device is not available on this simlock: <reason>`: agent-device is
   turned on but missing, too old, starting or crashed. The rest of Simlock
-  works as before.
+  works as before. `GET /health` answers it with status 200, because the
+  agent-device CLI treats a `/health` status of 500 or more as an unreachable
+  daemon and would print only `Remote daemon is unavailable`; the first
+  command then prints the reason.
 - `timed out waiting for a device; nothing was leased`.
 - `refused by simlock: <message>`: Simlock refused the lease request, for
   example a model it does not know, or a `ttlMs` above `lease.maxTtlMs`.
