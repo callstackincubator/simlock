@@ -2739,6 +2739,11 @@ function runCommand(
   });
 }
 
+// why: the fake agent-device names the device it leases `simlock-<id>`, as the real one does.
+function nameOf(rig: Rig, n: number): string {
+  return `simlock-${idOf(rig, n)}`;
+}
+
 function idOf(rig: Rig, n: number): string {
   const params = receivedAllocate(rig, n);
   return String(params["udid"] ?? params["serial"]);
@@ -3162,7 +3167,7 @@ describe("the agent-device front's request rules", () => {
       const steps = flagsOf(params)["batchSteps"] as { flags: Record<string, unknown> }[];
       expect(steps[0]?.flags["udid"]).toBe(idOf(rig, 1));
       expect(steps[0]?.flags).not.toHaveProperty("device");
-      expect(steps[1]?.flags["device"]).toBe(idOf(rig, 1));
+      expect(steps[1]?.flags["device"]).toBe(nameOf(rig, 1));
       await refused(
         rig,
         () => batch(rig, 1, [{ command: "snapshot", flags: { leaseId: hex(2) } }]),
@@ -3260,9 +3265,9 @@ describe("the agent-device front's request rules", () => {
       const one = await forwarded(rig, () => shard(rig, 1));
       const two = await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
 
-      expect(flagsOf(one)["device"]).toBe(idOf(rig, 1));
+      expect(flagsOf(one)["device"]).toBe(nameOf(rig, 1));
       expect(String(flagsOf(two)["device"]).split(",").sort()).toEqual(
-        [idOf(rig, 2), idOf(rig, 3)].sort(),
+        [nameOf(rig, 2), nameOf(rig, 3)].sort(),
       );
     });
 
@@ -3281,9 +3286,9 @@ describe("the agent-device front's request rules", () => {
         shard(rig, 2, { platform: "android", shardAll: 1 }),
       );
 
-      expect(flagsOf(ios)["device"]).toBe(idOf(rig, 1));
-      expect(flagsOf(tv)["device"]).toBe(idOf(rig, 3));
-      expect(flagsOf(android)["device"]).toBe(idOf(rig, 2));
+      expect(flagsOf(ios)["device"]).toBe(nameOf(rig, 1));
+      expect(flagsOf(tv)["device"]).toBe(nameOf(rig, 3));
+      expect(flagsOf(android)["device"]).toBe(nameOf(rig, 2));
       const iosOnly = await setUp({ drivers: bothDrivers });
       await granted(iosOnly, 1);
       await forwarded(iosOnly, () => shard(iosOnly, 1, { platform: "ios", shardAll: 1 }));
@@ -3294,6 +3299,20 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
+    it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or the reply named none", async () => {
+      const rig = await setUp();
+      rig.fake.nameDeviceInNextReply({ name: "Lab, left" });
+      await granted(rig, 1);
+      rig.fake.nameDeviceInNextReply("none");
+      await granted(rig, 2, {}, { token: secrets.two });
+
+      const comma = await forwarded(rig, () => shard(rig, 1));
+      const unnamed = await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
+
+      expect(flagsOf(comma)["device"]).toBe(idOf(rig, 1));
+      expect(flagsOf(unnamed)["device"]).toBe(idOf(rig, 2));
+    });
+
     it('`test --shard-split 2` with `device: " , "` is filled as if no list were sent; from a token that holds no device it is refused with `refused: no device leased; run open first`', async () => {
       const rig = await setUp();
       await granted(rig, 1);
@@ -3302,7 +3321,7 @@ describe("the agent-device front's request rules", () => {
 
       const params = await forwarded(rig, () => split(secrets.one, 1));
 
-      expect(flagsOf(params)["device"]).toBe(idOf(rig, 1));
+      expect(flagsOf(params)["device"]).toBe(nameOf(rig, 1));
       await refused(rig, () => split(secrets.two, undefined), noDeviceLeased);
     });
   });

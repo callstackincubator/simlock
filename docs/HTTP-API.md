@@ -1535,7 +1535,8 @@ the status.
   `reinstall` of a path on the worker.
 - `refused: no device leased; run open first`: a sharded `test` with no
   `--device` from an agent holding no matching device. With a device leased,
-  Simlock adds the agent's leased devices as `--device`.
+  Simlock adds the agent's leased devices as `--device`, each by the name
+  agent-device gave it (by its ID when it gave none or the name has a comma).
 - `refused: name the device with --udid <id>; run devices to see yours`:
   `capabilities` or `doctor` that names no device from an agent not holding
   exactly one.

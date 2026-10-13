@@ -90,6 +90,7 @@ interface DeviceRow {
 interface LeaseRow {
   readonly id: string;
   readonly deviceId: string;
+  readonly ownerId: string;
   readonly requesterId: string;
 }
 interface RequestRow {
@@ -740,8 +741,12 @@ function defineSuite(target: Target): void {
         expect(new Set(leases.map((lease) => lease.deviceId)).size).toBe(2);
         const devices = await listDevices(env);
         const driverIdOf = (who: Agent): string => {
-          const lease = leases.find((row) => row.requesterId === who.tokenId);
-          return devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId as string;
+          // why: a lease's requesterId is the lease's own ID when the agent chose it; the token is its ownerId.
+          const lease = leases.find((row) => row.ownerId === who.tokenId);
+          const driverId = devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId;
+          if (driverId === undefined)
+            throw new Error(`no leased device found for agent ${who.name}`);
+          return driverId;
         };
 
         ok(await b.run(["snapshot", target.deviceFlag, driverIdOf(b)], FIRST_SNAPSHOT));

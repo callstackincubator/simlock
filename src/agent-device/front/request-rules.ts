@@ -230,7 +230,12 @@ async function ruleSharding(check: Check, unit: Unit): Promise<void> {
   );
   if (matching.length === 0) throw refuse(NO_DEVICE_LEASED);
   for (const place of found) delete place["device"];
-  flagsOf(unit)["device"] = matching.map((device) => device.address).join(",");
+  // why: agent-device holds `--device` against the open session by device name, and an id there is a conflict; its shard lookup takes a name too. A name with a comma would split, so that device goes by its id.
+  flagsOf(unit)["device"] = matching
+    .map((device) =>
+      device.name === undefined || device.name.includes(",") ? device.address : device.name,
+    )
+    .join(",");
   check.changed = true;
 }
 
