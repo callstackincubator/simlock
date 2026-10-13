@@ -8,6 +8,7 @@ import { FakeDriver } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import type { DaemonServer } from "../daemon/server.js";
+import type { WebSocketUplinkListenerFactory } from "../ports/uplink-websocket.js";
 import type { GatewayRelay } from "../gateway/index.js";
 import {
   CryptoTokenSecrets,
@@ -87,6 +88,10 @@ interface WorkerSpec {
   readonly direct?: boolean;
   // why: a catalog read that waits for the fake clock, so a worker's catalog stays unread.
   readonly slowCatalog?: boolean;
+  // why: a worker's model can be a TV, so an adopted lease reads target `tv`.
+  readonly modelClass?: "phone" | "tv";
+  // why: a worker whose own clock differs from the gateway's, to prove no rule reads a clock across the two.
+  readonly clockSkewMs?: number;
 }
 
 interface Member {
@@ -97,6 +102,9 @@ interface Member {
   readonly driver: FakeDriver;
   readonly directory: string;
   readonly filesystem: Filesystem;
+  readonly clock: FakeClock;
+  // why: shared with the driver, so a test can make the next catalog read wait for the fake clock.
+  readonly latency: Record<string, number>;
   readonly secret: string;
   readonly origin: string;
 }
@@ -108,6 +116,8 @@ interface Rig {
   readonly logs: MemoryLogSink;
   readonly origin: string;
   readonly relay: GatewayRelay;
+  readonly uplinks: WebSocketUplinkListenerFactory;
+  readonly restart: () => Promise<void>;
   readonly members: Member[];
   readonly addWorker: (spec: WorkerSpec, existing?: Member) => Promise<Member>;
 }
@@ -134,27 +144,32 @@ async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function driverFor(spec: WorkerSpec, clock: FakeClock): FakeDriver {
+function driverFor(
+  spec: WorkerSpec,
+  clock: FakeClock,
+  latency: Record<string, number>,
+): FakeDriver {
   if (spec.platform === "android") {
     const model = spec.model ?? "Pixel 8";
     return new FakeDriver({
       availableOsVersions: ["35"],
       clock,
       defaultModels: { phone: [model] },
-      ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: slowCatalogMs } } : {}),
+      latencyMs: latency,
       knownModels: [model],
       modelClasses: { [model]: "phone" },
       platform: "android",
     });
   }
-  const model = spec.model ?? "iPhone 16";
+  const modelClass = spec.modelClass ?? "phone";
+  const model = spec.model ?? (modelClass === "tv" ? "Apple TV 4K" : "iPhone 16");
   return new FakeDriver({
     availableOsVersions: ["26.5"],
     clock,
-    defaultModels: { phone: [model] },
-    ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: slowCatalogMs } } : {}),
+    defaultModels: { [modelClass]: [model] },
+    latencyMs: latency,
     knownModels: [model],
-    modelClasses: { [model]: "phone" },
+    modelClasses: { [model]: modelClass },
     platform: "ios",
   });
 }
@@ -189,6 +204,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const port = await freeLoopbackPort();
   const logs = new MemoryLogSink();
   let relay: GatewayRelay | undefined;
+  let uplinks: WebSocketUplinkListenerFactory | undefined;
   const agentDevice =
     options.agentDevice === "unset"
       ? {}
@@ -197,27 +213,34 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
           ...(options.command === undefined ? {} : { command: options.command }),
           ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
         };
-  const gateway = await startDaemon({
-    clock,
-    configOverrides: {
-      agentDevice,
-      http: { enabled: true, host: "127.0.0.1", port },
-      lease: {
-        defaultTtlMs: options.defaultTtlMs ?? defaultTtlMs,
-        maxTtlMs: options.maxTtlMs ?? gatewayMaxTtlMs,
+  const startGateway = async (): Promise<DaemonServer> => {
+    const started = await startDaemon({
+      clock,
+      configOverrides: {
+        agentDevice,
+        http: { enabled: true, host: "127.0.0.1", port },
+        lease: {
+          defaultTtlMs: options.defaultTtlMs ?? defaultTtlMs,
+          maxTtlMs: options.maxTtlMs ?? gatewayMaxTtlMs,
+        },
+        mode: "gateway",
       },
-      mode: "gateway",
-    },
-    dataDirectory: directory,
-    filesystem,
-    gatewayRelay: (created) => {
-      relay = created;
-    },
-    logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
-    statePath: join(directory, "state.json"),
-    version: "1.2.3",
-  } as StartDaemonOptions);
-  runningDaemons.push(gateway);
+      dataDirectory: directory,
+      filesystem,
+      gatewayRelay: (created) => {
+        relay = created;
+      },
+      gatewayUplinks: (created) => {
+        uplinks = created;
+      },
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions);
+    runningDaemons.push(started);
+    return started;
+  };
+  let gateway = await startGateway();
   const members: Member[] = [];
   // fallow-ignore-next-line complexity -- one worker daemon with its own token, directory, fake agent-device and optional direct port.
   const addWorker = async (spec: WorkerSpec, existing?: Member): Promise<Member> => {
@@ -230,7 +253,11 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const workerFilesystem = existing?.filesystem ?? new MemoryFilesystem();
     const fake = existing?.fake ?? new FakeAgentDevice();
     if (spec.capability === "unavailable") fake.setUnavailable("down");
-    const driver = driverFor(spec, clock);
+    const latency: Record<string, number> =
+      spec.slowCatalog === true ? { listCatalog: slowCatalogMs } : {};
+    const workerClock =
+      spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs);
+    const driver = driverFor(spec, workerClock, latency);
     let directPort: number | undefined;
     if (spec.direct === true) {
       directPort = await freeLoopbackPort();
@@ -240,7 +267,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     }
     const started = startDaemon({
       agentDeviceUpstream: fake,
-      clock,
+      clock: workerClock,
       configOverrides: {
         agentDevice: { enabled: spec.capability !== "off" },
         capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
@@ -253,7 +280,11 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       dataDirectory: workerDirectory,
       drivers: [driver],
       filesystem: workerFilesystem,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      logger: new JsonLinesLogger({
+        clock: workerClock,
+        level: "debug",
+        sink: new MemoryLogSink(),
+      }),
       statePath: join(workerDirectory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
@@ -261,12 +292,14 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       return daemon;
     });
     const member: Member = {
+      clock: workerClock,
       daemon: started,
       directory: workerDirectory,
       driver,
       fake,
       filesystem: workerFilesystem,
       label: spec.label,
+      latency,
       origin: directPort === undefined ? "" : `http://127.0.0.1:${String(directPort)}`,
       secret,
       spec,
@@ -278,13 +311,24 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     addWorker,
     clock,
     directory,
-    gateway,
+    get gateway() {
+      return gateway;
+    },
     logs,
     members,
     origin: `http://127.0.0.1:${String(port)}`,
     get relay() {
       if (relay === undefined) throw new Error("the gateway never handed over its relay");
       return relay;
+    },
+    restart: async () => {
+      await gateway.stop("test");
+      runningDaemons.splice(runningDaemons.indexOf(gateway), 1);
+      gateway = await startGateway();
+    },
+    get uplinks() {
+      if (uplinks === undefined) throw new Error("the gateway never handed over its uplinks");
+      return uplinks;
     },
   };
   for (const spec of options.workers ?? [{ label: "w1" }]) {
@@ -335,7 +379,9 @@ async function turn(rig: Rig, member: Member, state: "available" | "unavailable"
 
 async function advance(rig: Rig, ms: number, step = 5_000): Promise<void> {
   for (let elapsed = 0; elapsed < ms; elapsed += step) {
-    rig.clock.advance(Math.min(step, ms - elapsed));
+    const by = Math.min(step, ms - elapsed);
+    rig.clock.advance(by);
+    for (const member of rig.members) if (member.clock !== rig.clock) member.clock.advance(by);
     await sleep(15);
   }
 }
@@ -1676,3 +1722,433 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(holderOf(rig, 1).fake.rpcRequests("agent_device.install_from_source")).toHaveLength(0);
   });
 });
+
+const unreachableReason =
+  "the worker holding this device is not connected to the gateway; try again";
+const unreachableMessage = `${notAvailable}${unreachableReason}`;
+const picksTheDevice = "refused: simlock picks the device";
+const gatewayWindowMs = 60_000;
+const hourMs = 3_600_000;
+
+function expectUnreachable(answer: Envelope): void {
+  expect(answer.result).toBeUndefined();
+  expect(answer.error).toMatchObject({
+    data: { details: { reason: "WORKER_UNREACHABLE" }, message: unreachableMessage },
+    message: unreachableMessage,
+  });
+}
+
+async function expectUnreachablePlain(response: Response): Promise<void> {
+  expect(response.status).toBe(503);
+  const body = (await response.json()) as Record<string, unknown>;
+  expect(body["error"]).toBe(unreachableMessage);
+  expect(body).not.toHaveProperty("details");
+}
+
+async function expectUnreachableEverywhere(rig: Rig, n: number): Promise<void> {
+  for (const response of [
+    await heartbeat(rig, n),
+    await command(rig, "snapshot", n),
+    await release(rig, n),
+  ]) {
+    expect(response.status).toBe(503);
+    expectUnreachable(await envelopeOf(response));
+  }
+  await expectUnreachablePlain(
+    await send(rig, "/upload/preflight", { body: "{}", headers: leased(n) }),
+  );
+}
+
+// why: the gateway closes the worker's socket as a network drop does; the worker redials only when its clock moves.
+async function dropUplink(rig: Rig, member: Member): Promise<void> {
+  const view = await viewOf(rig, member.label);
+  expect(view?.id).toBeDefined();
+  await rig.uplinks.closeWorkerLink(view?.id as string);
+  await vi.waitFor(
+    async () => expect((await viewOf(rig, member.label))?.connection).toBe("disconnected"),
+    { timeout: 10_000 },
+  );
+}
+
+async function untilConnected(rig: Rig, member: Member): Promise<void> {
+  await advance(rig, 2_000, 500);
+  await untilRead(rig, member);
+}
+
+function commandsReceived(member: Member): number {
+  return member.fake.rpcRequests("agent_device.command").length;
+}
+
+async function commandWorks(rig: Rig, member: Member, n: number): Promise<void> {
+  const before = commandsReceived(member);
+  const answer = await envelopeOf(await command(rig, "snapshot", n));
+  expect(answer.error).toBeUndefined();
+  expect(answer.result).toBeDefined();
+  expect(commandsReceived(member)).toBe(before + 1);
+}
+
+describe(
+  "the agent-device front, through a gateway: an unreachable worker",
+  {
+    timeout: 90_000,
+  },
+  () => {
+    it("with the device's worker disconnected, a command, a heartbeat and a release each answer 503 with `details.reason` `WORKER_UNREACHABLE` and the `workerUnreachable` message, and no agent-device daemon receives them", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      await dropUplink(rig, member);
+      const received = member.fake.requests.length;
+
+      for (const response of [
+        await command(rig, "snapshot", 1),
+        await heartbeat(rig, 1),
+        await release(rig, 1),
+      ]) {
+        expect(response.status).toBe(503);
+        expectUnreachable(await envelopeOf(response));
+      }
+
+      expect(member.fake.requests.length).toBe(received);
+    });
+
+    it("with the device's worker disconnected, an upload with the lease header answers 503 with that message and no `details`, and `devices` answers the RPC reply with `details`", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      await dropUplink(rig, member);
+
+      await expectUnreachablePlain(
+        await send(rig, "/upload/preflight", { body: "{}", headers: leased(1) }),
+      );
+      const devices = await command(rig, "devices", undefined);
+
+      expect(devices.status).toBe(503);
+      expectUnreachable(await envelopeOf(devices));
+    });
+
+    it("while the worker is disconnected, the simlock lease is not released, and the front's entry is not marked ended", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      const tap = tapDispatch(rig.gateway);
+      await dropUplink(rig, member);
+
+      expectUnreachable(await envelopeOf(await heartbeat(rig, 1)));
+      expectUnreachable(await envelopeOf(await release(rig, 1)));
+
+      expect(tap.operations).not.toContain("lease.release");
+      expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+      await untilConnected(rig, member);
+      const beat = await envelopeOf(await heartbeat(rig, 1));
+      expect(beat.error).toBeUndefined();
+      expect(beat.result).toMatchObject({ ok: true });
+    });
+
+    it("the uplink dropping mid-command answers the command with `workerUnreachable()`", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      const running = await runningCommand(rig, member, 1);
+
+      await dropUplink(rig, member);
+
+      await vi.waitFor(() => expect(running.done()).toBe(true), { timeout: 5_000 });
+      member.fake.releaseCommand();
+      const answer = await running.promise;
+      expect(answer.status).toBe(503);
+      expectUnreachable(await envelopeOf(answer));
+    });
+
+    it("right after the worker reconnects and before its view is refreshed, a command answers `workerUnreachable()`; once it is refreshed, within the TTL, the next command reaches it, and the next heartbeat renews the lease", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1, { ttlMs: 60_000 });
+      await listedByGateway(rig, 1);
+      await dropUplink(rig, member);
+      member.latency["listCatalog"] = slowCatalogMs;
+      await advance(rig, 2_000, 500);
+      await vi.waitFor(
+        async () => {
+          const view = await viewOf(rig, member.label);
+          expect(view?.connection).toBe("connected");
+          expect(view?.catalogReadAt).toBeUndefined();
+        },
+        { timeout: 10_000 },
+      );
+
+      expectUnreachable(await envelopeOf(await command(rig, "snapshot", 1)));
+
+      await advance(rig, 9_000, 1_000);
+      await untilRead(rig, member);
+      await commandWorks(rig, member, 1);
+      const beat = await envelopeOf(await heartbeat(rig, 1, { ttlMs: 120_000 }));
+      expect(beat.result).toMatchObject({ ok: true });
+      expect(await deadlineOf(member, 1)).toBe(rig.clock.now() + 120_000);
+    });
+
+    it("a worker that stays disconnected past the TTL: once it reconnects, the next heartbeat answers `LEASE_ENDED_BY_HOST`", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      await dropUplink(rig, member);
+
+      // why: one jump fires the worker's redial and the lease's expiry together, before the new socket is up.
+      await sleep(50);
+      rig.clock.advance(130_000);
+      await untilConnected(rig, member);
+
+      expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+    });
+
+    it("a lease known only from the link's memory (after `simlock release --all`) whose worker then disconnects answers `workerUnreachable()`", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await rig.gateway.dispatch("lease.release-all", {}, adminSession);
+      await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
+      await dropUplink(rig, member);
+
+      expectUnreachable(await envelopeOf(await heartbeat(rig, 1)));
+    });
+
+    it("a running command's renewal tick while the worker is disconnected fails, and the entry and its timer stay; after the reconnect the next tick renews", async () => {
+      // why: a worker clock of its own, so moving the gateway's clock does not make the worker redial.
+      const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
+      const member = first(rig);
+      await granted(rig, 1, { ttlMs: 30_000 });
+      await listedByGateway(rig, 1);
+      await runningCommand(rig, member, 1);
+      const tap = tapDispatch(rig.gateway);
+      const before = await deadlineOf(member, 1);
+      await dropUplink(rig, member);
+
+      rig.clock.advance(10_000);
+      await sleep(50);
+
+      expect(tap.operations).toContain("lease.renew");
+      expect(tap.operations).not.toContain("lease.release");
+      expect((await fleetLeases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
+      await untilConnected(rig, member);
+      await advance(rig, 10_000, 5_000);
+      await sleep(50);
+      expect(await deadlineOf(member, 1)).toBeGreaterThan(before ?? 0);
+      expect((await envelopeOf(await heartbeat(rig, 1))).result).toMatchObject({ ok: true });
+      member.fake.releaseCommand();
+    });
+
+    it("an allocate by the same token while its other lease's worker is disconnected does not mark that lease ended", async () => {
+      const rig = await setUp({
+        workers: [
+          { label: "w1", maxRunning: 1 },
+          { label: "w2", maxRunning: 1 },
+        ],
+      });
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      const holder = holderOf(rig, 1);
+      await dropUplink(rig, holder);
+
+      await granted(rig, 2);
+      await untilConnected(rig, holder);
+
+      const beat = await envelopeOf(await heartbeat(rig, 1));
+      expect(beat.error).toBeUndefined();
+      expect(beat.result).toMatchObject({ ok: true });
+    });
+  },
+);
+
+async function restarted(rig: Rig, member: Member, leases: number): Promise<void> {
+  await rig.restart();
+  await untilConnected(rig, member);
+  await expect.poll(async () => (await fleetLeases(rig)).length).toBe(leases);
+}
+
+describe(
+  "the agent-device front, through a gateway: after a gateway restart",
+  {
+    timeout: 90_000,
+  },
+  () => {
+    it("after a gateway restart and the worker's reconnect, the next heartbeat for the lease reaches the worker's agent-device daemon and renews the simlock lease, and a following command works", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1, { ttlMs: 60_000 });
+      await listedByGateway(rig, 1);
+      await restarted(rig, member, 1);
+      const received = heartbeatsReceived(member);
+
+      const beat = await envelopeOf(await heartbeat(rig, 1, { ttlMs: 120_000 }));
+
+      expect(beat.result).toMatchObject({ ok: true });
+      expect(heartbeatsReceived(member)).toBe(received + 1);
+      expect(await deadlineOf(member, 1)).toBe(rig.clock.now() + 120_000);
+      await commandWorks(rig, member, 1);
+    });
+
+    it("after a gateway restart, a command, a release, `devices` and an upload with the lease header, each as the token's first request, work on the adopted lease", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+
+      await restarted(rig, member, 1);
+      await commandWorks(rig, member, 1);
+
+      await restarted(rig, member, 1);
+      member.fake.listDevices([{ id: addressOfLease(rig, 1), name: "adopted" }]);
+      expect(await listedNames(await command(rig, "devices", undefined))).toEqual(["adopted"]);
+
+      await restarted(rig, member, 1);
+      const preflight = await send(rig, "/upload/preflight", { body: "{}", headers: leased(1) });
+      expect(preflight.status).toBe(200);
+      expect(pathsReceived(member)).toContain("/upload/preflight");
+
+      await restarted(rig, member, 1);
+      const released = await envelopeOf(await release(rig, 1));
+      expect(released.result).toMatchObject({ ok: true, released: true });
+      expect(await fleetLeases(rig)).toEqual([]);
+    });
+
+    it("after a gateway restart, an adopted lease on a TV model reads target `tv`, and `test --target tv` sharding uses it", async () => {
+      const rig = await setUp({ workers: [{ label: "w1", modelClass: "tv" }] });
+      const member = first(rig);
+      await granted(rig, 1, { target: "tv" });
+      await listedByGateway(rig, 1);
+      await restarted(rig, member, 1);
+
+      const answer = await envelopeOf(
+        await command(rig, "test", 1, {}, { flags: { shardAll: 1, target: "tv" } }),
+      );
+
+      expect(answer.error).toBeUndefined();
+      const sent = member.fake.rpcRequests("agent_device.command").at(-1)?.params;
+      const flags = (sent?.["flags"] ?? {}) as Record<string, unknown>;
+      expect(flags["device"]).toBe(addressOfLease(rig, 1));
+    });
+
+    it("after a gateway restart, a command naming a `deviceKey` on the adopted lease is accepted and sets it; a later command naming another `deviceKey` is refused `refused: simlock picks the device`", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      await restarted(rig, member, 1);
+
+      const accepted = await envelopeOf(
+        await command(rig, "snapshot", 1, {}, { meta: { deviceKey: "key-a" } }),
+      );
+      expect(accepted.error).toBeUndefined();
+      const received = commandsReceived(member);
+      const other = await envelopeOf(
+        await command(rig, "snapshot", 1, {}, { meta: { deviceKey: "key-b" } }),
+      );
+
+      expect(other.error?.message).toBe(picksTheDevice);
+      expect(commandsReceived(member)).toBe(received);
+      const same = await envelopeOf(
+        await command(rig, "snapshot", 1, {}, { meta: { deviceKey: "key-a" } }),
+      );
+      expect(same.error).toBeUndefined();
+    });
+
+    it("within 60 s of a gateway restart, before the worker reconnects, a heartbeat, a command, a release and an upload with the lease header for the lease each answer `workerUnreachable()`; after 60 s, with another capable worker connected, a heartbeat for it answers `refused: lease <id> is not one of yours on this gateway`", async () => {
+      // why: a worker clock of its own, so the worker does not redial until the test moves it.
+      const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
+      const member = first(rig);
+      await granted(rig, 1);
+      await listedByGateway(rig, 1);
+      await rig.restart();
+      const received = member.fake.requests.length;
+
+      await expectUnreachableEverywhere(rig, 1);
+
+      expect(member.fake.requests.length).toBe(received);
+      const other = await rig.addWorker({ label: "w2" });
+      await other.daemon;
+      await untilRead(rig, other);
+      rig.clock.advance(gatewayWindowMs + 1_000);
+      const beat = await envelopeOf(await heartbeat(rig, 1));
+      expect(beat.error?.message).toBe(notYoursOnGateway(1));
+    });
+
+    it("after a gateway restart, a lease of another token is not adopted, and a heartbeat naming it is refused", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await granted(rig, 1, {}, { token: secrets.two });
+      await expect.poll(async () => (await fleetLeases(rig, principals.two)).length).toBe(1);
+      await rig.restart();
+      await untilConnected(rig, member);
+      await expect.poll(async () => (await fleetLeases(rig, principals.two)).length).toBe(1);
+      const received = commandsReceived(member);
+
+      const beat = await envelopeOf(await heartbeat(rig, 1));
+      const devices = await envelopeOf(await command(rig, "devices", undefined));
+
+      expect(beat.error?.message).toBe(notYoursOnGateway(1));
+      expect(devices.result).toMatchObject({ data: { devices: [] }, ok: true });
+      expect(commandsReceived(member)).toBe(received);
+    });
+
+    it("after a gateway restart, a lease of this token whose requester is not its own id is not adopted", async () => {
+      const rig = await setUp();
+      const member = first(rig);
+      await rig.gateway.dispatch(
+        "lease.request",
+        { platform: "ios", requesterId: "someone-else", requires: ["agent-device"] },
+        sessionFor(principals.one),
+      );
+      await restarted(rig, member, 1);
+      const received = commandsReceived(member);
+
+      const devices = await envelopeOf(await command(rig, "devices", undefined));
+
+      expect(devices.result).toMatchObject({ data: { devices: [] }, ok: true });
+      expect(commandsReceived(member)).toBe(received);
+    });
+
+    it("a lease this gateway process asked for whose allocate failed after the grant (the uplink dropped mid-allocate) is never adopted, and stays out of `devices`, also when the worker's clock is an hour behind or ahead of the gateway's", async () => {
+      for (const skew of [0, -hourMs, hourMs]) {
+        const rig = await setUp({ workers: [{ clockSkewMs: skew, label: "w1" }] });
+        const member = first(rig);
+        member.fake.holdAllocate();
+        const running = track(allocate(rig, 1));
+        await expect.poll(() => allocatesReceived(member, 1).length).toBe(1);
+        await dropUplink(rig, member);
+        member.fake.letAllocateGo();
+        await running.promise;
+        await untilConnected(rig, member);
+        const received = commandsReceived(member);
+
+        const devices = await envelopeOf(await command(rig, "devices", undefined));
+
+        expect(devices.result, `skew ${String(skew)}`).toMatchObject({
+          data: { devices: [] },
+          ok: true,
+        });
+        expect(commandsReceived(member)).toBe(received);
+      }
+    });
+
+    it("after a gateway restart, a lease made before it is adopted when the worker's clock is an hour behind or ahead of the gateway's", async () => {
+      for (const skew of [-hourMs, hourMs]) {
+        const rig = await setUp({ workers: [{ clockSkewMs: skew, label: "w1" }] });
+        const member = first(rig);
+        await granted(rig, 1);
+        await listedByGateway(rig, 1);
+        await restarted(rig, member, 1);
+
+        const beat = await envelopeOf(await heartbeat(rig, 1));
+
+        expect(beat.error, `skew ${String(skew)}`).toBeUndefined();
+        expect(beat.result).toMatchObject({ ok: true });
+        await commandWorks(rig, member, 1);
+      }
+    });
+  },
+);

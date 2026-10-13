@@ -147,6 +147,12 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   readonly #server = new WebSocketServer({ noServer: true });
   #handlers: UplinkHandlers | undefined;
   #detach: (() => void) | undefined;
+  readonly #links = new Map<string, WebSocketUplinkConnection>();
+
+  /** why: test-only, closes one worker's socket from the gateway side, as a network drop does. */
+  async closeWorkerLink(workerId: string): Promise<void> {
+    await this.#links.get(workerId)?.close();
+  }
 
   async listen(handlers: UplinkHandlers): Promise<UplinkListener> {
     this.#handlers = handlers;
@@ -226,8 +232,13 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     // later `token.revoke` of it can find and close this exact link (ADR 0005 §8).
     const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
+      const connection = new WebSocketUplinkConnection(client);
+      this.#links.set(workerId, connection);
+      connection.onClose(() => {
+        if (this.#links.get(workerId) === connection) this.#links.delete(workerId);
+      });
       handlers.accept({
-        connection: new WebSocketUplinkConnection(client),
+        connection,
         workerId,
         ...(label === undefined ? {} : { label }),
         ...(tokenId === undefined ? {} : { tokenId }),

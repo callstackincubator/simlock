@@ -131,6 +131,8 @@ export interface StartDaemonOptions {
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
+  /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
+  readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
   readonly relayTargets?: RelayTargets;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
@@ -215,6 +217,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       eventHistory,
       filesystem,
       ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
+      ...(options.gatewayUplinks === undefined ? {} : { gatewayUplinks: options.gatewayUplinks }),
       hostSystem,
       idGenerator,
       ipc,
@@ -677,6 +680,7 @@ interface GatewayDaemonOptions {
   readonly eventHistory: EventHistory;
   readonly filesystem: Filesystem;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
+  readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
   /** The gateway's own machine. It runs no drivers, so its host facts carry no tools. */
   readonly hostSystem: HostSystem;
   readonly idGenerator: IdGenerator;
@@ -738,6 +742,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const routing = createRoutingPolicy(config.gateway.routing);
 
   const uplinks = new WebSocketUplinkListenerFactory();
+  options.gatewayUplinks?.(uplinks);
   const gatewayService = new GatewayService({
     // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
     // real and simply has no authority here (403); anything else is unauthenticated (401).

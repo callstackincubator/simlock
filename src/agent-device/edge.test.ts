@@ -2037,6 +2037,19 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await listed(rig)).toEqual([]);
   });
 
+  it("on a worker, after a simlock restart, a command for the old lease is not adopted and the next heartbeat answers `LEASE_ENDED_BY_HOST`, as today", async () => {
+    const first = await setUp();
+    await granted(first, 1);
+    const rig = await first.restart();
+    expect(await listed(rig)).toEqual([hex(1)]);
+
+    const answer = await envelopeOf(await runCommand(rig, "snapshot", 1));
+    // why: a worker has no map entry for the old lease and adopts nothing, so the command is forwarded as before and the heartbeat still ends the lease.
+    expect(answer.error).toBeUndefined();
+    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+    expect(await listed(rig)).toEqual([]);
+  });
+
   it("after the same restart (same `FakeDriver`, lease still listed), a release for a lease made before the restart answers the agent-device daemon's reply as a success and releases that simlock lease", async () => {
     const first = await setUp();
     await granted(first, 1);
