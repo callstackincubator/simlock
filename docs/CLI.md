@@ -1653,8 +1653,14 @@ own name for it.
 
 ### Where Android models come from
 
-Simlock reads Android device models from two places and writes to neither:
+Simlock reads Android device models from three places and writes to none of
+them:
 
+- **Simlock's own profiles** ship with Simlock (today: Pixel 9). They are
+  read first, so a device made from one has the same hardware on every
+  host, and the model is there even when your `cmdline-tools` is too old to
+  have it. A name Simlock's own profiles have wins over the same name in the
+  SDK and in `devices.xml`.
 - **Built-in profiles** ship with the Android SDK's `cmdline-tools`. A
   model newer than your `cmdline-tools` is not there; update
   `cmdline-tools` to get it.
@@ -1667,7 +1673,8 @@ Simlock reads Android device models from two places and writes to neither:
 `avdmanager list device` prints both kinds; it shows a custom profile with
 `OEM : User`. Simlock also reads `devices.xml` itself. When a custom profile
 has the same name as a built-in one, the built-in profile wins and the model
-is not custom. If `devices.xml` cannot be read, the built-in models are still
+is not custom. Simlock's own models are listed first, then the SDK's, then
+the custom ones. If `devices.xml` cannot be read, the built-in models are still
 listed. A custom model is marked `(custom)` in the human view of `simlock
 catalog` and listed in `customModels` in `--json`.
 

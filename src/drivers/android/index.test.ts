@@ -1247,10 +1247,10 @@ describe("AndroidDriver", () => {
         { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
         { abi: "x86_64", runtime: "35", tag: "google_apis" },
       ],
-      modelAliases: { "Pixel 8": ["pixel_8"] },
-      modelClasses: { "Pixel 8": "phone" },
-      modelRuntimes: { "Pixel 8": ["34", "35"] },
-      models: ["Pixel 8"],
+      modelAliases: { "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] },
+      modelClasses: { "Pixel 8": "phone", "Pixel 9": "phone" },
+      modelRuntimes: { "Pixel 8": ["34", "35"], "Pixel 9": ["34", "35"] },
+      models: ["Pixel 9", "Pixel 8"],
       runtimes: ["34", "35"],
     });
   });
@@ -1313,10 +1313,10 @@ describe("AndroidDriver", () => {
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: undefined,
       images: [],
-      modelAliases: { "Pixel 8": ["pixel_8"] },
-      modelClasses: { "Pixel 8": "phone" },
-      modelRuntimes: { "Pixel 8": [] },
-      models: ["Pixel 8"],
+      modelAliases: { "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] },
+      modelClasses: { "Pixel 8": "phone", "Pixel 9": "phone" },
+      modelRuntimes: { "Pixel 8": [], "Pixel 9": [] },
+      models: ["Pixel 9", "Pixel 8"],
       runtimes: [],
     });
   });
@@ -1357,8 +1357,8 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 8", "automotive_1024p"]);
-    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"] });
+    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8", "automotive_1024p"]);
+    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
   });
 
   it("resolves every listed name of every listed model, in upper and lower case, to that model", async () => {

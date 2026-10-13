@@ -61,6 +61,7 @@ import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
   BuiltinDeviceProfileSource,
+  containsForbiddenCharacter,
   DeviceProfileRegistry,
   parseAvdmanagerDeviceProfiles,
   UserDeviceProfileSource,
@@ -68,6 +69,8 @@ import {
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
+import { isPlayStoreImage } from "./image-fit.js";
+import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
@@ -256,6 +259,7 @@ interface SystemImage {
   readonly apiLevel: string;
   readonly path: string;
   readonly tag: string;
+  readonly tags: readonly string[];
   readonly version: string;
 }
 
@@ -837,6 +841,9 @@ export class AndroidDriver implements Driver {
     // `avdmanager create avd` is seeded with *some* built-in device (only to skip the
     // interactive "custom hardware profile?" prompt) and the profile's own properties then
     // overwrite that seed's config.ini values below, before anything reads them.
+    if (profile.kind === "library") {
+      assertLibraryProfileWritable(profile);
+    }
     const seedDeviceId =
       profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
     await this.#runOrThrow(this.#sdk.avdmanager, [
@@ -855,6 +862,10 @@ export class AndroidDriver implements Driver {
       // baseline: applying it after would let the baseline settle on the seed device's
       // hardware and then see a spurious drift on the very next boot.
       await this.#applyHardwareProperties(avdName, profile.hardwareProperties);
+    }
+
+    if (profile.kind === "library") {
+      await this.#applyLibraryProfile(avdName, profile, image);
     }
 
     const configHash = await this.#configHash(avdName, image);
@@ -1270,6 +1281,31 @@ export class AndroidDriver implements Driver {
     return first.id;
   }
 
+  async #applyLibraryProfile(
+    avdName: string,
+    profile: Extract<DeviceProfile, { readonly kind: "library" }>,
+    image: SystemImage,
+  ): Promise<void> {
+    await this.#mergeConfigIniLines(
+      avdName,
+      {
+        ...profile.hardware,
+        "PlayStore.enabled": profile.playStore && isPlayStoreImage(image) ? "yes" : "no",
+      },
+      (line) => !isSeedHardwareLine(line),
+    );
+    const bootPropPath = `${this.#configIniPath(avdName).replace(/\/config\.ini$/, "")}/boot.prop`;
+    const properties = Object.entries(profile.bootProperties);
+    if (properties.length > 0) {
+      await this.#filesystem.writeFileAtomic(
+        bootPropPath,
+        `${properties.map(([key, value]) => `${key}=${value}`).join("\n")}\n`,
+      );
+    } else if (await this.#filesystem.exists(bootPropPath)) {
+      await this.#filesystem.rm(bootPropPath);
+    }
+  }
+
   /** Merges `properties` into the AVD's `config.ini` -- see `#mergeConfigIniLines`. */
   async #applyHardwareProperties(
     avdName: string,
@@ -1576,6 +1612,7 @@ export class AndroidDriver implements Driver {
             apiLevel: apiMatch[1],
             path,
             tag,
+            tags: await systemImageTags(this.#filesystem, path, tag),
             version: await systemImageVersion(this.#filesystem, path),
           });
         }
@@ -1716,11 +1753,12 @@ export class AndroidDriver implements Driver {
   async #mergeConfigIniLines(
     avdName: string,
     entries: Readonly<Record<string, string>>,
+    keepLine: (line: string) => boolean = () => true,
   ): Promise<void> {
     for (const [key, value] of Object.entries(entries)) {
-      if (containsLineBreak(key) || containsLineBreak(value)) {
+      if (containsForbiddenCharacter(key) || containsForbiddenCharacter(value)) {
         throw new DriverCrashError(
-          `Refusing to merge config.ini entry with an embedded line break (key ${JSON.stringify(key)})`,
+          `Refusing to merge config.ini entry with a line break or NUL (key ${JSON.stringify(key)})`,
         );
       }
     }
@@ -1734,7 +1772,9 @@ export class AndroidDriver implements Driver {
       }
       contents = "";
     }
-    const lines = contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/);
+    const lines = (contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/)).filter(
+      keepLine,
+    );
     for (const [key, value] of Object.entries(entries)) {
       const line = `${key}=${value}`;
       const existingIndex = lines.findIndex((entry) => entry.startsWith(`${key}=`));
@@ -2386,9 +2426,49 @@ function portsFromAdbDevices(output: string): number[] {
     .filter((port) => Number.isInteger(port));
 }
 
-/** See `#mergeConfigIniLines`'s defense-in-depth check. */
-function containsLineBreak(value: string): boolean {
-  return /[\r\n]/.test(value);
+function isSeedHardwareLine(line: string): boolean {
+  return (
+    (line.startsWith("hw.") && !line.startsWith("hw.cpu.arch=")) ||
+    line.startsWith("vm.heapSize=") ||
+    line.startsWith("skin.")
+  );
+}
+
+function assertLibraryProfileWritable(
+  profile: Extract<DeviceProfile, { readonly kind: "library" }>,
+): void {
+  for (const [key, value] of [
+    ...Object.entries(profile.hardware),
+    ...Object.entries(profile.bootProperties),
+  ]) {
+    if (containsForbiddenCharacter(key) || containsForbiddenCharacter(value)) {
+      throw new DriverCrashError(
+        `Refusing library profile ${JSON.stringify(profile.name)}: ${JSON.stringify(key)} holds a line break or NUL`,
+      );
+    }
+  }
+}
+
+async function systemImageTags(
+  filesystem: Filesystem,
+  imagePath: string,
+  folder: string,
+): Promise<readonly string[]> {
+  try {
+    const properties = await filesystem.readFile(`${imagePath}/source.properties`);
+    const tagId = properties
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("SystemImage.TagId="))
+      ?.slice("SystemImage.TagId=".length)
+      .trim();
+    const tags = (tagId ?? "")
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter((tag) => tag !== "");
+    return tags.length > 0 ? tags : [folder];
+  } catch {
+    return [folder];
+  }
 }
 
 /**
@@ -2475,6 +2555,7 @@ function defaultDeviceProfileSources(
 ): readonly DeviceProfileSource[] {
   const devicesXmlPath = `${options.env.ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
   return [
+    new LibraryDeviceProfileSource(),
     // Scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
     new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
     new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),

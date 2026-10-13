@@ -50,12 +50,7 @@ interface AndroidCatalogOutput {
   }[];
 }
 
-/**
- * Checks the Android entry against the SDK on disk -- every listed image is installed, under a
- * runtime the catalog lists -- and returns the AVD id a built-in profile is listed with as
- * another name.
- */
-function avdIdFromCatalog(output: AndroidCatalogOutput): string {
+function checkCatalog(output: AndroidCatalogOutput): void {
   const android = output.platforms.find((platform) => platform.platform === "android");
   if (android === undefined) {
     throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
@@ -79,12 +74,9 @@ function avdIdFromCatalog(output: AndroidCatalogOutput): string {
     expect(existsSync(path), `listed image ${JSON.stringify(image)} is not installed`).toBe(true);
   }
 
-  const aliases = android.models.flatMap((name) => android.modelAliases[name] ?? []);
-  expect(
-    aliases.length,
-    "expected a built-in profile with its AVD id as another name",
-  ).toBeGreaterThan(0);
-  return aliases[0] as string;
+  expect(android.models[0]).toBe("Pixel 9");
+  expect(android.modelClasses["Pixel 9"]).toBe("phone");
+  expect(android.modelAliases["Pixel 9"]).toEqual(["pixel_9"]);
 }
 
 // Real emulator boots are slow and this SDK layout is host-specific, so this lane is
@@ -94,7 +86,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog agrees with the SDK and lists an AVD id and an installed image, a cold lease by that AVD id boots a real emulator, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const env = await withDaemon({
@@ -108,8 +100,7 @@ describe.skipIf(!hasAndroidSdk)(
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
-          // The lease below asks by an AVD id the catalog lists as another name.
-          const model = avdIdFromCatalog(catalog.json as AndroidCatalogOutput);
+          checkCatalog(catalog.json as AndroidCatalogOutput);
 
           const lease = await env.cli(
             [
@@ -117,7 +108,7 @@ describe.skipIf(!hasAndroidSdk)(
               "--platform",
               "android",
               "--device",
-              model,
+              "Pixel 9",
               "--agent-id",
               "android-smoke",
               "--detach",
@@ -145,6 +136,11 @@ describe.skipIf(!hasAndroidSdk)(
           const wrapped = await env.cli(["adb", "devices"]);
           expect(wrapped.code, `simlock adb failed: ${wrapped.stderr}`).toBe(0);
           expect(wrapped.stdout).toContain("emulator-");
+
+          const size = await env.cli(["adb", "shell", "wm", "size"]);
+          expect(size.stdout).toContain("Physical size: 1080x2424");
+          const density = await env.cli(["adb", "shell", "wm", "density"]);
+          expect(density.stdout).toContain("Physical density: 420");
 
           const refused = await env.cli(["adb", "kill-server"]);
           expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
