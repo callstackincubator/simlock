@@ -98,6 +98,7 @@ import {
   FleetLeaseIndex,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
+  type GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
@@ -112,6 +113,7 @@ import { AdminSecretManager } from "./admin-secret.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
+import type { RelayTargets } from "./relay.js";
 import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
@@ -123,6 +125,8 @@ export interface StartDaemonOptions {
   readonly dataDirectory?: string;
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
+  readonly gatewayRelay?: (relay: GatewayRelay) => void;
+  readonly relayTargets?: RelayTargets;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;

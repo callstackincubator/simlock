@@ -658,3 +658,22 @@ async function joinWithoutConfig(
     if (connection === "connected") expect(client.calls).toContain("config.get");
   });
 }
+
+describe("relayComponentInstall reads a lost uplink in one place (#514)", () => {
+  it("answers unknown, with WORKER_UNREACHABLE, when a worker answers DAEMON_STOPPING", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const stopping = new ScriptedWorkerClient();
+    stopping.installComponentHandler = async () => {
+      throw new SimlockError("DAEMON_STOPPING", "transport", "The daemon is stopping", {});
+    };
+    await harness.join("wrk_a", stopping);
+
+    const { results } = await harness.install(["wrk_a"]);
+
+    expect(results).toMatchObject([
+      { error: { code: "WORKER_UNREACHABLE" }, outcome: "unknown", workerId: "wrk_a" },
+    ]);
+    await harness.service.stop();
+  });
+});

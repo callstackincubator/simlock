@@ -55,6 +55,14 @@ export interface CallHooks {
   readonly onComponentProgress?:
     | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
     | undefined;
+  readonly onRelayHead?: ((head: RelayHead) => void) | undefined;
+  readonly onRelayChunk?: ((chunk: string) => void) | undefined;
+  readonly onRelayInvalid?: (() => void) | undefined;
+}
+
+export interface RelayHead {
+  readonly status: number;
+  readonly headers: readonly (readonly [string, string])[];
 }
 
 interface PendingCall extends CallHooks {

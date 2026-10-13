@@ -107,3 +107,28 @@ describe("CAPABILITY_MISSING", () => {
     });
   });
 });
+
+describe("RELAY_TARGET_MISSING", () => {
+  it("maps RELAY_TARGET_MISSING to HTTP 503 and CLI exit 1 as a domain error whose details name the target", () => {
+    const table: Record<string, unknown> = ERROR_TABLE;
+    const error = fromWireError(
+      "RELAY_TARGET_MISSING",
+      "No module on this worker serves agent-device",
+      {
+        target: "agent-device",
+      },
+    );
+
+    expect(table["RELAY_TARGET_MISSING"]).toEqual({
+      cliExitCode: 1,
+      code: "RELAY_TARGET_MISSING",
+      httpStatus: 503,
+      kind: "domain",
+    });
+    expect(error).toMatchObject({
+      code: "RELAY_TARGET_MISSING",
+      details: { target: "agent-device" },
+      kind: "domain",
+    });
+  });
+});

@@ -33,3 +33,6 @@ export { createRoutingPolicy } from "./routing.js";
 // fallow-ignore-next-line unused-type -- public shape for a caller implementing its own routing policy; no current one exists outside routing.ts.
 export type { RoutingPolicy, RoutingPolicyName } from "./routing.js";
 export { GatewayOwnerRoutedFacts } from "./owner-routed-facts.js";
+export { GatewayRelay } from "./relay.js";
+// fallow-ignore-next-line unused-type -- the client the gateway's worker links hold; tests build one around a scripted connection.
+export type { GatewayWorkerClient } from "./worker-client.js";

@@ -4964,3 +4964,23 @@ describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequeste
     });
   });
 });
+
+describe("FleetLeaseCoordinator reads a lost uplink in one place (#514)", () => {
+  it("reads DAEMON_STOPPING from a worker as a lost uplink: lease.request fails WORKER_UNREACHABLE", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_STOPPING", "transport", "The daemon is stopping", {}),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
+  });
+});
