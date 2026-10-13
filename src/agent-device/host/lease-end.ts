@@ -16,10 +16,12 @@ export class ReleaseScopeRecord {
     return this.#scopes.get(leaseId);
   }
 
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   allocating(leaseId: string): Promise<ReleaseScope | undefined> | undefined {
     return this.#allocating.get(leaseId);
   }
 
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   releasing(leaseId: string): Promise<boolean> | undefined {
     return this.#releasing.get(leaseId);
   }
@@ -73,6 +75,7 @@ export class ReleaseScopeRecord {
   }
 
   // why: once the participant owns a lease id, a reply arriving later must not bring its entry back.
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   own(leaseId: string): void {
     this.#ended.add(leaseId);
     if (this.#ended.size > MAX_ENDED_IDS) {
@@ -81,6 +84,7 @@ export class ReleaseScopeRecord {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- called by the participant in this file.
   drop(leaseId: string): void {
     this.#scopes.delete(leaseId);
   }
@@ -155,10 +159,7 @@ export class AgentDeviceLeaseEnd implements LeaseEndParticipant {
 
   async #end(leaseId: string, signal: AbortSignal): Promise<void> {
     if (signal.aborted) return;
-    const allocating = this.record.allocating(leaseId);
-    const allocated = allocating === undefined ? undefined : await raceAbort(allocating, signal);
-    if (allocated === ABORTED) return;
-    const scope = allocated ?? this.record.get(leaseId);
+    const scope = await this.#scopeOf(leaseId, signal);
     if (scope === undefined) return;
     if (this.upstream.current().state !== "running") return;
     const releasing = this.record.releasing(leaseId);
@@ -167,6 +168,12 @@ export class AgentDeviceLeaseEnd implements LeaseEndParticipant {
       if (outcome === ABORTED || outcome) return;
     }
     await this.#release(leaseId, scope, signal);
+  }
+
+  async #scopeOf(leaseId: string, signal: AbortSignal): Promise<ReleaseScope | undefined> {
+    const allocating = this.record.allocating(leaseId);
+    const allocated = allocating === undefined ? undefined : await raceAbort(allocating, signal);
+    return allocated === ABORTED ? undefined : (allocated ?? this.record.get(leaseId));
   }
 
   async #release(leaseId: string, scope: ReleaseScope, signal: AbortSignal): Promise<void> {

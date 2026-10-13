@@ -269,7 +269,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return this.requests.filter((request) => request.rpcMethod === rpcMethod);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the AgentDeviceUpstream port by the host.
+  // fallow-ignore-next-line complexity -- one fake dispatching each agent-device call by method.
   async fetch(request: Request): Promise<Response> {
     if (this.#unreachable) {
       const refused = (await request
@@ -395,6 +395,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     );
   }
 
+  // fallow-ignore-next-line complexity -- one fake mirroring agent-device's release checks in order.
   async #release(
     request: Request,
     id: unknown,
@@ -446,6 +447,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, { ok: true, released: !lease.ended });
   }
 
+  // fallow-ignore-next-line complexity -- one fake mirroring agent-device's command handling.
   async #command(
     request: Request,
     id: unknown,
