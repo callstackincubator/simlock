@@ -182,8 +182,8 @@ lowercase capability names, none twice, such as `["agent-device"]`. Simlock
 places the lease only on a worker whose status lists every one of them as
 `available`. Through a gateway, a request that no connected worker able to
 serve it can take fails at once with `CAPABILITY_MISSING`, and so does one
-already waiting when the last such worker loses the capability, restarts, or
-goes. Direct to a worker that lacks one it fails the same way. The error's
+already waiting when the last such worker loses the capability or restarts. If
+no worker stays connected, it fails with `NO_CAPACITY` instead. Direct to a worker that lacks one it fails the same way. The error's
 `details.capabilities` names the missing capabilities. `requires` cannot be
 combined with `idempotencyKey` (`BAD_REQUEST`). The CLI, the MCP tool and the
 HTTP lease body do not take it.
