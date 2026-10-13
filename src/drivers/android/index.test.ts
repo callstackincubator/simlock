@@ -63,9 +63,26 @@ const binaries = {
   emulator: `${sdk}/emulator/emulator`,
   sdkmanager: `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
 } as const;
-const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
+const libraryModels = LIBRARY_PROFILES.map((profile) => profile.name);
+
+function libraryAliases(extra: Record<string, string[]>): Record<string, string[]> {
+  return { ...Object.fromEntries(LIBRARY_PROFILES.map((p) => [p.name, [p.id]])), ...extra };
+}
+
+function libraryClasses(extra: Record<string, string>): Record<string, string> {
+  return { ...Object.fromEntries(LIBRARY_PROFILES.map((p) => [p.name, p.deviceClass])), ...extra };
+}
+
+function libraryRuntimes(
+  runtimes: string[],
+  extra: Record<string, string[]>,
+): Record<string, string[]> {
+  return { ...Object.fromEntries(LIBRARY_PROFILES.map((p) => [p.name, runtimes])), ...extra };
+}
+
+const pixelDevices = `Available devices:\nid: 0 or "pixel_5"\n    Name: Pixel 5\n    OEM : Google\n`;
 const twoPixelDevices =
-  `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n` +
+  `Available devices:\nid: 0 or "pixel_5"\n    Name: Pixel 5\n    OEM : Google\n` +
   `---------\nid: 1 or "pixel_9"\n    Name: Pixel 9\n    OEM : Google\n`;
 
 const VIRTUAL_DEVICE = {
@@ -143,9 +160,9 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    await expect(driver.resolveSpec({ model: "Pixel 8", platform: "android" })).resolves.toEqual({
+    await expect(driver.resolveSpec({ model: "Pixel 5", platform: "android" })).resolves.toEqual({
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     });
@@ -164,9 +181,9 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner);
 
-    await expect(driver.resolveSpec({ model: "Pixel 8", platform: "android" })).resolves.toEqual({
+    await expect(driver.resolveSpec({ model: "Pixel 5", platform: "android" })).resolves.toEqual({
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "35",
       platform: "android",
     });
@@ -181,7 +198,7 @@ describe("AndroidDriver", () => {
 
     await expect(
       driver.resolveSpec({
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "35",
         platform: "android",
       }),
@@ -206,7 +223,7 @@ describe("AndroidDriver", () => {
           "-k",
           /.+/,
           "-d",
-          "pixel_8",
+          "pixel_5",
         ]),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -231,7 +248,7 @@ describe("AndroidDriver", () => {
 
       const spec = await driver.resolveSpec({
         imageTag: "google_apis_playstore",
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -240,7 +257,7 @@ describe("AndroidDriver", () => {
       expect(spec).toEqual({
         physical: false,
         imageTag: "google_apis_playstore",
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -258,7 +275,7 @@ describe("AndroidDriver", () => {
       const failure = await driver
         .resolveSpec({
           imageTag: "google_apis_playstore",
-          model: "Pixel 8",
+          model: "Pixel 5",
           osVersion: "34",
           platform: "android",
         })
@@ -283,7 +300,7 @@ describe("AndroidDriver", () => {
       await expect(
         driver.resolveSpec({
           imageTag: "google_apis_playstore",
-          model: "Pixel 8",
+          model: "Pixel 5",
           platform: "android",
         }),
       ).resolves.toMatchObject({ imageTag: "google_apis_playstore", osVersion: "34" });
@@ -296,12 +313,12 @@ describe("AndroidDriver", () => {
         ["34", "google_apis", "arm64-v8a"],
       ]);
 
-      const spec = await driver.resolveSpec({ model: "Pixel 8", platform: "android" });
+      const spec = await driver.resolveSpec({ model: "Pixel 5", platform: "android" });
       await driver.provision(spec);
 
       expect(spec).toEqual({
         physical: false,
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -321,7 +338,7 @@ describe("AndroidDriver", () => {
 
       const spec = await driver.resolveSpec({
         imageTag: "google_apis_playstore",
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -340,7 +357,7 @@ describe("AndroidDriver", () => {
 
       const spec = await driver.resolveSpec({
         imageTag: "google_apis_playstore",
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -355,7 +372,7 @@ describe("AndroidDriver", () => {
       const { driver } = await taggedHarness([["34", "google_apis", "arm64-v8a"]]);
 
       const failure = await driver
-        .resolveSpec({ imageTag: "google_apis_playstore", model: "Pixel 8", platform: "android" })
+        .resolveSpec({ imageTag: "google_apis_playstore", model: "Pixel 5", platform: "android" })
         .catch((error: unknown) => error);
 
       expect(failure).toMatchObject({
@@ -373,7 +390,7 @@ describe("AndroidDriver", () => {
       ]);
       const spec = await driver.resolveSpec({
         imageTag: "google_apis_playstore",
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -394,7 +411,7 @@ describe("AndroidDriver", () => {
   it("boots concurrent devices on different even ports and skips ports adb shows taken", async () => {
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -453,7 +470,7 @@ describe("AndroidDriver", () => {
       });
       const spec = {
         physical: false,
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       } as const;
@@ -1170,14 +1187,14 @@ describe("AndroidDriver", () => {
         "-k",
         /.+/,
         "-d",
-        "pixel_8",
+        "pixel_5",
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_delete-me"]),
     ]);
     const driver: Driver = await createDriver(filesystem, runner, { ids: ["delete-me"] });
     const spec = await driver.resolveSpec({
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     });
@@ -1197,7 +1214,7 @@ describe("AndroidDriver", () => {
     );
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -1213,7 +1230,7 @@ describe("AndroidDriver", () => {
     );
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -1247,10 +1264,10 @@ describe("AndroidDriver", () => {
         { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
         { abi: "x86_64", runtime: "35", tag: "google_apis" },
       ],
-      modelAliases: { "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] },
-      modelClasses: { "Pixel 8": "phone", "Pixel 9": "phone" },
-      modelRuntimes: { "Pixel 8": ["34", "35"], "Pixel 9": ["34", "35"] },
-      models: ["Pixel 9", "Pixel 8"],
+      modelAliases: libraryAliases({ "Pixel 5": ["pixel_5"] }),
+      modelClasses: libraryClasses({ "Pixel 5": "phone" }),
+      modelRuntimes: libraryRuntimes(["34", "35"], { "Pixel 5": ["34", "35"] }),
+      models: [...libraryModels, "Pixel 5"],
       runtimes: ["34", "35"],
     });
   });
@@ -1270,8 +1287,10 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8"]);
-    expect(catalog.modelRuntimes).toEqual({ "Pixel 8": ["33", "35"], "Pixel 9": ["33", "35"] });
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5"]);
+    expect(catalog.modelRuntimes).toEqual(
+      libraryRuntimes(["33", "35"], { "Pixel 5": ["33", "35"] }),
+    );
   });
 
   it("resolves every pair listCatalog lists", async () => {
@@ -1291,7 +1310,7 @@ describe("AndroidDriver", () => {
     const pairs = Object.entries(catalog.modelRuntimes).flatMap(([model, runtimes]) =>
       runtimes.map((osVersion) => ({ model, osVersion })),
     );
-    expect(pairs).toHaveLength(4);
+    expect(pairs).toHaveLength((libraryModels.length + 1) * 2);
 
     for (const { model, osVersion } of pairs) {
       await expect(driver.resolveSpec({ model, osVersion, platform: "android" })).resolves.toEqual({
@@ -1313,10 +1332,10 @@ describe("AndroidDriver", () => {
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: undefined,
       images: [],
-      modelAliases: { "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] },
-      modelClasses: { "Pixel 8": "phone", "Pixel 9": "phone" },
-      modelRuntimes: { "Pixel 8": [], "Pixel 9": [] },
-      models: ["Pixel 9", "Pixel 8"],
+      modelAliases: libraryAliases({ "Pixel 5": ["pixel_5"] }),
+      modelClasses: libraryClasses({ "Pixel 5": "phone" }),
+      modelRuntimes: libraryRuntimes([], { "Pixel 5": [] }),
+      models: [...libraryModels, "Pixel 5"],
       runtimes: [],
     });
   });
@@ -1341,7 +1360,7 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
+    expect(catalog.modelAliases).toEqual(libraryAliases({ "Pixel 5": ["pixel_5"] }));
   });
 
   it("lists no other name when the id equals the display name ignoring case", async () => {
@@ -1349,7 +1368,7 @@ describe("AndroidDriver", () => {
       processResult(
         binaries.avdmanager,
         ["list", "device"],
-        `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n---------\n` +
+        `Available devices:\nid: 0 or "pixel_5"\n    Name: Pixel 5\n---------\n` +
           `id: 1 or "Automotive_1024p"\n    Name: automotive_1024p\n`,
       ),
     ]);
@@ -1357,8 +1376,8 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8", "automotive_1024p"]);
-    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5", "automotive_1024p"]);
+    expect(catalog.modelAliases).toEqual(libraryAliases({ "Pixel 5": ["pixel_5"] }));
   });
 
   it("resolves every listed name of every listed model, in upper and lower case, to that model", async () => {
@@ -1375,7 +1394,7 @@ describe("AndroidDriver", () => {
       { model, name: model },
       ...(catalog.modelAliases[model] ?? []).map((name) => ({ model, name })),
     ]);
-    expect(names).toHaveLength(5);
+    expect(names).toHaveLength(libraryModels.length * 2 + 3);
 
     for (const { model, name } of names) {
       for (const spelling of [name.toUpperCase(), name.toLowerCase()]) {
@@ -1393,7 +1412,7 @@ describe("AndroidDriver", () => {
     const filesystem = await androidFilesystem();
     await writeDevicesXml(
       filesystem,
-      customDeviceXml("pixel_8", 4096) +
+      customDeviceXml("pixel_5", 4096) +
         customDeviceXml("PIXEL 9", 4096) +
         customDeviceXml("My Tablet", 4096),
     );
@@ -1404,7 +1423,7 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8", "pixel_8", "My Tablet"]);
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5", "pixel_5", "My Tablet"]);
     expect(Object.keys(catalog.modelRuntimes)).toEqual(catalog.models);
   });
 
@@ -1418,7 +1437,7 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8", "My Tablet"]);
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5", "My Tablet"]);
     expect(catalog.customModels).toEqual(["My Tablet"]);
   });
 
@@ -1433,7 +1452,7 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8"]);
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5"]);
     expect(catalog).not.toHaveProperty("customModels");
   });
 
@@ -1447,8 +1466,8 @@ describe("AndroidDriver", () => {
 
     const catalog = await driver.listCatalog();
 
-    expect(catalog.models).toEqual(["Pixel 9", "Pixel 8"]);
-    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
+    expect(catalog.models).toEqual([...libraryModels, "Pixel 5"]);
+    expect(catalog.modelAliases).toEqual(libraryAliases({ "Pixel 5": ["pixel_5"] }));
     expect(runner.calls.filter((call) => call.command === binaries.avdmanager)).toHaveLength(1);
   });
 
@@ -1666,7 +1685,7 @@ describe("AndroidDriver", () => {
         "-k",
         /.+/,
         "-d",
-        "pixel_8",
+        "pixel_5",
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
@@ -1688,7 +1707,7 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
     const spec = await driver.resolveSpec({
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     });
@@ -1722,7 +1741,7 @@ describe("AndroidDriver", () => {
         "-k",
         /.+/,
         "-d",
-        "pixel_8",
+        "pixel_5",
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
@@ -1730,7 +1749,7 @@ describe("AndroidDriver", () => {
     ]);
     const driver = await createDriver(filesystem, runner, { ids: ["one"] });
     const spec = await driver.resolveSpec({
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     });
@@ -1772,7 +1791,7 @@ describe("AndroidDriver", () => {
         "-k",
         /.+/,
         "-d",
-        "pixel_8",
+        "pixel_5",
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -1789,7 +1808,7 @@ describe("AndroidDriver", () => {
     });
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -1951,7 +1970,7 @@ describe("AndroidDriver", () => {
           "-k",
           /.+/,
           "-d",
-          "pixel_8",
+          "pixel_5",
         ]),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -1977,7 +1996,7 @@ describe("AndroidDriver", () => {
       expect(config).toContain("hw.ramSize=4096");
       // The avdmanager `-d` seed uses a built-in device only to skip the interactive prompt --
       // it must never leak into the resolved spec or the applied hardware properties.
-      expect(config).not.toContain("pixel_8");
+      expect(config).not.toContain("pixel_5");
       expect(device.driverData).toMatchObject({ avdName: "simlock_one" });
     });
 
@@ -1997,7 +2016,7 @@ describe("AndroidDriver", () => {
             "-k",
             /.+/,
             "-d",
-            "pixel_8",
+            "pixel_5",
           ]),
           processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
           processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -2021,9 +2040,9 @@ describe("AndroidDriver", () => {
 
     it("shadows a devices.xml profile with a built-in one of the same name and never applies properties", async () => {
       const filesystem = await androidFilesystem();
-      // Same name as the built-in fixture's "Pixel 8" -- the built-in source is registered
+      // why: same name as the built-in fixture's "Pixel 5" -- the built-in source is registered
       // first, so it must win and the devices.xml properties must never be touched.
-      await writeDevicesXml(filesystem, customDeviceXml("Pixel 8", 4096));
+      await writeDevicesXml(filesystem, customDeviceXml("Pixel 5", 4096));
       const runner = new ScriptedProcessRunner([
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         processResult(binaries.avdmanager, [
@@ -2034,7 +2053,7 @@ describe("AndroidDriver", () => {
           "-k",
           /.+/,
           "-d",
-          "pixel_8",
+          "pixel_5",
         ]),
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -2042,7 +2061,7 @@ describe("AndroidDriver", () => {
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
 
       const spec = await driver.resolveSpec({
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -2075,7 +2094,7 @@ describe("AndroidDriver", () => {
           "-k",
           /.+/,
           "-d",
-          "pixel_8",
+          "pixel_5",
         ]),
       ]);
       const maliciousSource = {
@@ -2177,7 +2196,7 @@ describe("AndroidDriver", () => {
       await harness.provision("Pixel 9");
 
       expect((await harness.config()).get("hw.lcd.height")).toBe("2424");
-      expect(harness.seedDeviceId()).toBe("pixel_8");
+      expect(harness.seedDeviceId()).toBe("pixel_5");
     });
 
     it('resolves "Pixel 9" to the library profile when `devices.xml` defines a "Pixel 9"', async () => {
@@ -2210,11 +2229,11 @@ describe("AndroidDriver", () => {
         devicesXml: customDeviceXml("Custom A", 4096),
         listing: pixelDevices,
       });
-      const sdkSpec = await sdkHarness.resolve("Pixel 8");
+      const sdkSpec = await sdkHarness.resolve("Pixel 5");
       await sdkHarness.driver.provision(sdkSpec);
 
-      expect(sdkSpec.model).toBe("Pixel 8");
-      expect(sdkHarness.seedDeviceId()).toBe("pixel_8");
+      expect(sdkSpec.model).toBe("Pixel 5");
+      expect(sdkHarness.seedDeviceId()).toBe("pixel_5");
       expect((await sdkHarness.config()).has("hw.lcd.height")).toBe(false);
 
       const userHarness = await libraryHarness({
@@ -2502,8 +2521,8 @@ describe("AndroidDriver", () => {
       const lacksPixel9 = await libraryHarness({ listing: pixelDevices });
       await lacksPixel9.provision("Pixel 9");
 
-      expect(listsPixel9.seedDeviceId()).toBe("pixel_8");
-      expect(lacksPixel9.seedDeviceId()).toBe("pixel_8");
+      expect(listsPixel9.seedDeviceId()).toBe("pixel_5");
+      expect(lacksPixel9.seedDeviceId()).toBe("pixel_5");
     });
   });
 
@@ -2889,7 +2908,7 @@ describe("AndroidDriver.create", () => {
     });
 
     expect(driver.leaseEnvironment(VIRTUAL_DEVICE)).toEqual({ ANDROID_ADB_SERVER_PORT: "5199" });
-    await driver.resolveSpec({ model: "Pixel 8", platform: "android" });
+    await driver.resolveSpec({ model: "Pixel 5", platform: "android" });
     expect(runner.calls[0]?.options).toEqual({
       env: { ...scopedEnv, ANDROID_ADB_SERVER_PORT: "5199" },
     });
@@ -3255,7 +3274,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
   it("refuses to ready a device whose serial an emulator of an AVD outside its root answers, and changes nothing on that emulator, even when the device is then shut down (#256)", async () => {
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -3324,7 +3343,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       const runner = answeringAvdPath(host.runner(), ok(answer));
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
       const spec = await driver.resolveSpec({
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -3386,7 +3405,7 @@ describe("AndroidDriver readiness on a taken console port", () => {
       const runner = answeringAvdPath(host.runner(), answer);
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
       const spec = await driver.resolveSpec({
-        model: "Pixel 8",
+        model: "Pixel 5",
         osVersion: "34",
         platform: "android",
       });
@@ -3473,7 +3492,7 @@ describe("AndroidDriver console ports across a restart", () => {
   it("readies a stopped device and one provisioned after a restart each at an address its own emulator answers (#52)", async () => {
     const spec = {
       physical: false,
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     } as const;
@@ -3503,7 +3522,7 @@ describe("AndroidDriver console ports across a restart", () => {
 });
 
 describe("AndroidDriver console port reservations", () => {
-  const spec = { physical: false, model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+  const spec = { physical: false, model: "Pixel 5", osVersion: "34", platform: "android" } as const;
 
   it("keeps a device's console port across its stops, so a call on its stopped record reaches no other device", async () => {
     const filesystem = await androidFilesystem();
@@ -3571,7 +3590,7 @@ describe("AndroidDriver console port reservations", () => {
         "-k",
         /.+/,
         "-d",
-        "pixel_8",
+        "pixel_5",
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -3615,7 +3634,7 @@ describe("AndroidDriver console port reservations", () => {
       },
     );
     const spec = await driver.resolveSpec({
-      model: "Pixel 8",
+      model: "Pixel 5",
       osVersion: "34",
       platform: "android",
     });
@@ -4058,7 +4077,7 @@ live(
       tcpProbe: new NodeTcpProbe(),
     });
     const spec = await driver.resolveSpec({
-      model: process.env.SIMLOCK_LIVE_ANDROID_MODEL ?? "Pixel 8",
+      model: process.env.SIMLOCK_LIVE_ANDROID_MODEL ?? "Pixel 5",
       platform: "android",
       ...(process.env.SIMLOCK_LIVE_ANDROID_API === undefined
         ? {}
@@ -4114,7 +4133,7 @@ async function provisionedHarness(
       "-k",
       /.+/,
       "-d",
-      "pixel_8",
+      "pixel_5",
     ]),
     processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
   ];
@@ -4184,7 +4203,7 @@ async function provisionedHarness(
     tcpProbe,
   });
   const spec = await driver.resolveSpec({
-    model: "Pixel 8",
+    model: "Pixel 5",
     osVersion: "34",
     platform: "android",
   });

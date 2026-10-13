@@ -488,7 +488,7 @@ The list is the names you set, then Simlock's own list for the platform:
 | Class     | iOS, newest first                                                                                                 | Android, newest first                                     |
 | --------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | `phone`   | iPhone 17, iPhone 16, iPhone 15, iPhone 14, iPhone 13                                                              | Pixel 9, Pixel 8, Pixel 7, Pixel 6, Medium Phone          |
-| `tablet`  | iPad Pro 11-inch (M5), iPad Pro 11-inch (M4), iPad Air 11-inch (M3), iPad (A16), iPad (10th generation)            | none                                                      |
+| `tablet`  | iPad Pro 11-inch (M5), iPad Pro 11-inch (M4), iPad Air 11-inch (M3), iPad (A16), iPad (10th generation)            | Medium Tablet                                             |
 | `watch`   | Apple Watch Series 11 (46mm), Apple Watch Series 10 (46mm), Apple Watch Series 9 (45mm)                            | Wear OS Large Round, Wear OS Small Round                  |
 | `tv`      | Apple TV 4K (3rd generation), Apple TV                                                                             | Television (1080p), Television (4K)                       |
 | `vision`  | Apple Vision Pro                                                                                                   | none                                                      |
@@ -525,8 +525,10 @@ shows when the tag or the OS rules out the first names. It never downloads.
 A class with no listed name fails the lease at once with `UNKNOWN_MODEL`,
 naming `ios.defaultModels.<class>` or `android.defaultModels.<class>`, and a
 class whose listed names pair with no installed runtime fails with
-`RUNTIME_MISSING`. Android has no `tablet` model, and setting
-`android.defaultModels.tablet` does not add one.
+`RUNTIME_MISSING`. On Android, `tablet` holds Medium Tablet only; a name you
+set in `android.defaultModels.tablet` counts only if the catalog classes it
+`tablet`. A name in `android.defaultModels.phone` that is Medium Tablet is
+skipped, as any name of another class is.
 
 ## Android emulator launch options
 

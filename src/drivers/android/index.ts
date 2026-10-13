@@ -266,13 +266,14 @@ interface SystemImage {
 export const ANDROID_PASSTHROUGH_TOOLS: readonly string[] = ["adb"];
 
 /**
- * ADR 0015 §4: the models Simlock tries for each class on Android when the operator names none
- * first, newest first. A profile is never `tablet` or `vision` on Android, so neither has a list.
+ * why: ADR 0015 §4: the models Simlock tries for each class on Android when the operator names none
+ * first, newest first. Medium Tablet is Android's only `tablet`; Android has no `vision` list.
  */
 const ANDROID_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
   auto: ["Automotive (1080p landscape)", "Automotive (1024p landscape)"],
   desktop: ["Medium Desktop", "Large Desktop"],
   phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"],
+  tablet: ["Medium Tablet"],
   tv: ["Television (1080p)", "Television (4K)"],
   watch: ["Wear OS Large Round", "Wear OS Small Round"],
 };
