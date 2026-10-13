@@ -3,7 +3,15 @@ import type { Clock } from "../../ports/index.js";
 
 const MAX_PRINCIPALS_PER_REFRESH = 100;
 
-export interface FrontMapEntry {
+export interface DeviceFacts {
+  readonly platform?: "ios" | "android";
+  readonly model?: string;
+  readonly name?: string;
+  readonly target?: string;
+  readonly deviceKey?: string;
+}
+
+export interface FrontMapEntry extends DeviceFacts {
   readonly identity: TokenIdentity;
   readonly address: string;
   readonly ttlMs: number;
@@ -12,7 +20,7 @@ export interface FrontMapEntry {
 
 export type EndedBy = "agent" | "simlock";
 
-export interface HeldView {
+export interface HeldView extends DeviceFacts {
   readonly identity: TokenIdentity;
   readonly address: string;
   readonly ttlMs: number;
@@ -25,7 +33,7 @@ export interface ListedLease {
   readonly ttlDeadline: number;
 }
 
-interface Held {
+interface Held extends DeviceFacts {
   readonly identity: TokenIdentity;
   readonly address: string;
   ttlMs: number;
@@ -63,6 +71,13 @@ export class FrontMap {
   get(leaseId: string): HeldView | undefined {
     this.#prune();
     return this.#held.get(leaseId);
+  }
+
+  liveOf(requesterId: string): readonly (HeldView & { readonly leaseId: string })[] {
+    this.#prune();
+    return [...this.#held]
+      .filter(([, held]) => held.identity.requesterId === requesterId && held.endedAt === undefined)
+      .map(([leaseId, held]) => ({ ...held, leaseId }));
   }
 
   setTtl(leaseId: string, ttlMs: number): void {

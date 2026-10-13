@@ -1219,7 +1219,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const chunks = ['{"progress":1}\n', '{"progress":2}\n', '{"done":true}\n'];
     rig.fake.streamNextCommand(chunks);
 
-    const streamed = await command(rig, "install", undefined);
+    const streamed = await command(
+      rig,
+      "install",
+      undefined,
+      {},
+      { meta: { uploadedArtifactId: "art-1" } },
+    );
 
     expect(await streamed.text()).toBe(chunks.join(""));
 

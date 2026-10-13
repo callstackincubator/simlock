@@ -7,11 +7,13 @@ import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
 import { frontReply, failure, refusal, type FrontReply } from "../shared/replies.js";
 import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
+import { asRecord } from "../shared/selectors.js";
 import {
   ALLOCATE_SCOPE_KEYS,
   REPLY_SCOPE_KEYS,
   exchange,
   leaseCall,
+  listLeases,
   releaseAgentDevice,
   releaseSimlock,
   relay,
@@ -55,12 +57,6 @@ function notPlain(params: Record<string, unknown>): boolean {
 
 function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply | undefined {
   if (!present(fields.platform)) return refusal("refused: name --platform ios or android");
-  if (fields.platform !== "ios" && fields.platform !== "android") {
-    return refusal("refused: only iOS and Android");
-  }
-  if (present(fields.udid) || present(fields.serial)) {
-    return refusal("refused: simlock picks the device");
-  }
   return undefined;
 }
 
@@ -284,7 +280,10 @@ async function keepOrRelease(
       address,
       deadline: grant.lease.ttlDeadline,
       identity,
+      model: grant.device.spec.model,
+      platform: plan.platform,
       ttlMs: grant.lease.ttlMs,
+      ...replyFacts(reading.result),
     });
     return relay(reply);
   }
@@ -319,22 +318,18 @@ async function settleNoReply(
   if (!holds) await releaseSimlock(context, identity, plan.leaseId);
 }
 
-const LIST_TIMEOUT_MS = 5_000;
+function replyFacts(result: Record<string, unknown>) {
+  const device = asRecord(result["device"]);
+  const deviceKey = asRecord(result["lease"])?.["deviceKey"];
+  return {
+    ...(device === undefined ? {} : { target: stringOr(device["target"], "mobile") }),
+    ...(typeof device?.["name"] === "string" ? { name: device["name"] } : {}),
+    ...(typeof deviceKey === "string" && deviceKey.length >= 1 && deviceKey.length <= 128
+      ? { deviceKey }
+      : {}),
+  };
+}
 
-async function listLeases(context: FrontContext, identity: TokenIdentity) {
-  let timer: ReturnType<FrontContext["clock"]["setTimer"]> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = context.clock.setTimer(LIST_TIMEOUT_MS, () =>
-      reject(new Error("lease.list timed out")),
-    );
-  });
-  try {
-    const { leases } = await Promise.race([
-      context.dispatch("lease.list", {}, buildHttpSession(identity)),
-      timeout,
-    ]);
-    return leases.map((lease) => ({ id: lease.id, ttlDeadline: lease.ttlDeadline }));
-  } finally {
-    if (timer !== undefined) context.clock.cancel(timer);
-  }
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
 }

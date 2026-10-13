@@ -25,7 +25,9 @@ export type RpcRead =
   | { readonly kind: "too-large" }
   | { readonly kind: "malformed" };
 
-async function readBounded(body: ReadableStream<Uint8Array> | null): Promise<string | undefined> {
+export async function readBounded(
+  body: ReadableStream<Uint8Array> | null,
+): Promise<string | undefined> {
   if (body === null) return "";
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -66,9 +68,14 @@ export async function readRpcBody(request: Request): Promise<RpcRead> {
 
 export type CallClass = "allocate" | "heartbeat" | "release" | "wrapped-lease" | "command";
 
+const METHOD_SPELLING = /^agent[_-]device\./;
 const LEASE_METHOD = /^agent[_-]device\.lease\.(allocate|heartbeat|release)$/;
 const COMMAND_METHOD = /^agent[_-]device\.command$/;
 const WRAPPED_LEASE = /^lease_(allocate|heartbeat|release)$/;
+
+export function methodName(method: string): string | undefined {
+  return METHOD_SPELLING.test(method) ? method.replace(METHOD_SPELLING, "") : undefined;
+}
 
 export function classifyCall(method: string, params: Record<string, unknown>): CallClass {
   const lease = LEASE_METHOD.exec(method)?.[1];

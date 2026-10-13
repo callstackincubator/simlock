@@ -5,6 +5,7 @@ import { FrontMap } from "./front/front-map.js";
 import { createFront } from "./front/front.js";
 import { InProcessHostLink, type HostLink } from "./front/host-link.js";
 import { Renewals } from "./front/renewals.js";
+import type { AgentDevicePlatform } from "./host/agent-device-supervisor.js";
 import { AgentDeviceHost } from "./host/host.js";
 import { AgentDeviceLeaseEnd, ReleaseScopeRecord } from "./host/lease-end.js";
 import type { AgentDeviceUpstream } from "./host/upstream.js";
@@ -27,11 +28,12 @@ export interface AgentDeviceEdgeParts {
 export function createAgentDeviceEdgeParts(
   upstream: AgentDeviceUpstream,
   clock: Clock,
+  platforms: readonly AgentDevicePlatform[],
 ): AgentDeviceEdgeParts {
   const record = new ReleaseScopeRecord();
   return {
     leaseEnd: new AgentDeviceLeaseEnd(upstream, record),
-    link: new InProcessHostLink(new AgentDeviceHost(upstream, record)),
+    link: new InProcessHostLink(new AgentDeviceHost(upstream, platforms, record)),
     map: new FrontMap(clock),
     renewals: new Renewals(clock),
   };

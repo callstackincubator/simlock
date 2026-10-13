@@ -124,3 +124,23 @@ export async function releaseAgentDevice(
     identity,
   );
 }
+
+const LIST_TIMEOUT_MS = 5_000;
+
+export async function listLeases(context: FrontContext, identity: TokenIdentity) {
+  let timer: ReturnType<FrontContext["clock"]["setTimer"]> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = context.clock.setTimer(LIST_TIMEOUT_MS, () =>
+      reject(new Error("lease.list timed out")),
+    );
+  });
+  try {
+    const { leases } = await Promise.race([
+      context.dispatch("lease.list", {}, buildHttpSession(identity)),
+      timeout,
+    ]);
+    return leases.map((lease) => ({ id: lease.id, ttlDeadline: lease.ttlDeadline }));
+  } finally {
+    if (timer !== undefined) context.clock.cancel(timer);
+  }
+}

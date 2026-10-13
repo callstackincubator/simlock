@@ -21,7 +21,7 @@ describe("the agent-device host", () => {
       current: () => running,
       fetch: async () => new Response(),
     } as unknown as AgentDeviceUpstream;
-    const host = new AgentDeviceHost(upstream);
+    const host = new AgentDeviceHost(upstream, ["ios"]);
 
     expect(await host.status()).toEqual({
       reason: expect.stringMatching(/^could not load @agent-device\/proxy: ./),
@@ -35,7 +35,7 @@ describe("the agent-device host", () => {
       fetch: async () => new Response(),
     } as unknown as AgentDeviceUpstream;
 
-    expect(await new AgentDeviceHost(upstream).status()).toEqual({
+    expect(await new AgentDeviceHost(upstream, ["ios"]).status()).toEqual({
       reason: "agent-device is stopped",
       state: "unavailable",
     });

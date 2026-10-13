@@ -144,7 +144,7 @@ describe("the agent-device host's authenticate", () => {
   };
 
   it("returns the tagged identity's principal as the tenant, and null for a request the front did not tag", () => {
-    const host = new AgentDeviceHost(upstream);
+    const host = new AgentDeviceHost(upstream, ["ios"]);
     const tagged = new Request("http://worker/v1/agent-device/rpc");
     host.tag(tagged, { requesterId: "tok_agent", role: "agent" });
 

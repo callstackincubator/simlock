@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { TokenIdentity } from "../../http/token-store.js";
+import type { AgentDevicePlatform } from "./agent-device-supervisor.js";
 import { FRONT_PREFIX, PROXY_BASE_PATH } from "../shared/paths.js";
 import { recordingFetch, ReleaseScopeRecord } from "./lease-end.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
@@ -13,7 +14,11 @@ const TAG_HEADER = "x-simlock-front-tag";
 const PREFLIGHT_PATH = `${PROXY_BASE_PATH}/upload/preflight`;
 
 export type HostStatus =
-  | { readonly state: "running"; readonly leaseMaxTtlMs: number }
+  | {
+      readonly state: "running";
+      readonly leaseMaxTtlMs: number;
+      readonly platforms: readonly AgentDevicePlatform[];
+    }
   | { readonly state: "unavailable"; readonly reason: string };
 
 function stripBodyHeaders(headers: Headers): Headers {
@@ -33,6 +38,7 @@ export class AgentDeviceHost {
 
   constructor(
     readonly upstream: AgentDeviceUpstream,
+    readonly platforms: readonly AgentDevicePlatform[],
     record: ReleaseScopeRecord = new ReleaseScopeRecord(),
   ) {
     this.#upstreamFetch = recordingFetch(upstream, record);
@@ -43,7 +49,11 @@ export class AgentDeviceHost {
     if (current.state === "unavailable") return current;
     await this.#load();
     if (this.#loadError !== undefined) return { reason: this.#loadError, state: "unavailable" };
-    return { leaseMaxTtlMs: current.leaseMaxTtlMs, state: "running" };
+    return {
+      leaseMaxTtlMs: current.leaseMaxTtlMs,
+      platforms: this.platforms,
+      state: "running",
+    };
   }
 
   tag(request: Request, identity: TokenIdentity): string {

@@ -2,17 +2,22 @@ import type { HttpMount } from "../../http/app.js";
 import type { TokenIdentity } from "../../http/token-store.js";
 import { FRONT_MOUNT, FRONT_PREFIX } from "../shared/paths.js";
 import { failure, frontReply, notAvailable, refusal } from "../shared/replies.js";
+import { isKnownRoute } from "../shared/routes.js";
+import { commandName, asRecord } from "../shared/selectors.js";
 import {
   classifyCall,
   commandLeaseId,
+  methodName,
   readRpcBody,
   type CallClass,
   type RpcRead,
 } from "../shared/rpc.js";
 import { allocate } from "./allocate.js";
 import type { FrontContext } from "./context.js";
+import { filterDevices } from "./devices-filter.js";
 import { heartbeat } from "./heartbeat.js";
 import { release } from "./release.js";
+import { checkRequest } from "./request-rules.js";
 
 type RpcRequest = RpcRead & { readonly kind: "request" };
 
@@ -66,7 +71,15 @@ async function handleRpc(
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
   }
-  return routeCall(context, { identity, kind, leaseMaxTtlMs: status.leaseMaxTtlMs, read, request });
+  const checked = await checkRequest(context, identity, read, status.platforms);
+  if (checked.kind === "refused") return frontReply(checked.reply, read);
+  return routeCall(context, {
+    identity,
+    kind,
+    leaseMaxTtlMs: status.leaseMaxTtlMs,
+    read: checked.read,
+    request,
+  });
 }
 
 async function routeCall(
@@ -90,7 +103,7 @@ async function routeCall(
   }
   if (kind === "release") return release(context, identity, read, forwarded);
   const leaseId = kind === "command" ? commandLeaseId(read.params) : undefined;
-  if (leaseId === undefined) return passThrough(context, forwarded, identity, read);
+  if (leaseId === undefined) return forwardCommand(context, forwarded, identity, read);
   return runCommand(context, request, identity, read, leaseId);
 }
 
@@ -105,7 +118,7 @@ async function runCommand(
   request.signal.addEventListener("abort", end, { once: true });
   let response: Response;
   try {
-    response = await passThrough(context, carry(request, read.text), identity, read);
+    response = await forwardCommand(context, carry(request, read.text), identity, read);
   } catch (error) {
     end();
     throw error;
@@ -145,6 +158,20 @@ function untilBodyEnds(response: Response, end: () => void): Response {
   });
 }
 
+// why: agent-device answers `devices` with everything its daemon sees, so the answer is cut down before the CLI gets it.
+async function forwardCommand(
+  context: FrontContext,
+  request: Request,
+  identity: TokenIdentity,
+  read: RpcRequest,
+): Promise<Response> {
+  const response = await passThrough(context, request, identity, read);
+  const isDevices =
+    methodName(read.method) === "command" &&
+    commandName(asRecord(read.params)?.["command"]) === "devices";
+  return isDevices ? filterDevices(context, identity, response, read) : response;
+}
+
 async function passThrough(
   context: FrontContext,
   request: Request,
@@ -169,6 +196,13 @@ export function createFront(context: FrontContext): HttpMount {
       if (isRpc) return handleRpc(context, request, identity);
       const status = await context.link.status();
       if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
+      const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
+      if (!isKnownRoute(request.method, path)) {
+        return frontReply(
+          refusal(`refused: unknown route ${request.method} ${path}`, 404),
+          undefined,
+        );
+      }
       return passThrough(context, request, identity, undefined);
     },
     prefix: FRONT_MOUNT,

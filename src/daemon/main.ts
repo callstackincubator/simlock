@@ -322,6 +322,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     ? createAgentDeviceEdgeParts(
         options.agentDeviceUpstream ?? new SupervisorAgentDeviceUpstream(agentDevice),
         clock,
+        drivers.map((driver) => driver.platform),
       )
     : undefined;
   // Builds leasing on top of core (ADR 0018 §2).
