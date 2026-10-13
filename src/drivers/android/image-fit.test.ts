@@ -169,7 +169,7 @@ describe("fits", () => {
     expect(fits(phone, image("19", "tablet"))).toBe(false);
   });
 
-  it("a devices.xml profile avdmanager did not list fits every image", () => {
+  it("a devices.xml profile avdmanager did not list, with no tag-id, fits phone images only", () => {
     const properties: DeviceProfile = {
       hardwareProperties: {},
       kind: "properties",
@@ -177,8 +177,9 @@ describe("fits", () => {
       names: ["Legacy"],
     };
 
-    for (const tag of ["android-tv", "google_apis_playstore", "tablet", "android-wear"]) {
-      expect(fits(properties, image("Baklava", tag))).toBe(true);
+    expect(fits(properties, image("Baklava", "google_apis_playstore"))).toBe(true);
+    for (const tag of ["android-tv", "tablet", "android-wear"]) {
+      expect(fits(properties, image("Baklava", tag))).toBe(false);
     }
   });
 });
