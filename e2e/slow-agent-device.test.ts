@@ -23,141 +23,35 @@ import {
   waitForAgentDevice,
   waitFor,
   withSharedDaemon,
+  ANDROID,
+  FIRST_SNAPSHOT,
+  IOS,
+  failureText,
+  hasIosRuntime,
+  listDevices,
+  listLeases,
+  listRequests,
+  ok,
+  setLimits,
+  succeeds,
+  waitForFree,
+  warmUp,
   type Agent,
   type AgentDeviceResult,
+  type RequestRow,
+  type Target,
   type RecordedEvent,
   type SharedTestEnv,
 } from "./helpers/index.js";
-import { REPO_ROOT } from "./helpers/repo-root.js";
 
 const AGENT_DEVICE = process.env.SIMLOCK_E2E_AGENT_DEVICE;
-
-function succeeds(file: string, args: readonly string[]): boolean {
-  try {
-    execFileSync(file, args, { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasIosRuntime(): boolean {
-  if (process.platform !== "darwin" || process.arch !== "arm64") return false;
-  try {
-    return execFileSync("xcrun", ["simctl", "list", "runtimes"], { encoding: "utf8" }).includes(
-      "iOS",
-    );
-  } catch {
-    return false;
-  }
-}
 
 const iosAvailable = hasIosRuntime();
 const androidAvailable = succeeds("sh", ["-c", "command -v emulator && command -v adb"]);
 
-interface Target {
-  readonly platform: "ios" | "android";
-  readonly bundleId: string;
-  readonly app: string;
-  readonly deviceFlag: "--udid" | "--serial";
-  readonly forbiddenFlags: (deviceId: string, dir: string) => string[][];
-}
-
-const IOS: Target = {
-  platform: "ios",
-  bundleId: "com.callstack.appduct.playgroundnative",
-  app: join(REPO_ROOT, "e2e/fixtures/appduct/ios/AppductPlayground.app"),
-  deviceFlag: "--udid",
-  forbiddenFlags: (_id, dir) => [["--ios-simulator-device-set", dir]],
-};
-
-const ANDROID: Target = {
-  platform: "android",
-  bundleId: "com.callstack.appduct.playground",
-  app: join(REPO_ROOT, "e2e/fixtures/appduct/android/AppductPlayground.apk"),
-  deviceFlag: "--serial",
-  forbiddenFlags: (id, dir) => [
-    ["--ios-simulator-device-set", dir],
-    ["--android-device-allowlist", id],
-  ],
-};
-
-interface DeviceRow {
-  readonly id: string;
-  readonly driverDeviceId: string;
-  // why: the address agent-device names the device by (an iOS UDID, an Android adb serial); on Android it is not the driver's device id.
-  readonly address: string;
-  readonly state: string;
-}
-interface LeaseRow {
-  readonly id: string;
-  readonly deviceId: string;
-  readonly ownerId: string;
-  readonly requesterId: string;
-}
-interface RequestRow {
-  readonly requesterId: string;
-}
-
-// why: the first snapshot on a fresh simulator starts the XCTest runner, which agent-device gives 45 s to start (RUNNER_STARTUP_TIMEOUT_MS in packages/platform-apple/src/runner/runner-startup-transport.ts), so with the command's own 45 s it can pass the CLI's 60 s default and cut off agent-device's answer.
-const FIRST_SNAPSHOT = { timeout: 180_000 } as const;
-
 // why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
 function progress(line: string): void {
   writeSync(2, `${new Date().toISOString()} ${line}\n`);
-}
-
-async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
-  const result = await env.cli(["list", flag], { timeout: 60_000 });
-  expect(result.code, `simlock list ${flag}: ${result.stderr}`).toBe(0);
-  return result.json as T[];
-}
-
-const listDevices = (env: SharedTestEnv) => listRows<DeviceRow>(env, "--devices");
-const listLeases = (env: SharedTestEnv) => listRows<LeaseRow>(env, "--leases");
-
-// why: `simlock list --requests` prints one text line per request (`Request <id>: <requester>[ on <worker>], ...`) or "No requests are waiting.", never JSON.
-async function listRequests(env: SharedTestEnv): Promise<RequestRow[]> {
-  const result = await env.cli(["list", "--requests"], { timeout: 60_000 });
-  expect(result.code, `simlock list --requests: ${result.stderr}`).toBe(0);
-  return result.stdout
-    .split("\n")
-    .map((line) => /^Request \S+: ([^\s,]+)/.exec(line))
-    .filter((match) => match !== null)
-    .map((match) => ({ requesterId: match[1] as string }));
-}
-
-async function waitForFree(env: SharedTestEnv): Promise<void> {
-  let observed = "nothing read yet";
-  await waitFor(
-    async () => {
-      const [devices, leases, requests] = await Promise.all([
-        listDevices(env),
-        listLeases(env),
-        listRequests(env),
-      ]);
-      observed = `devices ${devices.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
-      return (
-        devices.length > 0 &&
-        devices.every((device) => device.state === "ready") &&
-        leases.length === 0 &&
-        requests.length === 0
-      );
-    },
-    {
-      timeout: 240_000,
-      interval: 1_000,
-      label: () => `every device ready, no lease, no request; last observed: ${observed}`,
-    },
-  );
-}
-
-function ok(result: AgentDeviceResult): void {
-  expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
-}
-
-function failureText(result: AgentDeviceResult): string {
-  return result.error?.message ?? `${result.stdout}\n${result.stderr}`;
 }
 
 function refused(result: AgentDeviceResult): void {
@@ -243,39 +137,6 @@ function defineSuite(target: Target): void {
     await waitForAgentDevice(env, probe.secret);
   }
 
-  async function setLimits(devices: number): Promise<void> {
-    const config = JSON.parse(await readFile(env.configPath, "utf8")) as {
-      capacity: { config: { limits: Record<string, unknown> } };
-    };
-    config.capacity.config.limits[platform] = { maxDevices: devices, maxRunning: devices };
-    await writeFile(env.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    await env.restart();
-    await awaitAgentDevice();
-  }
-
-  async function warmUp(count: number): Promise<void> {
-    const ids: string[] = [];
-    for (let index = 1; index <= count; index += 1) {
-      const lease = await env.cli(
-        ["lease", "--detach", "--platform", platform, "--agent-id", `warmup-${index}`],
-        { timeout: 330_000 },
-      );
-      expect(lease.code, lease.stderr).toBe(0);
-      ids.push((lease.json as { lease: { id: string } }).lease.id);
-    }
-    for (const id of ids) {
-      const released = await env.cli(["release", id], { timeout: 60_000 });
-      expect(released.code, released.stderr).toBe(0);
-    }
-    await waitFor(
-      async () => {
-        const devices = await listDevices(env);
-        return devices.length >= count && devices.every((device) => device.state === "ready");
-      },
-      { timeout: 240_000, interval: 1_000, label: "warm-up devices ready" },
-    );
-  }
-
   beforeAll(async () => {
     const pinned = await assertPinnedAgentDevice(platform);
     env = await withSharedDaemon({
@@ -290,7 +151,7 @@ function defineSuite(target: Target): void {
     });
     sharedEnvs.add(env);
     await awaitAgentDevice();
-    await warmUp(1);
+    await warmUp(env, target, 1);
   }, 420_000);
 
   afterAll(async () => {
@@ -695,12 +556,14 @@ function defineSuite(target: Target): void {
 
   describe("with the device limit raised to 2", () => {
     beforeAll(async () => {
-      await setLimits(2);
-      await warmUp(2);
+      await setLimits(env, target, 2);
+      await awaitAgentDevice();
+      await warmUp(env, target, 2);
     }, 420_000);
 
     afterAll(async () => {
-      await setLimits(1);
+      await setLimits(env, target, 1);
+      await awaitAgentDevice();
     }, 420_000);
 
     it(

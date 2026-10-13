@@ -20,3 +20,20 @@ export { events } from "./events.js";
 export type { RecordedEvent } from "./events.js";
 export { waitForDeviceState, waitForLeaseCount } from "./status.js";
 export type { CliResult } from "./cli.js";
+export {
+  ANDROID,
+  FIRST_SNAPSHOT,
+  IOS,
+  failureText,
+  hasIosRuntime,
+  listDevices,
+  listLeases,
+  listRequests,
+  listRows,
+  ok,
+  setLimits,
+  succeeds,
+  waitForFree,
+  warmUp,
+} from "./agent-device-targets.js";
+export type { DeviceRow, LeaseRow, RequestRow, Target } from "./agent-device-targets.js";
