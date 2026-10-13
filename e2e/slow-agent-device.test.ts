@@ -1,8 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { writeSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vitest";
 
 import {
   assertPinnedAgentDevice,
@@ -86,6 +96,11 @@ interface RequestRow {
   readonly requesterId: string;
 }
 
+// why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
+function progress(line: string): void {
+  writeSync(2, `${new Date().toISOString()} ${line}\n`);
+}
+
 async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
   const result = await env.cli(["list", flag], { timeout: 60_000 });
   expect(result.code, `simlock list ${flag}: ${result.stderr}`).toBe(0);
@@ -94,9 +109,20 @@ async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
 
 const listDevices = (env: SharedTestEnv) => listRows<DeviceRow>(env, "--devices");
 const listLeases = (env: SharedTestEnv) => listRows<LeaseRow>(env, "--leases");
-const listRequests = (env: SharedTestEnv) => listRows<RequestRow>(env, "--requests");
+
+// why: `simlock list --requests` prints one text line per request (`Request <id>: <requester>[ on <worker>], ...`) or "No requests are waiting.", never JSON.
+async function listRequests(env: SharedTestEnv): Promise<RequestRow[]> {
+  const result = await env.cli(["list", "--requests"], { timeout: 60_000 });
+  expect(result.code, `simlock list --requests: ${result.stderr}`).toBe(0);
+  return result.stdout
+    .split("\n")
+    .map((line) => /^Request \S+: ([^\s,]+)/.exec(line))
+    .filter((match) => match !== null)
+    .map((match) => ({ requesterId: match[1] as string }));
+}
 
 async function waitForFree(env: SharedTestEnv): Promise<void> {
+  let observed = "nothing read yet";
   await waitFor(
     async () => {
       const [devices, leases, requests] = await Promise.all([
@@ -104,6 +130,7 @@ async function waitForFree(env: SharedTestEnv): Promise<void> {
         listLeases(env),
         listRequests(env),
       ]);
+      observed = `devices ${devices.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
       return (
         devices.length > 0 &&
         devices.every((device) => device.state === "ready") &&
@@ -111,7 +138,11 @@ async function waitForFree(env: SharedTestEnv): Promise<void> {
         requests.length === 0
       );
     },
-    { timeout: 240_000, interval: 1_000, label: "every device ready, no lease, no request" },
+    {
+      timeout: 240_000,
+      interval: 1_000,
+      label: () => `every device ready, no lease, no request; last observed: ${observed}`,
+    },
   );
 }
 
@@ -260,6 +291,16 @@ function defineSuite(target: Target): void {
     await env?.teardown();
     sharedEnvs.delete(env);
   }, 120_000);
+
+  beforeEach((context) => {
+    progress(`START ${platform}: ${context.task.name.slice(0, 100)}`);
+  });
+
+  afterEach((context) => {
+    progress(
+      `END ${platform} (${context.task.result?.state ?? "unknown"}): ${context.task.name.slice(0, 100)}`,
+    );
+  });
 
   afterEach(async () => {
     await cleanupAgents();
