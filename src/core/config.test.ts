@@ -1773,6 +1773,24 @@ describe("loadConfig modes (ADR 0005)", () => {
     );
   });
 
+  it("reads agentDevice.enabled and leaseTtlCapMs on a gateway without a warning, and warns that it ignores agentDevice.command", async () => {
+    const warn = vi.fn();
+
+    const config = await load(
+      {
+        agentDevice: { enabled: true, leaseTtlCapMs: 10_000 },
+        mode: "gateway",
+      },
+      { warn },
+    );
+    expect(config.agentDevice).toMatchObject({ enabled: true, leaseTtlCapMs: 10_000 });
+    expect(warn).not.toHaveBeenCalled();
+
+    await load({ agentDevice: { command: "elsewhere" }, mode: "gateway" }, { warn });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice.command"'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice"'));
+  });
+
   it("says nothing about worker keys on a worker, which is every daemon today", async () => {
     const warn = vi.fn();
     await load({ capacity: { strategy: "fixed", config: { maxRunning: 3 } } }, { warn });
@@ -2021,14 +2039,5 @@ describe("agentDevice config", () => {
     const parsed = configSchema.parse(config) as unknown as Config;
     expect(dottedValue(parsed, "agentDevice.enabled")).toBe(true);
     expect(dottedValue(parsed, "agentDevice.command")).toBe("ad");
-  });
-
-  it("loads a gateway config with agentDevice and warns that the key is worker-only", async () => {
-    const warn = vi.fn();
-
-    const config = await loadWith({ agentDevice: { enabled: true }, mode: "gateway" }, warn);
-
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice"'));
-    expect(dottedValue(config, "agentDevice.enabled")).toBe(true);
   });
 });

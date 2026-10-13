@@ -43,6 +43,8 @@ const holderCannot = "the worker holding this lease cannot serve agent-device";
 const missingMessage =
   "No worker connected to this gateway can serve agent-device for this request";
 const tooOld = "refused: this agent-device is too old to use through a gateway; update it";
+// why: shorter than the gateway's 10 s call timeout, so the read can finish once the fake clock moves past it.
+const slowCatalogMs = 8_000;
 const defaultTtlMs = 600_000;
 const gatewayMaxTtlMs = 1_800_000;
 const workerMaxTtlMs = 50_000_000;
@@ -139,7 +141,7 @@ function driverFor(spec: WorkerSpec, clock: FakeClock): FakeDriver {
       availableOsVersions: ["35"],
       clock,
       defaultModels: { phone: [model] },
-      ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: 30_000 } } : {}),
+      ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: slowCatalogMs } } : {}),
       knownModels: [model],
       modelClasses: { [model]: "phone" },
       platform: "android",
@@ -150,7 +152,7 @@ function driverFor(spec: WorkerSpec, clock: FakeClock): FakeDriver {
     availableOsVersions: ["26.5"],
     clock,
     defaultModels: { phone: [model] },
-    ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: 30_000 } } : {}),
+    ...(spec.slowCatalog === true ? { latencyMs: { listCatalog: slowCatalogMs } } : {}),
     knownModels: [model],
     modelClasses: { [model]: "phone" },
     platform: "ios",
@@ -609,10 +611,15 @@ function allocatesReceived(member: Member, n?: number) {
     .filter((request) => n === undefined || request.params?.["leaseId"] === hex(n));
 }
 
-async function runningCommand(rig: Rig, member: Member, n: number) {
+async function runningCommand(
+  rig: Rig,
+  member: Member,
+  n: number,
+  options: Omit<SendOptions, "body"> = {},
+) {
   member.fake.holdCommand();
   const before = member.fake.rpcRequests("agent_device.command").length;
-  const running = track(command(rig, "snapshot", n));
+  const running = track(command(rig, "snapshot", n, options));
   await expect.poll(() => member.fake.rpcRequests("agent_device.command").length).toBe(before + 1);
   return running;
 }
@@ -724,7 +731,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const unread = await send(rig, "/health");
     expect(await unread.text()).toContain(`${notAvailable}${noWorker}`);
 
-    await advance(rig, 30_000, 10_000);
+    await advance(rig, 9_000, 1_000);
     await vi.waitFor(async () => expect((await send(rig, "/health")).status).toBe(200), {
       timeout: 10_000,
     });
@@ -1152,7 +1159,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 1 }] });
     const member = first(rig);
     await granted(rig, 1, { ttlMs: 30_000 }, { token: secrets.two });
-    await runningCommand(rig, member, 1).catch(() => undefined);
+    await runningCommand(rig, member, 1, { token: secrets.two });
     const tap = tapDispatch(rig.gateway);
     await advance(rig, 20_000, 5_000);
     const renewedBefore = tap.operations.filter((name) => name === "lease.renew").length;

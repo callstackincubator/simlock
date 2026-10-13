@@ -1489,8 +1489,31 @@ agent-device snapshot
 agent-device close
 ```
 
-With `agentDevice.enabled` `false`, and on a gateway, every `/v1/agent-device`
-URL answers `404`.
+With `agentDevice.enabled` `false` or unset, on a worker or a gateway, every
+`/v1/agent-device` URL answers `404`.
+
+A **gateway** with `agentDevice.enabled` serves the same URL, and the CLI is
+pointed at the gateway the same way. `open` lands only on a worker whose
+agent-device is available, and the commands, heartbeats and `close` of that
+lease go to the same worker. An agent on a gateway never shares an
+agent-device session with an agent on a worker's own tokens. Through a gateway:
+
+- `GET /health` answers the proxy's health from a worker whose agent-device is
+  available. With no such worker it answers `agent-device is not available on
+  this simlock: no worker connected to this gateway can serve agent-device`
+  with status 200.
+- A worker that is draining takes no new `open`, and keeps serving the leases
+  it holds.
+- A request that names no lease, other than `/health`, is refused with
+  `refused: this agent-device is too old to use through a gateway; update it`.
+  That includes `devices`, uploads, artifact downloads and diagnostics.
+- A request that names a lease the token does not hold, or the gateway does not
+  know, is refused with `refused: lease <id> is not one of yours on this
+  gateway` (status 403). A lease `simlock release --all` ended stays known for
+  one `lease.maxTtlMs` afterwards, so its next heartbeat answers `lease ended
+  by simlock; run disconnect, then open`.
+- A token whose ID is too long for the gateway to pass on is refused with
+  `refused: this token cannot be used through a gateway`.
 
 - **Every route needs the Simlock token.** No token is `401`, a worker join
   token is `403`, and so is an `operator` token, with
@@ -1535,7 +1558,8 @@ Messages the route prints. The agent-device CLI reads the message in the body
 the status.
 
 - `agent-device is not available on this simlock: <reason>`: agent-device is
-  turned on but missing, too old, starting or crashed. The rest of Simlock
+  turned on but missing, too old, starting or crashed (on a gateway: no
+  connected worker can serve it, or the worker holding the lease cannot). The rest of Simlock
   works as before. `GET /health` answers it with status 200, because the
   agent-device CLI treats a `/health` status of 500 or more as an unreachable
   daemon and would print only `Remote daemon is unavailable`; the first

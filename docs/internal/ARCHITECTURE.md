@@ -202,7 +202,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
 - **What a gateway does not do.** It starts no drivers, validates no device
   roots, and runs no reaper, health monitor or capacity strategy; of the
   config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`,
-  `eventLog.*` and `gateway.*` (worker-only keys warn and are ignored). It always listens
+  `eventLog.*`, `gateway.*` and `agentDevice.*` (worker-only keys warn and are ignored). It always listens
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run`,

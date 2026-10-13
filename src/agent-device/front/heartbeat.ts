@@ -10,6 +10,7 @@ import {
 import {
   REPLY_SCOPE_KEYS,
   exchange,
+  heldForAnother,
   releaseAgentDevice,
   releaseSimlock,
   relay,
@@ -142,5 +143,8 @@ export async function heartbeat(
   }
   if (leaseGoneReason(reading) === undefined) return relay(reply);
   if (entry?.endedBy === "agent") return relay(reply);
+  if (entry === undefined && (await heldForAnother(context, identity, leaseId))) {
+    return relay(reply);
+  }
   return releaseOurs(context, identity, leaseId, call, entry !== undefined);
 }

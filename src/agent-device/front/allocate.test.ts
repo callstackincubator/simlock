@@ -32,10 +32,11 @@ function setUp() {
     if (handler === undefined) throw new Error(`unexpected ${operation}`);
     return handler(input, session);
   }) as unknown as HttpDispatch;
+  const link = { value: { forward: vi.fn(), status: vi.fn() } as Record<string, unknown> };
   const context = {
     clock,
     dispatch,
-    link: { forward: vi.fn(), status: vi.fn() },
+    link: link.value,
     logger: new NoopLogger(),
     map,
   } as unknown as FrontContext;
@@ -54,7 +55,7 @@ function setUp() {
     });
   const requests = () => calls.filter((call) => call.operation === "lease.request");
   const cancels = () => calls.filter((call) => call.operation === "lease.cancel");
-  return { cancels, clock, handlers, hangUp, map, requests, run };
+  return { cancels, clock, handlers, hangUp, link: link.value, map, requests, run };
 }
 
 // why: the request must stay open until the test admits and settles it, to hang up in between.
@@ -151,5 +152,41 @@ describe("the allocate front", () => {
 
     expect(rig.requests()).toHaveLength(1);
     expect(rig.map.get("old")?.endedAt).toBeUndefined();
+  });
+
+  it("sends the host link's leaseRequires on the lease request, and none when the link names none", async () => {
+    const plain = setUp();
+    await plain.run();
+    const needing = setUp();
+    needing.link["leaseRequires"] = ["agent-device"];
+    await needing.run();
+
+    expect(plain.requests()[0]?.input).not.toHaveProperty("requires");
+    expect(needing.requests()[0]?.input).toMatchObject({ requires: ["agent-device"] });
+  });
+
+  it("releases the simlock lease and answers notAvailable when the link names no ceiling for the granted lease", async () => {
+    const rig = setUp();
+    const releases: Record<string, unknown>[] = [];
+    rig.handlers["lease.request"] = async () => ({
+      device: { address: "udid-1", spec: { model: "iPhone 16" } },
+      lease: { ttlDeadline: 5_000, ttlMs: 60_000 },
+    });
+    rig.handlers["lease.release"] = async (input) => {
+      releases.push(input);
+      return {};
+    };
+    (rig.link["status"] as ReturnType<typeof vi.fn>).mockResolvedValue({
+      platforms: ["ios"],
+      state: "running",
+    });
+
+    const answer = await rig.run();
+
+    expect(releases).toEqual([{ leaseId }]);
+    expect(await answer?.text()).toContain(
+      "agent-device is not available on this simlock: agent-device reported no lease ceiling for this lease",
+    );
+    expect(rig.link["forward"]).not.toHaveBeenCalled();
   });
 });

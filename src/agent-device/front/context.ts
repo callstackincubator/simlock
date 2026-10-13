@@ -138,6 +138,21 @@ export async function releaseAgentDevice(
   );
 }
 
+// why: a lease the token holds under another requester than its own id was made by something else (a gateway, for a worker's token of the same name), so this front has no claim to end it.
+export async function heldForAnother(
+  context: FrontContext,
+  identity: TokenIdentity,
+  leaseId: string,
+): Promise<boolean> {
+  try {
+    const { leases } = await context.dispatch("lease.list", {}, buildHttpSession(identity));
+    const found = leases.find((lease) => lease.id === leaseId);
+    return found !== undefined && found.requesterId !== leaseId;
+  } catch {
+    return false;
+  }
+}
+
 const LIST_TIMEOUT_MS = 5_000;
 
 export async function listLeases(context: FrontContext, identity: TokenIdentity) {

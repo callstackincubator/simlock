@@ -521,14 +521,14 @@ async function runningCommand(rig: Rig, n: number, options: Omit<SendOptions, "b
 }
 
 describe("the agent-device front, through the whole worker daemon", () => {
-  it("with agentDevice.enabled false, and on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
+  it("with agentDevice.enabled false, and unset on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
     const enabled = await setUp();
     expect((await send(enabled, "/health")).status).toBe(200);
 
     const off = await setUp({ enabled: false });
     expect((await send(off, "/health")).status).toBe(404);
 
-    const gateway = await setUp({ gatewayMode: true });
+    const gateway = await setUp({ enabled: "unset", gatewayMode: true });
     expect((await send(gateway, "/health")).status).toBe(404);
   });
 

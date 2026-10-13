@@ -43,6 +43,33 @@ function entry(overrides: Partial<Parameters<FleetLeaseIndex["add"]>[0]> = {}) {
 }
 
 describe("FleetLeaseIndex", () => {
+  describe("onRemoved", () => {
+    it("tells the listener each entry the index drops, by release, by a worker's relayed fact and by forgetting the worker", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      const dropped: string[] = [];
+      index.onRemoved((gone) => dropped.push(gone.gatewayLeaseId));
+      index.add(entry({ gatewayLeaseId: "a", workerLeaseId: "la" }));
+      index.add(entry({ gatewayLeaseId: "b", workerLeaseId: "lb" }));
+      index.add(entry({ gatewayLeaseId: "c", workerLeaseId: "lc", workerId: "wrk_2" }));
+
+      index.remove("a");
+      index.removeByWorkerLease("wrk_1", "lb");
+      index.forgetWorker("wrk_2");
+
+      expect(dropped).toEqual(["a", "b", "c"]);
+    });
+
+    it("tells the listener nothing for a lease the index never held", () => {
+      const index = new FleetLeaseIndex(PREFIX);
+      const dropped: string[] = [];
+      index.onRemoved((gone) => dropped.push(gone.gatewayLeaseId));
+
+      index.remove("missing");
+
+      expect(dropped).toEqual([]);
+    });
+  });
+
   describe("add / resolve / lookups", () => {
     it("resolves an entry by gateway id, by (workerId, workerLeaseId), by ownerId and by requesterId", () => {
       const index = new FleetLeaseIndex(PREFIX);
