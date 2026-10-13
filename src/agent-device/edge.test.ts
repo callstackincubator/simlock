@@ -2692,7 +2692,7 @@ describe("the agent-device front's request rules", () => {
       ["GET", "/artifacts/"],
       ["GET", "/artifacts/a.png"],
       ["GET", "/artifacts/dir/a.png"],
-      ["GET", "/sessions/s1/requests/r1/diagnostics"],
+      ["GET", "/sessions/tok_one:s1/requests/r1/diagnostics"],
     ])("%s %s with a token reaches agent-device", async (method, path) => {
       const rig = await setUp();
 
