@@ -91,6 +91,7 @@ export interface WorkerRegistryOptions {
  */
 function withoutReadFields(view: WorkerView): WorkerView {
   const {
+    capabilities: _capabilities,
     capacity: _capacity,
     catalog: _catalog,
     catalogReadAt: _catalogReadAt,
@@ -287,6 +288,7 @@ export class WorkerRegistry {
     // asked. A view left over from an earlier, compatible session must not keep showing them,
     // nor the installs or waiting requests that status listed (ADR 0010 §7).
     const {
+      capabilities: _staleCapabilities,
       host: _stale,
       installs: _staleInstalls,
       waiting: _staleWaiting,

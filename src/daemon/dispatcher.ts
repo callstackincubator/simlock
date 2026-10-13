@@ -48,6 +48,8 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  capabilityReason,
+  type capabilitySchema,
   consoleUrlField,
   fitPlatformCatalog,
   OPERATIONS,
@@ -99,6 +101,10 @@ export class NukeUnavailableError extends Error {
     this.name = "NukeUnavailableError";
   }
 }
+
+const CAPABILITY_READ_BUDGET_MS = 1_000;
+
+type CapabilityEntry = z.infer<typeof capabilitySchema>;
 
 export interface CapabilitySource {
   readonly name: string;
@@ -341,7 +347,7 @@ export class Dispatcher {
     platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
   });
 
-  #statusGet: Handler<"status.get"> = () => {
+  #statusGet: Handler<"status.get"> = async () => {
     const daemon = {
       health: this.options.health(),
       mode: this.options.config.mode,
@@ -351,8 +357,10 @@ export class Dispatcher {
     // While starting, the registry has not been checked against the machine: what it holds is
     // a claim nobody has looked at, so the answer is the daemon and its host and nothing else.
     if (daemon.health === "starting") return { daemon, host };
+    const capabilities = await this.#readCapabilities();
     const snapshot = this.options.registry.snapshot;
     return {
+      ...(capabilities === undefined ? {} : { capabilities }),
       capacity: buildCapacityFigures(snapshot.virtualDevices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       daemon,
@@ -365,6 +373,42 @@ export class Dispatcher {
       warmPool: this.options.warmPool.figures(),
     };
   };
+
+  // why: a module can never make status.get fail or hang, which would cut the worker off from its gateway.
+  async #readCapabilities(): Promise<CapabilityEntry[] | undefined> {
+    const sources = this.options.capabilitySources;
+    if (sources === undefined || sources.length === 0) return undefined;
+    return Promise.all(sources.map((source) => this.#readCapability(source)));
+  }
+
+  async #readCapability(source: CapabilitySource): Promise<CapabilityEntry> {
+    const unreadable: CapabilityEntry = {
+      name: source.name,
+      reason: capabilityReason(`could not read ${source.name}'s status`),
+      state: "unavailable",
+    };
+    let timer: TimerHandle | undefined;
+    const expired = new Promise<undefined>((resolve) => {
+      timer = this.options.clock.setTimer(CAPABILITY_READ_BUDGET_MS, () => resolve(undefined));
+    });
+    try {
+      const answer = await Promise.race([source.read().catch((): undefined => undefined), expired]);
+      if (answer === undefined) return unreadable;
+      if (answer.state === "available" || answer.state === "off") {
+        return { name: source.name, state: answer.state };
+      }
+      if (answer.state !== "unavailable") {
+        return { name: source.name, reason: "reported an invalid status", state: "unavailable" };
+      }
+      return {
+        name: source.name,
+        reason: capabilityReason(answer.reason ?? ""),
+        state: "unavailable",
+      };
+    } finally {
+      if (timer !== undefined) this.options.clock.cancel(timer);
+    }
+  }
 
   // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {

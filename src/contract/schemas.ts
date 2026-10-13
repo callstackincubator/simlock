@@ -1016,20 +1016,39 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
  * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
  */
-export const capabilityNameSchema = z.string();
+export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
-export const capabilitySchema = z.object({
-  name: capabilityNameSchema,
-  state: z.enum(["available", "unavailable", "off"]),
-  reason: z.string().optional(),
-});
+// why: \p{Cc} is exactly U+0000-U+001F and U+007F-U+009F, the spec's control characters.
+const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu;
+const CAPABILITY_REASON_MAX = 500;
+
+export const capabilitySchema = z
+  .object({
+    name: capabilityNameSchema,
+    state: z.enum(["available", "unavailable", "off"]),
+    reason: z
+      .string()
+      .min(1)
+      .max(CAPABILITY_REASON_MAX)
+      .refine((text) => !/[\p{Cc}\u2028\u2029]/u.test(text))
+      .optional(),
+  })
+  .refine((entry) => (entry.state === "unavailable") === (entry.reason !== undefined));
+
+export const capabilityListSchema = z
+  .array(capabilitySchema)
+  .max(16)
+  .refine((list) => new Set(list.map((entry) => entry.name)).size === list.length);
 
 export function capabilityReason(text: string): string {
-  return text;
+  let cut = text.replace(CONTROL_CHARACTERS, " ").trim().slice(0, CAPABILITY_REASON_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut === "" ? "unknown" : cut;
 }
 
 export const workerViewSchema = z.object({
-  capabilities: z.array(capabilitySchema).optional(),
+  capabilities: capabilityListSchema.optional(),
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
    * restarts, unique by construction, opaque to clients. Never a host name or an address. */
   id: z.string(),

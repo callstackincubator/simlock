@@ -2221,7 +2221,14 @@ function formatWorkers(
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
       const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${installs}`;
+      const capabilities = (worker.capabilities ?? [])
+        .map((entry) =>
+          entry.state === "unavailable"
+            ? ` -- ${entry.name} unavailable: ${entry.reason ?? "unknown"}`
+            : ` -- ${entry.name} ${entry.state}`,
+        )
+        .join("");
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${capabilities}${installs}`;
     })
     .join("\n");
 }

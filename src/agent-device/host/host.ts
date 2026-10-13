@@ -42,6 +42,8 @@ export class AgentDeviceHost {
     record: ReleaseScopeRecord = new ReleaseScopeRecord(),
   ) {
     this.#upstreamFetch = recordingFetch(upstream, record);
+    // why: the gateway's first status.get reads this host's status, and must not pay for the proxy module's load.
+    void this.#load();
   }
 
   async status(): Promise<HostStatus> {

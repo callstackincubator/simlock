@@ -278,6 +278,9 @@ function buildDispatcher(
 ): Dispatcher {
   return new Dispatcher({
     awaitReady: hooks.awaitReady,
+    ...(options.capabilitySources === undefined
+      ? {}
+      : { capabilitySources: options.capabilitySources }),
     capacity: options.capacity,
     warmPool: options.warmPool,
     catalog: options.catalog,

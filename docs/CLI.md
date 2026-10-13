@@ -1121,7 +1121,11 @@ resolution](#admin-credential-resolution)). A single host answers as a fleet
 of one: `list` shows the host itself, and `drain`, `undrain` and `remove`
 answer `UNSUPPORTED_IN_WORKER_MODE` (exit 2), because there is no gateway to
 take the host out of rotation or forget it. `list`
-prints one line per worker, or the views as JSON with `--json`; `drain`,
+prints one line per worker, or the views as JSON with `--json`. Each line
+ends with one suffix per capability the worker reports, before any install
+lines: ` -- agent-device available`, ` -- agent-device off` or
+` -- agent-device unavailable: <reason>`. A worker that reports none, such as
+one that is starting, gets no suffix; `drain`,
 `undrain` and `remove` print JSON on stdout, unconditionally — `--json` is a
 usage error (exit 2) for those three.
 

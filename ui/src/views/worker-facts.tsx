@@ -1,6 +1,8 @@
 import { connectionStatus, healthStatus, Status } from "../status";
 import { capacityByPlatform, deviceCounts, platformName, type WorkerView } from "./workers-model";
 
+const capabilityTone = { available: "ok", off: "idle", unavailable: "warn" } as const;
+
 /** What the list says about a worker, and what its detail page starts with. */
 export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
   const connection = connectionStatus(worker.connection);
@@ -58,6 +60,20 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
                         `${platformName(entry.platform)} ${entry.running} of ${entry.limit} running`,
                     )
                     .join(", ")}
+            </dd>
+          </div>
+          <div>
+            <dt>Capabilities</dt>
+            <dd>
+              {worker.capabilities === undefined
+                ? "Not reported"
+                : worker.capabilities.map((entry, index) => (
+                    <span key={entry.name}>
+                      {index === 0 ? "" : ", "}
+                      {entry.name} <Status tone={capabilityTone[entry.state]}>{entry.state}</Status>
+                      {entry.reason === undefined ? null : ` ${entry.reason}`}
+                    </span>
+                  ))}
             </dd>
           </div>
         </>

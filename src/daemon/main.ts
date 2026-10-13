@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  agentDeviceCapabilitySource,
   agentDeviceFindings,
   AgentDeviceSupervisor,
   cancelWaitingAllocates,
@@ -446,6 +447,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const daemon = new DaemonServer({
     // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
     beginStop: () => core.closeWarmPool(),
+    // why: the source's name is the config key's; the core names no module, so the composition supplies it.
+    capabilitySources: [
+      agentDeviceParts === undefined
+        ? { name: "agent-device", read: async () => ({ state: "off" }) }
+        : agentDeviceCapabilitySource(agentDeviceParts),
+    ],
     capacity: core.capacityReader,
     warmPool: core.warmPoolReader,
     catalog: core.catalog,

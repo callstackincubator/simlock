@@ -48,6 +48,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
   Partial<
     Pick<
       WorkerView,
+      | "capabilities"
       | "capacity"
       | "catalog"
       | "devices"
@@ -75,6 +76,7 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
     host: status.host,
     installs: status.installs ?? [],
     waiting: status.waiting ?? [],
+    ...(status.capabilities === undefined ? {} : { capabilities: status.capabilities }),
     ...(status.capacity === undefined ? {} : { capacity: status.capacity }),
     ...(status.warmPool === undefined ? {} : { warmPool: status.warmPool }),
     ...(status.leases === undefined ? {} : { leases: status.leases }),

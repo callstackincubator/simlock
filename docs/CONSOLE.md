@@ -137,10 +137,11 @@ Each worker shows:
 | Version | The worker's Simlock version |
 | Devices | How many devices are running, and how many are leased |
 | Capacity | Devices running out of the limit, per platform |
+| Capabilities | Each optional module the worker knows of, such as agent-device: `available`, `off`, or `unavailable` with its reason |
 
 A worker the gateway could not read from yet says "Not reported" where it
 has nothing to show. A worker that is still starting shows its health as
-`starting`, and leaves out its devices and capacity: they appear once it has
+`starting`, and leaves out its devices, capacity and capabilities: they appear once it has
 finished starting. Its page shows the status and the host, and says that devices,
 leases and capacity appear once startup finishes.
 

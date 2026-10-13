@@ -158,7 +158,7 @@ is on its entry in `workers`.
 
 While the daemon is starting (`daemon.health` is `starting`), the answer is
 `200` with the `daemon` block and `host` only: it has not yet checked what it
-holds, so `devices`, `leases`, `capacity`, `queueDepth`, `physicalQueueDepth`, `installs`,
+holds, so `capabilities`, `devices`, `leases`, `capacity`, `queueDepth`, `physicalQueueDepth`, `installs`,
 `waiting`, `warmPool` and `workers` are absent, not empty. They are all there once `health` is
 `running`, and also when it is `failed`.
 
@@ -244,6 +244,21 @@ installing; an older daemon leaves it out.
 device, oldest first, in the shape
 [`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
 sends it, empty when nothing waits; an older daemon leaves it out.
+
+**`capabilities`** lists each optional module the daemon knows of, with its
+state, in the order it sends them (at most 16, no name twice):
+
+```json
+[{ "name": "agent-device", "state": "unavailable", "reason": "found 0.20.1, need 0.21.25 or later" }]
+```
+
+`name` is lower-case letters, digits and `-`, starting with a letter, up to 32
+characters. `state` is `available`, `unavailable` or `off`. `reason` is there
+for `unavailable` only: 1 to 500 characters, with control characters replaced
+by spaces. A worker with `agentDevice.enabled` `false` or unset sends
+`agent-device` as `off`. A status read that takes over 1 s or fails shows
+`unavailable` with `could not read <name>'s status`. A gateway's own answer
+leaves `capabilities` out: each worker's list is on its entry in `workers`.
 
 A device in `devices` that is `provisioning` or `reclaiming` carries
 `transitionAgeMs`, how long it has been in that state. One that has been there
@@ -1286,6 +1301,12 @@ worker starts, finishes or fails, and on every periodic refresh, so an
 install queued behind another may appear only then. A worker that does not
 send one shows an empty list; a disconnected or incompatible worker shows
 none.
+
+`capabilities` is the worker's own `capabilities` list from its
+[`GET /v1/status`](#get-v1status): which optional modules it serves, such as
+agent-device. It is re-read on every refresh, so a change shows at the next
+periodic refresh at the latest. A starting or incompatible worker shows none;
+a disconnected worker keeps the list it last read.
 
 `waiting` is the worker's own `waiting` list from its
 [`GET /v1/status`](#get-v1status): the requests waiting in that worker's

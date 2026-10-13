@@ -39,6 +39,24 @@ export function createAgentDeviceEdgeParts(
   };
 }
 
+export function agentDeviceCapabilitySource(parts: AgentDeviceEdgeParts): {
+  readonly name: string;
+  readonly read: () => Promise<{
+    readonly state: "available" | "unavailable";
+    readonly reason?: string;
+  }>;
+} {
+  return {
+    name: "agent-device",
+    read: async () => {
+      const status = await parts.link.status();
+      return status.state === "running"
+        ? { state: "available" }
+        : { reason: status.reason, state: "unavailable" };
+    },
+  };
+}
+
 // why: a stop ends the gateway's sockets, so the calls that end then must send no renewal that races leasing teardown.
 export function disposeAgentDeviceEdge(parts: AgentDeviceEdgeParts): void {
   parts.renewals.dispose();
