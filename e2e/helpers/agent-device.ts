@@ -72,8 +72,13 @@ export async function makeAgent(env: SharedTestEnv, name: string): Promise<Agent
   const token = await newAgentToken(env);
   const home = await mkdtemp(join(tmpdir(), `simlock-ad-${name}-`));
   const entry = agentDeviceEntry();
+  // why: a developer's own AGENT_DEVICE_* settings must never point an agent at their own daemon.
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("AGENT_DEVICE_")),
+  );
   const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...inherited,
+    HOME: home,
     AGENT_DEVICE_STATE_DIR: home,
     AGENT_DEVICE_DAEMON_AUTH_TOKEN: token.secret,
     AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1",
@@ -123,13 +128,17 @@ export async function cleanupAgents(): Promise<void> {
 export async function waitForAgentDevice(env: SharedTestEnv, token: string): Promise<void> {
   await waitFor(
     async () => {
-      const response = await fetch(`${proxyUrl(env)}/rpc`, {
-        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "agent_device.probe" }),
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        method: "POST",
-      });
-      return response.status !== 503;
+      try {
+        const response = await fetch(`${proxyUrl(env)}/health`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (response.status !== 200) return false;
+        const body = (await response.json()) as { ok?: unknown };
+        return body.ok === true;
+      } catch {
+        return false;
+      }
     },
-    { timeout: 90_000, interval: 500, label: "the agent-device route answers" },
+    { timeout: 60_000, interval: 500, label: "the agent-device daemon answers /health" },
   );
 }

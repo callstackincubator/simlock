@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -366,11 +366,45 @@ export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise
     throw new Error("withSharedDaemon needs configOverrides.http.port");
   }
   const { testEnv, state } = await buildEnv(options);
+  const restart = async (): Promise<void> => {
+    const pids = await pidsHoldingSocket(state.socketPath);
+    await cli(["daemon", "stop"], state.env);
+    await waitFor(
+      async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
+      { timeout: 30_000, label: "previous daemon process exited" },
+    );
+    await testEnv.startDaemon();
+  };
   return {
     ...testEnv,
     httpPort: port,
-    restart: () => testEnv.restartDaemon(),
-    teardown: () => teardown(state),
+    restart,
+    async withConfig(overrides, fn) {
+      const previous = await readFileIfExists(testEnv.configPath);
+      const merged = mergeDeep(
+        previous === undefined ? {} : (JSON.parse(previous) as Record<string, unknown>),
+        overrides,
+      );
+      await writeFile(testEnv.configPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
+      await restart();
+      try {
+        return await fn();
+      } finally {
+        if (previous === undefined) await rm(testEnv.configPath, { force: true });
+        else await writeFile(testEnv.configPath, previous, "utf8");
+        await restart();
+      }
+    },
+    async teardown() {
+      // why: read before teardown deletes the home.
+      const pid = await readAgentDevicePid(state.home);
+      const resolved = await realpath(state.home).catch(() => state.home);
+      try {
+        await teardown(state);
+      } finally {
+        await killLeftoverAgentDevice(resolved, pid);
+      }
+    },
   };
 }
 
@@ -442,7 +476,6 @@ async function teardown(state: TeardownState): Promise<void> {
   // simulator keeps writing into its device directory while `rm` below walks it (`ENOTEMPTY`),
   // then outlives the home. The daemon is stopped by now, so nothing boots another one.
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
-  await killLeftoverAgentDevice(home);
   await rm(home, { force: true, recursive: true });
 
   if (strayPids.length > 0) {
@@ -452,29 +485,29 @@ async function teardown(state: TeardownState): Promise<void> {
   }
 }
 
-async function killLeftoverAgentDevice(home: string): Promise<void> {
+async function readAgentDevicePid(home: string): Promise<number | undefined> {
   const text = await readFileIfExists(join(home, "agent-device-daemon.json"));
-  if (text === undefined) return;
-  let record: { pid?: unknown; entry?: unknown };
+  if (text === undefined) return undefined;
   try {
-    record = JSON.parse(text) as { pid?: unknown; entry?: unknown };
+    const record = JSON.parse(text) as { pid?: unknown };
+    return typeof record.pid === "number" ? record.pid : undefined;
   } catch {
-    return;
+    return undefined;
   }
-  if (typeof record.pid !== "number" || typeof record.entry !== "string") return;
-  if (!(await isProcessAlive(record.pid))) return;
-  const { stdout } = await execFileAsync("ps", [
-    "-ww",
-    "-o",
-    "args=",
-    "-p",
-    String(record.pid),
-  ]).catch(() => ({ stdout: "" }));
-  if (!stdout.includes(record.entry)) return;
+}
+
+async function killLeftoverAgentDevice(home: string, pid: number | undefined): Promise<void> {
+  if (pid === undefined || !(await isProcessAlive(pid))) return;
+  const { stdout } = await execFileAsync("ps", ["-ww", "-o", "args=", "-p", String(pid)]).catch(
+    () => ({ stdout: "" }),
+  );
+  // why: the supervisor puts the resolved home in the marker; the caller resolved it before the home was removed.
+  const marker = `--simlock-home=${home}`;
+  if (!stdout.trim().endsWith(marker)) return;
   try {
-    process.kill(record.pid, "SIGKILL");
+    process.kill(pid, "SIGKILL");
   } catch {
-    // why: the record may name a process that exited since the check.
+    // why: the process may have exited since the check.
   }
 }
 
