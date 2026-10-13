@@ -119,7 +119,8 @@ both modes build the same probe. `FakeHostLoadProbe` serves tests.
   under `/sys/fs/cgroup` and in every parent folder up to `/sys/fs/cgroup`,
   and the lowest limit wins, because that is the one that binds. CPU limits
   compare as cores. Usage is read in the folder that holds the winning
-  limit, because the limit caps that folder's usage, siblings included. A
+  limit, because the limit caps that folder's usage, siblings included. On
+  a tie, the topmost of the tied folders wins, for the same reason. A
   cgroup path outside Simlock's cgroup namespace (a `..` segment) reads
   `/sys/fs/cgroup` alone.
   - CPU: a `cpu.max` quota below the machine's cores is a limit. CPU is
