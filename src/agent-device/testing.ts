@@ -167,7 +167,6 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.leaseMaxTtlMs = options.leaseMaxTtlMs ?? 4 * 60 * 60_000 + 10_000;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the AgentDeviceUpstream port by the host.
   current(): AgentDeviceUpstreamState {
     if (this.#unavailable !== undefined) {
       return { reason: this.#unavailable, state: "unavailable" };
