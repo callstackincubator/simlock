@@ -334,6 +334,25 @@ describe("DriverCatalog", () => {
       return (await catalog.listCatalog())[0]?.classDefaults;
     }
 
+    it("is Pixel 9 for Android's built-in phone list when the catalog lists Pixel 9 paired and no Pixel 8", async () => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["35"],
+        clock: new FakeClock(),
+        knownModels: ["Pixel 9", "Pixel 7"],
+        modelAliases: { "Pixel 9": ["pixel_9"] },
+        modelClasses: { "Pixel 7": "phone", "Pixel 9": "phone" },
+        modelRuntimes: { "Pixel 7": [], "Pixel 9": ["35"] },
+        platform: "android",
+      });
+      const catalog = new DriverCatalog([driver], {
+        preferences: {
+          android: { phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"] },
+        },
+      });
+
+      expect((await catalog.listCatalog())[0]?.classDefaults).toEqual({ phone: "Pixel 9" });
+    });
+
     it("is the first name on the preference list the catalog lists", async () => {
       await expect(
         defaultsOf({

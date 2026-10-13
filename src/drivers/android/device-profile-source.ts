@@ -29,6 +29,20 @@ export type DeviceProfile =
       readonly deviceClass: DeviceClass | undefined;
     }
   | {
+      readonly kind: "library";
+      readonly name: string;
+      readonly id: string;
+      readonly names: readonly string[];
+      readonly deviceClass: DeviceClass;
+      readonly imageKind: string | undefined;
+      readonly apiRange: { readonly min: number; readonly max?: number };
+      readonly playStore: boolean;
+      readonly tablet: boolean;
+      readonly hardware: Readonly<Record<string, string>>;
+      readonly bootProperties: Readonly<Record<string, string>>;
+      readonly copiedFrom: string;
+    }
+  | {
       readonly kind: "properties";
       readonly name: string;
       readonly names: readonly string[];
@@ -118,7 +132,7 @@ export class DeviceProfileRegistry {
     });
     const modelClasses: Record<string, DeviceClass> = {};
     for (const profile of listed.values()) {
-      const deviceClass = profile.kind === "builtin" ? profile.deviceClass : "phone";
+      const deviceClass = profile.kind === "properties" ? "phone" : profile.deviceClass;
       if (deviceClass !== undefined) modelClasses[profile.name] = deviceClass;
     }
     return { customModels, modelAliases, modelClasses, models };
@@ -150,7 +164,7 @@ export class DeviceProfileRegistry {
 
 /** Made on this machine rather than shipped with the SDK. */
 function isCustom(profile: DeviceProfile): boolean {
-  return profile.kind === "properties" || profile.custom;
+  return profile.kind === "properties" || (profile.kind === "builtin" && profile.custom);
 }
 
 /** The first profile any of whose names is `model`, ignoring case. */
@@ -444,7 +458,7 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
 }
 
 /** CR, LF, or NUL -- see the rejection check at the top of the `<d:device>` loop above. */
-function containsForbiddenCharacter(value: string): boolean {
+export function containsForbiddenCharacter(value: string): boolean {
   // oxlint-disable-next-line no-control-regex -- NUL rejection is intentional, not an accidental control-character match.
   return /[\r\n\u0000]/.test(value);
 }
