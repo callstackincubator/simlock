@@ -39,6 +39,7 @@ import {
   tokenRecordSchema,
   tokenRoleSchema,
   waitingRequestSchema,
+  capabilitySchema,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -105,6 +106,7 @@ export const statusGet = defineOperation({
      * is `starting`, like the fields above: a started worker and a gateway always send it.
      */
     warmPool: statusWarmPoolSchema.optional(),
+    capabilities: z.array(capabilitySchema).optional(),
     daemon: z.object({
       health: daemonHealthSchema,
       mode: daemonModeSchema,

@@ -6247,3 +6247,137 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     );
   });
 });
+
+describe("CLI: a worker's capabilities", () => {
+  const platform = {
+    atRamBudget: false,
+    limit: 2,
+    maxRunning: 2,
+    overLimit: false,
+    reserved: 0,
+    running: 0,
+    used: 0,
+    warm: 0,
+  };
+  const worker = (overrides: Record<string, unknown> = {}) => ({
+    capacity: {
+      android: platform,
+      global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+      ios: platform,
+    },
+    catalog: [],
+    connection: "connected" as const,
+    devices: [],
+    drained: false,
+    id: "wrk_1",
+    label: "mac-mini",
+    lastSeenAt: 1_000,
+    leases: [],
+    ...overrides,
+  });
+  const listed = async (workers: unknown[]): Promise<string> => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ listWorkers: () => Promise.resolve({ workers } as never) }),
+    });
+    await runCli(["worker", "list"], environment);
+    return output.stdout;
+  };
+
+  it("worker list prints ` -- agent-device available`, ` -- agent-device off` and ` -- agent-device unavailable: <reason>` on the worker's line", async () => {
+    const shown = await listed([
+      worker({ capabilities: [{ name: "agent-device", state: "available" }] }),
+      worker({ capabilities: [{ name: "agent-device", state: "off" }], id: "wrk_2" }),
+      worker({
+        capabilities: [
+          {
+            name: "agent-device",
+            reason: "found 0.20.1, need 0.21.25 or later",
+            state: "unavailable",
+          },
+        ],
+        id: "wrk_3",
+      }),
+    ]);
+
+    expect(shown).toContain("wrk_1 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s)");
+    expect(shown).toMatch(/^wrk_1 .* -- agent-device available$/m);
+    expect(shown).toMatch(/^wrk_2 .* -- agent-device off$/m);
+    expect(shown).toMatch(
+      /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.25 or later$/m,
+    );
+  });
+
+  it("worker list prints a starting agent-device as ` -- agent-device unavailable: starting`", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
+      }),
+    ]);
+
+    expect(shown).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+
+  it("worker list prints two entries in the order the worker sent them", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [
+          { name: "zeta", state: "off" },
+          { name: "agent-device", state: "available" },
+        ],
+      }),
+    ]);
+
+    expect(shown).toMatch(/^wrk_1 .* -- zeta off -- agent-device available$/m);
+  });
+
+  it("worker list prints nothing for a worker whose list is absent", async () => {
+    const shown = await listed([worker()]);
+
+    expect(shown).toMatch(/^wrk_1 .* 0 lease\(s\)$/m);
+  });
+
+  it("worker list puts the suffix on the worker's line, before its install lines", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [{ name: "agent-device", state: "available" }],
+        installs: [
+          { component: "26.4", platform: "ios", since: 1_000, state: "downloading", waiters: 2 },
+        ],
+      }),
+    ]);
+
+    expect(shown).toContain(
+      "-- agent-device available\n  Install ios 26.4: downloading for 0s, 2 waiters",
+    );
+  });
+
+  it("status against a gateway prints the same suffix in its workers block", async () => {
+    const output = outputCapture();
+    const status = {
+      capacity: {
+        android: platform,
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: platform,
+      },
+      daemon: { health: "running" as const, mode: "gateway" as const },
+      devices: [],
+      host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
+      leases: [],
+      queueDepth: 0,
+      workers: [
+        worker({
+          capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
+        }),
+      ],
+    };
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status as never) }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+});

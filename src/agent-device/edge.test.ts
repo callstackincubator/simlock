@@ -65,7 +65,7 @@ interface Envelope {
 interface SetUpOptions {
   readonly leaseTtlCapMs?: number;
   readonly drivers?: (clock: FakeClock) => FakeDriver[];
-  readonly enabled?: boolean;
+  readonly enabled?: boolean | "unset";
   readonly endWaitMs?: number;
   readonly gatewayMode?: boolean;
   readonly maxRunning?: number;
@@ -165,7 +165,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       clock,
       configOverrides: {
         agentDevice: {
-          enabled: options.enabled ?? true,
+          ...(options.enabled === "unset" ? {} : { enabled: options.enabled ?? true }),
           ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
         },
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
@@ -3598,5 +3598,70 @@ describe("the agent-device front's request rules", () => {
 
       expect(params["command"]).toBe("boot");
     });
+  });
+});
+
+describe("a worker's capabilities in status.get, through the whole worker daemon", () => {
+  async function capabilities(rig: Rig) {
+    return (await rig.daemon.dispatch("status.get", {}, adminSession)).capabilities;
+  }
+
+  it("a worker with agentDevice.enabled unset answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
+    const unset = await setUp({ enabled: "unset" });
+    const off = await setUp({ enabled: false });
+    const running = await setUp();
+
+    expect(await capabilities(running)).toEqual([{ name: "agent-device", state: "available" }]);
+    expect(await capabilities(unset)).toEqual([{ name: "agent-device", state: "off" }]);
+    expect(await capabilities(off)).toEqual([{ name: "agent-device", state: "off" }]);
+  });
+
+  it("a worker with agent-device running answers [{name: agent-device, state: available}], with no reason", async () => {
+    const rig = await setUp();
+
+    const [entry] = (await capabilities(rig)) ?? [];
+
+    expect(entry).toEqual({ name: "agent-device", state: "available" });
+    expect(entry).not.toHaveProperty("reason");
+  });
+
+  it("a worker whose agent-device is unavailable answers state unavailable with the same reason its front's notAvailable reply names", async () => {
+    const rig = await setUp();
+    const reason = "found 0.20.1, need 0.21.25 or later";
+    rig.fake.setUnavailable(reason);
+
+    const health = await (await send(rig, "/health")).text();
+
+    expect(await capabilities(rig)).toEqual([
+      { name: "agent-device", reason, state: "unavailable" },
+    ]);
+    expect(health).toContain(`${notAvailable}${reason}`);
+  });
+
+  it("a worker whose agent-device is starting answers unavailable with reason starting", async () => {
+    const rig = await setUp();
+    rig.fake.setUnavailable("starting");
+
+    expect(await capabilities(rig)).toEqual([
+      { name: "agent-device", reason: "starting", state: "unavailable" },
+    ]);
+  });
+
+  it("a worker whose agent-device goes from unavailable to running answers available on the next status.get", async () => {
+    const rig = await setUp();
+    rig.fake.setUnavailable("starting");
+    expect((await capabilities(rig))?.[0]?.state).toBe("unavailable");
+
+    rig.fake.setUnavailable(undefined);
+
+    expect(await capabilities(rig)).toEqual([{ name: "agent-device", state: "available" }]);
+  });
+
+  it("a worker's own worker.list answer carries its capabilities", async () => {
+    const rig = await setUp();
+
+    const { workers } = await rig.daemon.dispatch("worker.list", {}, adminSession);
+
+    expect(workers[0]?.capabilities).toEqual([{ name: "agent-device", state: "available" }]);
   });
 });

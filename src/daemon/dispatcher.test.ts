@@ -45,7 +45,7 @@ import {
   type ProcessRunner,
 } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
-import type { DispatchSession } from "./dispatcher.js";
+import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
@@ -228,6 +228,7 @@ async function buildDispatcher(
     /** A `state.json` the registry loads, for a test that starts from records already on disk. */
     readonly state?: object;
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
+    readonly capabilitySources?: DispatcherOptions["capabilitySources"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -315,6 +316,9 @@ async function buildDispatcher(
   });
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
+    ...(overrides.capabilitySources === undefined
+      ? {}
+      : { capabilitySources: overrides.capabilitySources }),
     capacity: engine,
     warmPool: engine,
     deviceModes: engine,
@@ -3966,4 +3970,116 @@ describe("Dispatcher: status.get while the daemon is starting", () => {
       expect(status.devices).toHaveLength(1);
     },
   );
+});
+
+describe("Dispatcher: status.get capabilities", () => {
+  type Read = Awaited<
+    ReturnType<NonNullable<DispatcherOptions["capabilitySources"]>[number]["read"]>
+  >;
+  const source = (read: () => Promise<Read>) => [{ name: "agent-device", read }];
+  const capabilitiesAfter = async (read: () => Promise<unknown>) => {
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: source(read as () => Promise<Read>),
+    });
+    return (await dispatcher.dispatch("status.get", {}, session())).capabilities;
+  };
+
+  it("answers a reason of 600 characters with a newline, an escape, a DEL and a U+2028 as 500 characters with spaces in their place", async () => {
+    const reason = `a\nb\u001bc\u007fd\u2028${"x".repeat(600)}`;
+
+    const capabilities = await capabilitiesAfter(async () => ({ reason, state: "unavailable" }));
+
+    expect(capabilities).toHaveLength(1);
+    expect(capabilities?.[0]?.name).toBe("agent-device");
+    expect(capabilities?.[0]?.reason).toHaveLength(500);
+    expect(capabilities?.[0]?.reason?.startsWith("a b c d ")).toBe(true);
+  });
+
+  it("answers a reason that is only control characters as unknown", async () => {
+    expect(
+      await capabilitiesAfter(async () => ({ reason: "\n\u001b\u007f", state: "unavailable" })),
+    ).toEqual([{ name: "agent-device", reason: "unknown", state: "unavailable" }]);
+  });
+
+  it("answers a source that reports a state outside the three as unavailable with reason `reported an invalid status`", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "available" }))).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+
+    expect(await capabilitiesAfter(async () => ({ state: "broken" }))).toEqual([
+      { name: "agent-device", reason: "reported an invalid status", state: "unavailable" },
+    ]);
+  });
+
+  it("answers a source that reports available with a reason as available with none", async () => {
+    expect(await capabilitiesAfter(async () => ({ reason: "fine", state: "available" }))).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+  });
+
+  it("answers a source that reports off with a reason as off with none", async () => {
+    expect(await capabilitiesAfter(async () => ({ reason: "no", state: "off" }))).toEqual([
+      { name: "agent-device", state: "off" },
+    ]);
+  });
+
+  it("answers a source that reports unavailable with no reason as unavailable with reason unknown", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "unavailable" }))).toEqual([
+      { name: "agent-device", reason: "unknown", state: "unavailable" },
+    ]);
+  });
+
+  it("answers a source whose read throws as unavailable with reason `could not read agent-device's status`, and status.get still answers", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "available" }))).toBeDefined();
+
+    expect(
+      await capabilitiesAfter(async () => {
+        throw new Error("boom");
+      }),
+    ).toEqual([
+      {
+        name: "agent-device",
+        reason: "could not read agent-device's status",
+        state: "unavailable",
+      },
+    ]);
+  });
+
+  it("answers status.get within 1.5 s when a capability read takes 2 s, with unavailable and reason `could not read agent-device's status`", async () => {
+    const clock = new FakeClock(1_000);
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: source(
+        () =>
+          new Promise((resolve) => clock.setTimer(2_000, () => resolve({ state: "available" }))),
+      ),
+      clock,
+    });
+    const answer = dispatcher.dispatch("status.get", {}, session());
+
+    for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+
+    expect((await answer).capabilities).toEqual([
+      {
+        name: "agent-device",
+        reason: "could not read agent-device's status",
+        state: "unavailable",
+      },
+    ]);
+  });
+
+  it("answers status.get with no capabilities field while the daemon's health is starting", async () => {
+    const sources = source(async () => ({ state: "available" }));
+    const running = await buildDispatcher({ capabilitySources: sources });
+    const starting = await buildDispatcher({ capabilitySources: sources, health: "starting" });
+
+    expect((await running.dispatcher.dispatch("status.get", {}, session())).capabilities).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+    expect(await starting.dispatcher.dispatch("status.get", {}, session())).not.toHaveProperty(
+      "capabilities",
+    );
+  });
 });

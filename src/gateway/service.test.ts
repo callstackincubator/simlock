@@ -1837,3 +1837,85 @@ describe("GatewayService", () => {
     });
   });
 });
+
+describe("GatewayService: a worker's capabilities in its view", () => {
+  const unavailable = {
+    name: "agent-device",
+    reason: "found 0.20.1, need 0.21.25 or later",
+    state: "unavailable" as const,
+  };
+  const available = { name: "agent-device", state: "available" as const };
+
+  async function joinedWith(capabilities: readonly (typeof unavailable | typeof available)[]) {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ capabilities: [...capabilities] });
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual(capabilities),
+    );
+    return { harness, worker };
+  }
+
+  it("shows available after the next refresh tick when the worker's agent-device went from unavailable to running", async () => {
+    const { harness, worker } = await joinedWith([unavailable]);
+    worker.status = statusFixture({ capabilities: [available] });
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([available]),
+    );
+    await harness.service.stop();
+  });
+
+  it("shows no list for a worker that reported one and restarted into starting", async () => {
+    const { harness } = await joinedWith([available]);
+    const restarted = new ScriptedWorkerClient();
+    restarted.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+
+    await harness.join("wrk_1", restarted);
+
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+    expect(Object.keys(harness.service.workers.view("wrk_1") ?? {})).not.toContain("capabilities");
+    await harness.service.stop();
+  });
+
+  it("shows no list for a worker that reported one and came back incompatible", async () => {
+    const { harness } = await joinedWith([available]);
+    const previous = { min: 5, max: 5 };
+    const incompatible = new ScriptedWorkerClient();
+    incompatible.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", incompatible);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    expect(Object.keys(harness.service.workers.view("wrk_1") ?? {})).not.toContain("capabilities");
+    await harness.service.stop();
+  });
+
+  it("keeps the list a disconnected worker last reported", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ capabilities: [unavailable] });
+    const workerEnd = await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([unavailable]),
+    );
+
+    await workerEnd.close();
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("disconnected"),
+    );
+    expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([unavailable]);
+    await harness.service.stop();
+  });
+});

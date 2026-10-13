@@ -301,3 +301,58 @@ describe("a worker's card once it has finished starting", () => {
     expect(unreadShown).toContain("Capacity Not reported");
   });
 });
+
+describe("the Capabilities row of a worker's page", () => {
+  const status = (tone: string, word: string) =>
+    `<span class="status status-${tone}"><span class="status-dot" aria-hidden="true"></span>${word}</span>`;
+  const page = (worker: WorkerView) =>
+    renderToStaticMarkup(<WorkerDetail id="wrk_1" workers={[worker]} now={NOW} />);
+
+  it("shows available in the ok tone, off in the neutral tone, and unavailable in the warn tone with its reason", () => {
+    const html = page({
+      ...RUNNING,
+      capabilities: [
+        { name: "agent-device", state: "available" },
+        { name: "second", state: "off" },
+        { name: "third", reason: "found 0.20.1, need 0.21.25 or later", state: "unavailable" },
+      ],
+    });
+
+    expect(text(html)).toContain("Capabilities");
+    expect(html).toContain(status("ok", "available"));
+    expect(html).toContain(status("idle", "off"));
+    expect(html).toContain(status("warn", "unavailable"));
+    expect(text(html)).toContain("third unavailable found 0.20.1, need 0.21.25 or later");
+  });
+
+  it("says Not reported for an absent list on a running worker", () => {
+    expect(text(page(RUNNING))).toContain("Capabilities Not reported");
+  });
+
+  it("leaves the row out for a starting worker", () => {
+    const starting = text(
+      page({
+        connection: "connected",
+        drained: false,
+        health: "starting",
+        id: "wrk_1",
+        lastSeenAt: NOW,
+      }),
+    );
+
+    expect(text(page(RUNNING))).toContain("Capabilities");
+    expect(starting).not.toContain("Capabilities");
+  });
+
+  it("shows the same row on the worker's card", () => {
+    const card = text(
+      renderToStaticMarkup(
+        <WorkerFacts
+          worker={{ ...RUNNING, capabilities: [{ name: "agent-device", state: "available" }] }}
+        />,
+      ),
+    );
+
+    expect(card).toContain("Capabilities agent-device available");
+  });
+});

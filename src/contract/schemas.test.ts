@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { statusGet } from "./operations.js";
 import {
+  capabilityReason,
   deviceRecordSchema,
   doctorReportSchema,
   fitHostFacts,
@@ -667,5 +669,80 @@ describe("doctorReportSchema's agent-device-unavailable finding", () => {
     const { remedy: _remedy, ...withoutRemedy } = finding;
     expect(doctorReportSchema.safeParse({ findings: [withoutMessage] }).success).toBe(false);
     expect(doctorReportSchema.safeParse({ findings: [withoutRemedy] }).success).toBe(false);
+  });
+});
+
+describe("a worker status's capabilities list", () => {
+  const status = (capabilities: unknown) =>
+    statusGet.output.safeParse({
+      capabilities,
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "26.0", tools: [] },
+    });
+  const entry = (overrides: Record<string, unknown> = {}) => ({
+    name: "agent-device",
+    state: "unavailable",
+    reason: "found 0.20.1, need 0.21.25 or later",
+    ...overrides,
+  });
+
+  it("passes with a 32-character name and a 500-character reason", () => {
+    expect(status([entry()]).success).toBe(true);
+    expect(status([entry({ name: `a${"b".repeat(31)}`, reason: "r".repeat(500) })]).success).toBe(
+      true,
+    );
+  });
+
+  it("passes an available and an off entry that carry no reason", () => {
+    expect(
+      status([
+        { name: "agent-device", state: "available" },
+        { name: "other", state: "off" },
+      ]).success,
+    ).toBe(true);
+  });
+
+  const refused: ReadonlyArray<readonly [string, unknown]> = [
+    ["17 entries", Array.from({ length: 17 }, (_, i) => entry({ name: `cap-${String(i)}` }))],
+    ["a name with an upper-case letter", [entry({ name: "Agent-device" })]],
+    ["a name starting with a digit", [entry({ name: "1agent" })]],
+    ["a name starting with -", [entry({ name: "-agent" })]],
+    ["a 33-character name", [entry({ name: `a${"b".repeat(32)}` })]],
+    ["a duplicate name", [entry(), entry({ reason: "other" })]],
+    ["a reason on an available entry", [entry({ state: "available" })]],
+    ["a reason on an off entry", [entry({ state: "off" })]],
+    ["an unavailable entry with no reason", [{ name: "agent-device", state: "unavailable" }]],
+    ["an unavailable entry with an empty reason", [entry({ reason: "" })]],
+    ["a 501-character reason", [entry({ reason: "r".repeat(501) })]],
+    ["a reason with a newline", [entry({ reason: "a\nb" })]],
+    ["a reason with an escape", [entry({ reason: "a\u001bb" })]],
+    ["a reason with a U+2028", [entry({ reason: "a\u2028b" })]],
+  ];
+
+  it.each(refused)("fails the schema with %s", (_title, capabilities) => {
+    expect(status([entry()]).success).toBe(true);
+    expect(status(capabilities).success).toBe(false);
+  });
+});
+
+describe("capabilityReason", () => {
+  it("answers a 600-character reason with a newline, an escape, a DEL and a U+2028 as 500 characters with spaces in their place", () => {
+    const text = `a\nb\u001bc\u007fd\u2028${"x".repeat(600)}`;
+
+    const cleaned = capabilityReason(text);
+
+    expect(cleaned.length).toBe(500);
+    expect(cleaned.startsWith("a b c d ")).toBe(true);
+  });
+
+  it("answers a reason that is only control characters as unknown", () => {
+    expect(capabilityReason("\n\u001b\u007f\u2028")).toBe("unknown");
+    expect(capabilityReason("")).toBe("unknown");
+  });
+
+  it("never splits a surrogate pair when it cuts to 500 units", () => {
+    const cleaned = capabilityReason(`${"x".repeat(499)}\u{1F600}`);
+
+    expect(cleaned).toBe("x".repeat(499));
   });
 });

@@ -132,6 +132,7 @@ interface Connection {
  * and omitting `queue` from a worker's options stays a compile error.
  */
 export interface DaemonServerEngineOptions {
+  readonly capabilitySources?: DispatcherOptions["capabilitySources"];
   readonly capacity: CapacityReader;
   readonly warmPool: WarmPoolReader;
   readonly deviceModes: DeviceModeReader;

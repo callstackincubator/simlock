@@ -100,7 +100,13 @@ export class NukeUnavailableError extends Error {
   }
 }
 
+export interface CapabilitySource {
+  readonly name: string;
+  readonly read: () => Promise<{ readonly state: string; readonly reason?: string }>;
+}
+
 export interface DispatcherOptions {
+  readonly capabilitySources?: readonly CapabilitySource[];
   readonly capacity: CapacityReader;
   /** The warm pool as its last pass left it, for `status.get`. */
   readonly warmPool: WarmPoolReader;

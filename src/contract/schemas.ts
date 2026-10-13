@@ -1016,7 +1016,20 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
  * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
  */
+export const capabilityNameSchema = z.string();
+
+export const capabilitySchema = z.object({
+  name: capabilityNameSchema,
+  state: z.enum(["available", "unavailable", "off"]),
+  reason: z.string().optional(),
+});
+
+export function capabilityReason(text: string): string {
+  return text;
+}
+
 export const workerViewSchema = z.object({
+  capabilities: z.array(capabilitySchema).optional(),
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
    * restarts, unique by construction, opaque to clients. Never a host name or an address. */
   id: z.string(),
