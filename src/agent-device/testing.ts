@@ -130,6 +130,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly leases = new Map<string, FakeAgentDeviceLease>();
   readonly abortedCommands: string[] = [];
   readonly abortedReleases: string[] = [];
+  // why: the ids of releases whose request was hung up on before the fake answered, so a test can wait until the hang-up has reached the daemon side.
+  readonly hungUpReleases: string[] = [];
   readonly refused: string[] = [];
   readonly uploads: string[] = [];
   baseUrl = "http://127.0.0.1:47001";
@@ -328,6 +330,9 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         await this.onHeartbeat?.();
         return this.#heartbeat(id, params, tenant);
       case "lease.release":
+        void untilAborted(request.signal).then(() => {
+          this.hungUpReleases.push(String(params["leaseId"]));
+        });
         await this.onRelease?.();
         request.signal.throwIfAborted();
         {

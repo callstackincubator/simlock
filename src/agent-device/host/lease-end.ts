@@ -55,8 +55,6 @@ export class ReleaseScopeRecord {
     const answered = reply.then(
       async (response) => {
         const text = await response.clone().text();
-        // why: a hang-up already on its way reaches the signal only after the I/O the reply raced.
-        await new Promise<void>((resolve) => setTimeout(resolve, 1));
         const ok = readReply(text).kind === "success" && !signal.aborted;
         if (ok && !this.#ended.has(leaseId)) this.#scopes.delete(leaseId);
         return ok;

@@ -1646,10 +1646,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
       await advance(rig, 12_000, 4_000);
     });
 
-    const agentRelease = track(release(rig, 1));
-    await advance(rig, 12_000, 4_000);
+    rig.fake.answerReleaseWhileCommandsRun();
+
+    const released = await envelopeOf(await release(rig, 1));
     rig.fake.releaseCommand();
-    const released = await envelopeOf(await agentRelease.promise);
     await running.promise;
 
     expect(released.result).toMatchObject({ ok: true, released: true });
@@ -2271,14 +2271,15 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     const abandoned = track(release(hungUp, 1, { signal: hangUp.signal }));
     await expect.poll(() => releasesReceived(hungUp).length).toBe(1);
     await releaseAll(hungUp);
+    const seenHungUp = watchWipes(hungUp);
     hangUp.abort();
     await abandoned.promise.catch(() => undefined);
-    const seenHungUp = watchWipes(hungUp);
+    await expect.poll(() => hungUp.fake.hungUpReleases).toEqual([hex(1)]);
 
     answerHungUp();
 
     await expect.poll(() => releasesReceived(hungUp).length).toBe(2);
-    expect(seenHungUp).toEqual([hungUpBefore]);
+    await expect.poll(() => seenHungUp).toEqual([hungUpBefore]);
     await expect.poll(() => wipes(hungUp)).toBeGreaterThan(hungUpBefore);
   });
 
