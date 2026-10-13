@@ -96,6 +96,9 @@ interface RequestRow {
   readonly requesterId: string;
 }
 
+// why: the first snapshot on a fresh simulator starts the XCTest runner, which agent-device gives 45 s to start (RUNNER_STARTUP_TIMEOUT_MS in packages/platform-apple/src/runner/runner-startup-transport.ts), so with the command's own 45 s it can pass the CLI's 60 s default and cut off agent-device's answer.
+const FIRST_SNAPSHOT = { timeout: 180_000 } as const;
+
 // why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
 function progress(line: string): void {
   writeSync(2, `${new Date().toISOString()} ${line}\n`);
@@ -317,7 +320,7 @@ function defineSuite(target: Target): void {
       ok(await open(a));
       ok(await a.run(["install", "Appduct", target.app]));
       ok(await a.run(["open", target.bundleId]));
-      const snapshot = await a.run(["snapshot"]);
+      const snapshot = await a.run(["snapshot"], FIRST_SNAPSHOT);
       ok(snapshot);
       expect(snapshot.stdout).toContain("tab-status");
       ok(await a.run(["click", 'id="tab-status"']));
@@ -365,7 +368,7 @@ function defineSuite(target: Target): void {
       ok(await a.run(["install", "Appduct", target.app]));
       // why: an iOS snapshot needs an app session on the device (ios_app_session_required).
       ok(await a.run(["open", target.bundleId]));
-      ok(await a.run(["snapshot"]));
+      ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
       const [lease] = await listLeases(env);
       const driverId = (await listDevices(env)).find((device) => device.id === lease?.deviceId)
         ?.driverDeviceId as string;
@@ -741,10 +744,10 @@ function defineSuite(target: Target): void {
           return devices.find((device) => device.id === lease?.deviceId)?.driverDeviceId as string;
         };
 
-        ok(await b.run(["snapshot", target.deviceFlag, driverIdOf(b)]));
+        ok(await b.run(["snapshot", target.deviceFlag, driverIdOf(b)], FIRST_SNAPSHOT));
         refused(await b.run(["snapshot", target.deviceFlag, driverIdOf(a)]));
         ok(await b.run(["close"]));
-        ok(await a.run(["snapshot"]));
+        ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
       },
     );
 
