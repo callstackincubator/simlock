@@ -766,7 +766,8 @@ function defineSuite(target: Target): void {
         ok(await open(b));
         const suite = await mkdtemp(join(tmpdir(), "simlock-ad-suite-"));
         onTestFinished(() => rm(suite, { force: true, recursive: true }));
-        await writeFile(join(suite, "smoke.ad"), "snapshot\n");
+        // why: a script needs a `context platform=` line (agent-device refuses one without), and a step that needs no app session: the shard runs beside agent A's open session, so `open` fails with the device in use and a `snapshot` with no app session.
+        await writeFile(join(suite, "smoke.ad"), `context platform=${platform}\nwait 200\n`);
 
         ok(await a.run(["test", suite, "--shard-all", "1"]));
         const two = await a.run(["test", suite, "--shard-all", "2"]);
