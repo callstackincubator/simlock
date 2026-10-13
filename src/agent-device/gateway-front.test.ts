@@ -1281,6 +1281,11 @@ function holderOf(rig: Rig, n: number): Member {
   return member;
 }
 
+// why: the gateway lists a lease only once its worker's next view reaches it, which can trail the grant.
+async function listedByGateway(rig: Rig, count: number): Promise<void> {
+  await expect.poll(async () => (await fleetLeases(rig)).length).toBe(count);
+}
+
 // why: a worker with room for one lease each puts two leases on two workers.
 async function twoLeasesOnTwoWorkers(): Promise<Rig> {
   const rig = await setUp({
@@ -1291,6 +1296,7 @@ async function twoLeasesOnTwoWorkers(): Promise<Rig> {
   });
   await granted(rig, 1);
   await granted(rig, 2);
+  await listedByGateway(rig, 2);
   expect(holderOf(rig, 1)).not.toBe(holderOf(rig, 2));
   return rig;
 }
@@ -1534,6 +1540,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
     await granted(rig, 1);
     await granted(rig, 2);
+    await listedByGateway(rig, 2);
     const member = first(rig);
     member.fake.listDevices([
       { id: addressOfLease(rig, 1), name: "first" },
