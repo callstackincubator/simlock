@@ -2557,9 +2557,9 @@ function hasUnacceptedLicense(result: ProcessResult): boolean {
 }
 
 /**
- * why: `ANDROID_SDK_HOME` (not `ANDROID_AVD_HOME`, which only
- * relocates created AVDs) is the historical env var Android tooling uses to relocate the whole
- * `~/.android` directory, including `devices.xml`.
+ * why: `devices.xml` is found the way `avdmanager` finds it: `ANDROID_USER_HOME`, else
+ * `ANDROID_PREFS_ROOT/.android`, else `ANDROID_SDK_HOME/.android`, else `~/.android`. Not
+ * `ANDROID_AVD_HOME`, which only relocates created AVDs.
  */
 function defaultDeviceProfileSources(
   options: AndroidDriverOptions,
@@ -2567,7 +2567,11 @@ function defaultDeviceProfileSources(
   onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
   env: () => NodeJS.ProcessEnv,
 ): readonly DeviceProfileSource[] {
-  const devicesXmlPath = `${options.env.ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
+  const { ANDROID_PREFS_ROOT, ANDROID_SDK_HOME, ANDROID_USER_HOME } = options.env;
+  const devicesXmlPath =
+    ANDROID_USER_HOME !== undefined
+      ? `${ANDROID_USER_HOME}/devices.xml`
+      : `${ANDROID_PREFS_ROOT ?? ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
   return [
     new LibraryDeviceProfileSource(),
     // Scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.

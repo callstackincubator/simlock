@@ -13,6 +13,7 @@ import {
 const avdmanager = "/android-sdk/cmdline-tools/latest/bin/avdmanager";
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
 const devicesXmlPath = "/home/simlock/.android/devices.xml";
+const noFit = { apiRange: undefined, imageKind: undefined, playStore: true, tablet: false };
 
 describe("BuiltinDeviceProfileSource", () => {
   it("lists each profile answering to its name and its avdmanager id", async () => {
@@ -95,6 +96,7 @@ describe("UserDeviceProfileSource", () => {
 
     await expect(source.profiles()).resolves.toEqual([
       {
+        ...noFit,
         hardwareProperties: {
           "hw.device.manufacturer": "Acme",
           "hw.device.name": "My Custom Phone",
@@ -197,6 +199,7 @@ describe("parseDevicesXml", () => {
 
     expect(parseDevicesXml(xml)).toEqual([
       {
+        ...noFit,
         hardwareProperties: {
           "hw.device.name": "Bucket Phone",
           "hw.lcd.density": "480",
@@ -225,6 +228,7 @@ describe("parseDevicesXml", () => {
 
     expect(parseDevicesXml(xml)).toEqual([
       {
+        ...noFit,
         hardwareProperties: {
           "hw.device.name": "Studio Phone",
           "hw.ramSize": "2048",
@@ -243,6 +247,7 @@ describe("parseDevicesXml", () => {
   ])("converts ram in %s, every unit the devices.xml schema allows, to MiB", (unit, value, mib) => {
     expect(parseDevicesXml(devicesXmlWithRam(`<d:ram unit="${unit}">${value}</d:ram>`))).toEqual([
       {
+        ...noFit,
         hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": mib },
         name: "Ram Phone",
       },
@@ -262,6 +267,7 @@ describe("parseDevicesXml", () => {
   it("reads the unit with surrounding whitespace, which the schema's token type allows", () => {
     expect(parseDevicesXml(devicesXmlWithRam('<d:ram unit=" GiB ">2</d:ram>'))).toEqual([
       {
+        ...noFit,
         hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
         name: "Ram Phone",
       },
@@ -272,6 +278,7 @@ describe("parseDevicesXml", () => {
     const ram = '<d:ram-size unit="MiB">6144</d:ram-size><d:ram unit="GiB">2</d:ram>';
     expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
       {
+        ...noFit,
         hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
         name: "Ram Phone",
       },
@@ -289,7 +296,7 @@ describe("parseDevicesXml", () => {
     ["a value too large to count exactly in MiB", '<d:ram unit="TiB">1000000000000000</d:ram>'],
   ])("leaves hw.ramSize unset for ram with %s instead of guessing", (_case, ram) => {
     expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
-      { hardwareProperties: { "hw.device.name": "Ram Phone" }, name: "Ram Phone" },
+      { ...noFit, hardwareProperties: { "hw.device.name": "Ram Phone" }, name: "Ram Phone" },
     ]);
   });
 
@@ -476,6 +483,7 @@ describe("DeviceProfileRegistry", () => {
     const registry = new DeviceProfileRegistry([builtin, user]);
 
     await expect(registry.resolve("My Custom Phone")).resolves.toEqual({
+      ...noFit,
       hardwareProperties: {
         "hw.device.manufacturer": "Acme",
         "hw.device.name": "My Custom Phone",

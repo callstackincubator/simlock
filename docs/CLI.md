@@ -1694,6 +1694,18 @@ them:
   so in a fleet only the worker that has it can lease it. To add one, create
   it with Android Studio's device manager on that machine.
 
+  Simlock finds `devices.xml` where `avdmanager` does: in
+  `$ANDROID_USER_HOME`, else `$ANDROID_PREFS_ROOT/.android`, else
+  `$ANDROID_SDK_HOME/.android`, else `.android` in your home directory.
+
+  A custom profile's API range, Play Store setting and screen size from
+  Android Studio decide which images it gets, with its device type. A
+  profile that needs API 31 or newer is never paired with an image below 31;
+  one with Play Store turned off gets no Play Store image (a Wear profile
+  always can); a profile with no device type and a screen of 7 inches or more
+  that does not fold also gets tablet images. A profile with none of these set
+  gets the phone images, as before.
+
 `avdmanager list device` prints both kinds; it shows a custom profile with
 `OEM : User`. Simlock also reads `devices.xml` itself. When a custom profile
 has the same name as a built-in one, the built-in profile wins and the model

@@ -64,14 +64,20 @@ function factsOf(profile: DeviceProfile): ProfileFacts | undefined {
       };
     case "builtin":
       return {
-        apiRange: undefined,
+        apiRange: profile.apiRange,
         kind: profile.tag,
-        playStore: true,
+        playStore: profile.playStore !== false || profile.tag === "android-wear",
         profileId: profile.avdmanagerId,
-        tablet: false,
+        tablet: profile.tablet ?? false,
       };
     case "properties":
-      return undefined;
+      return {
+        apiRange: profile.apiRange,
+        kind: profile.imageKind,
+        playStore: profile.playStore ?? true,
+        profileId: undefined,
+        tablet: profile.tablet ?? false,
+      };
   }
 }
 

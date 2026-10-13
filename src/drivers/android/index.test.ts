@@ -4692,15 +4692,15 @@ describe("AndroidDriver image fit", () => {
       }
     });
 
-    it("pairs a devices.xml profile avdmanager did not list with every installed level", async () => {
+    it("pairs a devices.xml profile avdmanager did not list with every installed phone level", async () => {
       const { driver, resolve } = await fitHarness(HOST_IMAGES, {
         devicesXml: customDeviceXml("Legacy Phone", 2048),
       });
 
       const catalog = await driver.listCatalog();
 
-      expect(catalog.modelRuntimes["Legacy Phone"]).toEqual(["34", "35", "36"]);
-      expect(await resolve("Legacy Phone", "34")).toMatchObject({ osVersion: "34" });
+      expect(catalog.modelRuntimes["Legacy Phone"]).toEqual(["35", "36"]);
+      expect(await resolve("Legacy Phone", "35")).toMatchObject({ osVersion: "35" });
     });
 
     it("counts android-Baklava with AndroidVersion.ApiLevel=35 as a level Pixel 9 pairs with", async () => {
