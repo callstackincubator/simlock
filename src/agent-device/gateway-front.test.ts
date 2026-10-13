@@ -555,6 +555,7 @@ interface DispatchTap {
   readonly operations: string[];
   readonly inputs: { readonly operation: string; readonly input: Record<string, unknown> }[];
   afterNext(operation: string, run: () => Promise<void>): void;
+  rejectNext(operation: string): void;
 }
 
 // why: the front reaches simlock through `daemon.dispatch` looked up at call time, so a wrapper on the daemon object sits between the front and leasing.
@@ -564,8 +565,10 @@ function tapDispatch(daemon: DaemonServer): DispatchTap {
   const operations: string[] = [];
   const inputs: { operation: string; input: Record<string, unknown> }[] = [];
   const afters = new Map<string, () => Promise<void>>();
+  const rejections = new Set<string>();
   target.dispatch = async (operation, input, session) => {
     operations.push(operation);
+    if (rejections.delete(operation)) throw new Error(`${operation} failed`);
     inputs.push({ input: (input ?? {}) as Record<string, unknown>, operation });
     const result = await original(operation, input, session);
     const after = afters.get(operation);
@@ -573,7 +576,12 @@ function tapDispatch(daemon: DaemonServer): DispatchTap {
     await after?.();
     return result;
   };
-  return { afterNext: (operation, run) => afters.set(operation, run), inputs, operations };
+  return {
+    afterNext: (operation, run) => afters.set(operation, run),
+    inputs,
+    operations,
+    rejectNext: (operation) => rejections.add(operation),
+  };
 }
 
 type RelayFn = (workerId: string, call: unknown) => Promise<Response>;
@@ -1332,7 +1340,7 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(pathsReceived(other)).toEqual(before);
   });
 
-  it("the preflight's ticket URL names the gateway's origin, its `upload.headers` carry the caller's own `authorization`, W2 received no `authorization` or `x-agent-device-token`, and a `PUT` to it with the lease header and those headers reaches W2", async () => {
+  it("the preflight's ticket URL names the gateway's origin, its `upload.headers` carry the caller's own `authorization`, W2 received its own daemon's token in `authorization` and `x-agent-device-token` and none of the caller's credentials, and a `PUT` to it with the lease header and those headers reaches W2", async () => {
     const rig = await twoLeasesOnTwoWorkers();
     const target = holderOf(rig, 2);
 
@@ -1353,6 +1361,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect(seen["authorization"]).toBe(`Bearer ${target.fake.token}`);
     // why: the proxy sends its own daemon token in both headers, never the caller's.
     expect(seen["x-agent-device-token"]).toBe(target.fake.token);
+    expect(Object.values(seen).join("\n")).not.toContain(secrets.one);
+    expect(Object.values(seen).join("\n")).not.toContain("caller-token");
 
     const put = await fetch(ticket.url, {
       body: "artifact bytes",
@@ -1583,6 +1593,44 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     expect((await envelopeOf(unreadable)).error?.message).toBe(
       `could not read the device list from the worker holding lease ${hex(2)}`,
     );
+  });
+
+  it("through the gateway, `devices` whose lease check fails answers `could not check your leases; try again`, not an empty list, and no daemon receives the command", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    for (const n of [1, 2]) {
+      holderOf(rig, n).fake.listDevices([
+        { id: addressOfLease(rig, n), name: `mine-${String(n)}` },
+      ]);
+    }
+    const tap = tapDispatch(rig.gateway);
+    tap.rejectNext("lease.list");
+    const before = rig.members.map(
+      (member) => member.fake.rpcRequests("agent_device.command").length,
+    );
+
+    const answer = await envelopeOf(await command(rig, "devices", undefined));
+
+    expect(answer.error?.message).toBe("could not check your leases; try again");
+    expect(
+      rig.members.map((member) => member.fake.rpcRequests("agent_device.command").length),
+    ).toEqual(before);
+  });
+
+  it("through the gateway, `devices` when W2 answers a body with no list aborts the forward still waiting on W1", async () => {
+    const rig = await twoLeasesOnTwoWorkers();
+    const slow = holderOf(rig, 1).fake;
+    slow.holdCommand();
+    holderOf(rig, 2).fake.answerDevicesWith(
+      JSON.stringify({ id: 1, jsonrpc: "2.0", result: { data: {}, ok: true } }),
+    );
+
+    const answer = await command(rig, "devices", undefined);
+
+    expect(answer.status).toBe(502);
+    expect((await envelopeOf(answer)).error?.message).toBe(
+      `could not read the device list from the worker holding lease ${hex(2)}`,
+    );
+    await expect.poll(() => slow.abortedCommands).toEqual(["devices"]);
   });
 
   it("through the gateway, a CLI that hangs up during `devices` aborts every forward", async () => {
