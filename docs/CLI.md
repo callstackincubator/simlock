@@ -1656,7 +1656,7 @@ own name for it.
 Simlock reads Android device models from three places and writes to none of
 them:
 
-- **Simlock's own profiles** ship with Simlock (today: Pixel 9). They are
+- **Simlock's own profiles** ship with Simlock (16 models, from Pixel 9 to Large Desktop). They are
   read first, so a device made from one has the same hardware on every
   host, and the model is there even when your `cmdline-tools` is too old to
   have it. A name Simlock's own profiles have wins over the same name in the
