@@ -77,6 +77,26 @@ describe("GatewayRelay against a worker that breaks the protocol", () => {
     expect(relayIdOf(cancel)).toBe(relayIdOf(request));
   });
 
+  it("fails the relay with INTERNAL naming the worker, and sends relay.cancel, on a relay-head whose header value `Headers` refuses", async () => {
+    const { connection, relay } = await setup();
+    const pending = outcome(relay.relay(WORKER_ID, call()));
+    const request = await sentFrame(connection, "relay.request");
+
+    connection.push("relay-head", {
+      headers: [["x-note", "\u20ac"]],
+      requestId: request.id,
+      status: 200,
+    });
+
+    expect(await pending).toEqual({
+      code: "INTERNAL",
+      message: `worker ${WORKER_ID} sent an invalid relay response`,
+      state: "rejected",
+    });
+    const cancel = await sentFrame(connection, "relay.cancel");
+    expect(relayIdOf(cancel)).toBe(relayIdOf(request));
+  });
+
   it("fails the relay with INTERNAL naming the worker, and sends relay.cancel, on a relay-chunk that is not base64", async () => {
     const { connection, relay } = await setup();
     const pending = relay.relay(WORKER_ID, call());

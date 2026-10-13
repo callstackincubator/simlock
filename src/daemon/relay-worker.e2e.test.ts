@@ -362,6 +362,8 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
 
       expect(within).toEqual({ state: "fulfilled", value: {} });
       expect(past).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
+      // why: with the schema bound deleted `new Request` would refuse it too, with this message.
+      expect((past as { message?: string }).message).not.toContain("cannot be built");
     },
   );
 
@@ -419,7 +421,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const outcome = await settle(openRelay(wire, relayInput()).result);
 
     expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
-    expect(fixture.logger.problems()).toContain("100");
+    expect(fixture.logger.problems()).toContain("at most 100 headers, got");
   });
 
   it("fails the call with INTERNAL and logs the message when a target throws", async () => {

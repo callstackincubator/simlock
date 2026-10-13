@@ -578,26 +578,6 @@ export class Dispatcher {
     return this.options.passthrough.passthrough(input.tool, undefined, input.args);
   };
 
-  /**
-   * why: ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
-   * instead of there. Everything a passthrough already decides is reused verbatim -- which
-   * flag scopes the tool to this daemon's root, which verbs the driver refuses -- because it
-   * is the same driver call: `#driverPassthrough` above passes no device, this handler passes
-   * the lease's device and the lease's platform, and it also spawns the result.
-   *
-   * `leaseId` is checked against the registry here so an id that names no lease answers
-   * `UNKNOWN_LEASE` rather than running a command (`authorize`'s `ownsLease` deliberately lets
-   * an unknown id through so this handler can say that -- see `roles.ts`). Which device the
-   * command touches is the driver's answer: `simctl` and `adb` take it from the command's own
-   * arguments, which this daemon does not parse, and `devicectl` gets the lease's `--device`
-   * added when the arguments name none (`devicectl-exec.ts`). That is the same accident
-   * boundary ADR 0001 draws for the local wrappers, reached over the wire.
-   *
-   * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
-   * so a command that writes a gigabyte costs this process nothing, and a client sees the
-   * first line while the command is still running.
-   */
-  /** ADR 0026: the connection's relays, for the gateway's uplink only. */
   #relays(session: DispatchSession): RelayConnection {
     if (session.isGatewayUplink !== true) {
       throw new DispatchError("FORBIDDEN", "Only the gateway's own uplink session may relay");
@@ -624,6 +604,25 @@ export class Dispatcher {
     return {};
   };
 
+  /**
+   * why: ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
+   * instead of there. Everything a passthrough already decides is reused verbatim -- which
+   * flag scopes the tool to this daemon's root, which verbs the driver refuses -- because it
+   * is the same driver call: `#driverPassthrough` above passes no device, this handler passes
+   * the lease's device and the lease's platform, and it also spawns the result.
+   *
+   * `leaseId` is checked against the registry here so an id that names no lease answers
+   * `UNKNOWN_LEASE` rather than running a command (`authorize`'s `ownsLease` deliberately lets
+   * an unknown id through so this handler can say that -- see `roles.ts`). Which device the
+   * command touches is the driver's answer: `simctl` and `adb` take it from the command's own
+   * arguments, which this daemon does not parse, and `devicectl` gets the lease's `--device`
+   * added when the arguments name none (`devicectl-exec.ts`). That is the same accident
+   * boundary ADR 0001 draws for the local wrappers, reached over the wire.
+   *
+   * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
+   * so a command that writes a gigabyte costs this process nothing, and a client sees the
+   * first line while the command is still running.
+   */
   #deviceExec: Handler<"device.exec"> = async (input, session) => {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");

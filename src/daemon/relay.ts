@@ -109,14 +109,16 @@ class RelayBodyFeed {
 
 export class RelayConnection {
   readonly #active = new Map<string, ActiveRelay>();
+  #closed = false;
 
   constructor(
     private readonly targets: RelayTargets,
     private readonly logger: Logger,
   ) {}
 
-  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   async request(input: RelayRequestInput, push: RelayPush): Promise<{ readonly cancelled?: true }> {
+    // why: a request parked behind the startup gate reaches here after its connection closed; running its target would answer nobody.
+    if (this.#closed) return { cancelled: true };
     if (this.#active.has(input.relayId)) {
       throw new DispatchError("BAD_REQUEST", `Relay ${input.relayId} is already active`);
     }
@@ -175,12 +177,12 @@ export class RelayConnection {
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   cancel(relayId: string): void {
     this.#active.get(relayId)?.controller.abort();
   }
 
   abortAll(): void {
+    this.#closed = true;
     for (const relay of this.#active.values()) relay.controller.abort();
   }
 
@@ -270,6 +272,11 @@ export class RelayConnection {
   ): Promise<{ readonly cancelled?: true }> {
     const reader = body.getReader();
     const stop = () => void reader.cancel().catch(() => undefined);
+    // why: a cancel that landed while the head was being written already fired its event, so no listener would ever stop this reader.
+    if (signal.aborted) {
+      stop();
+      return { cancelled: true };
+    }
     signal.addEventListener("abort", stop, { once: true });
     try {
       for (;;) {

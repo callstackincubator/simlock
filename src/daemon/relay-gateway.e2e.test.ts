@@ -403,7 +403,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   }, 30_000);
 
   it("a target that answers 401 without reading its body: the caller gets the 401, every relay.body is answered, and the gateway stops reading the caller's body", async () => {
-    behavior = () => Promise.resolve(new Response("nope", { status: 401 }));
+    behavior = async () => {
+      // why: the 401 comes after the gateway has filled its window, so relay.body calls are pending when the relay settles
+      await sleep(300);
+      return new Response("nope", { status: 401 });
+    };
     const { relay, spy } = await startPair();
     let pulls = 0;
     let cancelled = false;
@@ -427,6 +431,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     expect(response.status).toBe(401);
     expect(text).toBe("nope");
+    expect(spy.maxUnanswered).toBeGreaterThanOrEqual(1);
     expect(pulls).toBe(pullsAfterAnswer);
     expect(pulls).toBeLessThan(100);
     expect(cancelled).toBe(true);

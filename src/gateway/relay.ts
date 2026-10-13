@@ -247,9 +247,15 @@ class Exchange {
       this.#invalid();
       return;
     }
-    this.#headed = true;
     const responseHeaders = new Headers();
-    for (const [name, value] of headers) responseHeaders.append(name, value);
+    try {
+      for (const [name, value] of headers) responseHeaders.append(name, value);
+    } catch {
+      // why: `Headers` refuses a value above U+00FF that the push schema lets through.
+      this.#invalid();
+      return;
+    }
+    this.#headed = true;
     const method = this.init.call.request.method;
     if (method === "HEAD" || NO_BODY_STATUSES.has(status)) {
       this.init.resolve(new Response(null, { headers: responseHeaders, status }));
