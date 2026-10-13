@@ -8,3 +8,4 @@ dist/
 .stryker-tmp/
 test-results/
 playwright-report/
+.agent-device

@@ -38,7 +38,7 @@ export async function exchange(
     const response = await context.link.forward(request, identity);
     const text = await response.text();
     const reading = readReply(text, call);
-    // why: a 5xx or a body that is not a JSON-RPC reply ends the call as a 502, and its reason is only in what agent-device sent.
+    // why: the reason for a 5xx or a body that is not a JSON-RPC reply is only in what agent-device sent.
     if (reading.kind === "unusable" || response.status >= 500) {
       context.logger.warn("agent-device lease call got an unusable or failed reply", {
         body: text.slice(0, BODY_LOG_CHARS),

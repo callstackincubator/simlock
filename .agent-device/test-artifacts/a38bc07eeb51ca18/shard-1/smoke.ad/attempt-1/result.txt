@@ -1,6 +1,0 @@
-file: /var/folders/tb/j39z273s5kn7lb9tz1dhk8l00000gn/T/simlock-ad-suite-M4EFDV/smoke.ad
-session: tok_940277d2-b72a-4041-9669-465921028f23:adc-6aa503d4e031241a8e83d4fadd7c0c5d:shard-1:test:a38bc07eeb51ca18:1-smoke:attempt-1
-attempt: 1/1
-status: passed
-replayed: 1
-healed: 0

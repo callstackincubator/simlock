@@ -568,6 +568,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const upload = await send(rig, "/upload/preflight", { body: "{}" });
 
     expect(health.status).toBe(200);
+    expect(rpcAnswer.status).toBe(503);
+    expect(upload.status).toBe(503);
     expect(await health.text()).toContain(`${notAvailable}${reason}`);
     expect((await envelopeOf(rpcAnswer)).error?.message).toBe(`${notAvailable}${reason}`);
     expect(await upload.text()).toContain(`${notAvailable}${reason}`);
