@@ -31,6 +31,23 @@ describe("BuiltinDeviceProfileSource", () => {
     ]);
   });
 
+  it("keeps a profile's raw Tag value as tag, besides the class it maps to", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        `Available devices:\nid: 0 or "tv_sdk"\n    Name: Sdk TV\n    OEM : Google\n    Tag : google-tv\n---------\n` +
+          `id: 1 or "glasses"\n    Name: Glasses\n    OEM : Google\n    Tag : ai-glasses\n`,
+      ),
+    ]);
+    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+
+    const profiles = await source.profiles();
+
+    expect(profiles.map((profile) => [profile.name, "tag" in profile && profile.tag])).toEqual([
+      ["Sdk TV", "google-tv"],
+      ["Glasses", "ai-glasses"],
+    ]);
+  });
+
   it("marks a profile custom only when avdmanager lists it with OEM : User", async () => {
     const runner = new ScriptedProcessRunner([
       processResult(

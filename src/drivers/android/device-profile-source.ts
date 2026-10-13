@@ -10,6 +10,7 @@ export type DeviceProfile =
       readonly custom: boolean;
       /** From the entry's `Tag :` line (ADR 0015 §3); `undefined` for a tag the table does not know. */
       readonly deviceClass: DeviceClass | undefined;
+      readonly tag?: string | undefined;
     }
   | {
       readonly kind: "library";

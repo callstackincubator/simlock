@@ -3335,6 +3335,7 @@ describe("Doctor: warm pool targets", () => {
     readonly enabled?: boolean;
     readonly limit?: { ios?: number; android?: number; global?: number };
     readonly figures?: ReturnType<typeof figuresOf>;
+    readonly driver?: Omit<ConstructorParameters<typeof FakeDriver>[0], "clock">;
   }): Promise<DoctorFinding[]> {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -3352,7 +3353,7 @@ describe("Doctor: warm pool targets", () => {
           targets: options.targets ?? [],
         },
       },
-      drivers: [new FakeDriver({ clock, platform: "ios" })],
+      drivers: [new FakeDriver({ clock, platform: "ios", ...options.driver })],
       eventBus,
       registry,
       warmPool: {
@@ -3381,6 +3382,53 @@ describe("Doctor: warm pool targets", () => {
         remedy: "run simlock component install ios 27.0",
         target: "iPhone 17 / 27.0 / full",
       },
+    ]);
+  });
+
+  it.each([
+    ["ios", "iOS", "iPhone 17", ["18.0", "26.0"], "26.0"],
+    ["android", "Android", "Television (1080p)", ["34", "35"], "35"],
+  ] as const)(
+    "names simlock catalog, not component install, for an installed %s version the target's model does not pair with",
+    async (platform, name, model, runtimes, unpaired) => {
+      const found = await findings({
+        driver: {
+          availableOsVersions: [...runtimes],
+          knownModels: [model],
+          modelRuntimes: { [model]: runtimes.filter((runtime) => runtime !== unpaired) },
+          platform,
+        },
+        figures: figuresOf([{ model, osVersion: unpaired, platform, short: "runtime-missing" }]),
+      });
+
+      expect(found).toStrictEqual([
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `${model} does not pair with ${name} ${unpaired}`,
+          platform,
+          reason: "runtime-missing",
+          remedy: `run simlock catalog --platform ${platform}`,
+          target: `${model} / ${unpaired} / full`,
+        },
+      ]);
+    },
+  );
+
+  it("keeps the install text for a version the platform's catalog does not list", async () => {
+    const found = await findings({
+      driver: {
+        availableOsVersions: ["26.0"],
+        knownModels: ["iPhone 17"],
+        platform: "ios",
+      },
+      figures: figuresOf([{ model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" }]),
+    });
+
+    expect(found).toStrictEqual([
+      expect.objectContaining({
+        message: "iOS 27.0 is not installed",
+        remedy: "run simlock component install ios 27.0",
+      }),
     ]);
   });
 

@@ -1,5 +1,8 @@
+import type { DeviceProfile } from "./device-profile-source.js";
+
 export interface ImageFitInput {
   readonly apiLevel: string;
+  readonly sourceApiLevel?: string | undefined;
   readonly tag: string;
   readonly tags: readonly string[];
 }
@@ -16,4 +19,8 @@ export function isPlayStoreImage(image: ImageFitInput): boolean {
     image.tag !== "android-wear-cn" &&
     Number(image.apiLevel) >= MIN_WEAR_PLAY_STORE_API
   );
+}
+
+export function fits(_profile: DeviceProfile, _image: ImageFitInput): boolean {
+  return true;
 }

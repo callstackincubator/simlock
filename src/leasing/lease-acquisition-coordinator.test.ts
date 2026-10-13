@@ -3285,3 +3285,70 @@ describe("LeaseAcquisitionCoordinator: resolve", () => {
     });
   });
 });
+
+describe("LeaseAcquisitionCoordinator: levels a model no longer pairs with", () => {
+  const pixel = { model: "Pixel 8", physical: false, platform: "android" } as const;
+  const owner = (id: string) => ({ ownerId: id, requesterId: id });
+
+  class PairingDriver extends FakeDriver {
+    override async resolveSpec(
+      ...args: Parameters<FakeDriver["resolveSpec"]>
+    ): Promise<VirtualSpec> {
+      const catalog = await this.listCatalog();
+      const { model, osVersion } = args[0];
+      if (osVersion !== undefined && !(catalog.modelRuntimes[model] ?? []).includes(osVersion)) {
+        throw new RuntimeMissingError("android", osVersion);
+      }
+      return super.resolveSpec(...args);
+    }
+  }
+
+  function pairing(): PairingDriver {
+    return new PairingDriver({
+      availableOsVersions: ["34", "35"],
+      clock: new FakeClock(1_000),
+      knownModels: ["Pixel 8"],
+      modelRuntimes: { "Pixel 8": ["35"] },
+      platform: "android",
+    });
+  }
+
+  it("reuses an idle device on a level the catalog pairs for an exact request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "35" });
+
+    const granted = await harness.coordinator.request(
+      { ...pixel, osVersion: "35" },
+      owner("agent"),
+    );
+
+    expect(granted.device.id).toBe(idle.id);
+  });
+
+  it("does not pick an idle device on a level the catalog no longer pairs for an exact request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "34" });
+
+    const outcome = await harness.coordinator
+      .request({ ...pixel, osVersion: "34" }, owner("agent"))
+      .then(
+        (granted) => ({ granted: granted.device.id }),
+        (error: unknown) => ({ failed: (error as Error).name }),
+      );
+
+    expect(outcome).toEqual({ failed: "RuntimeMissingError" });
+    expect(idle.state).toBe("ready");
+  });
+
+  it("still picks an idle device on a level the catalog no longer pairs for a range request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "34" });
+
+    const granted = await harness.coordinator.request(
+      { model: "Pixel 8", osVersion: ">=34", platform: "android" },
+      owner("agent"),
+    );
+
+    expect(granted.device.id).toBe(idle.id);
+  });
+});
