@@ -15,7 +15,7 @@
 // prose runs over 200 words: everything outside code blocks, checklist lines and the Status,
 // Assumptions and Review sections (rule 12). `--draft-ok` turns every failure into a warning,
 // for the check that runs while the PR is still a draft. `--body-file <f> [--branch <b>]` reads
-// a body from a file instead of GitHub.
+// a body from a file instead of GitHub. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
@@ -39,13 +39,16 @@ if (fileAt !== -1) {
     console.error("usage: pr-body-check.mjs <pr> [--draft-ok] | --body-file <f> [--branch <b>]");
     process.exit(64);
   }
-  // why: one field per call, with -q, is the shape merge-pr.sh and its test's fake gh answer.
-  const view = (field) =>
-    execFileSync("gh", ["pr", "view", pr, "--json", field, "-q", `.${field}`], {
+  // why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr view` uses; repo-scoped
+  // REST works.
+  const pull = JSON.parse(
+    execFileSync("gh", ["api", "-X", "GET", `repos/${repository()}/pulls/${pr}`], {
       encoding: "utf8",
-    });
-  body = view("body");
-  branch = view("headRefName").trim();
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+  );
+  body = pull.body ?? "";
+  branch = pull.head.ref;
 }
 body = body.replace(/\r/g, "");
 
@@ -117,6 +120,14 @@ for (const f of failures) {
   console.log(`${gh ? (draftOk ? "::warning::" : "::error::") : "pr-body: "}${f}`);
 }
 process.exit(failures.length > 0 && !draftOk ? 1 : 0);
+
+function repository() {
+  if (process.env.GH_REPO) return process.env.GH_REPO;
+  const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
+  if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
+  return `${match[1]}/${match[2]}`;
+}
 
 function withoutCodeBlocks(text) {
   let inside = false;

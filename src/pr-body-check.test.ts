@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,39 @@ function check(body: string, ...args: string[]) {
       encoding: "utf8",
       env: { ...process.env, GITHUB_ACTIONS: "" },
     });
+    return { status: 0, lines: stdout.split("\n").filter((l) => l !== "") };
+  } catch (error) {
+    const failed = error as { status: number; stdout: string };
+    return { status: failed.status, lines: failed.stdout.split("\n").filter((l) => l !== "") };
+  }
+}
+
+function fromGitHub(pull: object, options: { origin?: boolean } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "pr-body-gh-"));
+  writeFileSync(join(dir, "pull.json"), JSON.stringify(pull));
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh
+[ "$*" = "api -X GET repos/o/r/pulls/7" ] || { echo "fake gh: unexpected: $*" >&2; exit 9; }
+cat ${JSON.stringify(join(dir, "pull.json"))}
+`,
+  );
+  chmodSync(join(dir, "gh"), 0o755);
+  const env = {
+    ...process.env,
+    PATH: `${dir}:${process.env.PATH}`,
+    GH_REPO: "o/r",
+    GITHUB_ACTIONS: "",
+  };
+  let cwd: string | undefined;
+  if (options.origin === true) {
+    delete (env as { GH_REPO?: string }).GH_REPO;
+    cwd = join(dir, "clone");
+    execFileSync("git", ["init", "-q", cwd]);
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/o/r.git"], { cwd });
+  }
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT, "7"], { cwd, encoding: "utf8", env });
     return { status: 0, lines: stdout.split("\n").filter((l) => l !== "") };
   } catch (error) {
     const failed = error as { status: number; stdout: string };
@@ -112,6 +145,26 @@ describe("pr-body-check.mjs", () => {
       .replace("Closes #12", "Closes #12\n\n```\n" + words(300) + "\n```");
     expect(check(uncounted).status).toBe(0);
     expect(check(uncounted).lines).toEqual([]);
+  });
+
+  it("reads a PR's body and branch from the repo-scoped REST pulls endpoint, a null body as empty", () => {
+    const bare = `## Review\n\n${COUNTS}\nRounds: 1. Tokens: 1.0M.\n\n${FOOTER}\n`;
+    expect(fromGitHub({ body: bare, head: { ref: "chore/x" } })).toEqual({ status: 0, lines: [] });
+
+    expect(fromGitHub({ body: bare, head: { ref: "bug/7" } }).lines).toEqual([
+      "pr-body: no `### Status` section",
+      expect.stringContaining("no `## Assumptions` section"),
+    ]);
+    expect(fromGitHub({ body: null, head: { ref: "chore/x" } }).lines).toEqual([
+      expect.stringContaining('the last line is not "*Written by an agent.*"'),
+      expect.stringContaining("no `## Review` section"),
+    ]);
+  });
+
+  it("takes the repo from the origin remote when GH_REPO is unset", () => {
+    const bare = `## Review\n\n${COUNTS}\nRounds: 1. Tokens: 1.0M.\n\n${FOOTER}\n`;
+    const result = fromGitHub({ body: bare, head: { ref: "chore/x" } }, { origin: true });
+    expect(result).toEqual({ status: 0, lines: [] });
   });
 
   it("with --draft-ok, reports every failure as a warning and exits 0", () => {

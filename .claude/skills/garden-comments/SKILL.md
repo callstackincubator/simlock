@@ -44,7 +44,8 @@ node .agents/scripts/comment-lint.mjs --all --base "$base" --head HEAD
 pnpm test:changed
 git add -A && git commit -m "chore(comments): delete comments that say what, not why, since <short base>"
 git push -u origin HEAD
-gh pr create --draft --title "chore(comments): delete comments that say what, not why, since <short base>" --body-file <scratch>/pr.md
+gh api -X POST repos/<owner>/<repo>/pulls -f title="chore(comments): delete comments that say what, not why, since <short base>" \
+  -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
 The body: `<base>..<head>`, how many blocks the lint listed and how many
@@ -60,7 +61,8 @@ them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
 with `Spec review: skipped. Code review: skipped.`. Then `gh pr ready <M>`
-and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR
+(in a cloud session it fails with a 403 naming the proxy's ready-for-review
+route: call that route) and `.agents/scripts/merge-pr.sh <M>`. Anything but a merge: leave the PR
 open and report.
 
 ## Report

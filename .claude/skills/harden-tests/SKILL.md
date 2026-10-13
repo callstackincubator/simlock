@@ -64,7 +64,8 @@ Run each changed test file once more, then:
 ```bash
 git add -A && git commit -m "test(harden): kill the mutants main's changes left alive since <short base>"
 git push -u origin HEAD
-gh pr create --draft --title "test(harden): kill the mutants main's changes left alive since <short base>" --body-file <scratch>/pr.md
+gh api -X POST repos/<owner>/<repo>/pulls -f title="test(harden): kill the mutants main's changes left alive since <short base>" \
+  -f head="$(git branch --show-current)" -f base=main -F draft=true -F body=@<scratch>/pr.md -q .number
 ```
 
 The body: `<base>..<head>`, the mutant and survivor counts, then one line
@@ -79,8 +80,9 @@ that name, `previous <Commit>` and the Fix lines. `Rerun: none` with
 findings open: leave the PR in draft and report them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
-with `Spec review: skipped.`. Then `gh pr ready <M>` and
-`.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
+with `Spec review: skipped.`. Then `gh pr ready <M>` (in a cloud session it
+fails with a 403 naming the proxy's ready-for-review route: call that route)
+and `.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
 it once and run the gate again. Anything else: leave the PR open and report.
 
 ## Report
