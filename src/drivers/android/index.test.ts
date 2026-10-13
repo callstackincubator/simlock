@@ -5187,6 +5187,7 @@ class WriteFailureFilesystem extends MemoryFilesystem {
 async function libraryHarness(
   options: {
     readonly devicesXml?: string;
+    readonly extraImages?: readonly (readonly [string, string, string])[];
     readonly filesystem?: MemoryFilesystem;
     readonly imageProperties?: string;
     readonly imageTag?: string;
@@ -5200,7 +5201,10 @@ async function libraryHarness(
 ) {
   const tag = options.imageTag ?? "google_apis";
   const filesystem = options.filesystem ?? new MemoryFilesystem();
-  await androidFilesystem({ images: [["35", tag, "arm64-v8a"]] }, filesystem);
+  await androidFilesystem(
+    { images: [["35", tag, "arm64-v8a"], ...(options.extraImages ?? [])] },
+    filesystem,
+  );
   const imageProperties = options.imageProperties ?? `Pkg.Revision=1\nSystemImage.TagId=${tag}\n`;
   if (imageProperties !== "") {
     await filesystem.writeFileAtomic(
@@ -6096,6 +6100,7 @@ describe("AndroidDriver custom profile fit from devices.xml", () => {
     const keysOf = async (xml: string) => {
       const harness = await libraryHarness({
         devicesXml: xml,
+        extraImages: [["35", "android-tv", "arm64-v8a"]],
         secondList: true,
       });
       await harness.provision("Keyed");
