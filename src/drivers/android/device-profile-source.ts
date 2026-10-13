@@ -214,6 +214,28 @@ function matchProfile(
   );
 }
 
+interface HiddenUserProfile {
+  readonly userName: string;
+  readonly libraryName: string;
+}
+
+export async function hiddenUserProfiles(
+  library: DeviceProfileSource,
+  user: DeviceProfileSource,
+): Promise<readonly HiddenUserProfile[]> {
+  const libraryProfiles = await library.profiles();
+  const hidden: HiddenUserProfile[] = [];
+  for (const profile of await user.profiles()) {
+    const shadow = profile.names
+      .map((name) => matchProfile(libraryProfiles, name))
+      .find((match) => match !== undefined);
+    if (shadow !== undefined) {
+      hidden.push({ libraryName: shadow.name, userName: profile.name });
+    }
+  }
+  return hidden;
+}
+
 /** Today's behavior, refactored behind `DeviceProfileSource`: resolves against `avdmanager list device`. */
 export class BuiltinDeviceProfileSource implements DeviceProfileSource {
   readonly #avdmanager: string;
@@ -240,7 +262,6 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
    * profiles come before custom ones, so a real SDK profile wins a name clash with a
    * devices.xml one whatever order `avdmanager` prints them in.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the DeviceProfileSource port by DeviceProfileRegistry.
   async profiles(): Promise<readonly DeviceProfile[]> {
     const profiles = (await this.#avdmanagerProfiles()).map(
       (profile): DeviceProfile => ({

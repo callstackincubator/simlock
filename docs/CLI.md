@@ -2129,6 +2129,15 @@ protocol version, for example the one in the SDK's `platform-tools`. Nothing
 is reported when no server is listening on that port. Advisory only, like the
 findings above — there is no `--fix` for it.
 
+`doctor` also reports a `driver-advisory` finding (code
+`device-profile-hidden`) for each profile in your Android `devices.xml` whose
+name one of Simlock's own Android profiles answers to, in the file's order. The
+message names the `devices.xml` profile and the Simlock profile that is used
+instead; Simlock reads its own profile first, so the one in `devices.xml` is
+never used. A name that Simlock's profile shares with the SDK is not reported,
+because the two agree. Rename the profile in `devices.xml` to use it. Advisory
+only — there is no `--fix` for it.
+
 `doctor` also checks the [prerequisites](#prerequisites) of each platform
 this host can run (iOS only on macOS), every time it runs. Each one missing is
 a `prerequisite-missing` finding with `platform`, `prerequisite` (for example

@@ -61,6 +61,7 @@ import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
   BuiltinDeviceProfileSource,
+  hiddenUserProfiles,
   containsForbiddenCharacter,
   DeviceProfileRegistry,
   parseAvdmanagerDeviceProfiles,
@@ -462,6 +463,7 @@ export class AndroidDriver implements Driver {
   readonly #acceptAndroidLicenses: boolean;
   readonly #clock: Clock;
   readonly #deviceProfiles: DeviceProfileRegistry;
+  readonly #profileSources: ReturnType<typeof defaultDeviceProfileSources> | undefined;
   readonly #devices = new Map<string, DeviceState>();
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
@@ -529,9 +531,14 @@ export class AndroidDriver implements Driver {
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
+    const defaults =
+      options.deviceProfileSources === undefined
+        ? defaultDeviceProfileSources(options, sdk, this.#onDiagnostic, () => this.#env())
+        : undefined;
+    this.#profileSources = defaults;
     this.#deviceProfiles = new DeviceProfileRegistry(
       options.deviceProfileSources ??
-        defaultDeviceProfileSources(options, sdk, this.#onDiagnostic, () => this.#env()),
+        (defaults === undefined ? [] : [defaults.library, defaults.builtin, defaults.user]),
     );
   }
 
@@ -1069,7 +1076,19 @@ export class AndroidDriver implements Driver {
   }
 
   async advisories(): Promise<readonly DriverAdvisory[]> {
-    return this.#physical.advisories();
+    const physical = await this.#physical.advisories();
+    if (this.#profileSources === undefined) return physical;
+    const hidden = await hiddenUserProfiles(
+      this.#profileSources.library,
+      this.#profileSources.user,
+    );
+    return [
+      ...physical,
+      ...hidden.map(({ libraryName, userName }) => ({
+        code: "device-profile-hidden",
+        message: `"${userName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`,
+      })),
+    ];
   }
 
   async listManaged(): Promise<DriverReality> {
@@ -2566,18 +2585,22 @@ function defaultDeviceProfileSources(
   sdk: AndroidSdkPaths,
   onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
   env: () => NodeJS.ProcessEnv,
-): readonly DeviceProfileSource[] {
+): {
+  readonly library: DeviceProfileSource;
+  readonly builtin: DeviceProfileSource;
+  readonly user: DeviceProfileSource;
+} {
   const { ANDROID_PREFS_ROOT, ANDROID_SDK_HOME, ANDROID_USER_HOME } = options.env;
   const devicesXmlPath =
     ANDROID_USER_HOME !== undefined
       ? `${ANDROID_USER_HOME}/devices.xml`
       : `${ANDROID_PREFS_ROOT ?? ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
-  return [
-    new LibraryDeviceProfileSource(),
+  return {
+    library: new LibraryDeviceProfileSource(),
     // Scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
-    new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
-    new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
-  ];
+    builtin: new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
+    user: new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
+  };
 }
 
 function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAllocator {
