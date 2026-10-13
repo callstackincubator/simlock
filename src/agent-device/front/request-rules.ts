@@ -194,25 +194,29 @@ function wrongDeviceKey(check: Check, source: Fields): boolean {
   return check.leased?.deviceKey === undefined || source["deviceKey"] !== check.leased.deviceKey;
 }
 
-async function ruleSelectors(check: Check, unit: Unit): Promise<void> {
-  if (unit.kind === "install") return;
+function ruleAddresses(check: Check, unit: Unit): void {
   const leased = check.leased;
   for (const place of places(unit)) {
     for (const field of ["udid", "serial"]) {
-      if (present(place[field]) && (leased === undefined || place[field] !== leased.address)) {
-        throw refuse(SIMLOCK_PICKS);
-      }
+      if (present(place[field]) && place[field] !== leased?.address) throw refuse(SIMLOCK_PICKS);
     }
     if (wrongDeviceKey(check, place)) throw refuse(SIMLOCK_PICKS);
   }
   if (!unit.isStep && wrongDeviceKey(check, check.meta)) throw refuse(SIMLOCK_PICKS);
+}
+
+async function ruleSelectors(check: Check, unit: Unit): Promise<void> {
+  if (unit.kind === "install") return;
+  ruleAddresses(check, unit);
   if (unit.kind === "allocate") return;
   if (unit.command === "test") return ruleShardList(check, unit);
   let rewritten = false;
   for (const place of places(unit)) {
     if (await ruleDevice(check, place)) rewritten = true;
   }
-  if (rewritten && leased !== undefined) flagsOf(unit)[leasedAddressField(leased)] = leased.address;
+  if (rewritten && check.leased !== undefined) {
+    flagsOf(unit)[leasedAddressField(check.leased)] = check.leased.address;
+  }
 }
 
 async function ruleSharding(check: Check, unit: Unit): Promise<void> {
@@ -343,6 +347,11 @@ export async function checkRequest(
   }
 }
 
+function checkMeta(check: Check): void {
+  const key = check.meta["deviceKey"];
+  if (present(key) && typeof key !== "string") throw refuse("refused: malformed deviceKey");
+}
+
 async function run(
   context: FrontContext,
   identity: TokenIdentity,
@@ -357,16 +366,12 @@ async function run(
   if (main === undefined) return { kind: "accepted", read };
   const units = [main, ...stepsOf(main)];
   const check = buildCheck(context, identity, platforms, params, main.kind);
-  const metaKey = check.meta["deviceKey"];
-  if (present(metaKey) && typeof metaKey !== "string") throw refuse("refused: malformed deviceKey");
+  checkMeta(check);
   for (const unit of units) checkTypes(unit);
   for (const unit of units) await applyRules(check, unit);
   if (main.command === "devices" && Boolean(check.meta["requestProgress"])) {
     throw refuse("refused: devices does not stream through simlock");
   }
   if (!check.changed) return { kind: "accepted", read };
-  return {
-    kind: "accepted",
-    read: { ...read, body, params, text: JSON.stringify(body) },
-  };
+  return { kind: "accepted", read: { ...read, body, params, text: JSON.stringify(body) } };
 }
