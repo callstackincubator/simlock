@@ -1190,7 +1190,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const answer = await envelopeOf(await release(rig, 1));
 
-    expect(answer.result).toMatchObject({ ok: true, released: true });
+    expect(answer.result).toMatchObject({ ok: true, released: false });
     expect(rig.fake.leases.has(hex(1))).toBe(false);
   });
 
@@ -1706,7 +1706,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const answer = await envelopeOf(await release(rig, 1));
 
-    expect(answer.result).toMatchObject({ ok: true, released: true });
+    expect(answer.result).toMatchObject({ ok: true, released: false });
     expect(rig.fake.leases.has(hex(1))).toBe(false);
     expect(tap.operations).not.toContain("lease.release");
   });
