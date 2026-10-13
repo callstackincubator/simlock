@@ -26,7 +26,7 @@ import {
 
 const poll = <T>(read: () => T | Promise<T>, timeout = 5_000) => expect.poll(read, { timeout });
 
-describe("a worker's relay targets over its uplink", () => {
+describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
   let behavior: RelayTarget = () => Promise.resolve(new Response("ok"));

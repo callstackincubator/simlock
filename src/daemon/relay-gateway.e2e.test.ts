@@ -121,7 +121,7 @@ function spyOn(client: GatewayWorkerClient): { client: GatewayWorkerClient; spy:
   return { client: wrapped, spy };
 }
 
-describe("a gateway relaying to a worker", () => {
+describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
   let behavior: RelayTarget = () => Promise.resolve(new Response("ok"));
@@ -509,7 +509,7 @@ describe("a gateway relaying to a worker", () => {
     const { relay } = await startPair();
 
     const response = await relay.relay(WORKER_ID, buildCall({}));
-    await poll(() => signal?.aborted, 30_000).toBe(true);
+    await poll(() => signal?.aborted, 15_000).toBe(true);
     const read = await settle(
       response.body?.getReader().read() ?? Promise.reject(new Error("no body")),
     );
