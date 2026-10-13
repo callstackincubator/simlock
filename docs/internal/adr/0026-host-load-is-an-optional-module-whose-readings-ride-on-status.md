@@ -192,9 +192,12 @@ sequenceDiagram
   G-->>C: view without load ("no reading while disconnected")
 ```
 
-`WorkerRegistry.disconnected` drops `load`, as it already drops `installs`
-and `waiting`. That is the one place a view loses it, and a disconnected
-view never carries it. A reconnect fills it in again on the next refresh.
+The worker registry owns the rule that a view not `connected` carries no
+`load`. It drops `load` when a worker disconnects or turns incompatible, as
+it already drops `installs` and `waiting`. A refresh never adds `load` to
+such a view, even when a `status.get` answer lands after the disconnect.
+A refresh that carries no `load` removes the old one rather than keeping
+it. A reconnect fills `load` in again on the next refresh.
 
 ### 6. A gateway reports its own machine, and sums nothing
 
