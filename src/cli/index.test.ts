@@ -1369,6 +1369,32 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(JSON.parse(output.stdout)).toEqual({ findings });
   });
 
+  it("simlock doctor prints a driver-advisory finding to stderr as `Warning [<platform>] <code>: <message>`", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        code: "device-profile-hidden",
+        kind: "driver-advisory" as const,
+        message: '"Pixel 9" in devices.xml is not used',
+        platform: "android" as const,
+      },
+    ];
+
+    await expect(
+      runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stderr.split("\n")).toContain(
+      'Warning [android] device-profile-hidden: "Pixel 9" in devices.xml is not used',
+    );
+  });
+
   it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
     const output = outputCapture();
     const findings = [

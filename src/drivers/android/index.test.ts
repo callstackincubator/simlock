@@ -1982,6 +1982,133 @@ describe("AndroidDriver", () => {
     expect(device?.mark).toBeUndefined();
   });
 
+  describe("device-profile-hidden advisories", () => {
+    const hiddenMessage = (xmlName: string, libraryName: string) =>
+      `"${xmlName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`;
+
+    // why: the fake adb server answers no version, so the physical handler adds its own advisory.
+    async function hiddenProfileAdvisories(driver: AndroidDriver) {
+      return (await driver.advisories()).filter(
+        (advisory) => advisory.code === "device-profile-hidden",
+      );
+    }
+
+    async function advisoriesFor(devicesXml: string | undefined, listing = pixelDevices) {
+      const filesystem = await androidFilesystem();
+      if (devicesXml !== undefined) await writeDevicesXml(filesystem, devicesXml);
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], listing),
+      ]);
+      const driver = await createDriver(filesystem, runner);
+      return { advisories: await hiddenProfileAdvisories(driver), runner };
+    }
+
+    it("reports `device-profile-hidden` for a `devices.xml` profile named like a library profile, with the message naming both", async () => {
+      const { advisories } = await advisoriesFor(customDeviceXml("Pixel 9", 4096));
+
+      expect(advisories).toEqual([
+        { code: "device-profile-hidden", message: hiddenMessage("Pixel 9", "Pixel 9") },
+      ]);
+    });
+
+    it("reports one matching a library profile's other name, in any letter case, naming the library profile's display name", async () => {
+      const { advisories } = await advisoriesFor(
+        customDeviceXml("pixel_9", 4096) + customDeviceXml("PIXEL 9", 4096),
+      );
+
+      expect(advisories).toEqual([
+        { code: "device-profile-hidden", message: hiddenMessage("pixel_9", "Pixel 9") },
+        { code: "device-profile-hidden", message: hiddenMessage("PIXEL 9", "Pixel 9") },
+      ]);
+    });
+
+    it("reports two hidden profiles as two advisories, in `devices.xml` order", async () => {
+      const { advisories } = await advisoriesFor(
+        customDeviceXml("Pixel 9", 4096) + customDeviceXml("Pixel 8", 4096),
+      );
+
+      expect(advisories.map((advisory) => advisory.message)).toEqual([
+        hiddenMessage("Pixel 9", "Pixel 9"),
+        hiddenMessage("Pixel 8", "Pixel 8"),
+      ]);
+    });
+
+    it("reports nothing for a `devices.xml` profile no library profile answers to", async () => {
+      const { advisories } = await advisoriesFor(customDeviceXml("My Tablet", 4096));
+
+      expect(advisories).toEqual([]);
+    });
+
+    it("reports nothing for a library name the SDK also lists", async () => {
+      const sdkListing = `Available devices:\nid: 0 or "pixel_9"\n    Name: Pixel 9\n    OEM : Google\n`;
+
+      const { advisories } = await advisoriesFor(undefined, sdkListing);
+
+      expect(advisories).toEqual([]);
+    });
+
+    it("reports one advisory per profile when `avdmanager list device` also lists it with `OEM : User`, and runs no `avdmanager`", async () => {
+      const userListing = `Available devices:\nid: 0 or "Pixel 9"\n    Name: Pixel 9\n    OEM : User\n`;
+
+      const { advisories, runner } = await advisoriesFor(
+        customDeviceXml("Pixel 9", 4096),
+        userListing,
+      );
+
+      expect(advisories).toEqual([
+        { code: "device-profile-hidden", message: hiddenMessage("Pixel 9", "Pixel 9") },
+      ]);
+      expect(runner.calls.map((call) => call.command)).not.toContain(binaries.avdmanager);
+    });
+
+    it("reports nothing when `devices.xml` is missing or unreadable", async () => {
+      const missing = await advisoriesFor(undefined);
+      const filesystem = await androidFilesystem();
+      await filesystem.mkdirp(`${home}/.android`);
+      await filesystem.writeFileAtomic(`${home}/.android/devices.xml`, "not xml at all {{{");
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+      expect(missing.advisories).toEqual([]);
+      expect(await hiddenProfileAdvisories(driver)).toEqual([]);
+    });
+
+    it("keeps the physical handler's advisories, before the new ones", async () => {
+      const base = await androidFilesystem();
+      await writeDevicesXml(base, customDeviceXml("Pixel 9", 4096));
+      let broken = false;
+      const filesystem = new Proxy(base, {
+        get(target, property) {
+          if (property === "stat" && broken) {
+            return async () => {
+              throw new Error("EACCES");
+            };
+          }
+          const value = Reflect.get(target, property) as unknown;
+          return typeof value === "function" ? (value as () => unknown).bind(target) : value;
+        },
+      });
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+      broken = true;
+
+      const advisories = await driver.advisories();
+
+      expect(advisories.map((advisory) => advisory.code)).toEqual([
+        "adb-protocol-mismatch",
+        "device-profile-hidden",
+      ]);
+    });
+
+    it("reports no hidden profiles for a driver built with injected `deviceProfileSources`", async () => {
+      const filesystem = await androidFilesystem();
+      await writeDevicesXml(filesystem, customDeviceXml("Pixel 9", 4096));
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]), {
+        deviceProfileSources: [],
+      });
+
+      expect(await hiddenProfileAdvisories(driver)).toEqual([]);
+    });
+  });
+
   describe("device-profile sources", () => {
     it("resolves a devices.xml-only model and applies its properties to config.ini before the config hash is captured", async () => {
       const filesystem = await androidFilesystem();
