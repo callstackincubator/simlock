@@ -14,6 +14,7 @@ import {
   releaseAgentDevice,
   releaseSimlock,
   relay,
+  unreachableReply,
   scopeOf,
   type Exchange,
   type FrontContext,
@@ -66,7 +67,7 @@ async function leaseStillThere(
     scopeOf(call.params, REPLY_SCOPE_KEYS),
   );
   if (ended.response === undefined) {
-    return frontReply(failure("agent-device did not answer the release"), call);
+    return unreachableReply(ended, call, "agent-device did not answer the release");
   }
   if (ended.reading.kind !== "success") return relay(ended);
   return releaseOurs(context, identity, leaseId, call, false);
@@ -134,7 +135,9 @@ export async function heartbeat(
     undefined,
     leaseId,
   );
-  if (leaseId === undefined || reply.response === undefined) return relay(reply);
+  if (reply.response === undefined)
+    return unreachableReply(reply, call, "agent-device did not answer the heartbeat");
+  if (leaseId === undefined) return relay(reply);
   const reading: ReplyReading = reply.reading;
   if (reading.kind === "success") {
     if (entry === undefined) return leaseStillThere(context, arguments_, leaseId);

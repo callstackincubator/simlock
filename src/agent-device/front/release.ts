@@ -1,7 +1,6 @@
 import type { TokenIdentity } from "../../http/token-store.js";
-import { failure, frontReply } from "../shared/replies.js";
 import { leaseCallFields, leaseIdOf, type RpcRead } from "../shared/rpc.js";
-import { exchange, relay, releaseSimlock, type FrontContext } from "./context.js";
+import { exchange, relay, releaseSimlock, unreachableReply, type FrontContext } from "./context.js";
 
 export async function release(
   context: FrontContext,
@@ -12,7 +11,7 @@ export async function release(
   const leaseId = leaseIdOf(leaseCallFields(call.params).leaseId);
   const reply = await exchange(context, forwarded, identity, undefined, leaseId);
   if (reply.response === undefined) {
-    return frontReply(failure("agent-device did not answer the release"), call);
+    return unreachableReply(reply, call, "agent-device did not answer the release");
   }
   if (leaseId === undefined || reply.reading.kind !== "success") return relay(reply);
   const entry = context.map.get(leaseId);

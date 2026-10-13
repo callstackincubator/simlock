@@ -1205,4 +1205,35 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     ).toHaveLength(1);
     member.fake.releaseCommand();
   });
+
+  it("stopping the gateway cancels the link's sweep of a lease the fleet removed, leaving the timers a gateway with no agent-device activity leaves", async () => {
+    const idle = await setUp();
+    await idle.gateway.stop("test");
+    const rig = await setUp();
+    await granted(rig, 1);
+    expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({ ok: true });
+    await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
+    expect(rig.clock.pendingTimerCount).toBeGreaterThan(idle.clock.pendingTimerCount);
+
+    await rig.gateway.stop("test");
+
+    expect(rig.clock.pendingTimerCount).toBe(idle.clock.pendingTimerCount);
+  });
+
+  it("a heartbeat, a release and an allocate whose relay fails with `RELAY_TARGET_MISSING` answer the notAvailable reply with that message, and the failed allocate leaves no lease", async () => {
+    const rig = await setUp();
+    const member = first(rig);
+    await granted(rig, 1);
+    const missing = `${notAvailable}no relay target agent-device on this worker`;
+    relayFailsWith(rig, "RELAY_TARGET_MISSING", "no relay target agent-device on this worker");
+
+    const beat = await heartbeat(rig, 1);
+    const released = await release(rig, 1);
+    const made = await allocate(rig, 2);
+
+    expect((await envelopeOf(beat)).error?.message).toBe(missing);
+    expect((await envelopeOf(released)).error?.message).toBe(missing);
+    expect((await envelopeOf(made)).error?.message).toBe(missing);
+    await expect.poll(async () => (await workerLeases(member)).length).toBe(1);
+  });
 });

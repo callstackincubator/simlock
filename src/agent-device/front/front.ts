@@ -31,7 +31,7 @@ interface Routed {
   readonly request: Request;
 }
 
-// why: the one place the front reads the lease id a call names; a new lease has none yet, so its status is read without one.
+// why: the lease id the link's status and a command's route are read with; a new lease has none yet, so its status is read without one.
 function leaseOf(
   kind: CallClass,
   read: RpcRead & { readonly kind: "request" },

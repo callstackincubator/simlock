@@ -19,6 +19,7 @@ import {
   releaseSimlock,
   relay,
   scopeOf,
+  unreachableReply,
   type FrontContext,
 } from "./context.js";
 import { chosenTtl } from "./ttl.js";
@@ -294,7 +295,7 @@ export async function allocate(
     return relay(reply);
   }
   await settleNoReply(context, made);
-  return frontReply(failure("agent-device did not answer the allocate"), call);
+  return unreachableReply(reply, call, "agent-device did not answer the allocate");
 }
 
 async function keepOrRelease(
