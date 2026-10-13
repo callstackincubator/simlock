@@ -261,30 +261,57 @@ async function withCallerCredentials(request: Request, response: Response): Prom
   }
 }
 
+type HeaderLease = { readonly leaseId: string | undefined } | { readonly refused: Response };
+
+function readLeaseHeader(request: Request): HeaderLease {
+  const header = request.headers.get(LEASE_HEADER);
+  if (header === null || header === "") return { leaseId: undefined };
+  const leaseId = leaseIdOf(header);
+  if (leaseId !== undefined) return { leaseId };
+  return {
+    refused: frontReply(
+      refusal("refused: the x-agent-device-lease-id header is not a lease id"),
+      undefined,
+    ),
+  };
+}
+
 async function routeByHeader(
   context: FrontContext,
   request: Request,
   identity: TokenIdentity,
 ): Promise<Response> {
-  const header = request.headers.get(LEASE_HEADER);
-  const value = header === null || header === "" ? undefined : header;
-  const leaseId = value === undefined ? undefined : leaseIdOf(value);
-  if (value !== undefined && leaseId === undefined) {
-    return frontReply(
-      refusal("refused: the x-agent-device-lease-id header is not a lease id"),
-      undefined,
-    );
-  }
-  if (leaseId !== undefined) {
-    const status = await context.link.status(leaseId, identity);
-    if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
-  }
+  const read = readLeaseHeader(request);
+  if ("refused" in read) return read.refused;
+  const { leaseId } = read;
+  if (leaseId === undefined) return passThrough(context, request, identity, undefined);
+  const status = await context.link.status(leaseId, identity);
+  if (status.state === "unavailable") return frontReply(notAvailable(status.reason), undefined);
   const response = await passThrough(context, request, identity, undefined, leaseId);
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
   const preflight = request.method === "POST" && path === "/upload/preflight";
-  return leaseId !== undefined && preflight && response.ok
-    ? withCallerCredentials(request, response)
-    : response;
+  return preflight && response.ok ? withCallerCredentials(request, response) : response;
+}
+
+async function handlePlain(
+  context: FrontContext,
+  request: Request,
+  identity: TokenIdentity,
+): Promise<Response> {
+  const status = await context.link.status();
+  const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
+  const probe = request.method === "GET" && path === "/health";
+  if (status.state === "unavailable") {
+    const reply = notAvailable(status.reason);
+    return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
+  }
+  if (!isKnownRoute(request.method, path)) {
+    return frontReply(refusal(`refused: unknown route ${request.method} ${path}`, 404), undefined);
+  }
+  if (probe || !context.link.readsLeaseHeader) {
+    return passThrough(context, request, identity, undefined, undefined, probe);
+  }
+  return routeByHeader(context, request, identity);
 }
 
 export function createFront(context: FrontContext): HttpMount {
@@ -296,23 +323,7 @@ export function createFront(context: FrontContext): HttpMount {
         return frontReply(refusal(AGENT_TOKEN_ONLY, 403), isRpc ? { id: null } : undefined);
       }
       if (isRpc) return handleRpc(context, request, identity);
-      const status = await context.link.status();
-      const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
-      const probe = request.method === "GET" && path === "/health";
-      if (status.state === "unavailable") {
-        const reply = notAvailable(status.reason);
-        return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
-      }
-      if (!isKnownRoute(request.method, path)) {
-        return frontReply(
-          refusal(`refused: unknown route ${request.method} ${path}`, 404),
-          undefined,
-        );
-      }
-      if (probe || !context.link.readsLeaseHeader) {
-        return passThrough(context, request, identity, undefined, undefined, probe);
-      }
-      return routeByHeader(context, request, identity);
+      return handlePlain(context, request, identity);
     },
     prefix: FRONT_MOUNT,
   };
