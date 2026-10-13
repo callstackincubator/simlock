@@ -1,8 +1,8 @@
 # vendor
 
-`agent-device-proxy-0.21.27-dev-54e4e4d.tgz` is `@agent-device/proxy`, packed
+`agent-device-proxy-0.21.28-dev-253dca0.tgz` is `@agent-device/proxy`, packed
 from the `simlock-integration` branch of agent-device at commit
-`54e4e4db971d75ba1ebeb75c0ab7bce45c7d9b28`:
+`253dca023edf13410f7928c76e9e604e5e5871a0`:
 
 ```bash
 pnpm --filter @agent-device/proxy pack --pack-destination <dir>

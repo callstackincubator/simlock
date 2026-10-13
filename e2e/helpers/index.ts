@@ -29,7 +29,6 @@ export {
   listDevices,
   listLeases,
   listRequests,
-  listRows,
   ok,
   setLimits,
   succeeds,

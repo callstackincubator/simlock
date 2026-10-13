@@ -76,7 +76,7 @@ export interface RequestRow {
 // why: the first snapshot on a fresh simulator starts the XCTest runner, which agent-device gives 45 s to start (RUNNER_STARTUP_TIMEOUT_MS in packages/platform-apple/src/runner/runner-startup-transport.ts), so with the command's own 45 s it can pass the CLI's 60 s default and cut off agent-device's answer.
 export const FIRST_SNAPSHOT = { timeout: 180_000 } as const;
 
-export async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
+async function listRows<T>(env: SharedTestEnv, flag: string): Promise<T[]> {
   const result = await env.cli(["list", flag], { timeout: 60_000 });
   expect(result.code, `simlock list ${flag}: ${result.stderr}`).toBe(0);
   return result.json as T[];

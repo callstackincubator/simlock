@@ -212,8 +212,8 @@ importers:
   .:
     dependencies:
       '@agent-device/proxy':
-        specifier: file:vendor/agent-device-proxy-0.21.27-dev-54e4e4d.tgz
-        version: file:vendor/agent-device-proxy-0.21.27-dev-54e4e4d.tgz
+        specifier: file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz
+        version: file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz
       '@hono/node-server':
         specifier: 2.0.10
         version: 2.0.10(hono@4.13.5)
@@ -314,9 +314,9 @@ importers:
 
 packages:
 
-  '@agent-device/proxy@file:vendor/agent-device-proxy-0.21.27-dev-54e4e4d.tgz':
-    resolution: {integrity: sha512-/Q0a2HgHF82DmisG8y5sYsguc5sBc8nEuWuylaemVUWaPmqpJTvwV6aVVsGcluJInU29361hyN27zSbl1v7FiQ==, tarball: file:vendor/agent-device-proxy-0.21.27-dev-54e4e4d.tgz}
-    version: 0.21.27-dev
+  '@agent-device/proxy@file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz':
+    resolution: {integrity: sha512-8vQHEJTDvsQvJchkbX/yZe/BZ2JkF68rsnQ/Ii16kuFCRgv2vXO6IYml2NrEOum7jjGpIXuuZl/WFP8ywl5p5w==, tarball: file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz}
+    version: 0.21.28-dev
     engines: {node: '>=22.12'}
 
   '@axe-core/playwright@4.13.0':
@@ -3101,7 +3101,7 @@ packages:
 
 snapshots:
 
-  '@agent-device/proxy@file:vendor/agent-device-proxy-0.21.27-dev-54e4e4d.tgz': {}
+  '@agent-device/proxy@file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz': {}
 
   '@axe-core/playwright@4.13.0(playwright-core@1.63.0)':
     dependencies:
