@@ -525,8 +525,7 @@ function fitText(xml: string, tag: string, name: string, container = false): str
   return element.text;
 }
 
-function apiBound(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
+function apiBound(value: string): number | undefined {
   const number = Number(value);
   return number >= 1 && number <= MAX_API_LEVEL ? number : undefined;
 }
@@ -534,16 +533,14 @@ function apiBound(value: string | undefined): number | undefined {
 function parseApiRange(text: string | undefined): ApiRange | undefined {
   const match = text === undefined ? null : API_LEVEL_PATTERN.exec(text);
   if (match === null) return undefined;
-  const [, low, dash, high] = match;
+  const [, low = "", dash, high = ""] = match;
   const min = apiBound(low);
   const max = apiBound(high);
-  if ((low !== undefined && min === undefined) || (high !== undefined && max === undefined)) {
-    return undefined;
-  }
-  if (dash === undefined) return min === undefined ? undefined : { max: min, min };
-  if (min !== undefined && max !== undefined) return min <= max ? { max, min } : undefined;
-  if (min !== undefined) return { min };
-  return max === undefined ? undefined : { max, min: 1 };
+  const bounded = (low === "" || min !== undefined) && (high === "" || max !== undefined);
+  if (!bounded || (low === "" && high === "")) return undefined;
+  if (dash === undefined) return { max: min as number, min: min as number };
+  const range = { ...(max === undefined ? {} : { max }), min: min ?? 1 };
+  return max !== undefined && range.min > max ? undefined : range;
 }
 
 // fallow-ignore-next-line complexity -- one bounded read per fit field of one <d:device> block.
