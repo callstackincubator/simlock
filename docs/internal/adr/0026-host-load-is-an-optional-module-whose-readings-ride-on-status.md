@@ -120,8 +120,8 @@ Simlock can actually use.
 
 - The sampler starts when the daemon starts, before startup convergence,
   so a starting daemon already has a reading. The first read is
-  immediate. After that, a `Clock` timer re-armed after each read fires
-  every 15 s. The interval is fixed, with no config key.
+  immediate. After that, a `Clock` timer fires every 15 s, re-armed each
+  time it fires. The interval is fixed, with no config key.
 - One read is in flight at most. A tick that finds one still running is
   skipped. Each read is bounded at 10 s, after which that read counts as
   failed. The `sysctl` call has its own process timeout below that.
@@ -155,9 +155,11 @@ running one alike:
 - The block is absent when no reading has finished yet, and when the
   module is not wired.
 - Every number is finite and not negative, `busyPercent` is at most 100,
-  `cores` is at least 1, and `pressure` is one of `normal`, `warn` and
-  `critical`. A gateway parses every worker's answer, so the schema bounds
-  all of it.
+  `cores` is above zero (a cgroup quota can allow half a core), and
+  `pressure` is one of `normal`, `warn` and `critical`. A gateway parses
+  every worker's answer, so the schema bounds all of it. The sampler
+  leaves out a part whose figures break these bounds, so a bad read never
+  fails `status.get`.
 - The protocol moves up by one. The CLI and the console read the block
   only when it is present.
 
