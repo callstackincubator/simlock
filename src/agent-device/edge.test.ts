@@ -1109,7 +1109,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await forwarded(rig, () => runCommand(rig, "snapshot", 1, { meta: { deviceKey: key } }));
   });
 
-  it("an allocate reply whose lease `deviceKey` is not 1 to 128 characters still succeeds and keeps the lease, with the device key left unset: no release is sent and a command naming the lease with a `deviceKey` is refused", async () => {
+  it("an allocate reply whose lease `deviceKey` is over 128 characters still succeeds and keeps the lease, with the device key left unset: no release is sent and a command naming the lease with a `deviceKey` is refused", async () => {
     const rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("x".repeat(129));
 
