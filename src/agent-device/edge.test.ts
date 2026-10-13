@@ -2061,6 +2061,20 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     });
   });
 
+  it("an allocate reply whose device key is `ios:mobile:<id>` is recorded, and release-all sends that device key in the release", async () => {
+    const rig = await setUp();
+    rig.fake.nameDeviceKeyInNextReply("ios:mobile:00008110-001A2B3C4D5E");
+    await granted(rig, 1);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    expect(releasesReceived(rig)[0]?.params).toMatchObject({
+      deviceKey: "ios:mobile:00008110-001A2B3C4D5E",
+      leaseId: hex(1),
+    });
+  });
+
   it("release-all: the driver's reclaim of the device starts only after agent-device answers that release", async () => {
     const rig = await setUp();
     await granted(rig, 1);
