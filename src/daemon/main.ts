@@ -98,7 +98,7 @@ import {
   FleetLeaseIndex,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
-  type GatewayRelay,
+  GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
@@ -205,6 +205,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       eventBus,
       eventHistory,
       filesystem,
+      ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
       hostSystem,
       idGenerator,
       ipc,
@@ -489,6 +490,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     queue: leasing,
     presence: latestPresence,
     reaper,
+    relayTargets: options.relayTargets ?? {},
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
     nuke,
     registry,
@@ -660,6 +662,7 @@ interface GatewayDaemonOptions {
   readonly eventBus: EventBus;
   readonly eventHistory: EventHistory;
   readonly filesystem: Filesystem;
+  readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** The gateway's own machine. It runs no drivers, so its host facts carry no tools. */
   readonly hostSystem: HostSystem;
   readonly idGenerator: IdGenerator;
@@ -778,6 +781,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // `GatewayOwnerRoutedFacts`'s own doc comment for why the fleet's lease index, not a worker's
   // relayed payload, is what a fleet lease's push has to be routed by.
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
+  // why: a test reaches the gateway's relay through this callback.
+  options.gatewayRelay?.(new GatewayRelay({ directory: gatewayService }));
 
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;

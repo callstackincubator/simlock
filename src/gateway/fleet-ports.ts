@@ -12,7 +12,8 @@
  * (see its doc comment) -- the seam changes here, not around it, when one of these shapes turns
  * out to be missing something the coordinator needs.
  */
-import type { SimlockAdminClient } from "../admin/index.js";
+import type { AnySimlockError } from "../contract/index.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import type { WorkerView } from "./worker-registry.js";
 
 /**
@@ -31,7 +32,7 @@ import type { WorkerView } from "./worker-registry.js";
 export interface WorkerDispatchTarget {
   readonly workerId: string;
   readonly reachable: boolean;
-  client(): SimlockAdminClient | undefined;
+  client(): GatewayWorkerClient | undefined;
   /**
    * Added by #118. Forces this worker's view to be re-read now, rather than waiting for the
    * next lease event or the periodic tick. Called after a stale-view `NO_CAPACITY` (ADR §11:
@@ -56,8 +57,16 @@ export interface WorkerDispatchTarget {
  */
 export function liveClient(
   target: WorkerDispatchTarget | undefined,
-): SimlockAdminClient | undefined {
+): GatewayWorkerClient | undefined {
   return target?.reachable === true ? target.client() : undefined;
+}
+
+// why: the one answer to "is the uplink lost": the client stamps `kind: "transport"` on every rejection caused by the
+// connection dying or closing under a call (`DAEMON_CONNECTION_LOST`, a worker's `DAEMON_STOPPING`); a refusal the worker
+// answered is a domain or protocol error.
+
+export function isUplinkLost(error: AnySimlockError): boolean {
+  return error.kind === "transport";
 }
 
 /** Resolves a worker id to its live link. `GatewayService` satisfies this;

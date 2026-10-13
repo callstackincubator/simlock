@@ -3,6 +3,7 @@ export * from "./errors.js";
 export * from "./operations.js";
 export * from "./protocol.js";
 export * from "./pushes.js";
+export * from "./relay.js";
 export * from "./roles.js";
 export * from "./schemas.js";
 export * from "./worker-view.js";

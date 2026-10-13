@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 
+import { relayChunkSchema, relayHeadersSchema } from "./relay.js";
 import { eventEnvelopeSchema, leaseProgressSchema } from "./schemas.js";
 
 /**
@@ -93,6 +94,21 @@ const componentProgressPushSchema = z.object({
 /** One `component-progress` push's `progress`, as a `component.install` caller sees it. */
 export type ComponentProgress = z.infer<typeof componentProgressPushSchema>["progress"];
 
+/**
+ * why: `status` is one a `Response` can carry (ADR 0026), so a worker cannot send an interim 1xx; keyed by the
+ * `relay.request` call's frame id like `output`, so a connection with more than one relay routes each head to its own call.
+ */
+const relayHeadPushSchema = z.object({
+  requestId: requestIdSchema,
+  status: z.number().int().min(200).max(599),
+  headers: relayHeadersSchema,
+});
+
+const relayChunkPushSchema = z.object({
+  requestId: requestIdSchema,
+  chunk: relayChunkSchema,
+});
+
 const leaseLostPushSchema = z.object({
   leaseId: z.string(),
   deviceId: z.string(),
@@ -121,6 +137,8 @@ export const PUSH_SCHEMAS = {
   output: outputPushSchema,
   started: startedPushSchema,
   "component-progress": componentProgressPushSchema,
+  "relay-head": relayHeadPushSchema,
+  "relay-chunk": relayChunkPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

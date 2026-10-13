@@ -1,7 +1,6 @@
 import type { SimlockAdminClient } from "../admin/index.js";
+import type { RelayClientMethods } from "../simlock-client/client.js";
 
-export interface GatewayWorkerClient extends SimlockAdminClient {
-  relayRequest(input: unknown, hooks: unknown): Promise<unknown>;
-  relayBody(input: unknown): Promise<unknown>;
-  relayCancel(input: unknown): Promise<unknown>;
-}
+// why: `simlock/admin` exports no relay method (ADR 0026); only the gateway's own session on a worker makes them.
+
+export interface GatewayWorkerClient extends SimlockAdminClient, RelayClientMethods {}

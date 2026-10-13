@@ -198,6 +198,9 @@ export class GatewayDispatcher {
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
+      "relay.request": relayRefused,
+      "relay.body": relayRefused,
+      "relay.cancel": relayRefused,
       // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).
     };
@@ -534,4 +537,9 @@ function unsupportedByDesign(
   return () => {
     throw new DispatchError("UNSUPPORTED_IN_GATEWAY_MODE", message, { operation });
   };
+}
+
+// why: relays run from a gateway to its workers, so a gateway's own front door has none.
+function relayRefused(): never {
+  throw new DispatchError("FORBIDDEN", "A gateway does not accept relay operations");
 }

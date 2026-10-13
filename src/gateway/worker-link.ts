@@ -22,10 +22,11 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
-import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
-import { connectSimlockAdmin } from "../admin/index.js";
+import type { StatusGetOutput } from "../admin/index.js";
+import { connectSimlockClient } from "../simlock-client/client.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
 
 /**
@@ -79,7 +80,7 @@ class WorkerCallTimeoutError extends Error {
 export type WorkerClientFactory = (
   connection: IpcConnection,
   principal: string,
-) => Promise<SimlockAdminClient>;
+) => Promise<GatewayWorkerClient>;
 
 export interface WorkerLinkOptions {
   readonly uplink: AcceptedUplink;
@@ -121,7 +122,7 @@ function grantedDevices(devices: readonly unknown[]): WorkerGrantedDevice[] {
 export class WorkerLink {
   readonly workerId: string;
   readonly #logger: Logger;
-  #client: SimlockAdminClient | undefined;
+  #client: GatewayWorkerClient | undefined;
   #unsubscribeEvents: (() => Promise<void>) | undefined;
   #closed = false;
   #refreshing = false;
@@ -160,7 +161,7 @@ export class WorkerLink {
    * `start()` has assigned it or after `close()`/`#handleClosed` has run -- neither clears
    * `#client` itself, so this mirrors `reachable` rather than checking it separately. */
   // fallow-ignore-next-line unused-class-member -- reached only through the `WorkerDispatchTarget` interface (FleetLeaseCoordinator); the audit cannot follow a member access through that.
-  client(): SimlockAdminClient | undefined {
+  client(): GatewayWorkerClient | undefined {
     return this.#closed ? undefined : this.#client;
   }
 
@@ -172,7 +173,7 @@ export class WorkerLink {
   async start(): Promise<void> {
     this.options.uplink.connection.onClose(() => this.#handleClosed());
     const connect = this.options.connect ?? defaultConnect;
-    let client: SimlockAdminClient;
+    let client: GatewayWorkerClient;
     try {
       // C3: bounded like every other call this class makes (see `WORKER_CALL_TIMEOUT_MS`) --
       // `hello` is a round trip too, and a peer that completes the WebSocket upgrade with a
@@ -364,7 +365,7 @@ export class WorkerLink {
    * parks behind the worker's startup-readiness gate, so it answering is proof the transport is
    * alive even while the other three are genuinely, harmlessly queued behind a slow `converge`
    * -- application latency, not transport death, and P1's counter must not confuse the two. */
-  async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
+  async #rebuildView(client: GatewayWorkerClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
     this.#consecutiveRefreshTimeouts = 0;
     // A starting worker answers `status.get` with its health and host only, and everything else
@@ -383,7 +384,7 @@ export class WorkerLink {
   /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
    * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
   async #refreshRunning(
-    client: SimlockAdminClient,
+    client: GatewayWorkerClient,
     status: StatusGetOutput,
     includeCatalog: boolean,
   ): Promise<void> {
@@ -431,7 +432,7 @@ export class WorkerLink {
   /** A starting worker's view: its health and host, which `workerViewFields` builds from the
    * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
    * write is (H2). */
-  #refreshStarting(client: SimlockAdminClient, status: StatusGetOutput): void {
+  #refreshStarting(client: GatewayWorkerClient, status: StatusGetOutput): void {
     if (this.#superseded()) return;
     this.options.registry.refresh(this.workerId, {
       ...workerViewFields({ status }),
@@ -618,8 +619,9 @@ function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): 
   return { done, options, resolve };
 }
 
-const defaultConnect: WorkerClientFactory = (connection, principal) =>
-  connectSimlockAdmin({ connection, principal });
+const defaultConnect: WorkerClientFactory = async (connection, principal) =>
+  // why: the gateway's session is the one client that also makes relay calls, which `simlock/admin` does not export.
+  (await connectSimlockClient({ connection, principal }, true)) as GatewayWorkerClient;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

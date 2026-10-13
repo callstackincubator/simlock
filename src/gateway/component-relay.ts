@@ -22,6 +22,7 @@ import { DispatchError } from "../daemon/dispatch.js";
 import type { SimlockAdminClient } from "../admin/index.js";
 import type { Clock } from "../ports/index.js";
 import {
+  isUplinkLost,
   liveClient,
   type FleetViews,
   type WorkerDirectory,
@@ -202,15 +203,12 @@ async function askWorker(
   return settled;
 }
 
-/**
- * A worker's error, as a result. `DAEMON_CONNECTION_LOST` is the gateway's own client reporting
- * that the uplink closed under the call: the worker never answered, and its install carries on,
- * so the result is `unknown`. `DOWNLOADS_DISABLED` is the worker's policy refusing. Anything else
- * the worker answered is `failed`, with its code and message.
- */
+// why: a lost uplink (`isUplinkLost`) means the worker never answered and its install carries on, so the result is
+// `unknown`; `DOWNLOADS_DISABLED` is the worker's policy refusing, and anything else it answered is `failed`.
+
 function fromError(view: WorkerView, error: unknown): WorkerInstallResult {
   if (isSimlockError(error)) {
-    if (error.code === "DAEMON_CONNECTION_LOST") {
+    if (isUplinkLost(error)) {
       return result(view, "unknown", {
         code: "WORKER_UNREACHABLE",
         message: `The uplink to worker ${view.id} closed before it answered; its install may still be running`,

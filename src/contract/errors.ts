@@ -47,6 +47,7 @@ export interface ErrorDetailsMap {
   LEASE_ID_TAKEN: { readonly leaseId: string };
   NO_DRIVER: { readonly platform: Platform };
   CAPABILITY_MISSING: { readonly capabilities: readonly string[] };
+  RELAY_TARGET_MISSING: { readonly target: string };
   RUNTIME_MISSING: {
     readonly platform: Platform;
     readonly osVersion: string;
@@ -151,6 +152,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   LEASE_ID_TAKEN: true,
   NO_DRIVER: true,
   CAPABILITY_MISSING: true,
+  RELAY_TARGET_MISSING: true,
   RUNTIME_MISSING: true,
   UNKNOWN_MODEL: true,
   INSUFFICIENT_DISK_SPACE: true,
@@ -251,6 +253,12 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "domain",
     cliExitCode: 12,
     httpStatus: 422,
+  },
+  RELAY_TARGET_MISSING: {
+    code: "RELAY_TARGET_MISSING",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
   },
   RUNTIME_MISSING: { code: "RUNTIME_MISSING", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   UNKNOWN_MODEL: { code: "UNKNOWN_MODEL", kind: "domain", cliExitCode: 12, httpStatus: 422 },

@@ -303,6 +303,20 @@ export interface SimlockAdminClient extends SimlockClient {
   removeDevice(input: DeviceRemoveInput): Promise<DeviceRemoveOutput>;
 }
 
+type OperationInput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["input"]>;
+type OperationOutput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
+
+// why: not part of `SimlockAdminClient`, so `simlock/admin` does not export it (ADR 0026).
+
+export interface RelayClientMethods {
+  relayRequest(
+    input: OperationInput<"relay.request">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayChunk" | "onRelayInvalid">,
+  ): Promise<OperationOutput<"relay.request">>;
+  relayBody(input: OperationInput<"relay.body">): Promise<OperationOutput<"relay.body">>;
+  relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">>;
+}
+
 export async function connectSimlockClient(
   options: ConnectOptions,
   admin: false,
@@ -365,7 +379,7 @@ function buildDegradedClient(
   admin: boolean,
 ): SimlockClient | SimlockAdminClient {
   const rejected = <T>(): Promise<T> => Promise.reject(error);
-  const client: SimlockAdminClient = {
+  const client: SimlockAdminClient & RelayClientMethods = {
     principal,
     role: admin ? "admin" : "agent",
     daemonVersion: error.details.daemonVersion,
@@ -429,6 +443,9 @@ function buildDegradedClient(
     removeComponent: () => rejected(),
     addDevice: () => rejected(),
     removeDevice: () => rejected(),
+    relayRequest: () => rejected(),
+    relayBody: () => rejected(),
+    relayCancel: () => rejected(),
   };
   return client;
 }
@@ -557,6 +574,22 @@ class SimlockClientImpl {
 
   async close(): Promise<void> {
     await this.#wire.close();
+  }
+
+  async relayRequest(
+    input: OperationInput<"relay.request">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayChunk" | "onRelayInvalid">,
+  ): Promise<OperationOutput<"relay.request">> {
+    const payload = await this.#callRaw("relay.request", input, hooks);
+    return this.#parseOutput("relay.request", payload);
+  }
+
+  relayBody(input: OperationInput<"relay.body">): Promise<OperationOutput<"relay.body">> {
+    return this.#call("relay.body", input);
+  }
+
+  relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">> {
+    return this.#call("relay.cancel", input);
   }
 
   // ---- admin-only operations ------------------------------------------------------------------

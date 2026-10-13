@@ -24,9 +24,9 @@ import type {
   LeaseRequestInput,
   InstallComponentOptions,
   RequestLeaseOptions,
-  SimlockAdminClient,
   StatusGetOutput,
 } from "../admin/index.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import { SimlockError } from "../admin/index.js";
 import { OPERATIONS, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import type { platformCatalogSchema } from "../contract/index.js";
@@ -375,10 +375,10 @@ export class ScriptedWorkerClient {
     return this.#eventListener !== undefined;
   }
 
-  asClient(): SimlockAdminClient {
+  asClient(): GatewayWorkerClient {
     // The cast is the point of this double: a `WorkerLink` only ever touches the members below,
     // and fabricating the other twenty would say less about what it depends on, not more.
-    return this as unknown as SimlockAdminClient;
+    return this as unknown as GatewayWorkerClient;
   }
 
   /** Holds every `status.get` until the returned function is called. */

@@ -57,6 +57,7 @@ import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
 import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
+import { RelayConnection, type RelayTargets } from "./relay.js";
 
 type RequestId = string | number;
 
@@ -70,6 +71,7 @@ interface Connection {
    * reason and at the same moment.
    */
   readonly progressDisposers: Set<() => void>;
+  readonly relays: RelayConnection;
   buffer: string;
   helloReceived: boolean;
   closed: boolean;
@@ -152,6 +154,7 @@ export interface DaemonServerEngineOptions {
   readonly nuke?: Nuke;
   readonly passthrough?: PassthroughResolver;
   readonly processRunner?: ProcessRunner;
+  readonly relayTargets?: RelayTargets;
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
@@ -667,6 +670,7 @@ export class DaemonServer {
       role: "agent",
       progressDisposers: new Set(),
       protocolMismatch: undefined,
+      relays: new RelayConnection(this.#engine?.relayTargets ?? {}, this.#logger),
       selfInitiatedReleases: new Set(),
       socket,
       subscriptionId: undefined,
@@ -1101,6 +1105,12 @@ export class DaemonServer {
         // Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
+      case "relay.request":
+        return this.#relayRequest(connection, frame.id, frame.payload);
+      case "relay.body":
+        return this.#dispatcher.dispatch("relay.body", frame.payload, this.#session(connection));
+      case "relay.cancel":
+        return this.#dispatcher.dispatch("relay.cancel", frame.payload, this.#session(connection));
       case "config.get":
         return this.#dispatcher.dispatch(
           "config.get",
@@ -1176,6 +1186,7 @@ export class DaemonServer {
       isGatewayUplink: connection.isGatewayUplink,
       manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
       principal: connection.principal,
+      relays: connection.relays,
       role: connection.role,
     };
   }
@@ -1296,6 +1307,32 @@ export class DaemonServer {
       connection.progressDisposers.delete(disposeOutput);
       disposeOutput();
     }
+  }
+
+  // why: each push resolves once it is on the socket, so the relay reads its target only as fast as the socket takes the parts.
+
+  #relayRequest(connection: Connection, requestId: RequestId, value: unknown): Promise<unknown> {
+    return this.#dispatcher.dispatch("relay.request", value, {
+      ...this.#session(connection),
+      onRelayChunk: (chunk) =>
+        writeFrame(connection.socket, {
+          push: "relay-chunk",
+          payload: this.#parseOutput(
+            PUSH_SCHEMAS["relay-chunk"],
+            { chunk, requestId },
+            "push:relay-chunk",
+          ),
+        }),
+      onRelayHead: (status, headers) =>
+        writeFrame(connection.socket, {
+          push: "relay-head",
+          payload: this.#parseOutput(
+            PUSH_SCHEMAS["relay-head"],
+            { headers, requestId, status },
+            "push:relay-head",
+          ),
+        }),
+    });
   }
 
   /**
@@ -1536,6 +1573,7 @@ export class DaemonServer {
       disposeProgress();
     }
     connection.progressDisposers.clear();
+    connection.relays.abortAll();
     this.#connections.delete(connection);
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;

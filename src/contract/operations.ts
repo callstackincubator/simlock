@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { parseOsConstraint } from "./os-range.js";
+import { relayChunkSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   capabilityNameSchema,
@@ -960,6 +961,73 @@ export const deviceRemove = defineOperation({
   output: z.object({ id: z.string(), driverDeviceId: z.string() }),
 });
 
+const RELAY_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+const relayUrlSchema = z
+  .string()
+  .max(4096)
+  .refine((value) => {
+    try {
+      const { protocol } = new URL(value);
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+
+/**
+ * One HTTP exchange a gateway hands to a module on a worker, over the gateway's uplink. The
+ * response leaves as `relay-head` and `relay-chunk` pushes keyed by this call's frame id; the
+ * answer comes once its body has ended, or `{ cancelled: true }` once a `relay.cancel` took
+ * effect. Admin only, and on a worker only the gateway's own uplink session may call it.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const relayRequest = defineOperation({
+  name: "relay.request",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      relayId: relayIdSchema,
+      target: capabilityNameSchema,
+      method: z.enum(RELAY_METHODS),
+      url: relayUrlSchema,
+      headers: relayHeadersSchema,
+      tenant: z.string().min(1).max(300),
+      leaseId: leaseIdSchema.optional(),
+      hasBody: z.boolean(),
+    })
+    .strict()
+    .refine((input) => !input.hasBody || (input.method !== "GET" && input.method !== "HEAD"), {
+      message: "hasBody is not allowed with GET or HEAD",
+    }),
+  output: z.object({ cancelled: z.literal(true).optional() }),
+});
+
+/** One part of a relayed request body, in `seq` order, or its end. */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const relayBody = defineOperation({
+  name: "relay.body",
+  role: "admin",
+  effect: "write",
+  input: z.union([
+    z
+      .object({ relayId: relayIdSchema, seq: z.number().int().min(0), chunk: relayChunkSchema })
+      .strict(),
+    z.object({ relayId: relayIdSchema, end: z.literal(true) }).strict(),
+  ]),
+  output: z.object({}),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const relayCancel = defineOperation({
+  name: "relay.cancel",
+  role: "admin",
+  effect: "write",
+  input: z.object({ relayId: relayIdSchema }).strict(),
+  output: z.object({}),
+});
+
 export const OPERATIONS = {
   "catalog.get": catalogGet,
   "status.get": statusGet,
@@ -993,6 +1061,9 @@ export const OPERATIONS = {
   "component.remove": componentRemove,
   "device.add": deviceAdd,
   "device.remove": deviceRemove,
+  "relay.request": relayRequest,
+  "relay.body": relayBody,
+  "relay.cancel": relayCancel,
 } as const;
 
 export type OperationName = keyof typeof OPERATIONS;

@@ -66,7 +66,7 @@ import {
 } from "../leasing/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
+import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -1226,7 +1226,7 @@ export class FleetLeaseCoordinator {
    * right now" branch above already answers that same code for the pre-flight version of it.
    */
   #classifyRelayedError(error: AnySimlockError, workerId: string): DispatchError {
-    if (error.kind === "transport") {
+    if (isUplinkLost(error)) {
       return new DispatchError("WORKER_UNREACHABLE", error.message, { workerId });
     }
     return new DispatchError(error.code, error.message, error.details);
