@@ -34,6 +34,7 @@ export interface FakeAgentDeviceRequest {
 
 interface FakeAgentDeviceLease {
   readonly leaseId: string;
+  readonly address: string | undefined;
   readonly tenant: string | undefined;
   readonly scope: {
     readonly runId: unknown;
@@ -53,6 +54,17 @@ interface FakeFailure {
 
 export type FakeLeaseGoneReason = "LEASE_NOT_FOUND" | "LEASE_EXPIRED" | "LEASE_REVOKED";
 
+interface RunningCommand {
+  readonly leaseId: string;
+  readonly address: string | undefined;
+  readonly ended: Promise<void>;
+}
+
+export interface FakeAllocateReplyEdit {
+  readonly runId?: string;
+  readonly clientId?: string;
+}
+
 interface Gate {
   readonly promise: Promise<void>;
   open(): void;
@@ -64,6 +76,28 @@ function gate(): Gate {
     open = resolve;
   });
   return { open, promise };
+}
+
+const present = (value: unknown): boolean => value !== undefined && value !== null;
+
+function addressOf(params: Record<string, unknown>): string | undefined {
+  const address = params["udid"] ?? params["serial"];
+  return typeof address === "string" ? address : undefined;
+}
+
+function untilAborted(signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+function scopeRequired(id: unknown): Response {
+  return errorEnvelope(id, {
+    code: "UNAUTHORIZED",
+    details: { reason: "LEASE_SCOPE_REQUIRED" },
+    message: "lease scope required",
+  });
 }
 
 async function readRpc(request: Request, tenantHeader: string | undefined) {
@@ -95,6 +129,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly requests: FakeAgentDeviceRequest[] = [];
   readonly leases = new Map<string, FakeAgentDeviceLease>();
   readonly abortedCommands: string[] = [];
+  readonly abortedReleases: string[] = [];
+  readonly refused: string[] = [];
   readonly uploads: string[] = [];
   baseUrl = "http://127.0.0.1:47001";
   token = "daemon-token-1";
@@ -116,6 +152,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #commandGate: Gate | undefined;
   #streamChunks: readonly string[] | undefined;
   #restarts = 0;
+  readonly #running = new Set<RunningCommand>();
+  #commandsOutliveRequests = false;
+  #hangRelease = false;
+  #releaseBody: string | undefined;
+  #replyEdit: FakeAllocateReplyEdit | undefined;
 
   constructor(options: { readonly leaseMaxTtlMs?: number } = {}) {
     this.leaseMaxTtlMs = options.leaseMaxTtlMs ?? 4 * 60 * 60_000 + 10_000;
@@ -194,6 +235,24 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#commandGate?.open();
   }
 
+  // why: agent-device does not watch its caller hang up, so a command whose request simlock aborted still runs until the test lets it go.
+  keepCommandsAfterAbort(): void {
+    this.#commandsOutliveRequests = true;
+  }
+
+  answerNextReleaseWith(body: string): void {
+    this.#releaseBody = body;
+  }
+
+  hangNextRelease(): void {
+    this.#hangRelease = true;
+  }
+
+  // why: the reply carries the edited values while the lease the fake stores keeps the scope the CLI's allocate carried.
+  editNextAllocateReply(edit: FakeAllocateReplyEdit): void {
+    this.#replyEdit = edit;
+  }
+
   streamNextCommand(chunks: readonly string[]): void {
     this.#streamChunks = chunks;
   }
@@ -212,7 +271,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
 
   // fallow-ignore-next-line unused-class-member -- reached through the AgentDeviceUpstream port by the host.
   async fetch(request: Request): Promise<Response> {
-    if (this.#unreachable) throw new TypeError("fetch failed");
+    if (this.#unreachable) {
+      const refused = (await request
+        .clone()
+        .json()
+        .catch(() => undefined)) as { readonly method?: unknown } | undefined;
+      this.refused.push(typeof refused?.method === "string" ? refused.method : request.url);
+      throw new TypeError("fetch failed");
+    }
     const url = new URL(request.url);
     const base = new URL(this.baseUrl);
     if (url.origin !== base.origin) throw new TypeError("fetch failed: wrong origin");
@@ -255,7 +321,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
         return this.#heartbeat(id, params, tenant);
       case "lease.release":
         await this.onRelease?.();
-        return this.#release(id, params, tenant);
+        request.signal.throwIfAborted();
+        return this.#release(request, id, params, tenant);
       default:
         return this.#command(request, id, params, meta);
     }
@@ -274,6 +341,13 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#failAllocate = undefined;
     if (failure !== undefined) return errorEnvelope(id, failure);
     const leaseId = String(params["leaseId"]);
+    const address = addressOf(params);
+    if (address !== undefined && this.#claimed(address)) {
+      return errorEnvelope(id, {
+        code: "DEVICE_IN_USE",
+        message: "device is in use by another session",
+      });
+    }
     const scope = {
       clientId: params["clientId"],
       deviceKey: this.#replyDeviceKey ?? params["deviceKey"],
@@ -281,9 +355,18 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
       runId: params["runId"],
     };
     this.#replyDeviceKey = undefined;
-    this.leases.set(leaseId, { ended: false, leaseId, scope, tenant, ttlMs: params["ttlMs"] });
+    const edit = this.#replyEdit;
+    this.#replyEdit = undefined;
+    this.leases.set(leaseId, {
+      address,
+      ended: false,
+      leaseId,
+      scope,
+      tenant,
+      ttlMs: params["ttlMs"],
+    });
     return envelope(id, {
-      lease: { ...scope, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
+      lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
       ok: true,
     });
   }
@@ -305,23 +388,61 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     return envelope(id, { lease: params, ok: true });
   }
 
-  #release(id: unknown, params: Record<string, unknown>, tenant: string | undefined): Response {
+  #claimed(address: string): boolean {
+    return (
+      [...this.leases.values()].some((lease) => lease.address === address) ||
+      [...this.#running].some((command) => command.address === address)
+    );
+  }
+
+  async #release(
+    request: Request,
+    id: unknown,
+    params: Record<string, unknown>,
+    tenant: string | undefined,
+  ): Promise<Response> {
+    const leaseId = String(params["leaseId"]);
+    if (this.#hangRelease) {
+      this.#hangRelease = false;
+      await untilAborted(request.signal);
+      this.abortedReleases.push(leaseId);
+      throw new Error("aborted");
+    }
     const failure = this.#failRelease;
     this.#failRelease = undefined;
     if (failure !== undefined) return errorEnvelope(id, failure);
-    const lease = this.leases.get(String(params["leaseId"]));
-    if (lease === undefined || (!this.#anyTenantReleases && lease.tenant !== tenant)) {
+    const raw = this.#releaseBody;
+    this.#releaseBody = undefined;
+    if (raw !== undefined) return new Response(raw, { status: 200 });
+    if (tenant === undefined || !present(params["runId"])) return scopeRequired(id);
+    const lease = this.leases.get(leaseId);
+    if (lease === undefined) return envelope(id, { ok: true, released: false });
+    if (!this.#anyTenantReleases && lease.tenant !== tenant) {
       return errorEnvelope(id, { code: "LEASE_NOT_FOUND", message: "lease not found" });
+    }
+    const keys = ["leaseProvider", "clientId", "deviceKey"] as const;
+    if (keys.some((key) => present(lease.scope[key]) && !present(params[key]))) {
+      return scopeRequired(id);
     }
     if (
       lease.scope.runId !== params["runId"] ||
-      lease.scope.leaseProvider !== params["leaseProvider"] ||
-      lease.scope.clientId !== params["clientId"] ||
-      lease.scope.deviceKey !== params["deviceKey"]
+      keys.some((key) => present(params[key]) && lease.scope[key] !== params[key])
     ) {
-      return errorEnvelope(id, { code: "UNAUTHORIZED", message: "lease scope mismatch" });
+      return errorEnvelope(id, {
+        code: "UNAUTHORIZED",
+        details: { reason: "LEASE_SCOPE_MISMATCH" },
+        message: "lease scope mismatch",
+      });
     }
     this.leases.delete(lease.leaseId);
+    const running = [...this.#running].filter((command) => command.leaseId === leaseId);
+    if (running.length > 0) {
+      const aborted = untilAborted(request.signal).then(() => {
+        this.abortedReleases.push(leaseId);
+        throw new Error("aborted");
+      });
+      await Promise.race([Promise.all(running.map((command) => command.ended)), aborted]);
+    }
     return envelope(id, { ok: true, released: !lease.ended });
   }
 
@@ -332,14 +453,27 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     meta: Record<string, unknown>,
   ): Promise<Response> {
     const command = String(params["command"] ?? "");
+    const leaseId = meta["leaseId"];
     if (this.#commandGate !== undefined) {
+      const finish = gate();
+      const running: RunningCommand = {
+        address: typeof leaseId === "string" ? this.leases.get(leaseId)?.address : undefined,
+        ended: finish.promise,
+        leaseId: typeof leaseId === "string" ? leaseId : "",
+      };
+      this.#running.add(running);
       const aborted = new Promise<never>((_resolve, reject) => {
         request.signal.addEventListener("abort", () => {
           this.abortedCommands.push(command);
-          reject(new Error("aborted"));
+          if (!this.#commandsOutliveRequests) reject(new Error("aborted"));
         });
       });
-      await Promise.race([this.#commandGate.promise, aborted]);
+      try {
+        await Promise.race([this.#commandGate.promise, aborted]);
+      } finally {
+        this.#running.delete(running);
+        finish.open();
+      }
     }
     const chunks = this.#streamChunks;
     this.#streamChunks = undefined;
@@ -358,7 +492,6 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     const failure = this.#failCommand;
     this.#failCommand = undefined;
     if (failure !== undefined) return errorEnvelope(id, failure);
-    const leaseId = meta["leaseId"];
     if (command === "close" && typeof leaseId === "string") {
       const lease = this.leases.get(leaseId);
       if (lease !== undefined) lease.ended = true;

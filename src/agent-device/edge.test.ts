@@ -66,6 +66,7 @@ interface SetUpOptions {
   readonly leaseTtlCapMs?: number;
   readonly drivers?: (clock: FakeClock) => FakeDriver[];
   readonly enabled?: boolean;
+  readonly endWaitMs?: number;
   readonly gatewayMode?: boolean;
   readonly maxRunning?: number;
   readonly slowStart?: boolean;
@@ -81,7 +82,7 @@ interface Rig {
   readonly origin: string;
   readonly statePath: string;
   readonly started: Promise<DaemonServer>;
-  readonly restart: () => Promise<Rig>;
+  readonly restart: (between?: () => void) => Promise<Rig>;
 }
 
 const phoneModels = {
@@ -166,7 +167,11 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         },
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port },
-        lease: { defaultTtlMs, maxTtlMs },
+        lease: {
+          defaultTtlMs,
+          maxTtlMs,
+          ...(options.endWaitMs === undefined ? {} : { endWaitMs: options.endWaitMs }),
+        },
         ...(options.gatewayMode === true ? { mode: "gateway" as const } : {}),
       },
       dataDirectory: directory,
@@ -202,8 +207,9 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     fake,
     filesystem,
     origin,
-    restart: async () => {
+    restart: async (between) => {
       await daemon.stop("test");
+      between?.();
       const next = await launch();
       return rigFor(next, Promise.resolve(next));
     },
@@ -1640,8 +1646,10 @@ describe("the agent-device front, through the whole worker daemon", () => {
       await advance(rig, 12_000, 4_000);
     });
 
-    const released = await envelopeOf(await release(rig, 1));
+    const agentRelease = track(release(rig, 1));
+    await advance(rig, 12_000, 4_000);
     rig.fake.releaseCommand();
+    const released = await envelopeOf(await agentRelease.promise);
     await running.promise;
 
     expect(released.result).toMatchObject({ ok: true, released: true });
@@ -1675,7 +1683,9 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await rig.daemon.dispatch("lease.release-all", {}, adminSession);
-    await release(rig, 1);
+    const agentRelease = release(rig, 1);
+    rig.fake.releaseCommand();
+    await agentRelease;
     const received = rig.fake.requests.length;
     const tap = tapDispatch(rig);
 
@@ -1879,7 +1889,9 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await advance(rig, 5_000, 5_000);
-    await release(rig, 1);
+    const agentRelease = release(rig, 1);
+    rig.fake.releaseCommand();
+    await agentRelease;
     const tap = tapDispatch(rig);
 
     await advance(rig, 60_000, 5_000);
@@ -1977,5 +1989,616 @@ describe("the agent-device front, through the whole worker daemon", () => {
     };
 
     expect(config.agentDevice.leaseTtlCapMs).toBe(10_000);
+  });
+});
+
+const wipeOperations = new Set(["reclaim", "shutdown", "destroy"]);
+
+function wipes(rig: Rig): number {
+  return rig.driver.calls.filter((call) => wipeOperations.has(call.operation)).length;
+}
+
+function releasesReceived(rig: Rig) {
+  return rig.fake.rpcRequests("agent_device.lease.release");
+}
+
+async function releaseAll(rig: Rig): Promise<void> {
+  await rig.daemon.dispatch("lease.release-all", {}, adminSession);
+}
+
+// why: the wipe count the agent-device daemon saw when each release reached it says whether the wipe had started.
+function watchWipes(rig: Rig): number[] {
+  const seen: number[] = [];
+  rig.fake.onRelease = async () => {
+    seen.push(wipes(rig));
+  };
+  return seen;
+}
+
+function gateOnRelease(rig: Rig): () => void {
+  let open!: () => void;
+  const held = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  rig.fake.onRelease = () => held;
+  return open;
+}
+
+async function plainLease(rig: Rig, requesterId: string): Promise<void> {
+  await rig.daemon.dispatch(
+    "lease.request",
+    { model: "iPhone 16", platform: "ios", requesterId },
+    sessionFor(principals.one),
+  );
+}
+
+describe("simlock ending a simlock lease ends the agent-device session first", () => {
+  it("release-all while an agent holds a device sends agent-device a release with the agent's principal as tenant and the run ID, lease provider and client ID of the allocate reply, plus its device key when the reply names one", async () => {
+    const rig = await setUp();
+    rig.fake.nameDeviceKeyInNextReply("device-key-1");
+    await granted(rig, 1);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    const sent = releasesReceived(rig)[0];
+    expect(sent?.tenant).toBe(principals.one);
+    expect(sent?.params).toEqual({
+      ...scope,
+      deviceKey: "device-key-1",
+      leaseId: hex(1),
+      tenantId: principals.one,
+    });
+
+    const plain = await setUp();
+    await granted(plain, 1);
+    await releaseAll(plain);
+    await expect.poll(() => releasesReceived(plain).length).toBe(1);
+    expect(releasesReceived(plain)[0]?.params).toEqual({
+      ...scope,
+      leaseId: hex(1),
+      tenantId: principals.one,
+    });
+  });
+
+  it("release-all: the driver's reclaim of the device starts only after agent-device answers that release", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const before = wipes(rig);
+    const answer = gateOnRelease(rig);
+
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    await sleep(50);
+
+    expect(wipes(rig)).toBe(before);
+    answer();
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+  });
+
+  it("a command still running at release-all finishes before the driver's reclaim of that device starts", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const running = await runningCommand(rig, 1);
+    const before = wipes(rig);
+
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    await sleep(50);
+
+    expect(running.done()).toBe(false);
+    expect(wipes(rig)).toBe(before);
+    rig.fake.releaseCommand();
+    await running.promise;
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+  });
+
+  it("while the host waits for that release, the device stays `reclaiming` and a second agent's open for the same model is not granted it", async () => {
+    const rig = await setUp({ maxRunning: 1 });
+    await granted(rig, 1);
+    await runningCommand(rig, 1);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    const second = track(allocate(rig, 2, {}, { token: secrets.two }));
+    await sleep(100);
+
+    expect((await devices(rig)).map((device) => device.state)).toEqual(["reclaiming"]);
+    expect(second.done()).toBe(false);
+    expect(allocatesReceived(rig, 2)).toEqual([]);
+    rig.fake.releaseCommand();
+    await second.promise;
+  });
+
+  it("once the reclaim ends, a second agent's open is granted that device", async () => {
+    const rig = await setUp({ maxRunning: 1 });
+    await granted(rig, 1);
+    const device = await grantedDevice(rig);
+    await runningCommand(rig, 1);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    const second = track(allocate(rig, 2, {}, { token: secrets.two }));
+    await sleep(50);
+    expect(second.done()).toBe(false);
+
+    rig.fake.releaseCommand();
+    const answer = await envelopeOf(await second.promise);
+
+    expect(answer.result).toMatchObject({ ok: true });
+    expect(receivedAllocate(rig, 2)["udid"]).toBe(device.address);
+  });
+
+  it("a simlock lease that expires, one an operator releases with `lease.release`, and one whose device is lost each send agent-device the same release before the reclaim starts", async () => {
+    const expiring = await setUp();
+    const atRelease = watchWipes(expiring);
+    await granted(expiring, 1, { ttlMs: 30_000 });
+    const expiringBefore = wipes(expiring);
+    await advance(expiring, 31_000, 5_000);
+    await expect.poll(() => releasesReceived(expiring).length).toBe(1);
+    expect(releasesReceived(expiring)[0]?.params).toEqual({
+      ...scope,
+      leaseId: hex(1),
+      tenantId: principals.one,
+    });
+    expect(atRelease).toEqual([expiringBefore]);
+
+    const operator = await setUp();
+    const atOperatorRelease = watchWipes(operator);
+    await granted(operator, 1);
+    const operatorBefore = wipes(operator);
+    await operator.daemon.dispatch("lease.release", { leaseId: hex(1) }, adminSession);
+    await expect.poll(() => releasesReceived(operator).length).toBe(1);
+    expect(releasesReceived(operator)[0]?.params).toEqual({
+      ...scope,
+      leaseId: hex(1),
+      tenantId: principals.one,
+    });
+    expect(atOperatorRelease).toEqual([operatorBefore]);
+
+    const lost = await setUp();
+    const atLostRelease = watchWipes(lost);
+    await granted(lost, 1);
+    const lostBefore = wipes(lost);
+    const reality = await lost.driver.listManaged();
+    lost.driver.setManagedReality({
+      ...reality,
+      devices: reality.devices.map((device) => ({ ...device, runState: "stopped" as const })),
+    });
+    await advance(lost, 120_000, 15_000);
+    await expect.poll(() => releasesReceived(lost).length).toBe(1);
+    expect(releasesReceived(lost)[0]?.params).toEqual({
+      ...scope,
+      leaseId: hex(1),
+      tenantId: principals.one,
+    });
+    expect(atLostRelease).toEqual([lostBefore]);
+  });
+
+  it("after release-all, the agent's next heartbeat answers LEASE_ENDED_BY_HOST and makes no new simlock lease", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    await releaseAll(rig);
+    await expect.poll(() => rig.fake.leases.has(hex(1))).toBe(false);
+
+    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
+
+    expect(await listed(rig)).toEqual([]);
+  });
+
+  it("the agent's own release, answered before simlock leasing ends the lease, leaves agent-device with no second release", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+
+    expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({ released: true });
+    await expect
+      .poll(async () => (await devices(rig)).map((device) => device.state))
+      .toEqual(["ready"]);
+    await sleep(50);
+
+    expect(releasesReceived(rig)).toHaveLength(1);
+  });
+
+  it.each(["an error", "a non-JSON body", "an unreachable daemon"])(
+    "the agent's own release that agent-device answers with %s keeps the record: a later release-all sends the participant's release",
+    async (failure) => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      if (failure === "an error") {
+        rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
+      } else if (failure === "a non-JSON body") {
+        rig.fake.answerNextReleaseWith("<html>bad gateway</html>");
+      } else {
+        rig.fake.setUnreachable(true);
+      }
+      await release(rig, 1);
+      rig.fake.setUnreachable(false);
+      expect(await listed(rig)).toEqual([hex(1)]);
+      const before = releasesReceived(rig).length;
+
+      await releaseAll(rig);
+
+      await expect.poll(() => releasesReceived(rig).length).toBe(before + 1);
+      expect(releasesReceived(rig).at(-1)?.params).toEqual({
+        ...scope,
+        leaseId: hex(1),
+        tenantId: principals.one,
+      });
+    },
+  );
+
+  it("release-all while the agent's own release is in flight waits for it; when it succeeds, no second release is sent and the reclaim starts after it answers", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const before = wipes(rig);
+    const answer = gateOnRelease(rig);
+    const agentRelease = track(release(rig, 1));
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    await releaseAll(rig);
+    await sleep(50);
+
+    expect(releasesReceived(rig)).toHaveLength(1);
+    expect(wipes(rig)).toBe(before);
+    answer();
+    await agentRelease.promise;
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(releasesReceived(rig)).toHaveLength(1);
+  });
+
+  it("release-all while the agent's own release is in flight: when it fails, or its CLI hangs up, the participant sends its own release before the reclaim", async () => {
+    const failing = await setUp();
+    await granted(failing, 1);
+    const failingBefore = wipes(failing);
+    const answerFailing = gateOnRelease(failing);
+    failing.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
+    const failedRelease = track(release(failing, 1));
+    await expect.poll(() => releasesReceived(failing).length).toBe(1);
+    await releaseAll(failing);
+    const seenFailing = watchWipes(failing);
+
+    answerFailing();
+    await failedRelease.promise;
+
+    await expect.poll(() => releasesReceived(failing).length).toBe(2);
+    expect(seenFailing).toEqual([failingBefore]);
+    await expect.poll(() => wipes(failing)).toBeGreaterThan(failingBefore);
+
+    const hungUp = await setUp();
+    await granted(hungUp, 1);
+    const hungUpBefore = wipes(hungUp);
+    const answerHungUp = gateOnRelease(hungUp);
+    const hangUp = new AbortController();
+    const abandoned = track(release(hungUp, 1, { signal: hangUp.signal }));
+    await expect.poll(() => releasesReceived(hungUp).length).toBe(1);
+    await releaseAll(hungUp);
+    hangUp.abort();
+    await abandoned.promise.catch(() => undefined);
+    const seenHungUp = watchWipes(hungUp);
+
+    answerHungUp();
+
+    await expect.poll(() => releasesReceived(hungUp).length).toBe(2);
+    expect(seenHungUp).toEqual([hungUpBefore]);
+    await expect.poll(() => wipes(hungUp)).toBeGreaterThan(hungUpBefore);
+  });
+
+  it("release-all while the agent's own release hangs: at lease.endWaitMs the wait ends and the reclaim starts", async () => {
+    const rig = await setUp({ endWaitMs: 30_000 });
+    await granted(rig, 1);
+    const before = wipes(rig);
+    rig.fake.hangNextRelease();
+    const agentRelease = track(release(rig, 1));
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+    await releaseAll(rig);
+
+    await advance(rig, 20_000, 5_000);
+    expect(wipes(rig)).toBe(before);
+    await advance(rig, 15_000, 5_000);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    void agentRelease;
+  });
+
+  it("the agent's release sent while the participant's release is in flight answers released false, and the reclaim starts once the participant's release answers", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    await runningCommand(rig, 1);
+    const before = wipes(rig);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    const agentRelease = await envelopeOf(await release(rig, 1));
+
+    expect(agentRelease.result).toMatchObject({ ok: true, released: false });
+    expect(wipes(rig)).toBe(before);
+    rig.fake.releaseCommand();
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+  });
+
+  it("an agent holding two devices: release-all sends one release per lease, each with that lease's scope", async () => {
+    const rig = await setUp();
+    await granted(rig, 1, { clientId: "client-1", runId: "run-1" });
+    await granted(rig, 2, { clientId: "client-2", runId: "run-2" });
+
+    await releaseAll(rig);
+
+    await expect.poll(() => releasesReceived(rig).length).toBe(2);
+    const byLease = new Map(
+      releasesReceived(rig).map((request) => [request.params?.["leaseId"], request.params]),
+    );
+    expect(byLease.get(hex(1))).toEqual({
+      ...scope,
+      clientId: "client-1",
+      leaseId: hex(1),
+      runId: "run-1",
+      tenantId: principals.one,
+    });
+    expect(byLease.get(hex(2))).toEqual({
+      ...scope,
+      clientId: "client-2",
+      leaseId: hex(2),
+      runId: "run-2",
+      tenantId: principals.one,
+    });
+  });
+
+  it("a simlock lease from a plain client, with the edge on, ends with nothing sent to agent-device and its reclaim starts at once", async () => {
+    const rig = await setUp();
+    await plainLease(rig, "plain-1");
+    const before = wipes(rig);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(releasesReceived(rig)).toEqual([]);
+  });
+
+  it("with agentDevice.enabled false, release-all reclaims at once, as today", async () => {
+    const rig = await setUp({ enabled: false });
+    await plainLease(rig, "plain-1");
+    const before = wipes(rig);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(rig.fake.requests).toEqual([]);
+  });
+
+  it("agent-device answering the release with an error: the device's reclaim still starts", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const before = wipes(rig);
+    const atRelease = watchWipes(rig);
+    rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
+
+    await releaseAll(rig);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(releasesReceived(rig)).toHaveLength(1);
+    expect(atRelease).toEqual([before]);
+  });
+
+  it("agent-device unreachable for the release: the device's reclaim still starts", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const before = wipes(rig);
+    rig.fake.setUnreachable(true);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(rig.fake.refused).toContain("agent_device.lease.release");
+  });
+
+  it("after the agent-device daemon restarts, release-all gets released false from it and the reclaim starts at once", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.restart();
+    const before = wipes(rig);
+
+    await releaseAll(rig);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(releasesReceived(rig)).toHaveLength(1);
+  });
+
+  it("after a simlock daemon restart on the same data directory, a lease made before the restart ends at startup with nothing sent to agent-device", async () => {
+    const first = await setUp();
+    await granted(first, 1, { ttlMs: 30_000 });
+
+    const rig = await first.restart(() => first.clock.advance(60_000));
+
+    await expect.poll(async () => await listed(rig)).toEqual([]);
+    expect(releasesReceived(rig)).toEqual([]);
+  });
+
+  it("an allocate reply with a run ID of 129 characters, and one with a client ID holding `/`: the front releases the agent-device lease and the simlock lease and answers a COMMAND_FAILED error", async () => {
+    const rig = await setUp();
+    const good = await envelopeOf(await allocate(rig, 1));
+    expect(good.result).toMatchObject({ ok: true });
+    await release(rig, 1);
+
+    for (const [n, edit] of [
+      [2, { runId: "r".repeat(129) }],
+      [3, { clientId: "client/1" }],
+    ] as const) {
+      rig.fake.editNextAllocateReply(edit);
+
+      const answer = await envelopeOf(await allocate(rig, n));
+
+      expect(answer.error?.data?.code).toBe("COMMAND_FAILED");
+      await expect.poll(async () => await listed(rig)).toEqual([]);
+      expect(rig.fake.leases.has(hex(n))).toBe(false);
+    }
+  });
+
+  it("a lease ended by `nuke` sends nothing to agent-device", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+
+    await rig.daemon.dispatch("nuke.run", {}, adminSession);
+
+    await sleep(100);
+    expect(await listed(rig)).toEqual([]);
+    expect(releasesReceived(rig)).toEqual([]);
+  });
+
+  it("a command held past lease.endWaitMs: the reclaim starts at the ceiling and the host's release request is aborted; a second agent's open of that device answers DEVICE_IN_USE and leaves no simlock lease until the command is let go, then is granted", async () => {
+    const rig = await setUp({ endWaitMs: 30_000, maxRunning: 1 });
+    await granted(rig, 1);
+    await runningCommand(rig, 1);
+    const before = wipes(rig);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    await advance(rig, 35_000, 5_000);
+
+    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+    expect(rig.fake.abortedReleases).toEqual([hex(1)]);
+    await expect
+      .poll(async () => (await devices(rig)).map((device) => device.state))
+      .toEqual(["ready"]);
+    const refused = await envelopeOf(await allocate(rig, 2, {}, { token: secrets.two }));
+    expect(refused.error?.data?.code).toBe("DEVICE_IN_USE");
+    await expect.poll(async () => await listed(rig)).toEqual([]);
+
+    rig.fake.releaseCommand();
+    await expect
+      .poll(async () => {
+        const retry = await envelopeOf(await allocate(rig, 3, {}, { token: secrets.two }));
+        return retry.result === undefined ? "refused" : "granted";
+      })
+      .toBe("granted");
+  });
+
+  it("a daemon stop while the host waits for a release, with the held command set to outlive its HTTP request, aborts the participant's request and the stop finishes before the command is let go", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.keepCommandsAfterAbort();
+    await runningCommand(rig, 1);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    const stopped = track(rig.daemon.stop("test"));
+
+    await expect.poll(() => stopped.done()).toBe(true);
+    expect(rig.fake.abortedReleases).toEqual([hex(1)]);
+  });
+
+  it("`nuke.run` while the host waits for a release aborts that request and the reset goes on", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    rig.fake.keepCommandsAfterAbort();
+    await runningCommand(rig, 1);
+    await releaseAll(rig);
+    await expect.poll(() => releasesReceived(rig).length).toBe(1);
+
+    const reset = track(rig.daemon.dispatch("nuke.run", {}, adminSession));
+
+    await expect.poll(() => reset.done()).toBe(true);
+    expect(rig.fake.abortedReleases).toEqual([hex(1)]);
+  });
+});
+
+describe("FakeAgentDevice as agent-device behaves", () => {
+  const udid = "00000000-0000-0000-0000-000000000001";
+
+  function call(
+    fake: FakeAgentDevice,
+    method: string,
+    params: Record<string, unknown>,
+    tenant: string | null = "tok_a",
+  ): Promise<Response> {
+    return fake.fetch(
+      new Request(`${fake.baseUrl}/rpc`, {
+        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
+        headers: {
+          authorization: `Bearer ${fake.token}`,
+          "content-type": "application/json",
+          ...(tenant === null ? {} : { "x-agent-device-tenant": tenant }),
+        },
+        method: "POST",
+      }),
+    );
+  }
+
+  const allocation = (n: number, extra: Record<string, unknown> = {}) => ({
+    ...scope,
+    deviceKey: "key-1",
+    leaseId: hex(n),
+    platform: "ios",
+    udid,
+    ...extra,
+  });
+
+  it("refuses a release missing the tenant, the run ID, the lease provider, the client ID or the device key with LEASE_SCOPE_REQUIRED, and one with a different client ID with LEASE_SCOPE_MISMATCH, as agent-device does", async () => {
+    const fake = new FakeAgentDevice();
+    await call(fake, "agent_device.lease.allocate", allocation(1));
+    const full = { ...allocation(1), tenantId: "tok_a" };
+    delete (full as Record<string, unknown>)["platform"];
+    delete (full as Record<string, unknown>)["udid"];
+
+    const accepted = (await (
+      await call(fake, "agent_device.lease.release", full)
+    ).json()) as Envelope;
+    expect(accepted.result).toMatchObject({ released: true });
+    await call(fake, "agent_device.lease.allocate", allocation(1));
+
+    const reasonOf = async (params: Record<string, unknown>, tenant: string | null = "tok_a") => {
+      const answer = (await (
+        await call(fake, "agent_device.lease.release", params, tenant)
+      ).json()) as {
+        readonly error?: { readonly data?: { readonly details?: { readonly reason?: string } } };
+      };
+      return answer.error?.data?.details?.reason;
+    };
+    const { tenantId: _tenantId, ...untenanted } = full;
+    expect(await reasonOf(untenanted, null)).toBe("LEASE_SCOPE_REQUIRED");
+    for (const missing of ["runId", "leaseProvider", "clientId", "deviceKey"]) {
+      const partial = { ...full } as Record<string, unknown>;
+      delete partial[missing];
+      expect(await reasonOf(partial), missing).toBe("LEASE_SCOPE_REQUIRED");
+    }
+    expect(await reasonOf({ ...full, clientId: "client-2" })).toBe("LEASE_SCOPE_MISMATCH");
+  });
+
+  it("answers an allocate for a device a live lease holds with DEVICE_IN_USE, and a release of a lease with a held command only after the command is let go", async () => {
+    const fake = new FakeAgentDevice();
+    const codeOf = async (response: Response) =>
+      ((await response.json()) as Envelope).error?.data?.code;
+    expect(
+      await codeOf(await call(fake, "agent_device.lease.allocate", allocation(1))),
+    ).toBeUndefined();
+    expect(
+      await codeOf(
+        await call(fake, "agent_device.lease.allocate", allocation(2, { udid: "other-device" })),
+      ),
+    ).toBeUndefined();
+
+    expect(await codeOf(await call(fake, "agent_device.lease.allocate", allocation(3)))).toBe(
+      "DEVICE_IN_USE",
+    );
+
+    fake.holdCommand();
+    const running = track(
+      call(fake, "agent_device.command", { command: "snapshot", meta: { leaseId: hex(1) } }),
+    );
+    await sleep(20);
+    const full = { ...allocation(1), tenantId: "tok_a" };
+    const releasing = track(call(fake, "agent_device.lease.release", full));
+    await sleep(50);
+
+    expect(releasing.done()).toBe(false);
+    expect(await codeOf(await call(fake, "agent_device.lease.allocate", allocation(3)))).toBe(
+      "DEVICE_IN_USE",
+    );
+    fake.releaseCommand();
+    await running.promise;
+    expect(((await (await releasing.promise).json()) as Envelope).result).toMatchObject({
+      released: true,
+    });
+    expect(
+      await codeOf(await call(fake, "agent_device.lease.allocate", allocation(3))),
+    ).toBeUndefined();
   });
 });
