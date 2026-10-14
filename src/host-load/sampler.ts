@@ -42,11 +42,21 @@ export class HostLoadSampler {
   #reading: { readonly at: number; readonly parts: Omit<HostLoadReading, "ageMs"> } | undefined;
   #inFlight = false;
   #disposed = false;
+  #firstReading: Promise<void>;
+  #markFirstReading: () => void = () => undefined;
   #tickTimer: TimerHandle | undefined;
   #boundTimer: TimerHandle | undefined;
 
   constructor(private readonly options: HostLoadSamplerOptions) {
     this.#logger = (options.logger ?? new NoopLogger()).child("host-load");
+    this.#firstReading = new Promise((resolve) => {
+      this.#markFirstReading = resolve;
+    });
+  }
+
+  /** why: settles once the first read has been recorded, whatever it found, or at dispose; the read's own bound keeps it from waiting longer than that. */
+  firstReading(): Promise<void> {
+    return this.#firstReading;
   }
 
   start(): void {
@@ -65,6 +75,7 @@ export class HostLoadSampler {
 
   dispose(): void {
     this.#disposed = true;
+    this.#markFirstReading();
     if (this.#tickTimer !== undefined) this.options.clock.cancel(this.#tickTimer);
     this.#tickTimer = undefined;
     if (this.#boundTimer !== undefined) this.options.clock.cancel(this.#boundTimer);
@@ -132,6 +143,7 @@ export class HostLoadSampler {
         if (this.#states[part] === "read") this.#states[part] = "failed";
       }
       this.#reading = { at: now, parts: {} };
+      this.#markFirstReading();
       return;
     }
     for (const part of ["cpu", "memory", "disk"] as const) {
@@ -146,6 +158,7 @@ export class HostLoadSampler {
     if (counters.memory !== undefined) parts.memory = counters.memory;
     if (counters.disk !== undefined) parts.disk = counters.disk;
     this.#reading = { at: now, parts };
+    this.#markFirstReading();
   }
 
   #note(part: Part, present: boolean): void {

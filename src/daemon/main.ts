@@ -592,14 +592,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost
       // the socket race never gets here, so it reaps nothing.
       if (options.agentDeviceUpstream === undefined) void agentDevice.start();
-      // Dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
+      // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
       // `status.get` never parks (it still answers `starting` during convergence), but its
       // `events.subscribe` does park on startup readiness, so the refresh that follows the
       // subscribe reads `running` instead of keeping `starting`. A daemon that fails its
       // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
       // uplink: a worker whose gateway is down must still come up and serve its local agents
-      // (`GatewayUplink` retries on its own backoff).
-      gatewayUplink?.start();
+      // (`GatewayUplink` retries on its own backoff). The dial waits for the first host load reading,
+      // because the gateway reads `status.get` once on connect and next on its 30 s beat, so a dial that beats the first host load reading leaves the worker without a Load for that long.
+      if (gatewayUplink !== undefined) {
+        void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
+      }
       if (!config.http.enabled) return;
       void startHttpGateway().then(
         () => resolveGatewayStarted?.(),

@@ -2756,6 +2756,31 @@ describe("startDaemon host load", () => {
       });
   });
 
+  it("dials its gateway only after the first host load reading, so the gateway's first status.get carries load", async () => {
+    const dials: number[] = [];
+    const listener = createServer((socket) => {
+      dials.push(Date.now());
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+    const { port } = listener.address() as { readonly port: number };
+    try {
+      const probe = new FakeHostLoadProbe();
+      await startOnClock({
+        configOverrides: { gateway: { token: "join-token-load", url: `ws://127.0.0.1:${port}` } },
+        hostLoadProbe: probe,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(dials).toEqual([]);
+
+      probe.answer(COUNTERS);
+
+      await expect.poll(() => dials.length).toBeGreaterThan(0);
+    } finally {
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
+  });
+
   it("fits the load it answers with to the status.get bounds: an age over a day is capped at one day", async () => {
     const probe = new FakeHostLoadProbe(COUNTERS);
     const { clock, daemon } = await startOnClock({ hostLoadProbe: probe });

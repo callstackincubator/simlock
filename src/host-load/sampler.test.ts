@@ -301,6 +301,38 @@ describe("HostLoadSampler", () => {
     sampler.dispose();
   });
 
+  it("settles firstReading when the first read is recorded, not before, and whether it succeeded or failed", async () => {
+    const answered = harness();
+    let settled = false;
+    void answered.sampler.firstReading().then(() => (settled = true));
+    answered.sampler.start();
+    await flush();
+    expect(settled).toBe(false);
+    await answered.settle(counters(10, 100));
+    expect(settled).toBe(true);
+
+    const failed = harness();
+    let failedSettled = false;
+    void failed.sampler.firstReading().then(() => (failedSettled = true));
+    failed.sampler.start();
+    await failed.settle(new Error("no proc"));
+    expect(failedSettled).toBe(true);
+  });
+
+  it("settles firstReading at dispose when no read was ever recorded", async () => {
+    const { sampler } = harness();
+    let settled = false;
+    void sampler.firstReading().then(() => (settled = true));
+    sampler.start();
+    await flush();
+    expect(settled).toBe(false);
+
+    sampler.dispose();
+    await flush();
+
+    expect(settled).toBe(true);
+  });
+
   it("holds no timer after dispose(), and a read in flight changes nothing and logs nothing", async () => {
     const { clock, probe, sampler, settle, warnings } = harness();
     sampler.start();
