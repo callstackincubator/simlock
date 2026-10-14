@@ -1,10 +1,11 @@
+import type { CSSProperties, ReactNode } from "react";
 import { Id, PageHeader, Panel } from "../layout";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
-import { deviceStateStatus, installStatus, pressureStatus, Status } from "../status";
+import { deviceStateStatus, installStatus, pressureStatus, Status, type Tone } from "../status";
 import { type Column, DataTable } from "../table";
 import { WorkerLeases } from "./leases";
-import { formatBusyPercent, formatBytes, formatCores } from "./load-model";
+import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load-model";
 import { WorkerFacts } from "./worker-facts";
 import {
   platformName,
@@ -330,6 +331,11 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
   if (load === undefined) return <p className="muted">Not reported.</p>;
   const { cpu, disk, memory } = load;
   const age = formatDuration(Math.ceil((now - load.readAt) / 1000) * 1000);
+  const gauges = loadGauges(load);
+  // why: a gauge only shades the figure beside it. The console takes thresholds from the daemon
+  // and invents none, so CPU and disk have no level to be wrong at and stay in the neutral tone;
+  // memory has one the worker sends — its pressure — and takes that tone.
+  const memoryTone = memory?.pressure === undefined ? "idle" : pressureStatus(memory.pressure).tone;
   return (
     <dl className="facts">
       <div>
@@ -338,10 +344,15 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
           {cpu === undefined ? (
             "Unavailable"
           ) : (
-            <>
-              {formatBusyPercent(cpu.busyPercent)} busy, {formatCores(cpu.cores)}
-              <Limit limited={cpu.limited} />
-            </>
+            <Gauged
+              figure={
+                <>
+                  {formatBusyPercent(cpu.busyPercent)} busy, {formatCores(cpu.cores)}
+                  <Limit limited={cpu.limited} />
+                </>
+              }
+              gauge={gauges.cpu}
+            />
           )}
         </dd>
       </div>
@@ -351,10 +362,16 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
           {memory === undefined ? (
             "Unavailable"
           ) : (
-            <>
-              {formatBytes(memory.availableBytes)} of {formatBytes(memory.totalBytes)} available
-              <Limit limited={memory.limited} />
-            </>
+            <Gauged
+              figure={
+                <>
+                  {formatBytes(memory.availableBytes)} of {formatBytes(memory.totalBytes)} available
+                  <Limit limited={memory.limited} />
+                </>
+              }
+              gauge={gauges.memory}
+              tone={memoryTone}
+            />
           )}
         </dd>
       </div>
@@ -375,9 +392,14 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
       <div>
         <dt>Disk</dt>
         <dd>
-          {disk === undefined
-            ? "Unavailable"
-            : `${formatBytes(disk.freeBytes)} of ${formatBytes(disk.totalBytes)} free`}
+          {disk === undefined ? (
+            "Unavailable"
+          ) : (
+            <Gauged
+              figure={`${formatBytes(disk.freeBytes)} of ${formatBytes(disk.totalBytes)} free`}
+              gauge={gauges.disk}
+            />
+          )}
         </dd>
       </div>
       <div>
@@ -385,5 +407,36 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
         <dd>{age} ago</dd>
       </div>
     </dl>
+  );
+}
+
+function Gauged(props: {
+  readonly figure: ReactNode;
+  readonly gauge?: number | undefined;
+  readonly tone?: Tone;
+}) {
+  const { figure, gauge, tone = "idle" } = props;
+  return (
+    <span className="load-figure">
+      <span>{figure}</span>
+      {gauge === undefined ? null : <LoadGauge percent={gauge} tone={tone} />}
+    </span>
+  );
+}
+
+// why: a gauge is never the only place its number is -- the figure above it is the text, so it
+// carries no accessible name of its own (`aria-hidden`) and takes no focus. Its colour comes from
+// the stylesheet by class, so both themes apply; only its level arrives inline, which the
+// Content-Security-Policy allows (`style-src` governs style elements, not style attributes).
+function LoadGauge(props: { readonly percent: number; readonly tone: Tone }) {
+  const { percent, tone } = props;
+  return (
+    <span
+      className={`load-bar load-bar-${tone}`}
+      aria-hidden="true"
+      style={{ "--load-bar": `${percent}%` } as CSSProperties}
+    >
+      <span className="load-bar-fill" />
+    </span>
   );
 }

@@ -557,3 +557,98 @@ describe("a worker's page shows its load", () => {
     expect(html.match(/<span class="muted">\(limit\)<\/span>/g)).toHaveLength(2);
   });
 });
+
+describe("the Load gauges", () => {
+  const htmlAt = (worker: WorkerView, now = NOW) =>
+    renderToStaticMarkup(<WorkerDetail id="wrk_1" workers={[worker]} now={now} />);
+  const panelOf = (worker: WorkerView) => loadPanel(htmlAt(worker));
+  const bar = (tone: string, percent: number) =>
+    `<span class="load-bar load-bar-${tone}" aria-hidden="true" style="--load-bar:${percent}%"><span class="load-bar-fill"></span></span>`;
+  const row = (html: string, label: string) => {
+    const start = html.indexOf(`<dt>${label}</dt>`);
+    if (start === -1) throw new Error(`the panel has no ${label} row`);
+    const next = html.indexOf("<dt>", start + 1);
+    return html.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("a worker's detail draws one gauge in each of its CPU, Memory and Disk rows and none in Swap, Pressure or Read", () => {
+    const panel = panelOf({ ...RUNNING, load: LOAD });
+
+    expect(row(panel, "CPU")).toContain(bar("idle", 34));
+    expect(row(panel, "Memory")).toContain(bar("ok", 69));
+    expect(row(panel, "Disk")).toContain(bar("idle", 77));
+    for (const label of ["Swap", "Pressure", "Read"]) {
+      expect(row(panel, label)).not.toContain("load-bar");
+    }
+    expect(panel.match(/class="load-bar /g)).toHaveLength(3);
+  });
+
+  it("a worker's detail draws no gauge in the row of a figure that says Unavailable", () => {
+    const { cpu: _cpu, ...noCpu } = LOAD;
+    const { memory: _memory, ...noMemory } = LOAD;
+    const { disk: _disk, ...noDisk } = LOAD;
+    const zeroTotal = {
+      ...LOAD,
+      memory: { ...LOAD.memory, availableBytes: 12 * GIB, totalBytes: 0 },
+    };
+
+    expect(row(panelOf({ ...RUNNING, load: noCpu }), "CPU")).toContain("Unavailable");
+    expect(row(panelOf({ ...RUNNING, load: noCpu }), "CPU")).not.toContain("load-bar");
+    expect(row(panelOf({ ...RUNNING, load: noMemory }), "Memory")).not.toContain("load-bar");
+    expect(row(panelOf({ ...RUNNING, load: noDisk }), "Disk")).not.toContain("load-bar");
+    expect(row(panelOf({ ...RUNNING, load: zeroTotal }), "Memory")).not.toContain("load-bar");
+  });
+
+  it("a worker's detail colours the memory gauge with its pressure, and idle where the view has none", () => {
+    type Memory = NonNullable<NonNullable<WorkerView["load"]>["memory"]>;
+    const { pressure: _pressure, ...noPressure } = LOAD.memory;
+    const memoryBar = (memory: Memory) =>
+      row(panelOf({ ...RUNNING, load: { ...LOAD, memory } }), "Memory");
+
+    expect(memoryBar(LOAD.memory)).toContain(bar("ok", 69));
+    expect(memoryBar({ ...LOAD.memory, pressure: "warn" })).toContain(bar("warn", 69));
+    expect(memoryBar({ ...LOAD.memory, pressure: "critical" })).toContain(bar("error", 69));
+    expect(memoryBar(noPressure)).toContain(bar("idle", 69));
+  });
+
+  it("a worker's detail keeps the CPU and disk gauges idle at any level, a full disk included", () => {
+    const panel = panelOf({
+      ...RUNNING,
+      load: {
+        ...LOAD,
+        cpu: { busyPercent: 99, cores: 10, limited: false },
+        disk: { freeBytes: 0, totalBytes: 494.4 * GIB },
+      },
+    });
+
+    expect(row(panel, "CPU")).toContain(bar("idle", 99));
+    expect(row(panel, "Disk")).toContain(bar("idle", 100));
+  });
+
+  it("a worker's detail says each figure's number once, the gauge carrying none of its own", () => {
+    const panel = text(htmlAt({ ...RUNNING, load: LOAD }));
+
+    expect(loadPanel(panel).match(/34%/g)).toHaveLength(1);
+    expect(loadPanel(panel)).not.toContain("69%");
+    expect(loadPanel(panel)).not.toContain("77%");
+    const gauges = panelOf({ ...RUNNING, load: LOAD }).match(
+      /class="load-bar load-bar-\w+" aria-hidden="true"/g,
+    );
+
+    expect(gauges).toHaveLength(3);
+  });
+
+  it("a worker's detail draws no gauge at all where it says Not reported. or No reading while disconnected.", () => {
+    expect(panelOf(RUNNING)).not.toContain("load-bar");
+    expect(panelOf({ ...RUNNING, connection: "disconnected", load: LOAD })).not.toContain(
+      "load-bar",
+    );
+  });
+
+  it("the worker's card prints its Load row as one line of text with no gauge", () => {
+    const card = renderToStaticMarkup(<WorkerFacts worker={{ ...RUNNING, load: LOAD }} />);
+
+    expect(text(card)).toContain("Load CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free");
+    expect(card).not.toContain("load-bar");
+  });
+});

@@ -179,6 +179,15 @@ scale; never a value between.
   nothing is visible only in the picture. A chart can be focused, and the
   arrow keys step through it. Its focus ring goes round the whole chart, for
   keyboard focus only: a click on a chart draws none.
+- **Load gauges.** A figure of how full something is carries a bar in a line of
+  its own under it: 8px high, `--field` track, `max-width: 20rem`, square, and
+  never the accent. Its fill takes a status colour by class; its level arrives
+  inline, which the Content-Security-Policy allows for a style attribute. A gauge
+  is never the only place its number is, so it carries no accessible name and
+  takes no focus — the figure above it is the text. Colour is a second signal
+  here too: a gauge shades a level the console has a word for and nothing else,
+  so CPU and disk stay `--status-idle` until the worker sends a limit they can be
+  judged against.
 
 ## Layout
 
@@ -208,7 +217,10 @@ scale; never a value between.
 ## Motion
 
 Almost none. Colour changes on hover take 120ms (`--duration`). Nothing slides,
-fades or bounces, charts included. With `prefers-reduced-motion: reduce`, there
+fades or bounces, charts included. The one exception is a load gauge's fill: it
+takes 120ms (`--duration`) to reach a new level rather than jumping, because a
+new reading lands every 15 seconds and a jump reads as a glitch. Nothing else
+moves, and nothing ever loops. With `prefers-reduced-motion: reduce`, there
 are no transitions at all.
 
 ## Voice

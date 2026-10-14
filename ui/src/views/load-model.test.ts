@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBusyPercent, formatBytes, formatCores, loadSummary } from "./load-model";
+import { formatBusyPercent, formatBytes, formatCores, loadGauges, loadSummary } from "./load-model";
 
 const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
@@ -62,5 +62,63 @@ describe("the card summary", () => {
     );
     expect(loadSummary(noMemory)).toBe("CPU 34% · memory unavailable · disk 112.4 GiB free");
     expect(loadSummary(noDisk)).toBe("CPU 34% · memory 9.8 of 32.0 GiB · disk unavailable");
+  });
+});
+
+describe("how full each figure is", () => {
+  it("answers each figure's fullness as a whole percent", () => {
+    expect(loadGauges(FULL)).toEqual({ cpu: 34, disk: 77, memory: 69 });
+  });
+
+  it("rounds a gauge's percent the way the figure above it does", () => {
+    const shown = (percent: number) => Number(formatBusyPercent(percent).replace("%", ""));
+
+    for (const busyPercent of [34.4, 34.5, 0.5, 99.5]) {
+      const cpu = { busyPercent, cores: 10, limited: false };
+
+      expect(loadGauges({ ...FULL, cpu }).cpu).toBe(shown(busyPercent));
+    }
+  });
+
+  it("fills the bar for a figure at or over its own total and empties it for one with nothing used", () => {
+    const full = loadGauges({
+      ...FULL,
+      cpu: { busyPercent: 100, cores: 10, limited: false },
+      disk: { freeBytes: 0, totalBytes: 100 * GIB },
+      memory: { ...FULL.memory, availableBytes: 0 },
+    });
+    const over = loadGauges({
+      cpu: { busyPercent: 137, cores: 10, limited: false },
+      disk: { freeBytes: -20 * GIB, totalBytes: 100 * GIB },
+      memory: { ...FULL.memory, availableBytes: -5 * GIB },
+      readAt: 0,
+    });
+    const empty = loadGauges({
+      ...FULL,
+      cpu: { busyPercent: -4, cores: 10, limited: false },
+      disk: { freeBytes: 100 * GIB, totalBytes: 100 * GIB },
+      memory: { ...FULL.memory, availableBytes: 34 * GIB, totalBytes: 32 * GIB },
+    });
+
+    expect(full).toEqual({ cpu: 100, disk: 100, memory: 100 });
+    expect(over).toEqual({ cpu: 100, disk: 100, memory: 100 });
+    expect(empty).toEqual({ cpu: 0, disk: 0, memory: 0 });
+  });
+
+  it("answers nothing for a figure the reading gives no denominator for", () => {
+    const { cpu: _cpu, ...noCpu } = FULL;
+    const { memory: _memory, ...noMemory } = FULL;
+    const { disk: _disk, ...noDisk } = FULL;
+    const zeroTotals = {
+      ...FULL,
+      disk: { freeBytes: 12 * GIB, totalBytes: 0 },
+      memory: { ...FULL.memory, totalBytes: 0 },
+    };
+
+    expect(loadGauges(noCpu)).toEqual({ disk: 77, memory: 69 });
+    expect(loadGauges(noMemory)).toEqual({ cpu: 34, disk: 77 });
+    expect(loadGauges(noDisk)).toEqual({ cpu: 34, memory: 69 });
+    expect(loadGauges(zeroTotals)).toEqual({ cpu: 34 });
+    expect(loadGauges({ readAt: 0 })).toEqual({});
   });
 });

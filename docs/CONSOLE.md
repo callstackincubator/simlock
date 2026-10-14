@@ -171,7 +171,11 @@ Select a worker to open its page. It adds:
 - **Load**: how busy the machine is right now: CPU busy share and cores,
   memory available of total, swap used, memory pressure (`normal`, `warn` or
   `critical`, left out where the system does not report it), and disk free of
-  total. A part the worker could not read says `Unavailable`. **Read** says how
+  total. CPU, memory and disk each have a bar under the figure showing how full
+  it is, for scanning at a glance: the memory bar takes the colour of its
+  pressure, and the other two stay neutral because the worker reports no CPU or
+  disk limit for the console to judge them against. A part the worker could not
+  read says `Unavailable`, and has no bar. **Read** says how
   long ago the reading was taken, and it ticks up until the next one. A
   worker that sent no load says "Not reported.", and a disconnected one "No
   reading while disconnected."

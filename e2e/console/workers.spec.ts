@@ -31,6 +31,12 @@ interface WorkerView {
     readonly android: { readonly running: number; readonly limit: number };
   };
   readonly leases: readonly { readonly deviceId: string; readonly grantedAt: number }[];
+  readonly load?: {
+    readonly readAt: number;
+    readonly cpu?: { readonly busyPercent: number; readonly cores: number };
+    readonly memory?: { readonly availableBytes: number; readonly totalBytes: number };
+    readonly disk?: { readonly freeBytes: number; readonly totalBytes: number };
+  };
 }
 
 interface Status {
@@ -442,6 +448,130 @@ test.describe("the workers views", () => {
     const first = await read.textContent();
     await expect(read).not.toHaveText(first ?? "", { timeout: 10_000 });
     await expect(fact(panel, "Memory")).toContainText("available");
+  });
+
+  test("a worker's detail draws a bar under each figure, filled to that figure's own percent", async ({
+    daemon,
+    page,
+  }) => {
+    const [host] = await workerList(daemon);
+    await openConsole(page, daemon);
+    const shown = card(page, host?.id ?? "");
+    await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    await shown.getByRole("link", { name: host?.id ?? "" }).click();
+
+    const panel = page.getByRole("region", { name: "Load", exact: true });
+    // why: the worker's reading turns over every 15 s, so this measures around it and retries when
+    // it changes mid-measurement — otherwise the bar and the figure compared are different readings.
+    await waitFor(
+      async () => {
+        const before = (await workerList(daemon))[0]?.load;
+        if (before?.cpu === undefined || before.memory === undefined || before.disk === undefined)
+          return false;
+        const painted = await panel.locator(".load-bar").evaluateAll((bars) =>
+          bars.map((bar) => {
+            const fill = bar.firstElementChild as HTMLElement;
+            return {
+              track: bar.getBoundingClientRect().width,
+              fill: fill.getBoundingClientRect().width,
+            };
+          }),
+        );
+        const after = (await workerList(daemon))[0]?.load;
+        if (JSON.stringify(before) !== JSON.stringify(after)) return false;
+
+        const whole = (percent: number) => Math.round(Math.min(100, Math.max(0, percent)));
+        const wanted = [
+          whole(before.cpu.busyPercent),
+          whole((1 - before.memory.availableBytes / before.memory.totalBytes) * 100),
+          whole((1 - before.disk.freeBytes / before.disk.totalBytes) * 100),
+        ];
+        return (
+          painted.length === wanted.length &&
+          painted.every((bar, index) => {
+            const expected = (bar.track * wanted[index]) / 100;
+            return Math.abs(bar.fill - expected) <= 1;
+          })
+        );
+      },
+      { interval: 500, timeout: 40_000, label: () => "the fill to match the figure" },
+    );
+  });
+
+  test("a load gauge's fill takes its colour from the stylesheet and never the accent, in both themes", async ({
+    daemon,
+    page,
+  }) => {
+    const [host] = await workerList(daemon);
+    await openConsole(page, daemon);
+    const shown = card(page, host?.id ?? "");
+    await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    await shown.getByRole("link", { name: host?.id ?? "" }).click();
+    const panel = page.getByRole("region", { name: "Load", exact: true });
+    await expect(panel.locator(".load-bar").first()).toBeVisible();
+
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      const { accent, tones } = await readStatuses(page);
+      const fills = await panel.locator(".load-bar").evaluateAll((bars) =>
+        bars.map((bar) => ({
+          tone: /load-bar-(\w+)/.exec(bar.className)?.[1] ?? "",
+          colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
+        })),
+      );
+
+      expect(fills.length).toBeGreaterThan(0);
+      for (const fill of fills) {
+        const context = `${fill.tone} gauge in ${colorScheme}`;
+        expect(fill.tone, context).not.toBe("");
+        expect(fill.colour, context).toBe(
+          tones[TONES.indexOf(fill.tone as (typeof TONES)[number])],
+        );
+        expect(fill.colour, context).not.toBe(accent);
+      }
+    }
+  });
+
+  test("a load gauge's fill slides to a new level over --duration, and not at all under reduced motion", async ({
+    browserName,
+    daemon,
+    page,
+  }) => {
+    const [host] = await workerList(daemon);
+    await openConsole(page, daemon);
+    const shown = card(page, host?.id ?? "");
+    await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    await shown.getByRole("link", { name: host?.id ?? "" }).click();
+
+    const panel = page.getByRole("region", { name: "Load", exact: true });
+    const fill = panel.locator(".load-bar-fill").first();
+    await expect(fill).toBeVisible();
+    // why: the stylesheet moves the fill's width over the document's own duration token, which is
+    // what `prefers-reduced-motion: reduce` already sets to zero. Both sides are read back as
+    // computed values and compared as milliseconds: a browser writes the token's `120ms` as `.12s`.
+    const asMs = (value: string) =>
+      value.trim().endsWith("ms") ? Number.parseFloat(value) : Number.parseFloat(value) * 1_000;
+    await expect
+      .poll(async () => {
+        const style = await fill.evaluate((element) => {
+          const computed = getComputedStyle(element);
+          return {
+            duration: computed.transitionDuration,
+            property: computed.transitionProperty,
+            token: getComputedStyle(document.documentElement).getPropertyValue("--duration").trim(),
+          };
+        });
+        return style.property === "width" && asMs(style.duration) === asMs(style.token);
+      })
+      .toBe(true);
+
+    if (browserName === "chromium") {
+      // why: emulated in Chromium alone — it is the one engine whose reduced-motion emulation was
+      // verified on the machine that wrote this test, and a guard must not hide a real failure in
+      // the other two.
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await expect(fill).toHaveCSS("transition-duration", "0s");
+    }
   });
 
   test("a disconnected worker's Load row says No reading while disconnected within a second", async ({
