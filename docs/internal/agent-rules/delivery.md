@@ -24,8 +24,8 @@ it before anything else happens to it.
 | `feature:ready`    | maintainer                          | Business sections and ADRs accepted; agents do the rest.  |
 | `feature:planned`  | spec session, on split              | Split into tasks. Never picked up itself.                 |
 | `feature:blocked`  | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
-| `task:draft`       | spec session, on creation           | Scope written; technical spec, approval, or deps missing. |
-| `task:ready`       | automation, or maintainer           | An agent may implement it.                                |
+| `task:draft`       | spec session, on creation           | Scope written; technical spec or its spec check missing.  |
+| `task:ready`       | spec session, after the spec check  | An agent may implement it once its Depends on allow.      |
 | `task:blocked`     | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 
 Two labels sit outside that scheme. `flaky-test` marks a bug that names a
@@ -41,8 +41,8 @@ Transitions per kind:
   returns to `triage` when the reporter answers.
 - **feature**: `spec` → `ready` or `planned`, and `ready` → `planned` when
   the delivering agent splits it. Both end at closed.
-- **task**: `draft` → `ready`, and back to `draft` if the approval, the
-  technical spec, or a closed dependency goes away.
+- **task**: `draft` → `ready` when its spec check passes, and back to
+  `draft` if the technical spec is emptied or the maintainer moves it.
 - **any kind**: `triage` or `ready` → `blocked` when an agent stops on a
   blocker it names in its handoff. The maintainer clears it by re-adding the
   label it came from.
@@ -55,14 +55,18 @@ is open, done means closed as completed.
 
 1. **An agent acts only on `bug:triage`, `bug:ready`, `feature:ready`, and
    `task:ready`.** Nothing else is work. Agents never label their way into
-   work: only a maintainer, or automation a maintainer configured, moves an
-   issue to a state an agent may act on.
+   work: only a maintainer, automation a maintainer configured, or the spec
+   session that wrote a task and saw its spec check pass (rule 7) moves an
+   issue to a state an agent may act on. The maintainer's say on a task is
+   the split interview; they can move a task back to `task:draft` at any
+   time. A `task:ready` task runs once every issue under its Depends on is
+   closed, or is a task of the same feature whose PR passed review.
    `feature:ready` delegates one thing: the maintainer accepted the business
    sections and every ADR the feature links, and that approves the rest. An
-   agent delivering it may write the task specs, split the feature, tick
-   each task's approval box, and deliver the tasks as they turn ready. A new
-   decision that needs an ADR, or a comment that would change the spec, is
-   not covered: the agent stops and hands off.
+   agent delivering it may write the task specs, split the feature, set
+   each checked task `task:ready`, and deliver the tasks in their Depends
+   on order. A new decision that needs an ADR, or a comment that would
+   change the spec, is not covered: the agent stops and hands off.
 
 2. **The assignee is the claim, and a handoff is how a claim is released.**
    Before doing anything on an issue an agent assigns itself, and it never
@@ -121,15 +125,18 @@ is open, done means closed as completed.
 
 7. **A task carries both halves.** A task's Scope is the slice of the parent's
    outcome it delivers; its Technical spec is what a delivery agent needs to
-   build it without asking: modules touched, contract and event changes,
-   which rules in this directory are in play, and the tests to write phrased
-   as claims. It need not repeat what `always-in-scope.md` lists, and a small
-   gap it leaves is an assumption, not a question (rule 3). A task with an
-   empty technical section is `task:draft` no matter what anyone says in a
-   comment. Before a task's approval box is ticked, or a feature delivered as
-   one PR gets `feature:ready`, the spec session has the `check-spec` skill
-   read the body as posted, with a fresh context, and fixes in the body what
-   it reports.
+   build it without asking: the facts it rests on, modules touched,
+   contract and event changes, which rules in this directory are in play,
+   and the tests to write phrased as claims. A fact is what existing code,
+   another tool or the machine does today; each cites the line or the
+   command output it was read from, never a summary. It need not repeat
+   what `always-in-scope.md` lists, and a small gap it leaves is an
+   assumption, not a question (rule 3). A task with an empty technical
+   section is `task:draft` no matter what anyone says in a comment. Before
+   a task gets `task:ready`, or a feature delivered as one PR gets
+   `feature:ready`, the spec session has the `check-spec` skill read the
+   body as posted, with a fresh context, and fixes in the body what it
+   reports.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
    reproduces the bug as a failing test whose title states the claim the
@@ -316,6 +323,7 @@ closes the issue:
 
 ```bash
 gh issue list --search 'label:bug:ready,feature:ready,task:ready no:assignee'
+gh issue view <n> --json body -q .body    # a task: every Depends on allows it (rule 1)
 gh issue edit <n> --add-assignee @me
 .agents/scripts/worktree.sh task/<n>    # or bug/<n>, feature/<n>; resumes origin/<branch>
 ```
@@ -350,13 +358,8 @@ rules mechanically, so nobody has to remember them:
 
 - Adding a `<kind>:<state>` label removes any other one on the issue. Every
   transition is therefore a single add.
-- A `task:draft` issue becomes `task:ready` on its own when its approval box
-  is ticked, its Technical spec section is filled in, and every issue under
-  Depends on is closed. It is re-evaluated whenever its body changes and
-  whenever an issue it depends on closes.
-- A `task:ready` issue with no assignee goes back to `task:draft` when the
-  approval box is unticked, the technical spec is emptied, or a dependency
-  is reopened. A claimed task is left alone.
+- A `task:ready` issue with no assignee goes back to `task:draft` when its
+  Technical spec section is emptied. A claimed task is left alone.
 - A comment by the reporter on a `bug:needs-info` issue moves it back to
   `bug:triage`, reopening the issue if it had been closed. Two weeks of
   silence closes it as not planned.
@@ -373,6 +376,6 @@ rules mechanically, so nobody has to remember them:
   closes `#<n>` and closes nothing else.
 
 The judgment calls stay manual by design: `bug:new` → `bug:triage`,
-`bug:triage` → `bug:ready`, and `feature:spec` → `feature:ready`. The
-approval box on each task is the maintainer's click, except on the tasks of
-a `feature:ready` feature, where the delivering agent ticks it (rule 1).
+`bug:triage` → `bug:ready`, and `feature:spec` → `feature:ready`. A task
+needs none: the spec session sets `task:ready` once its check passes
+(rule 1).

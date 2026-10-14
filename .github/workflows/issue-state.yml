@@ -3,11 +3,8 @@ name: Issue state
 # The one place that enforces docs/internal/agent-rules/delivery.md
 # mechanically:
 # - one <kind>:<state> label per issue (adding the next label drops the old);
-# - task:draft becomes task:ready when approved, specified, and unblocked, and
-#   task:ready goes back to task:draft when that stops being true. A dependency
-#   unblocks when it is closed, or when it is a task of the same feature whose
-#   PR passed review (open, not a draft): the feature's PRs stack and merge
-#   together at the end of its delivery;
+# - a task:ready task whose Technical spec is emptied goes back to task:draft
+#   (the spec session sets task:ready; Depends on is the deliver skill's order);
 # - a reporter's reply moves bug:needs-info back to bug:triage, reopening the
 #   issue if the stale job closed it (agents post under a maintainer's
 #   account, so comments carrying the agent footer from rule 12 do not count);
@@ -69,14 +66,8 @@ jobs:
             }
 
   task-ready:
-    name: Promote or demote between task:draft and task:ready
-    if: >-
-      (github.event_name == 'issues' &&
-       (github.event.action == 'closed' || github.event.action == 'reopened' ||
-        (github.event.action == 'edited' && github.event.changes.body != null))) ||
-      (github.event_name == 'pull_request' &&
-       (github.event.action == 'ready_for_review' || github.event.action == 'converted_to_draft' ||
-        github.event.action == 'closed'))
+    name: Demote a task:ready task whose Technical spec is emptied
+    if: github.event_name == 'issues' && github.event.action == 'edited' && github.event.changes.body != null
     runs-on: ubuntu-24.04
     permissions:
       issues: write
@@ -85,106 +76,26 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const hasLabel = (issue, name) => issue.labels.some((l) => l.name === name);
-            const section = (body, heading) => {
-              const m = body.match(new RegExp(`^## ${heading}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m"));
-              return m ? m[1] : null;
-            };
-            const dependencies = (body) =>
-              [...(section(body, "Depends on") ?? "").matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
-            const specified = (body) => {
-              const spec = section(body, "Technical spec");
-              if (spec === null) return false;
-              return spec
-                .replace(/<!--[\s\S]*?-->/g, "")
-                .split("\n")
-                .some((line) => line.trim() !== "" && !line.startsWith("#") && line.trim() !== "- ...");
-            };
-            const approved = (body) => /^- \[x\] Approved for delivery/im.test(body);
-            const parentOf = async (number) => {
-              const data = await github.graphql(
-                `query($owner:String!,$repo:String!,$number:Int!){
-                  repository(owner:$owner,name:$repo){ issue(number:$number){ parent{ number } } } }`,
-                { ...context.repo, number },
-              );
-              return data.repository.issue?.parent?.number ?? null;
-            };
-            const reviewedPr = async (number) => {
-              const { data } = await github.rest.pulls.list({
-                ...context.repo, state: "open", head: `${context.repo.owner}:task/${number}`,
-              });
-              return data.some((pr) => !pr.draft);
-            };
-
-            let changed = null;
-            if (context.eventName === "pull_request") {
-              // why: a merged PR closes its issue, and the issues event re-checks the same tasks.
-              if (context.payload.pull_request.merged) return;
-              const m = /^task\/(\d+)$/.exec(context.payload.pull_request.head.ref);
-              if (m === null) return;
-              changed = Number(m[1]);
-            } else if (context.payload.action !== "edited") {
-              changed = context.payload.issue.number;
+            const issue = context.payload.issue;
+            if (!issue.labels.some((l) => l.name === "task:ready")) return;
+            const body = issue.body ?? "";
+            const m = body.match(/^## Technical spec\s*$([\s\S]*?)(?=^## |(?![\s\S]))/m);
+            const specified = m !== null && m[1]
+              .replace(/<!--[\s\S]*?-->/g, "")
+              .split("\n")
+              .some((line) => line.trim() !== "" && !line.startsWith("#") && line.trim() !== "- ...");
+            const issue_number = issue.number;
+            if (specified) return;
+            if (issue.assignees?.length) {
+              core.info(`#${issue_number} has no Technical spec but is claimed; leaving it`);
+              return;
             }
-
-            const candidates = [];
-            if (changed === null) {
-              const issue = context.payload.issue;
-              if (hasLabel(issue, "task:draft") || hasLabel(issue, "task:ready")) candidates.push(issue);
-            } else {
-              for (const labels of ["task:draft", "task:ready"]) {
-                const issues = await github.paginate(github.rest.issues.listForRepo, {
-                  ...context.repo, state: "open", labels, per_page: 100,
-                });
-                for (const issue of issues) {
-                  if (dependencies(issue.body ?? "").includes(changed)) candidates.push(issue);
-                }
-              }
-            }
-
-            for (const issue of candidates) {
-              const body = issue.body ?? "";
-              const why = [];
-              if (!approved(body)) why.push("approval box not ticked");
-              if (!specified(body)) why.push("Technical spec section empty");
-              const open = [];
-              let parent;
-              for (const n of dependencies(body)) {
-                const dep = await github.rest.issues.get({ ...context.repo, issue_number: n });
-                if (dep.data.state === "closed") continue;
-                parent ??= await parentOf(issue.number);
-                if (parent !== null && (await parentOf(n)) === parent && (await reviewedPr(n))) continue;
-                open.push(`#${n}`);
-              }
-              if (open.length) why.push(`waiting on ${open.join(", ")}`);
-              const ready = why.length === 0;
-              const isReady = hasLabel(issue, "task:ready");
-              const issue_number = issue.number;
-
-              if (ready && !isReady) {
-                await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["task:ready"] });
-                await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "task:draft" });
-                const deps = dependencies(body).map((n) => `#${n}`);
-                await github.rest.issues.createComment({
-                  ...context.repo, issue_number,
-                  body: `Now \`task:ready\`: approved, technical spec present${deps.length ? `, ${deps.join(", ")} closed or reviewed in this feature's stack` : ""}.`,
-                });
-                core.info(`#${issue_number}: task:draft -> task:ready`);
-              } else if (!ready && isReady) {
-                if (issue.assignees?.length) {
-                  core.info(`#${issue_number} no longer ready (${why.join("; ")}) but is claimed; leaving it`);
-                  continue;
-                }
-                await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["task:draft"] });
-                await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "task:ready" });
-                await github.rest.issues.createComment({
-                  ...context.repo, issue_number, body: `Back to \`task:draft\`: ${why.join("; ")}.`,
-                });
-                core.info(`#${issue_number}: task:ready -> task:draft`);
-              } else {
-                core.info(`#${issue_number} unchanged${why.length ? ` (${why.join("; ")})` : ""}`);
-              }
-            }
+            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["task:draft"] });
+            await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "task:ready" });
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number, body: "Back to `task:draft`: Technical spec section empty.",
+            });
+            core.info(`#${issue_number}: task:ready -> task:draft`);
 
   needs-info-reply:
     name: Reporter replied on bug:needs-info

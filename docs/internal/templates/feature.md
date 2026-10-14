@@ -3,7 +3,8 @@ Feature spec. A spec session writes this; nobody edits it by hand.
 Sections up to "Open questions" are the business spec and never contain
 implementation detail unless the detail is itself a requirement.
 "Decisions" and "Technical spec" are added in a later session. A feature
-that is split into tasks gets sub-issues instead of a Technical spec.
+that is split into tasks gets sub-issues, "Shared values" and "Tasks"
+instead of a Technical spec.
 -->
 
 Request: #NNN <!-- or "none" when the maintainer originated it -->
@@ -72,6 +73,16 @@ an end-to-end test can verify against main. -->
 
 - ADR NNNN — <title>: <one line on what it fixes for this feature>
 
+## Shared values
+
+<!-- Added when the feature is split. Every value more than one task uses
+(a format, limit, name or key, the protocol bump), one row each, with the
+source of its Facts row. Tasks link here and never restate a value. -->
+
+| Value | Rule | Source |
+| ----- | ---- | ------ |
+| ...   | ...  | ...    |
+
 ## Tasks
 
 <!-- Added when the feature is split; replaces the Technical spec. First a
@@ -88,6 +99,23 @@ stays current. -->
 
 <!-- Only for a feature delivered as one PR. Delete this section when the
 feature is split into tasks. -->
+
+### Facts
+
+<!-- Every fact this spec rests on, one row each: what existing code,
+another tool or this machine does today. Source: where it was read, a
+`path:line` in this repo, a `path:line` in another tool's source at the
+commit toolchain.md names, or a command and the output line it printed. A
+value this change sends to another module, process or tool (an id, name,
+key, header, path, flag, JSON shape) is a row: its source is the line that
+parses or validates it, and the row shows the value passes. A fake of
+another tool cites the real reply it copies. A sentence below about today's
+behaviour names its row (F1). A fact with no source is an open question,
+not a row. -->
+
+| #  | Fact | Source |
+| -- | ---- | ------ |
+| F1 | ...  | ...    |
 
 ### Modules touched
 

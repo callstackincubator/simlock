@@ -18,10 +18,10 @@ session fixes what you report.
 Arguments: an issue number, and a scope:
 
 - `task`: one task (or a feature delivered as one PR), read with its parent.
-  Every category except overlap.
+  Every category except overlap and shared-values.
 - `feature`: a feature with sub-issues, read with every open sub-issue.
-  Only contradiction between tasks, overlap, and whether the tasks together
-  deliver every Completion condition.
+  Only contradiction between tasks, overlap, shared values, and whether the
+  tasks together deliver every Completion condition.
 - `closure`: one body and a list of finding lines a spec session fixed. Only
   whether the body as posted closes each one; read only what that needs,
   and skip steps 2 and 3.
@@ -49,10 +49,11 @@ spec must agree with:
 - `docs/internal/adr/README.md` and every ADR the spec names;
 - `docs/internal/templates/feature.md` or `task.md`, whichever the body
   follows;
-- the code the spec names, and the code the checks below send you to.
-  Search; do not read around.
+- the code the spec names, and the code the checks below send you to;
+  another tool's code at the version `toolchain.md` names under "Other
+  tools' source". Search; do not read around.
 
-Budget: about 25 file reads or searches. A question you cannot settle
+Budget: about 35 file reads or searches. A question you cannot settle
 within it is a finding, not a reason to read more.
 
 ## 2. Plan it, then break it (`task` scope)
@@ -126,15 +127,23 @@ what goes wrong because of it.
     Modules touched, with no line under Scope saying why it cannot split
     (spec-session's split mode sizes tasks so). Every stage of delivery
     grows with the task, and a big one costs review rounds and parks.
-11. **code-claim.** A sentence that says what existing code does today: it
-    names a file, function, field or event ("`stopAuxiliary` stops the
-    gateway first, which aborts open requests", "`settle` rejects
-    waiters"). Read the code each one names; a claim the code does not bear
-    out is a finding, with the line that contradicts it. An implementer
-    builds on these sentences, finds them false mid-task, and stops.
+11. **fact.** Each Facts row, and each sentence that says what existing
+    code, another tool or the machine does today ("`settle` rejects
+    waiters", "the CLI prints JSON"). Read the source the row cites; a row
+    with no source, a source that does not bear it out, or such a sentence
+    with no row is a finding, with the line that contradicts it. An
+    implementer builds on these, finds them false mid-task, and stops.
+12. **boundary.** Each value the change sends to another module, process
+    or tool (an id, name, key, header, path, flag, JSON shape), and each
+    command, flag, output shape or fixture a Tests line uses. Find the line
+    that accepts it, or run it on `main`; try odd and long values. One the
+    receiver would reject, or that does not exist, is a finding. A fake of
+    another tool whose reply differs from the real one is one too.
 
 In `feature` scope, also: a Completion condition no task delivers is a
-finding under unverifiable.
+finding under unverifiable, and a value two tasks use that the feature's
+Shared values table does not hold, or that a task states differently, is a
+finding under shared-values.
 
 What a rule, an accepted ADR or `always-in-scope.md` already answers is not
 a gap. "Nothing shows the suite is green" is never a finding: CI proves it.
@@ -147,7 +156,7 @@ End with exactly this block, nothing after it:
 
 ```
 Issue: #N  Scope: task | feature  Checked: <#N and each issue read>  Findings: n
-Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n> · size <ok|n|n/a> · code-claim <ok|n|n/a>
+Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n> · size <ok|n|n/a> · fact <ok|n|n/a> · boundary <ok|n|n/a> · shared-values <ok|n|n/a>
 - [<category>] #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
 Verdict: ready | fix first
 ```

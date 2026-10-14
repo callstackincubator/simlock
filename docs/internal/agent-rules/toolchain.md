@@ -90,6 +90,18 @@ A Done when line needs the slow lane when it needs a real simulator or
 emulator. It says so in its own words ("on a Mac with an iOS runtime: ...")
 and names the slow-lane test that proves it.
 
+## Other tools' source
+
+A spec's Facts row about another tool cites that tool's source at the
+commit this repo uses, or a command run on this machine; never a summary or
+the tool's docs alone.
+
+| Tool | Version | Read it |
+| ---- | ------- | ------- |
+| agent-device | the commit `vendor/README.md` names | `git -C <checkout> show <commit>:<path>` in a clone of `callstackincubator/agent-device`. No clone: `gh api 'repos/callstackincubator/agent-device/contents/<path>?ref=<commit>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
+| Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
+| simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
+
 ## Project checks
 
 - **Published surfaces.** A change to a schema, a contract type or a

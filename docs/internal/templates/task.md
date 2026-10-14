@@ -1,7 +1,8 @@
 <!--
 Task spec. A spec session writes this as a sub-issue of a feature.
-A task is task:draft until the Technical spec is filled in, the approval box
-is ticked, and every issue under "Depends on" is closed.
+A task is task:draft until its Technical spec is filled in and its spec
+check passes; the spec session then sets task:ready. "Depends on" sets only
+the order of delivery.
 -->
 
 Part of #NNN.
@@ -22,6 +23,23 @@ result beside the new one. End with one line: what a user would notice if
 this task goes wrong. -->
 
 ## Technical spec
+
+### Facts
+
+<!-- Every fact this spec rests on, one row each: what existing code,
+another tool or this machine does today. Source: where it was read, a
+`path:line` in this repo, a `path:line` in another tool's source at the
+commit toolchain.md names, or a command and the output line it printed. A
+value this change sends to another module, process or tool (an id, name,
+key, header, path, flag, JSON shape) is a row: its source is the line that
+parses or validates it, and the row shows the value passes. A fake of
+another tool cites the real reply it copies. A sentence below about today's
+behaviour names its row (F1). A fact with no source is an open question,
+not a row. -->
+
+| #  | Fact | Source |
+| -- | ---- | ------ |
+| F1 | ...  | ...    |
 
 ### Modules touched
 
@@ -74,7 +92,3 @@ real simulator or emulator says so and names the slow-lane test that proves it. 
 <!-- One issue per line. Leave empty if none. -->
 
 - #NNN
-
-## Approval
-
-- [ ] Approved for delivery

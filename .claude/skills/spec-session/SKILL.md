@@ -1,6 +1,6 @@
 ---
 name: spec-session
-description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues; technical and split end with the spec-checker agent reading the posted body, and its findings are fixed before any approval box is ticked or ready label set. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
+description: Run a spec session on a GitHub issue — turn a request into a feature spec, write or amend its business section, add the technical section, or split it into task sub-issues; technical and split end with the spec-checker agent reading the posted body, and its findings are fixed before any ready label is set, and split ends with every task task:ready. Always reconciles comments posted since the body was last edited before writing anything. Use when the user says "spec session for #N", "write the spec for #N", "add the technical spec to #N", or "split #N into tasks", and when the deliver skill specifies a feature:ready feature unattended.
 model: opus
 effort: medium
 ---
@@ -71,7 +71,31 @@ in step 4. Do not start step 3 until every item has an answer.
 
 Every mode is an interview: one question at a time, each with your
 recommended answer. Explore the codebase instead of asking whenever it can
-answer. Use the technique of the `interview-me` and `grill-me` skills.
+answer. Ask nothing a rule, an accepted ADR or the code's handling of the
+same case already answers: adopt it and say so. Use the technique of the
+`interview-me` and `grill-me` skills.
+
+**Facts** (`technical` and `split`). Before you write a Technical spec or a
+task body, fill its Facts table (`docs/internal/templates/task.md`): every
+fact the design rests on about existing code, another tool or the machine.
+
+1. List the questions the design depends on. Send them to `Explore` agents
+   with `model: haiku`, one per repository, all in one message, each ending
+   `Answer with path:line lines only, one per line, no prose.` Where another
+   tool's source lives: `toolchain.md`, "Other tools' source".
+2. Read every line they return yourself before you write its row. A fact
+   never comes from an agent's summary.
+3. A value the change sends to another module, process or tool (an id,
+   name, key, header, path, flag, JSON shape): find the line that parses or
+   validates it, and check the value passes. A pattern gets a table of
+   example values, odd ones included.
+4. A command, flag, output shape or fixture a Tests line uses: run it on
+   `main`, or check that it exists. Cite the output line.
+5. When the feature copies another tool's behaviour, read how that tool
+   does it before you propose anything.
+
+A fact you cannot source is an open question: attended, ask; unattended,
+stop.
 
 **Creating a feature from a request** (`request:new` issue given):
 interview for the business sections of `docs/internal/templates/feature.md`,
@@ -136,8 +160,9 @@ Write each body so the spec check finds nothing:
   `toolchain.md`. Two tasks that only add to the same file in different
   places run at once: the one that merges second takes the base branch.
   That holds for an open task of another feature too;
-- every sentence about what existing code does today checked against that
-  code;
+- every sentence about today's behaviour names its Facts row;
+- every value more than one task uses in the feature's Shared values
+  table, linked from each task, never restated;
 - a Done when line that needs the slow lane says so and names its test, as
   `toolchain.md` asks;
 - nothing `always-in-scope.md` covers.
@@ -163,13 +188,12 @@ gh issue edit <feature> --add-label feature:planned --remove-label feature:spec
 
 Unattended, remove `feature:ready` instead of `feature:spec`.
 
-Approval boxes:
+Once the spec check (step 5) passes, set every task ready, attended or
+not. Depends on sets only the order the `deliver` skill runs them in:
 
-- Attended: tick none. That is the maintainer's click, after the spec check.
-- Unattended: `feature:ready` is the approval. Tick each box yourself once
-  the spec check is done, in a second body edit after the task exists: the
-  issue-state workflow promotes a task on body edits only, so a box ticked
-  at creation leaves the task in `task:draft`.
+```bash
+gh issue edit <task> --add-label task:ready --remove-label task:draft
+```
 
 **`revise`**: the reconcile step, plus the amendments it produced.
 
@@ -192,6 +216,8 @@ show, then explain, then ask.
 - Before writing the body, play the result back: the user flow diagram, the
   example, and what will and will not change. Write only after the
   maintainer says it matches what they meant.
+- Each option says where it changes things: this repo, another tool, or
+  both.
 - In a Technical spec, draw a Mermaid dependency flowchart of the modules
   involved (changed ones marked), and a Mermaid sequence diagram for any
   request that crosses a process or network hop, failure reply included.
@@ -247,9 +273,9 @@ and the code leave open: attended, ask; unattended, stop.
 
 - Attended: walk the findings with the maintainer one at a time, each with
   your recommended fix, and fold in the accepted ones. A finding the
-  maintainer accepts stays. Tell them to tick an approval box or add
-  `feature:ready` only once the check says `Verdict: ready`, or every open
+  maintainer accepts stays. Set `task:ready`, or tell them to add
+  `feature:ready`, only once the check says `Verdict: ready`, or every open
   finding is one they accepted.
 - Unattended: fix every finding the accepted business sections and ADRs
   settle, in the task body. A finding that needs a new decision stops the
-  session: report it, and tick no box.
+  session: report it, and set no task ready.

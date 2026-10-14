@@ -125,7 +125,8 @@ origin/main`.
 gh issue view <N> --json number,title,labels,assignees,body
 ```
 
-- `task:ready`, `bug:ready`: one issue; go to step 3.
+- `task:ready` whose Depends on allow (delivery rule 1), `bug:ready`: one
+  issue; go to step 3.
 - `feature:ready` with a filled Technical spec and no Tasks section: one PR
   delivers it; go to step 3.
 - Other `feature:ready`: specify it (step 2), then walk its tasks.
@@ -137,7 +138,7 @@ gh issue view <N> --json number,title,labels,assignees,body
 Run the `spec-session` skill on it in `split` mode, unattended (rule 1). It
 writes each task's technical spec, links overlapping tasks under Depends on,
 runs the spec check, fixes what the accepted business sections settle, and
-only then ticks each approval box. If it reports a finding or decision that
+only then sets each task `task:ready`. If it reports a finding or decision that
 needs a new ADR or the maintainer's choice, park the feature (step 6) with
 it under Blocked on.
 
@@ -287,12 +288,9 @@ together at the end, so `main` never holds part of a feature. Bottom to top:
 the feature's open ADR PRs (branches `feature/<N>-adr*`, oldest first), then
 each task's PR in the order its review passed.
 
-Runnable: open, `task:ready`, unassigned. The issue-state workflow makes a
-task ready once each Depends on is closed, or is a task of this feature
-whose PR passed review (open, not a draft), so readiness is the order. After
-`gh pr ready` or a merge the workflow takes a minute: watch its run
-(`gh run list --workflow "Issue state" --limit 1`, then `gh run watch <id>`)
-and list again; do not diagnose why a task is not ready yet.
+Runnable: open, `task:ready`, unassigned, and every issue under its Depends
+on closed or a task of this feature whose PR passed review (open, not a
+draft). Check the Depends on yourself; no workflow promotes tasks.
 
 - A task's red stage gets `base: <branch of the stack's top PR>`; with no
   PR yet, no `base` (it starts from `main`).

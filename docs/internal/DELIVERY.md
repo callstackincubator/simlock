@@ -31,8 +31,8 @@ request, closed — not from a label. The branch for issue `<n>` is always
 | `feature:ready`   | Business sections and ADRs accepted; agents do the rest. |
 | `feature:planned` | Split into tasks. Never picked up itself.                |
 | `feature:blocked` | Waiting on the maintainer to clear a blocker.            |
-| `task:draft`      | Scope written; technical spec, approval or deps missing. |
-| `task:ready`      | An agent may implement it.                               |
+| `task:draft`      | Scope written; technical spec or its spec check missing. |
+| `task:ready`      | Spec checked; runs once its Depends on allow.            |
 | `task:blocked`    | Waiting on the maintainer to clear a blocker.            |
 
 ## A bug, from report to fix
@@ -99,12 +99,12 @@ request, closed — not from a label. The branch for issue `<n>` is always
 
 Steps 1 to 4 are the same, but the second session ends differently: instead
 of a Technical spec section on the feature, it produces sub-issues. There
-are two ways in. Attended, you sit through the split and tick each task's
-approval box (steps 5 and 6). Unattended, the second session settles only
+are two ways in. Attended, you sit through the split and agree the task
+list and test seams (steps 5 and 6). Unattended, the second session settles only
 the decisions that need ADRs; you accept those, add `feature:ready`, and
 run `/deliver <feature>`. The run writes each task's technical spec, has
-`check-spec` read the tasks as posted and fixes what it finds, ticks the
-boxes itself, and then delivers the tasks in dependency order, two at a
+`check-spec` read the tasks as posted and fixes what it finds, marks them
+ready, and then delivers the tasks in dependency order, two at a
 time, merging each through the gate. A small gap a task leaves open it
 closes the conservative way and lists as an `Assumption:` line in the PR,
 for you to see. It stops and hands back to you only for a new ADR, a
@@ -116,21 +116,21 @@ waiting.
 
 5. Each task is a native sub-issue of the feature, labelled `task:draft`, with
    a body from [templates/task.md](templates/task.md): Scope, Technical spec,
-   Done when, Out of scope, Depends on, and an approval checkbox. Once the
-   tasks exist, `check-spec` reads them as posted, one checker per task and
+   Facts, Done when, Out of scope and Depends on. Every fact cites the line
+   or command output it was read from. Once the tasks exist, `check-spec` reads them as posted, one checker per task and
    one for the feature as a whole, and the session fixes what they find,
    including tasks that overlap without a Depends on, in this feature or
    another. After the second check, a closure check confirms each fix closed
    its finding; one that did not goes to you. The feature
    becomes `feature:planned` and keeps only its business spec, Decisions and
    the task list.
-6. The maintainer ticks the approval box on each task, once, at planning
-   time. From then on the automation promotes a task to `task:ready` the
-   moment its box is ticked, its Technical spec has content, and every issue
-   under Depends on is closed. Nobody re-reads the dependency graph by hand.
+6. When the check passes, the session sets every task `task:ready`. Your
+   say is the split interview; move a task back to `task:draft` to hold it.
+   Depends on sets only the order: `deliver` starts a task once each
+   dependency is closed or is a task of the same feature whose PR passed
+   review.
 7. Agents claim `task:ready` issues one PR each, on `task/<n>`, each PR
-   reviewed before it leaves draft (below). As tasks close, the ones they
-   unblocked become ready on their own.
+   reviewed before it leaves draft (below).
 8. Verification is part of delivery. Every task PR walks its Done when, and
    the PR that closes the last open sub-issue also walks the feature's
    Completion conditions. When that last sub-issue closes, the automation
@@ -304,8 +304,8 @@ and a failed check once it is ready.
 
 The workflow in `.github/workflows/issue-state.yml` handles the transitions
 that are mechanical: adding a state label removes the previous one, so every
-transition is a single add; `task:draft` becomes `task:ready` when approved,
-specified and unblocked, and goes back when that stops being true; a
+transition is a single add; a `task:ready` task whose Technical spec is
+emptied goes back to `task:draft`; a
 reporter's reply moves `bug:needs-info` back to `bug:triage` and reopens the
 issue if needed; a silent `bug:needs-info` closes after two weeks; a feature
 whose last sub-issue closed gets a note to close it; a completed feature
@@ -317,9 +317,8 @@ own procedure, and the reviews are the delivering agent's job, not CI's.
 
 Three transitions are judgments and stay manual on purpose: `bug:new` to
 `bug:triage`, `bug:triage` to `bug:ready`, and `feature:spec` to
-`feature:ready`. Each is one click. The approval box on each task is a
-fourth, except for the tasks of a `feature:ready` feature, where your
-`feature:ready` was the approval.
+`feature:ready`. Each is one click. Tasks need no click: the spec session
+marks them ready once their check passes.
 
 ## Watching the pipeline
 

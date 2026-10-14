@@ -57,12 +57,12 @@
   {
     "name": "task:draft",
     "color": "5319e7",
-    "description": "Scope written; technical spec, approval, or deps missing."
+    "description": "Scope written; technical spec or its spec check missing."
   },
   {
     "name": "task:ready",
     "color": "5319e7",
-    "description": "An agent may implement it."
+    "description": "Spec checked. An agent may implement it once its Depends on allow."
   },
   {
     "name": "task:blocked",
