@@ -1492,6 +1492,12 @@ agent-device close
 With `agentDevice.enabled` `false` or unset, on a worker or a gateway, every
 `/v1/agent-device` URL answers `404`.
 
+Downloads (artifacts) up to 2 GB (2147483648 bytes) are carried. A download
+whose `content-length` is over that is answered `413` with
+`{"ok": false, "code": "INVALID_ARGS", "error": "..."}` before any byte is
+read. A download with no usable `content-length` that passes 2 GB is cut with
+a failed response, never one that ends as if it were whole.
+
 A **gateway** with `agentDevice.enabled` serves the same URL, and the CLI is
 pointed at the gateway the same way. `open` lands only on a worker whose
 agent-device is available, and the commands, heartbeats and `close` of that
