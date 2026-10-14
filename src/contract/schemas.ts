@@ -529,12 +529,12 @@ export const hostLoadSchema = z.object({
   disk: loadDiskSchema.optional(),
 });
 
-/** ADR 0028 §4: what `status.get` carries about the machine's load, as old as its last read. */
+/** ADR 0029 §4: what `status.get` carries about the machine's load, as old as its last read. */
 export type StatusLoad = z.infer<typeof hostLoadSchema>;
 
 /**
  * Brings a reading within `hostLoadSchema`'s bounds, so an odd figure cannot fail the daemon's own
- * `status.get` output check (ADR 0028 §4): `ageMs` is capped at one day and a part whose figures
+ * `status.get` output check (ADR 0029 §4): `ageMs` is capped at one day and a part whose figures
  * break the schema is left out, as one that could not be read.
  */
 export function fitHostLoad<Load extends StatusLoad>(load: Load | undefined): Load | undefined {

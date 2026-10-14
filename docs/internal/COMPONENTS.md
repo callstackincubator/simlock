@@ -135,7 +135,7 @@ modules with.
 
 ## Host load
 
-`src/host-load/` is entered only through its `index.ts` and imports nothing but `src/ports/` (ADR 0028). Core, leasing, the drivers, the gateway and the contract never import it; the composition root wires it.
+`src/host-load/` is entered only through its `index.ts` and imports nothing but `src/ports/` (ADR 0029). Core, leasing, the drivers, the gateway and the contract never import it; the composition root wires it.
 
 | Component | Where | Owns | Does not |
 |---|---|---|---|
