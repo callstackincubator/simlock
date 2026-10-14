@@ -98,6 +98,11 @@ function refusalFor(params: Record<string, unknown>): FrontReply | undefined {
   return undefined;
 }
 
+function holderReply(holder: Awaited<ReturnType<FrontContext["link"]["status"]>>): FrontReply {
+  if (holder.state === "unreachable") return workerUnreachable();
+  return notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING);
+}
+
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
   const device =
@@ -285,11 +290,7 @@ export async function allocate(
   const holder = await context.link.status(plan.leaseId, identity);
   if (holder.state !== "running" || holder.leaseMaxTtlMs === undefined) {
     await releaseSimlock(context, identity, plan.leaseId);
-    if (holder.state === "unreachable") return frontReply(workerUnreachable(), call);
-    return frontReply(
-      notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING),
-      call,
-    );
+    return frontReply(holderReply(holder), call);
   }
   const forwarded = new Request(request.url, {
     body: JSON.stringify(forwardedBody(call, plan, address, holder.leaseMaxTtlMs)),

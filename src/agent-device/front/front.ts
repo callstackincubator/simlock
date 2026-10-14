@@ -25,6 +25,7 @@ import { allocate } from "./allocate.js";
 import { relay, type FrontContext } from "./context.js";
 import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-filter.js";
 import { heartbeat } from "./heartbeat.js";
+import type { LinkStatus } from "./host-link.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
 
@@ -77,6 +78,26 @@ function untilHangUp(signal: AbortSignal, work: Promise<Response | undefined>): 
 
 const FAILED_BODY_LOG_CHARS = 500;
 
+// why: `devices` names no lease, so a gateway with no capable worker still answers "try again" when one of the token's own leases is only unreachable.
+async function notRunning(
+  context: FrontContext,
+  identity: TokenIdentity,
+  read: RpcRequest,
+  status: Exclude<LinkStatus, { state: "running" }>,
+): Promise<Response> {
+  if (
+    status.state === "unavailable" &&
+    !(
+      isDevicesCall(read) &&
+      context.link.readsLeaseHeader &&
+      (await anyUnreachable(context, identity, context.map.liveOf(identity.requesterId)))
+    )
+  ) {
+    return frontReply(notAvailable(status.reason), read);
+  }
+  return frontReply(workerUnreachable(), read);
+}
+
 async function handleRpc(
   context: FrontContext,
   request: Request,
@@ -91,14 +112,7 @@ async function handleRpc(
   }
   const kind = classifyCall(read.method, read.params);
   const status = await context.link.status(leaseOf(kind, read), identity);
-  if (status.state === "unavailable") {
-    const unreachable =
-      isDevicesCall(read) &&
-      context.link.readsLeaseHeader &&
-      (await anyUnreachable(context, identity, context.map.liveOf(identity.requesterId)));
-    return frontReply(unreachable ? workerUnreachable() : notAvailable(status.reason), read);
-  }
-  if (status.state === "unreachable") return frontReply(workerUnreachable(), read);
+  if (status.state !== "running") return notRunning(context, identity, read, status);
   if (kind === "wrapped-lease") {
     return frontReply(refusal("refused: send lease calls as lease RPCs"), read);
   }
@@ -313,6 +327,13 @@ async function routeByHeader(
   return preflight && response.ok ? withCallerCredentials(request, response) : response;
 }
 
+// why: a request naming a lease is judged by that lease's worker, which may be the one that is gone.
+function namesLease(context: FrontContext, request: Request, probe: boolean): boolean {
+  return (
+    context.link.readsLeaseHeader && !probe && (request.headers.get(LEASE_HEADER) ?? "") !== ""
+  );
+}
+
 async function handlePlain(
   context: FrontContext,
   request: Request,
@@ -321,10 +342,7 @@ async function handlePlain(
   const status = await context.link.status();
   const path = new URL(request.url).pathname.slice(FRONT_PREFIX.length);
   const probe = request.method === "GET" && path === "/health";
-  // why: a request naming a lease is judged by that lease's worker, which may be the one that is gone.
-  const byLease =
-    context.link.readsLeaseHeader && !probe && (request.headers.get(LEASE_HEADER) ?? "") !== "";
-  if (status.state === "unavailable" && !byLease) {
+  if (status.state === "unavailable" && !namesLease(context, request, probe)) {
     const reply = notAvailable(status.reason);
     return frontReply(probe ? { ...reply, status: HEALTH_STATUS } : reply, undefined);
   }

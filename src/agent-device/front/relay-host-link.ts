@@ -129,27 +129,11 @@ export class RelayHostLink implements HostLink {
   }
 
   status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus> {
-    if (leaseId !== undefined && identity !== undefined) {
-      const placed = this.#place(leaseId);
-      if (placed === undefined && this.#inStartWindow()) return Promise.resolve(UNREACHABLE);
-      if (placed?.ownerId === identity.requesterId) {
-        const reach = this.options.fleet.reach(placed.workerId);
-        if (reach !== undefined && !(reach.connected && reach.refreshed)) {
-          return Promise.resolve(UNREACHABLE);
-        }
-        const holder = this.options.fleet.holder(placed.workerId);
-        return Promise.resolve(
-          holder === undefined
-            ? { reason: HOLDER_CANNOT, state: "unavailable" }
-            : {
-                leaseMaxTtlMs: agentDeviceLeaseMaxTtlMs(holder.leaseMaxTtlMs),
-                platforms: holder.platforms,
-                state: "running",
-              },
-        );
-      }
-    }
-    return Promise.resolve(this.#anyStatus());
+    if (leaseId === undefined || identity === undefined) return Promise.resolve(this.#anyStatus());
+    const placed = this.#place(leaseId);
+    if (placed === undefined && this.#inStartWindow()) return Promise.resolve(UNREACHABLE);
+    if (placed?.ownerId !== identity.requesterId) return Promise.resolve(this.#anyStatus());
+    return Promise.resolve(this.#holderStatus(placed));
   }
 
   async forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response> {
@@ -198,6 +182,18 @@ export class RelayHostLink implements HostLink {
     this.#sweep = undefined;
     this.#kept.clear();
     this.#asked.clear();
+  }
+
+  #holderStatus(placed: PlacedLease): LinkStatus {
+    const reach = this.options.fleet.reach(placed.workerId);
+    if (reach !== undefined && !(reach.connected && reach.refreshed)) return UNREACHABLE;
+    const holder = this.options.fleet.holder(placed.workerId);
+    if (holder === undefined) return { reason: HOLDER_CANNOT, state: "unavailable" };
+    return {
+      leaseMaxTtlMs: agentDeviceLeaseMaxTtlMs(holder.leaseMaxTtlMs),
+      platforms: holder.platforms,
+      state: "running",
+    };
   }
 
   #inStartWindow(): boolean {

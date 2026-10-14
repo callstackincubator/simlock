@@ -1066,47 +1066,51 @@ function agentDeviceFleetPort({
 
 type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
 
-function leaseFacts(
+// why: the worker's view lists the lease, its granted device and the model's class in its catalog; a lease missing any of them is not offered for adoption.
+function listedLease(
   views: FleetPortParts["views"],
+  view: WorkerView | undefined,
   entry: ReturnType<FleetLeaseIndex["all"]>[number],
-): FleetLeaseFacts {
-  const view = views.view(entry.workerId);
+): FleetLeaseFacts["listed"] {
   const record = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
-  const device =
-    record === undefined
-      ? undefined
-      : views
-          .grantedDevices()
-          .find((granted) => granted.workerId === entry.workerId && granted.id === record.deviceId);
+  const device = views
+    .grantedDevices()
+    .find((granted) => granted.workerId === entry.workerId && granted.id === record?.deviceId);
   const { platform, model } = device?.spec ?? {};
-  const base = {
-    connected: view?.connection === "connected",
-    leaseId: entry.gatewayLeaseId,
-    refreshed: view?.catalogReadAt !== undefined,
-    requesterId: entry.requesterId,
-    workerId: entry.workerId,
-  };
   if (
     record === undefined ||
     device?.address === undefined ||
     (platform !== "ios" && platform !== "android") ||
     model === undefined
   ) {
-    return base;
+    return undefined;
   }
   const deviceClass = view?.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
     model
   ];
   return {
-    ...base,
-    listed: {
-      address: device.address,
-      model,
-      platform,
-      ttlDeadline: record.ttlDeadline,
-      ttlMs: record.ttlMs,
-      ...(deviceClass === undefined ? {} : { deviceClass }),
-    },
+    address: device.address,
+    model,
+    platform,
+    ttlDeadline: record.ttlDeadline,
+    ttlMs: record.ttlMs,
+    ...(deviceClass === undefined ? {} : { deviceClass }),
+  };
+}
+
+function leaseFacts(
+  views: FleetPortParts["views"],
+  entry: ReturnType<FleetLeaseIndex["all"]>[number],
+): FleetLeaseFacts {
+  const view = views.view(entry.workerId);
+  const listed = listedLease(views, view, entry);
+  return {
+    connected: view?.connection === "connected",
+    leaseId: entry.gatewayLeaseId,
+    refreshed: view?.catalogReadAt !== undefined,
+    requesterId: entry.requesterId,
+    workerId: entry.workerId,
+    ...(listed === undefined ? {} : { listed }),
   };
 }
 
