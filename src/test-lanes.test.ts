@@ -132,4 +132,21 @@ describe("test lanes (package.json)", () => {
     expect(config).toMatch(/name:\s*"physical"/);
     expect(config).toMatch(/name:\s*"physical-manual"/);
   });
+
+  it("the `unit` project and the mutation config leave out `*.timing.test.ts`, the `timing` project takes them and runs files one at a time, `pnpm test` runs `test:timing`, and CI's `quality` job needs the `timing` job", () => {
+    const config = readFileSync(join(REPO_ROOT, "vitest.config.ts"), "utf8");
+    const mutate = readFileSync(join(REPO_ROOT, "vitest.mutate.config.ts"), "utf8");
+    const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+    const unitProject = /name:\s*"unit"[\s\S]*?name:\s*"(?:timing|e2e)"/.exec(config)?.[0] ?? "";
+    const timingProject = /name:\s*"timing"[\s\S]*?(?:name:\s*"e2e"|$)/.exec(config)?.[0] ?? "";
+    const quality = /\n {2}quality:[\s\S]*$/.exec(ci)?.[0] ?? "";
+
+    expect(unitProject).toContain("*.timing.test.ts");
+    expect(mutate).toContain("*.timing.test.ts");
+    expect(timingProject).toContain("src/**/*.timing.test.ts");
+    expect(timingProject).toMatch(/fileParallelism:\s*false/);
+    expect(script("test:timing")).toContain("--project timing");
+    expect(script("test")).toContain("test:timing");
+    expect(quality).toMatch(/needs:\s*\[[^\]]*\btiming\b/);
+  });
 });

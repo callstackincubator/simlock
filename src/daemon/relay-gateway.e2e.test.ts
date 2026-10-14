@@ -1,20 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeDriver } from "../core/testing.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
-import { linkPair, TappedTransport, TYPE } from "../link/testing.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import { linkPair, TYPE } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import type { DispatchSession } from "./dispatch.js";
-import { startDaemon } from "./main.js";
 import type { RelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import {
-  adminSession,
   aborted,
   cleanUp,
   digestOf,
-  freeLoopbackPort,
   gate,
   MIB,
   KIB,
@@ -24,12 +19,11 @@ import {
   readParts,
   settleWithin,
   sleep,
+  startFleet as startFleet_,
   startWorker,
+  type FleetExec,
   type WorkerFixture,
 } from "./test-relay-support.js";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const poll = <T>(read: () => T | Promise<T>, timeout = 5_000) => expect.poll(read, { timeout });
 
@@ -163,79 +157,8 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     return { fixture, gatewayEnd, makeRelay, opened, pair, relay, spy };
   }
 
-  async function startFleet(execCommand?: { args: string[]; command: string; env: object }) {
-    const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
-    directories.push(gatewayDirectory);
-    const port = await freeLoopbackPort();
-    let relay: GatewayRelay | undefined;
-    const taps: TappedTransport[] = [];
-    const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
-      dataDirectory: gatewayDirectory,
-      filesystem: new MemoryFilesystem(),
-      gatewayRelay: (given) => {
-        relay = given;
-      },
-      gatewayUplinks: (uplinks) => {
-        const listen = uplinks.listen.bind(uplinks);
-        uplinks.listen = (handlers) =>
-          listen({
-            ...handlers,
-            accept: (uplink) => {
-              const tap = new TappedTransport(uplink.connection);
-              taps.push(tap);
-              handlers.accept({ ...uplink, connection: tap });
-            },
-          });
-      },
-      logger: new NoopLogger(),
-      statePath: join(gatewayDirectory, "state.json"),
-      version: "1.0.0-e2e",
-    });
-    daemons.push(gateway);
-    const { secret } = await gateway.dispatch(
-      "token.create",
-      { label: "worker-a", role: "worker" },
-      adminSession,
-    );
-    const driverOptions =
-      execCommand === undefined
-        ? {}
-        : { passthrough: () => execCommand, passthroughTools: ["adb"] };
-    const worker = await startWorker(
-      directories,
-      daemons,
-      { "agent-device": target, echo: target },
-      {
-        configOverrides: {
-          gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${String(port)}` },
-        },
-        drivers: [
-          new FakeDriver({
-            availableOsVersions: ["18.0"],
-            clock: new SystemClock(),
-            knownModels: ["Pixel-A"],
-            platform: "android",
-            ...driverOptions,
-          } as ConstructorParameters<typeof FakeDriver>[0]),
-        ],
-      },
-    );
-    let workerId = "";
-    await vi.waitFor(
-      async () => {
-        const { workers } = await gateway.dispatch("worker.list", {}, adminSession);
-        const ready = workers.find(
-          (view) => view.connection === "connected" && view.capacity && view.catalog?.length,
-        );
-        expect(ready).toBeDefined();
-        workerId = ready?.id ?? "";
-      },
-      { timeout: 10_000 },
-    );
-    expect(relay).toBeDefined();
-    return { gateway, relay: relay as unknown as GatewayRelay, taps, worker, workerId };
-  }
+  const startFleet = (execCommand?: FleetExec) =>
+    startFleet_({ daemons, directories, target }, execCommand === undefined ? {} : { execCommand });
 
   const agent = (overrides: Partial<DispatchSession> = {}): DispatchSession => ({
     manageEventSubscription: () => undefined,
