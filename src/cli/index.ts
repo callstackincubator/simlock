@@ -2233,7 +2233,7 @@ function workerLoadLine(worker: WorkerView, now: number): string {
   if (worker.connection === "disconnected") return "\n  Load: no reading while disconnected";
   if (worker.load === undefined) return "";
   const { readAt, ...parts } = worker.load;
-  return `\n  ${formatLoadLine(parts, Math.ceil(Math.max(0, now - readAt) / 1000), "leave out")}`;
+  return `\n  ${formatLoadLine(parts, Math.ceil(Math.max(0, now - readAt) / 1000))}`;
 }
 
 /** A worker's state words: its connection, then `starting` while it has not finished starting, then `drained`. */
@@ -2411,10 +2411,9 @@ function formatLoadCores(cores: number): string {
 function formatLoadLine(
   load: Pick<NonNullable<StatusGetOutput["load"]>, "cpu" | "disk" | "memory">,
   ageSeconds: number,
-  unreadParts: "say" | "leave out" = "say",
 ): string {
   const { cpu, disk, memory } = load;
-  const unread = (text: string): string[] => (unreadParts === "say" ? [text] : []);
+  const unread = (text: string): string[] => [text];
   const cpuPart =
     cpu === undefined
       ? unread("CPU unavailable")

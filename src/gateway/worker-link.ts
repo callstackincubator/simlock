@@ -433,7 +433,7 @@ export class WorkerLink {
     return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
   }
 
-  /** A starting worker's view: its health and host, which `workerViewFields` builds from the
+  /** why: a starting worker's view is its health, host and load, which `workerViewFields` builds from the
    * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
    * write is (H2). */
   #refreshStarting(client: GatewayWorkerClient, status: StatusGetOutput, receivedAt: number): void {

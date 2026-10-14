@@ -345,7 +345,7 @@ export class WorkerRegistry {
   /**
    * why: replaces what the worker reports, and is partial on purpose: a refresh triggered by a lease event
    * re-reads status and devices but not the catalog (§7), and an absent key leaves the previous
-   * value standing rather than blanking it -- except for a `starting` refresh, which says the
+   * value standing rather than blanking it -- except `load`, which a refresh without one removes, and a `starting` refresh, which says the
    * worker has checked nothing: it drops capacity, catalog, catalogReadAt, devices, installs,
    * leases, queueDepth and waiting from the view (absent means "not known"), keeping the last
    * catalog, leases and physical devices aside for routing and retention. A refresh for a worker whose view is gone

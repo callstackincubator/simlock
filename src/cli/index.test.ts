@@ -3000,7 +3000,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       expect(lines[2]).toMatch(/^ {2}Install ios 26\.4: downloading for 60s, 2 waiters$/);
       expect(lines[3]).toMatch(/^wrk_2: connected, starting/);
       expect(lines[4]).toBe(
-        "  Load: memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · read 3s ago",
+        "  Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk unavailable · read 3s ago",
       );
     });
 

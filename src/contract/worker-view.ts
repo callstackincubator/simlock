@@ -78,8 +78,8 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
           const { ageMs, ...parts } = status.load;
           return { load: { readAt: Math.max(0, receivedAt - ageMs), ...parts } };
         })();
-  // A starting worker has checked nothing: its view is its health and its host, and every other
-  // field is absent -- never empty, which would read as "nothing is leased".
+  // why: a starting worker has checked nothing: its view is its health, its host and its load, and every
+  // other field is absent -- never empty, which would read as "nothing is leased".
   if (status.daemon.health === "starting")
     return { health: "starting", host: status.host, ...load };
   return {

@@ -529,7 +529,7 @@ export const hostLoadSchema = z.object({
   disk: loadDiskSchema.optional(),
 });
 
-/** ADR 0029 §5: a worker's load as its view carries it: when it was read, on the viewer's clock. */
+// why: a view stores when the load was read (`readAt`, the viewer's clock), not its age, so the age stays right as the view sits.
 const workerLoadSchema = z.object({
   readAt: z.number().int().min(0),
   cpu: loadCpuSchema.optional(),
