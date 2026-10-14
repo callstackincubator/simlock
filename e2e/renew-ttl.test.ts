@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon } from "./helpers/index.js";
@@ -24,25 +24,12 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
       configOverrides: { lease: { defaultTtlMs: 60_000, maxTtlMs: 30_000 } },
     });
 
-    // Every command auto-starts on demand; the daemon process fails the config load before
-    // it ever opens its socket, so the CLI retries for its startup window and then gives up
-    // -- surfaced as an INTERNAL timeout, not a specific config error code (the CLI never
-    // got a response to relay).
-    const result = await env.cli(["catalog", "--json"], { timeout: 15_000 });
+    // why: the CLI loads the config before it launches a daemon, so no daemon.log is written.
+    const result = await env.cli(["catalog", "--json"]);
     expect(result.code).toBe(1);
     expect(result.error?.code).toBe("INTERNAL");
-
-    await waitFor(
-      async () => {
-        try {
-          const log = await readFile(env.logPath, "utf8");
-          return log.includes("lease.defaultTtlMs");
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 10_000, label: "daemon.log names the offending config key" },
-    );
+    expect(result.error?.message).toContain("lease.defaultTtlMs");
+    expect(existsSync(env.logPath)).toBe(false);
   });
 
   it("keeps a renewing holder's lease alive (MCP and CLI) while a SIGKILLed holder's lease stays until its TTL, then expires", async () => {
