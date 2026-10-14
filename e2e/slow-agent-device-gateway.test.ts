@@ -1,4 +1,3 @@
-import { writeSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +26,7 @@ import {
   makeAgent,
   newAgentToken,
   ok,
+  progress,
   setLimits,
   succeeds,
   waitFor,
@@ -49,11 +49,6 @@ interface WorkerView {
   readonly connection: string;
   readonly capacity?: Readonly<Record<string, { readonly limit: number }>>;
   readonly capabilities?: readonly { readonly name: string; readonly state: string }[];
-}
-
-// why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
-function progress(line: string): void {
-  writeSync(2, `${new Date().toISOString()} ${line}\n`);
 }
 
 const sharedEnvs = new Set<SharedTestEnv>();
@@ -184,7 +179,7 @@ function defineSuite(target: Target): void {
   }, 420_000);
 
   it(
-    "through the gateway, an agent opens a device, installs the Appduct fixture app as an upload, opens it, takes a snapshot that shows tab-status, saves a PNG screenshot and closes; within 240 s the device is free and the lease is gone from the gateway's simlock list",
+    "through the gateway, an agent opens a device, installs the Appduct fixture app as an upload, opens it, takes a snapshot that shows tab-status, saves a PNG screenshot and closes; the device is free within 240 s and the lease is gone from the gateway's simlock list within 240 s",
     { timeout: 600_000 },
     async () => {
       const a = await agent("a");
@@ -229,6 +224,59 @@ function defineSuite(target: Target): void {
     },
   );
 
+  it(
+    "with agentDevice.enabled unset on the gateway, its /v1/agent-device/health answers 404 where it answered something else while enabled",
+    { timeout: 600_000 },
+    async () => {
+      const probe = await newAgentToken(gateway);
+      const healthUrl = `http://127.0.0.1:${String(gateway.httpPort)}/v1/agent-device/health`;
+      const headers = { authorization: `Bearer ${probe.secret}` };
+      expect((await fetch(healthUrl, { headers })).status, "health while enabled").not.toBe(404);
+      await changeConfig(gateway, (config) => {
+        delete config.agentDevice;
+      });
+      await waitForWorker(
+        "the gateway's worker list shows the worker connected again",
+        (view) => view.connection === "connected",
+        120_000,
+      );
+      expect((await fetch(healthUrl, { headers })).status).toBe(404);
+    },
+  );
+
+  it(
+    "with the worker's agentDevice.enabled unset (the gateway's simlock worker list shows agent-device off), open through the gateway fails within 5 s with a message containing `no worker connected to this gateway can serve agent-device`, and no lease is made",
+    { timeout: 600_000 },
+    async () => {
+      await changeConfig(worker, (config) => {
+        delete config.agentDevice;
+      });
+      await waitForWorker(
+        "the gateway's worker list shows the worker connected with agent-device off",
+        (view) => view.connection === "connected" && agentDeviceState(view) === "off",
+        120_000,
+      );
+      const a = await agent("a");
+      const startedAt = Date.now();
+      const result = await a.run(["open", "--platform", platform], { timeout: 5_000 });
+      expect(Date.now() - startedAt, "open took longer than 5 s").toBeLessThan(5_000);
+      expect(result.code, "open was accepted").not.toBe(0);
+      expect(failureText(result)).toContain(NO_WORKER);
+      expect(await listLeases(gateway)).toEqual([]);
+      expect(await listLeases(worker)).toEqual([]);
+    },
+  );
+
+  it(
+    "simlock worker list on the gateway shows the worker with agent-device available",
+    { timeout: 600_000 },
+    async () => {
+      const listed = await gateway.cli(["worker", "list"], { timeout: 60_000 });
+      expect(listed.code, listed.stderr).toBe(0);
+      expect(listed.stdout).toMatch(/^\S+ \(worker\): connected .* -- agent-device available$/m);
+    },
+  );
+
   describe("with the device limit raised to 2", () => {
     const waitForCapacity = (limit: number) =>
       waitForWorker(
@@ -270,62 +318,6 @@ function defineSuite(target: Target): void {
       },
     );
   });
-
-  it(
-    "with agentDevice.enabled unset on the gateway, its /v1/agent-device/health answers 404 and no lease is made",
-    { timeout: 600_000 },
-    async () => {
-      await changeConfig(gateway, (config) => {
-        delete config.agentDevice;
-      });
-      await waitForWorker(
-        "the gateway's worker list shows the worker connected again",
-        (view) => view.connection === "connected",
-        120_000,
-      );
-      const probe = await newAgentToken(gateway);
-      const health = await fetch(
-        `http://127.0.0.1:${String(gateway.httpPort)}/v1/agent-device/health`,
-        { headers: { authorization: `Bearer ${probe.secret}` } },
-      );
-      expect(health.status).toBe(404);
-      expect(await listLeases(gateway)).toEqual([]);
-      expect(await listLeases(worker)).toEqual([]);
-    },
-  );
-
-  it(
-    "with the worker's agentDevice.enabled unset (the gateway's simlock worker list shows agent-device off), open through the gateway fails within 5 s with a message containing `no worker connected to this gateway can serve agent-device`, and no lease is made",
-    { timeout: 600_000 },
-    async () => {
-      await changeConfig(worker, (config) => {
-        delete config.agentDevice;
-      });
-      await waitForWorker(
-        "the gateway's worker list shows the worker connected with agent-device off",
-        (view) => view.connection === "connected" && agentDeviceState(view) === "off",
-        120_000,
-      );
-      const a = await agent("a");
-      const startedAt = Date.now();
-      const result = await a.run(["open", "--platform", platform], { timeout: 5_000 });
-      expect(Date.now() - startedAt, "open took longer than 5 s").toBeLessThan(5_000);
-      expect(result.code, "open was accepted").not.toBe(0);
-      expect(failureText(result)).toContain(NO_WORKER);
-      expect(await listLeases(gateway)).toEqual([]);
-      expect(await listLeases(worker)).toEqual([]);
-    },
-  );
-
-  it(
-    "simlock worker list on the gateway shows the worker with agent-device available",
-    { timeout: 600_000 },
-    async () => {
-      const listed = await gateway.cli(["worker", "list"], { timeout: 60_000 });
-      expect(listed.code, listed.stderr).toBe(0);
-      expect(listed.stdout).toMatch(/^\S+ \(worker\): connected .* -- agent-device available$/m);
-    },
-  );
 }
 
 describe.skipIf(AGENT_DEVICE === undefined || !iosAvailable)(

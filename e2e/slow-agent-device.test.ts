@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { writeSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -48,11 +47,6 @@ const AGENT_DEVICE = process.env.SIMLOCK_E2E_AGENT_DEVICE;
 
 const iosAvailable = hasIosRuntime();
 const androidAvailable = succeeds("sh", ["-c", "command -v emulator && command -v adb"]);
-
-// why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
-function progress(line: string): void {
-  writeSync(2, `${new Date().toISOString()} ${line}\n`);
-}
 
 function refused(result: AgentDeviceResult): void {
   expect(result.code, "the command was accepted").not.toBe(0);

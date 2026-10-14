@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { writeSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -164,4 +165,9 @@ export async function warmUp(daemon: SharedTestEnv, target: Target, count: numbe
     },
     { timeout: 240_000, interval: 1_000, label: "warm-up devices ready" },
   );
+}
+
+// why: vitest holds a test's console output until the test ends; a write to fd 2 reaches the log at once, so a stuck test shows while it runs.
+export function progress(line: string): void {
+  writeSync(2, `${new Date().toISOString()} ${line}\n`);
 }

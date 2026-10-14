@@ -30,6 +30,7 @@ export {
   listLeases,
   listRequests,
   ok,
+  progress,
   setLimits,
   succeeds,
   waitForFree,
