@@ -1301,9 +1301,10 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const held = member.fake.leases.get(hex(1));
     expect(held).toBeDefined();
     member.fake.leases.set(hex(2), { ...(held as NonNullable<typeof held>), leaseId: hex(2) });
+    // why: a lease whose requester is not its own id is never adopted, so the front's memory lacks it however soon the worker's catalog arrives.
     await rig.gateway.dispatch(
       "lease.request",
-      { leaseId: hex(2), platform: "ios", requesterId: hex(2), requires: ["agent-device"] },
+      { leaseId: hex(2), platform: "ios", requesterId: "someone-else", requires: ["agent-device"] },
       sessionFor(principals.one),
     );
     interceptRelay(rig, async ({ request }) => {
