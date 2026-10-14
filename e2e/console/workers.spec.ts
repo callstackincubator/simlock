@@ -580,6 +580,24 @@ test.describe("the workers views", () => {
           colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
         })),
       );
+      // why: CI is Linux, and only macOS reports a pressure, so a live worker can only ever paint
+      // the idle tone here. These ask the stylesheet what the other three would paint, so a tone
+      // rule cannot be deleted with the suite green; they check the colour rule only.
+      const drawn = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.className = "load-bar";
+        const seen = ["ok", "warn", "error", "idle"].map((tone) => {
+          probe.className = `load-bar load-bar-${tone}`;
+          const fill = document.createElement("span");
+          fill.className = "load-bar-fill";
+          probe.append(fill);
+          document.body.append(probe);
+          const colour = getComputedStyle(fill).backgroundColor;
+          probe.remove();
+          return colour;
+        });
+        return seen;
+      });
 
       expect(fills.length).toBeGreaterThan(0);
       for (const fill of fills) {
@@ -589,6 +607,12 @@ test.describe("the workers views", () => {
           tones[TONES.indexOf(fill.tone as (typeof TONES)[number])],
         );
         expect(fill.colour, context).not.toBe(accent);
+      }
+
+      for (const [index, tone] of TONES.entries()) {
+        const context = `${tone} gauge rule in ${colorScheme}`;
+        expect(drawn[index], context).toBe(tones[index]);
+        expect(drawn[index], context).not.toBe(accent);
       }
     }
   });
