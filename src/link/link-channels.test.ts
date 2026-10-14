@@ -472,15 +472,31 @@ describe("link byte channels: ending", () => {
     const pair = linkPair();
     const { g, w } = await openPair(pair);
     await writeAndClose(g, pattern(0, 10));
-    const reader = w.readable.getReader();
-    await readAtLeast(reader, 10);
-    await reader.read();
     await settle();
 
-    await reader.cancel();
+    await w.readable.cancel();
     await settle();
 
     expect(pair.workerTap.binaries(TYPE.STOP)).toEqual([]);
+    expect(pair.gatewayLog.problems()).toEqual([]);
+  });
+
+  it("grants credit once per 64 KiB read, or when the reader has read everything it holds", async () => {
+    const pair = linkPair();
+    const { g, w } = await openPair(pair);
+    const writer = g.writable.getWriter();
+    for (let i = 0; i < 100; i += 1) await writer.write(pattern(i * KiB, KiB));
+    await settle();
+
+    const reader = w.readable.getReader();
+    let read = 0;
+    while (read < 100 * KiB) read += (await reader.read()).value?.length ?? 0;
+    await settle();
+
+    const grants = pair.workerTap
+      .binaries(TYPE.CREDIT)
+      .map((e) => new DataView(e.payload.buffer, e.payload.byteOffset).getUint32(0));
+    expect(grants).toEqual([64 * KiB, 36 * KiB]);
   });
 
   it("abort(\"why\") on one side errors both streams on both sides with aborted; the aborting side's error message is why and the peer's carries no reason string", async () => {

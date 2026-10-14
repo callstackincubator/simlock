@@ -206,4 +206,16 @@ describe("WebSocketUplinkConnection binary messages", () => {
     expect(worker.unsentBytes).toBe(0);
     expect(onSent).toHaveBeenCalled();
   });
+
+  it("onSent fires when a text send completes", async () => {
+    const { accepted, url } = await startAcceptingGateway();
+    const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
+    await accepted;
+    const onSent = vi.fn();
+    worker.onSent(onSent);
+
+    await worker.write("hello");
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+  });
 });

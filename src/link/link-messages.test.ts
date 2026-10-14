@@ -77,7 +77,7 @@ describe("link text messages", () => {
     expect(closed).toHaveBeenCalledTimes(1);
   });
 
-  it("a pair's fail(error) reaches onError", async () => {
+  it("a pair's fail(error) reaches onError and closes that end", async () => {
     const { gatewayEnd, gateway } = linkPair();
     const errors: Error[] = [];
     gateway.onError((error) => errors.push(error));
@@ -86,6 +86,7 @@ describe("link text messages", () => {
     await settle();
 
     expect(errors.map((error) => error.message)).toEqual(["socket reset"]);
+    expect(gatewayEnd.closed).toBe(true);
   });
 
   it("closing the transport fails every open channel with closed", async () => {
