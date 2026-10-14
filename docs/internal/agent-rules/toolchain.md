@@ -9,6 +9,7 @@ command of their own: they take every command from here.
 | ---------------------------------------------- | -------------------------------------------- |
 | Unit tests that import what the branch changed | `pnpm test:changed`                          |
 | One unit test file                             | `pnpm exec vitest run --project unit <file>` |
+| One timing file (`*.timing.test.ts`)           | `pnpm exec vitest run --project timing <file>` |
 | Fast e2e files (builds first)                  | `pnpm test:e2e <files>`                      |
 | Console lane, Chromium only (1)                | `pnpm test:console --project=chromium`       |
 
@@ -19,7 +20,7 @@ command of their own: they take every command from here.
 
 Hooks and CI run these. Never run them by hand, and never the tools behind
 them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
-`pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm lint`, `pnpm lint:comments`,
+`pnpm test:timing`, `pnpm typecheck`, `pnpm typecheck:e2e`, `pnpm lint`, `pnpm lint:comments`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
@@ -33,8 +34,8 @@ list and this one the same.
   in its output.
 - **Push hook:** Fallow, then the e2e typecheck.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
-  check` steps run as parallel jobs (static checks, unit tests, the e2e
-  lane in three shards); the Quality check passes only when all of them
+  check` steps run as parallel jobs (static checks, unit tests, the timing
+  tests, the e2e lane in three shards); the Quality check passes only when all of them
   do. The console lane runs on
   every push to `main`, and on a pull request when it changes a source, UI,
   console spec or build file: in every browser when it changes `ui/` or the

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash, type Hash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,12 +84,18 @@ export async function settleWithin<T>(promise: Promise<T>, withinMs = 5_000): Pr
   return Promise.race([outcome, sleep(withinMs).then((): Settled<T> => ({ state: "pending" }))]);
 }
 
+/** why: AES in counter mode gives bytes that are random-access by offset and generated at GB/s, so a 2 GiB pattern costs seconds, not a byte loop's minutes. */
 export function patternBytes(size: number, seed = 1, offset = 0): Uint8Array {
-  const bytes = new Uint8Array(size);
-  for (let index = 0; index < size; index += 1) {
-    bytes[index] = ((offset + index) * 31 + seed * 17 + ((offset + index) >> 8)) & 0xff;
-  }
-  return bytes;
+  const key = Buffer.alloc(16);
+  key.writeUInt32BE(seed >>> 0, 12);
+  const block = BigInt(Math.floor(offset / 16));
+  const counter = Buffer.alloc(16);
+  counter.writeBigUInt64BE(block >> 64n, 0);
+  counter.writeBigUInt64BE(block & 0xffff_ffff_ffff_ffffn, 8);
+  const cipher = createCipheriv("aes-128-ctr", key, counter);
+  const skip = offset % 16;
+  const out = cipher.update(Buffer.alloc(skip + size));
+  return new Uint8Array(out.buffer, out.byteOffset + skip, size);
 }
 
 export function digestOf(parts: readonly Uint8Array[]): string {
@@ -396,26 +402,92 @@ export interface CountingProxy {
   readonly stop: () => Promise<void>;
 }
 
-/** why: placeholder until green; it carries nothing and counts nothing, so every count is 0. */
 export function startCountingProxy(targetPort: number): Promise<CountingProxy> {
-  return Promise.resolve({
-    carried: () => ({ down: 0, up: 0 }),
-    port: targetPort,
-    reset: () => undefined,
-    stop: () => Promise.resolve(),
+  const counts = { down: 0, up: 0 };
+  const sockets = new Set<Socket>();
+  const server = createServer((client) => {
+    const upstream = connect({ host: "127.0.0.1", port: targetPort });
+    sockets.add(client);
+    sockets.add(upstream);
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("error", close);
+    upstream.on("error", close);
+    client.on("close", close);
+    upstream.on("close", close);
+    client.on("data", (chunk: Buffer) => {
+      counts.up += chunk.length;
+    });
+    upstream.on("data", (chunk: Buffer) => {
+      counts.down += chunk.length;
+    });
+    // why: pipe pauses the reader while the writer is full, so the proxy never buffers a stream.
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address() as AddressInfo;
+      resolve({
+        carried: () => ({ down: counts.down, up: counts.up }),
+        port: address.port,
+        reset: () => {
+          counts.down = 0;
+          counts.up = 0;
+        },
+        stop: () =>
+          new Promise<void>((done) => {
+            for (const socket of sockets) socket.destroy();
+            server.close(() => done());
+          }),
+      });
+    });
   });
 }
 
-/** why: placeholder until green; the digest of the pattern with the chunk `[first, first + firstSize)` and the chunk `[second, second + secondSize)` exchanged, where `first + firstSize <= second`. */
+const CHECKPOINT = 64 * MIB;
+const checkpoints = new Map<string, Hash[]>();
+
+function checkpointsFor(total: number, seed: number): Hash[] {
+  const key = `${String(total)}:${String(seed)}`;
+  const known = checkpoints.get(key);
+  if (known !== undefined) return known;
+  const states: Hash[] = [];
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < total; offset += CHECKPOINT) {
+    states.push(hash.copy());
+    hash.update(patternBytes(Math.min(CHECKPOINT, total - offset), seed, offset));
+  }
+  checkpoints.set(key, states);
+  return states;
+}
+
+/** why: the digest of the pattern with the chunk `[first, first + firstSize)` and the chunk `[second, second + secondSize)` exchanged, where `first + firstSize <= second`. */
 export function patternDigestSwapped(
   total: number,
   seed: number,
-  _swap: {
+  swap: {
     readonly first: number;
     readonly second: number;
     readonly firstSize: number;
     readonly secondSize: number;
   },
 ): string {
-  return patternDigest(total, seed);
+  const states = checkpointsFor(total, seed);
+  const start = Math.floor(swap.first / CHECKPOINT) * CHECKPOINT;
+  const hash = (states[start / CHECKPOINT] as Hash).copy();
+  const feed = (from: number, to: number) => {
+    for (let offset = from; offset < to; offset += MIB) {
+      hash.update(patternBytes(Math.min(MIB, to - offset), seed, offset));
+    }
+  };
+  feed(start, swap.first);
+  hash.update(patternBytes(swap.secondSize, seed, swap.second));
+  feed(swap.first + swap.firstSize, swap.second);
+  hash.update(patternBytes(swap.firstSize, seed, swap.first));
+  feed(swap.second + swap.secondSize, total);
+  return hash.digest("hex");
 }

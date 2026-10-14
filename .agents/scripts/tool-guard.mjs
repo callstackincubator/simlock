@@ -17,6 +17,7 @@ import path from "node:path";
 const SCRIPTS = new Set([
   "check",
   "test",
+  "test:timing",
   "typecheck",
   "typecheck:e2e",
   "lint",

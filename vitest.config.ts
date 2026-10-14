@@ -18,6 +18,18 @@ export default defineConfig({
           // `ui/` holds the console's own unit tests: plain functions, no browser. The browser
           // lane is Playwright's (`pnpm test:console`).
           include: ["src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
+          // why: the timing files measure throughput and latency of GiB transfers: they run one
+          // at a time (`pnpm test:timing`) so another file's load cannot move a number.
+          exclude: ["**/node_modules/**", "src/**/*.timing.test.ts"],
+        },
+      },
+      {
+        test: {
+          name: "timing",
+          include: ["src/**/*.timing.test.ts"],
+          fileParallelism: false,
+          testTimeout: 300_000,
+          hookTimeout: 120_000,
         },
       },
       {
