@@ -1553,6 +1553,8 @@ describe("DaemonServer relays during startup", () => {
     await writing;
 
     expect(callsWhileStarting).toBe(0);
+    // why: bytes written while startup is parked prove the channel was accepted; none written would also pass "< 8 MiB" if nothing were accepted.
+    expect(writtenWhileStarting).toBeGreaterThan(0);
     expect(writtenWhileStarting).toBeLessThan(upload.length);
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
     expect(length).toBe(upload.length);
