@@ -403,7 +403,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
       "": { cpuMax: "max 100000\n" },
       "system.slice": { memoryMax: "8589934592\n", ...USAGE },
       "system.slice/simlock.service": {
-        memoryMax: "68719476736\n",
+        memoryMax: "17179869184\n",
         current: "1\n",
         stat: "inactive_file 0\n",
       },
@@ -421,6 +421,39 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
       "": { cpuMax: "150000 50000\n" },
     });
     expect(cpu.cpu).toMatchObject({ cores: 2, limited: true });
+
+    const folderLower = await readCgroup("/system.slice/simlock.service", {
+      "system.slice": { memoryMax: "8589934592\n", current: "1\n", stat: "inactive_file 0\n" },
+      "system.slice/simlock.service": {
+        memoryMax: "4294967296\n",
+        current: "1073741824\n",
+        stat: "inactive_file 0\n",
+      },
+    });
+    expect(folderLower.memory).toMatchObject({
+      availableBytes: 3 * GIB,
+      limited: true,
+      totalBytes: 4 * GIB,
+    });
+  });
+
+  it("reports the folder's memory.max of 16 GiB as limited when cpu.max is max everywhere, and keeps the machine's CPU", async () => {
+    const counters = await readCgroup("/system.slice/simlock.service", {
+      "": { cpuMax: "max 100000\n" },
+      "system.slice/simlock.service": {
+        cpuMax: "max 100000\n",
+        memoryMax: "17179869184\n",
+        ...USAGE,
+      },
+    });
+
+    expect(counters.memory).toStrictEqual({
+      availableBytes: 13 * GIB,
+      limited: true,
+      swapUsedBytes: 0,
+      totalBytes: 16 * GIB,
+    });
+    expect(counters.cpu).toMatchObject({ cores: 64, limited: false });
   });
 
   it("reads usage from the folder that holds the winning limit, not from Simlock's own folder, and from the topmost of two folders tied on the lowest limit", async () => {
