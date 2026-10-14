@@ -9,9 +9,6 @@ export interface ReleaseScope {
 const SCOPE_VALUE = /^[A-Za-z0-9._-]{1,128}$/;
 const OPTIONAL_KEYS = ["leaseProvider", "clientId", "deviceKey"] as const;
 
-// why: a tenant relayed through a gateway is `gw:<gateway instance id>:<principal>`, which can be as long as the relay allows (300).
-const TENANT_VALUE = /^[A-Za-z0-9._:-]{1,300}$/;
-
 function validScopeValue(value: unknown): value is string {
   return typeof value === "string" && SCOPE_VALUE.test(value);
 }
@@ -26,7 +23,7 @@ export function readReleaseScope(lease: unknown): ReleaseScope | undefined {
   const fields = lease as Record<string, unknown>;
   const tenantId = fields["tenantId"];
   const runId = fields["runId"];
-  if (typeof tenantId !== "string" || !TENANT_VALUE.test(tenantId)) return undefined;
+  if (typeof tenantId !== "string" || !SCOPE_VALUE.test(tenantId)) return undefined;
   if (!validScopeValue(runId)) return undefined;
   const optional: { -readonly [K in (typeof OPTIONAL_KEYS)[number]]?: string } = {};
   for (const key of OPTIONAL_KEYS) {

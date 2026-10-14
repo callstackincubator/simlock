@@ -1512,8 +1512,6 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   gateway` (status 403). A lease `simlock release --all` ended stays known for
   one `lease.maxTtlMs` afterwards, so its next heartbeat answers `lease ended
   by simlock; run disconnect, then open`.
-- A token whose ID is too long for the gateway to pass on is refused with
-  `refused: this token cannot be used through a gateway`.
 
 - **Every route needs the Simlock token.** No token is `401`, a worker join
   token is `403`, and so is an `operator` token, with

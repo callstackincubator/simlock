@@ -204,7 +204,7 @@ export function relayInput(overrides: Record<string, unknown> = {}): Record<stri
     method: "GET",
     relayId: nextRelayId(),
     target: "echo",
-    tenant: "gw:g1:alice",
+    tenant: "gw.g1.alice",
     url: "http://gateway.test:4321/agent-device/rpc?x=1",
     ...overrides,
   };

@@ -220,8 +220,11 @@ sequenceDiagram
 ### 6. The tenant on the worker carries the gateway's prefix
 
 A relayed request's agent-device tenant on the worker is
-`gw:<gateway instance id>:<principal>`, the prefix the gateway already puts
-on the requester of every lease it dispatches. Tokens minted on a gateway and
+`gw.<gateway instance id>.<principal>`, the prefix the gateway already puts
+on the requester of every lease it dispatches, with dots for colons because
+agent-device accepts only letters, digits, dot, underscore and hyphen (up to
+128 characters; a character it refuses is escaped, and a longer name is cut and
+ends in a hash). Tokens minted on a gateway and
 on a worker are separate, so two agents can share a principal name; with the
 prefix they never share an agent-device tenant, and neither can drive the
 other's device. The simlock lease's owner stays the bare principal, as for

@@ -48,27 +48,42 @@ function request(path = "/rpc"): Request {
 }
 
 describe("RelayHostLink", () => {
-  it("refuses a token whose tenant would pass the relay's 300 characters, and relays nothing", async () => {
+  it.each([
+    { principal: "tok.a b/é:x", row: "characters agent-device refuses" },
+    { principal: "t".repeat(300), row: "a 300 character ID" },
+    { principal: "tok_a", row: "an underscore" },
+  ])(
+    "sends agent-device a tenant of 1 to 128 letters, digits, dots, underscores and hyphens for a token with $row, and relays it",
+    async ({ principal }) => {
+      const { index, link, relay } = setUp();
+      index.set("L", { ownerId: principal, workerId: "w1" });
+
+      await link.forward(request(), { requesterId: principal, role: "agent" }, "L");
+
+      expect(relay).toHaveBeenCalledTimes(1);
+      expect(relay.mock.calls[0]?.[2]).toMatch(/^[A-Za-z0-9._-]{1,128}$/);
+    },
+  );
+
+  it("sends agent-device different tenants for different tokens, even when they differ only in characters it refuses or past the 128th", async () => {
     const { index, link, relay } = setUp();
-    index.set("L", { ownerId: "t".repeat(300), workerId: "w1" });
-    const long: TokenIdentity = { requesterId: "t".repeat(300), role: "agent" };
+    const principals = ["a b", "a_b", "a.b", "a:b", "t".repeat(300), `${"t".repeat(299)}u`];
+    for (const principal of principals) {
+      index.set("L", { ownerId: principal, workerId: "w1" });
+      await link.forward(request(), { requesterId: principal, role: "agent" }, "L");
+    }
 
-    const answer = await link.forward(request(), long, "L");
-
-    expect(await answer.json()).toMatchObject({
-      error: { message: "refused: this token cannot be used through a gateway" },
-      id: 7,
-    });
-    expect(relay).not.toHaveBeenCalled();
+    const tenants = relay.mock.calls.map((call) => call[2]);
+    expect(new Set(tenants).size).toBe(principals.length);
   });
 
-  it("relays a lease the token holds to its worker under the prefixed tenant", async () => {
+  it("relays a lease the token holds to its worker under the tenant `gw.<gateway instance id>.<principal>`", async () => {
     const { index, link, relay } = setUp();
     index.set("L", { ownerId: "tok_a", workerId: "w1" });
 
     await link.forward(request(), agent, "L");
 
-    expect(relay).toHaveBeenCalledWith("w1", expect.any(Request), "gw:gw1:tok_a", "L");
+    expect(relay).toHaveBeenCalledWith("w1", expect.any(Request), "gw.gw1.tok_5f_a", "L");
   });
 
   it("answers the flat refusal shape for a request that is not an rpc call", async () => {

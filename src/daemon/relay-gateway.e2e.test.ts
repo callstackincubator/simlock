@@ -55,7 +55,7 @@ function buildCall(init: CallInit) {
   return {
     request,
     target: init.target ?? "echo",
-    tenant: init.tenant ?? "gw:g1:alice",
+    tenant: init.tenant ?? "gw.g1.alice",
     ...(init.leaseId === undefined ? {} : { leaseId: init.leaseId }),
   };
 }
@@ -264,7 +264,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(seen?.method).toBe("GET");
     expect(seen?.headers.get("accept")).toBe("text/plain");
     expect(seen?.headers.get("x-test")).toBe("1");
-    expect(seen?.tenant).toBe("gw:g1:alice");
+    expect(seen?.tenant).toBe("gw.g1.alice");
     expect(seen?.leaseId).toBe("lease_1");
     expect(response.status).toBe(201);
     expect(response.headers.get("x-reply")).toBe("yes");

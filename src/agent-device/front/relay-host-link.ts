@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock, TimerHandle } from "../../ports/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
@@ -39,11 +41,26 @@ export interface RelayHostLinkOptions {
 const NO_WORKER = "no worker connected to this gateway can serve agent-device";
 const HOLDER_CANNOT = "the worker holding this lease cannot serve agent-device";
 const TOO_OLD = "refused: this agent-device is too old to use through a gateway; update it";
-const TOKEN_TOO_LONG = "refused: this token cannot be used through a gateway";
-// why: #514's relay refuses a tenant over 300 characters.
-const MAX_TENANT_CHARS = 300;
+// why: agent-device accepts a tenant of 1 to 128 letters, digits, dots, underscores and hyphens.
+const MAX_TENANT_CHARS = 128;
+const HASH_CHARS = 27;
 const SWEEP_MS = 60_000;
 const FORBIDDEN = 403;
+
+// why: a character agent-device refuses (or a dot, the separator) becomes `_<hex>_`, so two names never share a tenant.
+function tenantPart(value: string): string {
+  return value.replace(/[^A-Za-z0-9-]/gu, (char) => `_${char.codePointAt(0)?.toString(16)}_`);
+}
+
+// why: `gw.<gateway instance id>.<principal>`, cut to 128 characters with a hash of the whole name when longer, so every input gives a tenant agent-device accepts and distinct inputs stay distinct.
+export function relayTenant(instanceId: string, principal: string): string {
+  const tenant = `gw.${tenantPart(instanceId)}.${tenantPart(principal)}`;
+  if (tenant.length <= MAX_TENANT_CHARS) return tenant;
+  const hash = createHash("sha256")
+    .update(JSON.stringify([instanceId, principal]))
+    .digest("hex");
+  return `${tenant.slice(0, MAX_TENANT_CHARS - HASH_CHARS - 1)}.${hash.slice(0, HASH_CHARS)}`;
+}
 
 interface Kept extends PlacedLease {
   readonly since: number;
@@ -87,8 +104,7 @@ export class RelayHostLink implements HostLink {
   }
 
   async forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response> {
-    const tenant = `gw:${this.options.fleet.instanceId}:${identity.requesterId}`;
-    if (tenant.length > MAX_TENANT_CHARS) return refuseRequest(request, TOKEN_TOO_LONG);
+    const tenant = relayTenant(this.options.fleet.instanceId, identity.requesterId);
     if (leaseId === undefined) return this.#forwardBare(request, tenant);
     const placed = this.#place(leaseId);
     if (placed === undefined || placed.ownerId !== identity.requesterId) {
