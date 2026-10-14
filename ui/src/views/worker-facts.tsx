@@ -1,4 +1,5 @@
 import { connectionStatus, healthStatus, Status } from "../status";
+import { loadSummary } from "./load-model";
 import { capacityByPlatform, deviceCounts, platformName, type WorkerView } from "./workers-model";
 
 const capabilityTone = { available: "ok", off: "idle", unavailable: "warn" } as const;
@@ -39,6 +40,7 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
         <dt>Version</dt>
         <dd className="mono">{worker.version ?? "Not reported"}</dd>
       </div>
+      {starting ? <LoadRow worker={worker} /> : null}
       {starting ? null : (
         <>
           <div>
@@ -62,6 +64,7 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
                     .join(", ")}
             </dd>
           </div>
+          <LoadRow worker={worker} />
           <div>
             <dt>Capabilities</dt>
             <dd>
@@ -79,6 +82,19 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
         </>
       )}
     </dl>
+  );
+}
+
+function LoadRow({ worker }: { readonly worker: WorkerView }) {
+  if (worker.connection === "incompatible") return null;
+  let shown = "Not reported";
+  if (worker.connection === "disconnected") shown = "No reading while disconnected";
+  else if (worker.load !== undefined) shown = loadSummary(worker.load);
+  return (
+    <div>
+      <dt>Load</dt>
+      <dd>{shown}</dd>
+    </div>
   );
 }
 

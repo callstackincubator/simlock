@@ -29,6 +29,8 @@ const CONNECTIONS: Tones = { connected: "ok", disconnected: "error", incompatibl
 
 const HEALTH: Tones = { running: "ok", starting: "warn", failed: "error" };
 
+const PRESSURE: Tones = { normal: "ok", warn: "warn", critical: "error" };
+
 const INSTALL_STATES: Tones = { downloading: "ok", waiting: "idle" };
 
 const WAITING_STAGES: Tones = { queued: "idle", starting: "ok" };
@@ -46,3 +48,4 @@ export const connectionStatus = (connection: string) => statusOf(CONNECTIONS, co
 export const healthStatus = (health: string) => statusOf(HEALTH, health);
 export const installStatus = (state: string) => statusOf(INSTALL_STATES, state);
 export const waitingStageStatus = (stage: string) => statusOf(WAITING_STAGES, stage);
+export const pressureStatus = (pressure: string) => statusOf(PRESSURE, pressure);

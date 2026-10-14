@@ -1,9 +1,10 @@
 import { Id, PageHeader, Panel } from "../layout";
 import { formatDuration } from "../live/time";
 import { Link } from "../router";
-import { deviceStateStatus, installStatus, Status } from "../status";
+import { deviceStateStatus, installStatus, pressureStatus, Status } from "../status";
 import { type Column, DataTable } from "../table";
 import { WorkerLeases } from "./leases";
+import { formatBusyPercent, formatBytes, formatCores } from "./load-model";
 import { WorkerFacts } from "./worker-facts";
 import {
   platformName,
@@ -51,7 +52,7 @@ export function WorkerDetail(props: {
             }
             actions={<AllWorkers />}
           />
-          <Panel title="Status" description="The worker's connection, health and capacity.">
+          <Panel title="Status" description="The worker's connection, health, capacity and load.">
             <WorkerFacts worker={worker} />
           </Panel>
           {worker.health === "starting" ? (
@@ -59,6 +60,7 @@ export function WorkerDetail(props: {
               <Panel title="Host" description="The machine the worker runs on.">
                 <HostFacts worker={worker} />
               </Panel>
+              <LoadPanel worker={worker} now={now} />
               <p className="muted">Devices, leases and capacity appear once startup finishes.</p>
             </>
           ) : (
@@ -93,6 +95,7 @@ function WorkerReads(props: {
           <Catalog catalog={worker.catalog ?? []} />
         </Panel>
       </div>
+      <LoadPanel worker={worker} now={now} />
       <Panel
         title="Warm pool"
         description="The devices the worker keeps booted ahead of demand, and why a target is short."
@@ -299,5 +302,89 @@ function Installs({ now, worker }: { readonly worker: WorkerView; readonly now: 
         );
       })}
     </ul>
+  );
+}
+
+function LoadPanel({ now, worker }: { readonly worker: WorkerView; readonly now: number }) {
+  if (worker.connection === "incompatible") return null;
+  return (
+    <Panel title="Load" description="How busy the machine is right now.">
+      <LoadFacts worker={worker} now={now} />
+    </Panel>
+  );
+}
+
+function Limit({ limited }: { readonly limited: boolean }) {
+  return limited ? (
+    <>
+      {" "}
+      <span className="muted">(limit)</span>
+    </>
+  ) : null;
+}
+
+function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now: number }) {
+  if (worker.connection === "disconnected") {
+    return <p className="muted">No reading while disconnected.</p>;
+  }
+  const { load } = worker;
+  if (load === undefined) return <p className="muted">Not reported.</p>;
+  const { cpu, disk, memory } = load;
+  const age = formatDuration(Math.ceil((now - load.readAt) / 1000) * 1000);
+  return (
+    <dl className="facts">
+      <div>
+        <dt>CPU</dt>
+        <dd>
+          {cpu === undefined ? (
+            "Unavailable"
+          ) : (
+            <>
+              {formatBusyPercent(cpu.busyPercent)} busy, {formatCores(cpu.cores)}
+              <Limit limited={cpu.limited} />
+            </>
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>Memory</dt>
+        <dd>
+          {memory === undefined ? (
+            "Unavailable"
+          ) : (
+            <>
+              {formatBytes(memory.availableBytes)} of {formatBytes(memory.totalBytes)} available
+              <Limit limited={memory.limited} />
+            </>
+          )}
+        </dd>
+      </div>
+      {memory === undefined ? null : (
+        <div>
+          <dt>Swap</dt>
+          <dd>{formatBytes(memory.swapUsedBytes)} used</dd>
+        </div>
+      )}
+      {memory?.pressure === undefined ? null : (
+        <div>
+          <dt>Pressure</dt>
+          <dd>
+            <Status tone={pressureStatus(memory.pressure).tone}>{memory.pressure}</Status>
+          </dd>
+        </div>
+      )}
+      <div>
+        <dt>Disk</dt>
+        <dd>
+          {disk === undefined
+            ? "Unavailable"
+            : `${formatBytes(disk.freeBytes)} of ${formatBytes(disk.totalBytes)} free`}
+        </dd>
+      </div>
+      <div>
+        <dt>Read</dt>
+        <dd>{age} ago</dd>
+      </div>
+    </dl>
   );
 }

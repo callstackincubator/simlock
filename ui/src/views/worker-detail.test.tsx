@@ -74,6 +74,7 @@ const RUNNING: WorkerView = {
 function text(html: string): string {
   return html
     .replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
