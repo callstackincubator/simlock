@@ -240,6 +240,68 @@ describe("GatewayRelay on a byte channel", () => {
     expect(last?.done).toBe(true);
   });
 
+  it("cancels the caller's request body and clears its deadline timer when the channel ends", async () => {
+    const deadlineMs = 123_456;
+    const handles: unknown[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: () => void,
+      delay?: number,
+    ) => {
+      const handle = realSetTimeout(handler, delay);
+      if (delay === deadlineMs) handles.push(handle);
+      return handle;
+    }) as unknown as typeof setTimeout);
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => {
+        cancelled = true;
+      },
+      pull: () => new Promise<void>(() => undefined),
+    });
+    try {
+      const { connection, relay } = await setup({ deadlineMs });
+      const pending = relay.relay(WORKER_ID, call(body));
+      const request = await sentFrame(connection, "relay.request");
+      const channel = await openedChannel(connection);
+      connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+      const response = await pending;
+      const reader = response.body?.getReader();
+
+      channel.end();
+      const last = await reader?.read();
+
+      expect(last?.done).toBe(true);
+      await vi.waitFor(() => expect(cancelled).toBe(true));
+      expect(handles).toHaveLength(1);
+      expect(clearSpy).toHaveBeenCalledWith(handles[0]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
+  it("errors the caller's body saying the worker ended the response early when the channel is aborted by the peer after the {} answer", async () => {
+    const { connection, relay } = await setup();
+    const pending = relay.relay(WORKER_ID, call());
+    const request = await sentFrame(connection, "relay.request");
+    const channel = await openedChannel(connection);
+    connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+    const response = await pending;
+    connection.reply(request.id, {});
+    await sleep(20);
+
+    channel.fail("aborted");
+    const read = await readFailure(response);
+
+    expect(read).toEqual({
+      code: "INTERNAL",
+      message: `worker ${WORKER_ID} ended the relayed response early`,
+      state: "rejected",
+    });
+  });
+
   it("errors the caller's body with the deadline message when the worker answers {} and never ends the channel", async () => {
     const { connection, relay } = await setup({ deadlineMs: 100 });
     const pending = relay.relay(WORKER_ID, call());
@@ -512,6 +574,26 @@ describe("GatewayRelay against a worker that breaks the protocol", () => {
     connection.push("relay-head", { headers: [], requestId: request.id, status: 101 });
 
     expect(await pending).toEqual({
+      code: "INTERNAL",
+      message: `worker ${WORKER_ID} sent an invalid relay response`,
+      state: "rejected",
+    });
+    const cancel = await sentFrame(connection, "relay.cancel");
+    expect(relayIdOf(cancel)).toBe(relayIdOf(request));
+  });
+
+  it("errors the caller's body with INTERNAL naming the worker, and sends relay.cancel, on a second relay-head", async () => {
+    const { connection, relay } = await setup();
+    const pending = relay.relay(WORKER_ID, call());
+    const request = await sentFrame(connection, "relay.request");
+    await openedChannel(connection);
+    connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+    const response = await pending;
+
+    connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+    const read = await readFailure(response);
+
+    expect(read).toEqual({
       code: "INTERNAL",
       message: `worker ${WORKER_ID} sent an invalid relay response`,
       state: "rejected",

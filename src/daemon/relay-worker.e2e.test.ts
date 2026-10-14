@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { creditEnvelope } from "../link/test-support.js";
 import type { DaemonServer } from "./server.js";
 import type { RelayTarget } from "./relay.js";
 import {
@@ -228,6 +229,25 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
 
     expect(signal?.aborted).toBe(true);
     expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
+  });
+
+  it("fails relay.request BAD_REQUEST and aborts the target's request when the gateway breaks a link rule on the relay's channel", async () => {
+    let signal: AbortSignal | undefined;
+    behavior = async (request) => {
+      signal = request.signal;
+      await aborted(request.signal);
+      return new Response("late");
+    };
+    await start();
+    const relay = await openRelay(uplink, relayInput(), { keepOpen: true });
+    await poll(() => signal !== undefined).toBe(true);
+
+    // why: the first channel the gateway end opens is number 2; a CREDIT of 0 breaks the link's rule.
+    await uplink.pair.gatewayEnd.writeBinary(creditEnvelope(2, 0));
+    const result = await settleWithin(relay.result);
+
+    expect(signal?.aborted).toBe(true);
+    expect(result).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
   });
 
   it("answers relay.request and relay.cancel FORBIDDEN from an admin session that is not the gateway's uplink", async () => {
@@ -517,6 +537,24 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
 
     expect(result).toEqual({ state: "fulfilled", value: {} });
     expect(outcome).toEqual({ state: "fulfilled", value: "stopped" });
+  });
+
+  it("errors a request body the target reads after it answered, rather than ending it as if the upload were complete", async () => {
+    let held: Request | undefined;
+    behavior = (request) => {
+      held = request;
+      return Promise.resolve(new Response("nope", { status: 401 }));
+    };
+    await start();
+    const relay = await openRelay(uplink, relayInput({ hasBody: true, method: "PUT" }), {
+      keepOpen: true,
+    });
+    const result = await settleWithin(relay.result);
+
+    const late = held === undefined ? undefined : await settleWithin(held.text());
+
+    expect(result).toEqual({ state: "fulfilled", value: {} });
+    expect(late).toMatchObject({ state: "rejected" });
   });
 
   it("stops a hasBody false relay's request direction at once, so bytes the gateway still writes error its writer stopped", async () => {
