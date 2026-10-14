@@ -77,9 +77,12 @@ offers two things, and nothing else:
   string, a `readable` and a `writable` (standard Web streams of bytes,
   with ordinary backpressure), and `abort(reason)`. The peer gets the
   matching channel with `acceptChannel(id)`. A channel carries bytes both
-  ways. Closing the `writable` ends that direction; `abort` ends both, on
-  both sides. A user passes the id to its peer in a message and reads no
-  meaning into it. `acceptChannel` throws for an id the peer never opened,
+  ways. Closing the `writable` ends that direction; cancelling the
+  `readable` tells the peer to stop sending that direction, whose writer
+  then errors with `stopped`, while the other direction goes on; `abort`
+  ends both, on both sides. A channel ends once both directions are done.
+  The id is 1–32 characters of `[A-Za-z0-9-]`; a user passes it to its
+  peer in a message and reads no other meaning into it. `acceptChannel` throws for an id the peer never opened,
   one already accepted, and one already ended.
 - **Credit is visible.** A channel's `credit` is the number of bytes its
   writer may send now without waiting, and `whenCredit()` resolves when
@@ -87,11 +90,15 @@ offers two things, and nothing else:
   it can skip data instead, as a live stream drops frames for a viewer that
   fell behind. The streams stay standard Web streams.
 
+`openChannel()` takes an abort signal, always: no wait in the link is
+unbounded. `whenCredit()` rejects when the channel fails.
+
 A channel fails, and both its streams error, when the peer aborts it, when
 the peer breaks the link's rules on it (§2), when the peer does not accept
 it within 30 s, when a write has waited 60 s for the reader to make room
 (§2), or when the connection closes. Only a write that is actually waiting
-counts toward the 60 s; a writer that writes no more than `credit` never
+counts toward the 60 s, and the 60 s start again whenever credit arrives,
+so a slow reader that keeps reading is never reset; a writer that writes no more than `credit` never
 waits and is never reset. The error says which of these it was.
 That is the only way a user learns of anything inside the link. The link
 bounds only the waits it causes; a wait for bytes the peer has not sent yet
@@ -116,8 +123,12 @@ names it.
 - **Envelope.** A channel's bytes travel as binary WebSocket messages: a
   type, the channel's number on this connection, then the payload. Types:
   `OPEN`, `DATA` (at most 64 KiB of bytes), `END` (this direction is done),
-  `CREDIT` (the sender may send this many more bytes), `RESET` (the channel
-  is aborted). Text messages stay as they are.
+  `STOP` (send no more in this direction), `CREDIT` (the sender may send
+  this many more bytes, at least 1), `RESET` (the channel is aborted, with
+  a reason code: aborted, stalled, not-accepted or invalid; a user's own
+  abort reason stays on its side). Text messages stay as they are. An
+  `OPEN` goes out before any message written after `openChannel()`
+  resolves, so a peer always knows a channel before a message names it.
 - **Numbers.** The side that opens a channel numbers it: the worker with
   odd numbers, the gateway with even ones, so the two never collide. A
   number is never reused on a connection.
@@ -131,17 +142,20 @@ names it.
   channel only. A side holds at most 4 MiB unread per channel. A write
   that has waited 60 s for credit resets the channel.
 - **Two lanes.** Each side sends through one scheduler per connection.
-  Text messages, `OPEN`, `CREDIT` and `RESET` go in the priority lane;
+  Text messages, `OPEN`, `STOP`, `CREDIT` and `RESET` go in the priority lane;
   `DATA` and `END` in the bulk lane. A bulk message is handed to the socket
-  only while less than 256 KiB is still unsent there. Channels take turns
+  only while less than 256 KiB is still unsent there; the transport says
+  when bytes leave, which wakes the bulk lane. A channel's `writable`
+  holds at most one 64 KiB message of its own before its writer waits. Channels take turns
   in the bulk lane, one message each. When both lanes have something to
   send, the priority lane goes first, but the bulk lane sends at least one
   message for every 64 KiB of priority messages, so neither starves.
 - **Rule breaks fail one channel.** `DATA` past the allowed bytes, an
   envelope naming a channel number this side does not hold, an `OPEN`
   reusing a live number, carrying the wrong parity or past the peer's 64,
-  and an envelope too
-  short to read are dropped, never buffered. The channel they name, when
+  `DATA` over 64 KiB, `DATA` or `END` after that direction ended, a
+  `CREDIT` of 0 or beyond 4 MiB outstanding, an unknown envelope type, and
+  an envelope too short to read are dropped, never buffered. The channel they name, when
   this side holds it, is reset, and the link logs why. A `RESET` for a
   channel this side does not hold is dropped and never answered. The
   connection stays up.
@@ -170,8 +184,8 @@ sequenceDiagram
 
 ### 3. The uplink transport port carries text and binary messages
 
-The uplink port's connection gains binary messages and a count of the bytes
-written and not yet sent. The uplink connector and listener hand out this
+The uplink port's connection gains binary messages, a count of the bytes
+written and not yet sent, and a notice when that count drops. The uplink connector and listener hand out this
 transport connection, and the code that makes the uplink wraps it (§1). The
 WebSocket adapter sends a `Uint8Array` as a binary message and stops
 dropping binary messages it receives. The in-memory pair adapter carries
@@ -197,6 +211,11 @@ ADR 0026 §2's operation changes as follows:
   fails before its `END` errors; it never ends cleanly short.
 - `relay.cancel` stays. A cancel, an uplink drop, the deadline and every
   failure also abort the channel.
+- A relay ends its channel on every path. The worker stops the request
+  direction (`STOP`) once its target has answered without reading the
+  whole body, or at once for a relay with no body; the gateway then stops
+  reading the caller's body. Every failure of `relay.request`, before or
+  after the target runs, aborts its channel.
 - The gateway's limit of 4 unanswered `relay.body` calls and its 64 MiB
   unread buffer are gone: credit replaces both. A slow reader slows its own
   transfer and nothing else.
