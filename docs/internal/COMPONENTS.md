@@ -140,7 +140,7 @@ modules with.
 | Component | Where | Owns | Does not |
 |---|---|---|---|
 | `HostLoadSampler` | `src/host-load/sampler.ts` | The machine's CPU, memory and disk load: one read at start and every 15 s, one read at a time and each bounded at 10 s, busy % from two successive CPU counters, the age of the reading, and one warn when a part that was read fails. Served from memory through `current()`. | Read the machine: the `HostLoadProbe` port does. Shape the wire block: the contract's `fitHostLoad` does. |
-| `HostLoadProbe` adapters | `src/ports/host-load.ts` | `DarwinHostLoadProbe` (`sysctl`, `os.cpus()`), `LinuxHostLoadProbe` (`/proc/stat`, `/proc/meminfo`), `FakeHostLoadProbe`, and `productionHostLoadProbe`. Each part is read on its own and left out when it fails. | Compute a percentage. |
+| `HostLoadProbe` adapters | `src/ports/host-load.ts` | `DarwinHostLoadProbe` (`sysctl`, `os.cpus()`), `LinuxHostLoadProbe` (`/proc/stat`, `/proc/meminfo`, `/proc/self/cgroup` and the cgroup v2 files under `/sys/fs/cgroup`), `FakeHostLoadProbe`, and `productionHostLoadProbe`. Each part is read on its own and left out when it fails. | Compute a percentage. |
 
 ## Event bus
 

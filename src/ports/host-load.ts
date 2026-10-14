@@ -148,7 +148,7 @@ export interface LinuxHostLoadProbeOptions {
   readonly filesystem: Pick<Filesystem, "diskSpace" | "readFile">;
   readonly dataDirectory: string;
   readonly cores: () => number;
-  readonly nowMicros?: () => number;
+  readonly nowMicros: () => number;
 }
 
 const CGROUP_ROOT = "/sys/fs/cgroup";
@@ -263,7 +263,7 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
         const stat = await this.#optional(`${limit.folder}/cpu.stat`);
         const usage = /^usage_usec (\d+)$/m.exec(stat ?? "");
         if (!usage) return undefined;
-        const now = this.options.nowMicros?.() ?? Date.now() * 1000;
+        const now = this.options.nowMicros();
         return {
           busyTime: Number(usage[1]),
           cores: limit.value,

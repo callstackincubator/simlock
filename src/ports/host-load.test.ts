@@ -100,7 +100,12 @@ const PROC_MEMINFO =
   "MemTotal:       16000000 kB\nMemFree:         1000000 kB\nMemAvailable:    4000000 kB\nSwapTotal:       2000000 kB\nSwapFree:        1500000 kB\n";
 
 function linuxProbe(filesystem: MemoryFilesystem): LinuxHostLoadProbe {
-  return new LinuxHostLoadProbe({ cores: () => 4, dataDirectory: "/data", filesystem });
+  return new LinuxHostLoadProbe({
+    cores: () => 4,
+    dataDirectory: "/data",
+    filesystem,
+    nowMicros: () => 10_000_000,
+  });
 }
 
 describe("DarwinHostLoadProbe", () => {
@@ -377,6 +382,12 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     expect(counters.cpu).toMatchObject({ cores: 0.01, limited: true, totalTime: 100_000 });
   });
 
+  it("reports a quota of 1000 over a period of 1000000 as 0.001 cores, limited", async () => {
+    const counters = await readCgroup("/x", { x: { cpuMax: "1000 1000000\n", ...USAGE } });
+
+    expect(counters.cpu).toMatchObject({ cores: 0.001, limited: true });
+  });
+
   it("uses /sys/fs/cgroup itself for a 0::/ line", async () => {
     const counters = await readCgroup("/", {
       "": { cpuMax: "150000 100000\n", memoryMax: "max\n", ...USAGE },
@@ -392,7 +403,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
       "": { cpuMax: "max 100000\n" },
       "system.slice": { memoryMax: "8589934592\n", ...USAGE },
       "system.slice/simlock.service": {
-        memoryMax: "17179869184\n",
+        memoryMax: "68719476736\n",
         current: "1\n",
         stat: "inactive_file 0\n",
       },
@@ -450,7 +461,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     expect(counters.cpu).toStrictEqual(LIMITED_TWO_CORES);
   });
 
-  it("accepts every file with the kernel's trailing newline, and nothing else after the value", async () => {
+  it("accepts cpu.max and memory.max with the kernel's trailing newline, and nothing else after the value", async () => {
     const folders = {
       x: { cpuMax: "200000 100000\n", memoryMax: "8589934592\n", ...USAGE, swap: "1048576\n" },
     };
@@ -499,6 +510,13 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     );
 
     expect(counters.cpu).toMatchObject({ cores: 4, limited: false });
+
+    const equal = await readCgroup(
+      "/x",
+      { x: { cpuMax: "400000 100000\n", ...USAGE } },
+      { cores: 4 },
+    );
+    expect(equal.cpu).toMatchObject({ cores: 4, limited: false });
     expect(counters.cpu?.totalTime).toBe(100 + 10 + 50 + 5 + 7 + 3 + 300 + 20);
   });
 
@@ -538,6 +556,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
   it.each([
     ["max", "max\n"],
     ["a value above MemTotal", "1099511627776\n"],
+    ["a value equal to MemTotal", "68719476736\n"],
     ["an unparsable file", "garbage\n"],
   ])("reports the machine's memory, not limited, for memory.max %s", async (_why, value) => {
     const accepted = await readCgroup("/x", { x: { memoryMax: "8589934592\n", ...USAGE } });
@@ -595,6 +614,8 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
 
   it("reports the machine's figures when /proc/self/cgroup cannot be read", async () => {
     const files = folderFiles("docker/abc", { cpuMax: "200000 100000\n", ...USAGE });
+    const accepted = await cgroupFilesystem("0::/docker/abc\n", files);
+    expect((await cgroupProbe(accepted).read()).cpu?.limited).toBe(true);
 
     const counters = await cgroupProbe(await cgroupFilesystem(undefined, files)).read();
 
@@ -608,6 +629,8 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
       memoryMax: "8589934592\n",
       ...USAGE,
     });
+    const accepted = await cgroupFilesystem("12:memory:/docker/abc\n0::/docker/abc\n", files);
+    expect((await cgroupProbe(accepted).read()).cpu?.limited).toBe(true);
 
     const counters = await cgroupProbe(
       await cgroupFilesystem(
