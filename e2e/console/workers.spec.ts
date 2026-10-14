@@ -441,7 +441,7 @@ test.describe("the workers views", () => {
     await expect(read).toHaveText(/^\d+ s ago$/);
     const first = await read.textContent();
     await expect(read).not.toHaveText(first ?? "", { timeout: 10_000 });
-    await expect(fact(panel, "CPU")).toContainText("busy");
+    await expect(fact(panel, "Memory")).toContainText("available");
   });
 
   test("a disconnected worker's Load row says No reading while disconnected within a second", async ({
