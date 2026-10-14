@@ -1999,8 +1999,15 @@ describe(
 
 async function restarted(rig: Rig, member: Member, leases: number): Promise<void> {
   await rig.restart();
-  // why: the worker's redial delay doubles with each restart in a row (1 s, 2 s, 4 s ... up to its jitter), so one test that restarts four times waits up to 8 s.
-  await advance(rig, 8_000, 500);
+  // why: the worker's redial delay doubles with each restart in a row and carries jitter, so the clock moves on until the worker is back instead of by a sum that a fourth restart can outrun.
+  await vi.waitFor(
+    async () => {
+      const view = await viewOf(rig, member.label);
+      if (view?.connection !== "connected") await advance(rig, 1_000, 500);
+      expect(view?.connection).toBe("connected");
+    },
+    { interval: 20, timeout: 30_000 },
+  );
   await untilRead(rig, member);
   await expect.poll(async () => (await fleetLeases(rig)).length).toBe(leases);
 }
