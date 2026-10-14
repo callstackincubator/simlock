@@ -60,14 +60,24 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
    * every other `IpcConnection` in the tree already does.
    */
   readonly #pending: string[] = [];
+  readonly #binaryListeners = new Set<(bytes: Uint8Array) => void>();
+  readonly #sentListeners = new Set<() => void>();
   #closed = false;
 
   constructor(socket: WebSocket) {
     this.#socket = socket;
     socket.on("message", (data: RawData, isBinary: boolean) => {
-      // Binary frames are not part of this protocol. Ignoring one is the same treatment
-      // `SimlockWire` gives a malformed line: a peer's bad frame is not this side's crash.
-      if (isBinary) return;
+      if (isBinary) {
+        // why: with no listener the message is dropped, so nothing piles up before a link subscribes.
+        if (this.#binaryListeners.size === 0) return;
+        const bytes = Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.isBuffer(data)
+            ? data
+            : Buffer.from(data as ArrayBuffer);
+        for (const listener of this.#binaryListeners) listener(bytes);
+        return;
+      }
       const chunk = Array.isArray(data)
         ? Buffer.concat(data).toString("utf8")
         : Buffer.isBuffer(data)
@@ -113,16 +123,26 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
     return subscribeListener(this.#errorListeners, listener);
   }
 
-  readonly unsentBytes = 0;
-
-  async writeBinary(): Promise<void> {}
-
-  onBinary(): () => void {
-    return () => {};
+  get unsentBytes(): number {
+    return this.#socket.bufferedAmount;
   }
 
-  onSent(): () => void {
-    return () => {};
+  onBinary(listener: (bytes: Uint8Array) => void): () => void {
+    return subscribeListener(this.#binaryListeners, listener);
+  }
+
+  onSent(listener: () => void): () => void {
+    return subscribeListener(this.#sentListeners, listener);
+  }
+
+  async writeBinary(bytes: Uint8Array): Promise<void> {
+    if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) return;
+    await new Promise<void>((resolve) => {
+      this.#socket.send(bytes, { binary: true }, () => {
+        for (const listener of this.#sentListeners) listener();
+        resolve();
+      });
+    });
   }
 
   async write(contents: string): Promise<void> {
@@ -133,7 +153,10 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
       // A send error is not rethrown -- the `error` event above already reports it to every
       // listener, and a rejected `write` would tear down a caller that has nothing to do
       // about it.
-      this.#socket.send(contents, () => resolve());
+      this.#socket.send(contents, () => {
+        for (const listener of this.#sentListeners) listener();
+        resolve();
+      });
     });
   }
 

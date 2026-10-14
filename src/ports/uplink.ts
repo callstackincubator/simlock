@@ -251,12 +251,22 @@ export function createConnectionPair(): [MemoryTransportConnection, MemoryTransp
   return [left, right];
 }
 
+type PairedMessage =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "binary"; readonly bytes: Uint8Array };
+
 class PairedConnection implements MemoryTransportConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
   /** Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
    * socket does: the peer may write before this end has been handed to whoever reads it. */
   readonly #pending: string[] = [];
+  readonly #errorListeners = new Set<(error: Error) => void>();
+  readonly #binaryListeners = new Set<(bytes: Uint8Array) => void>();
+  readonly #sentListeners = new Set<() => void>();
+  readonly #queue: Array<{ message: PairedMessage; resolve: () => void; size: number }> = [];
+  #unsent = 0;
+  #held = false;
   #peer: PairedConnection | undefined;
   #closed = false;
 
@@ -287,38 +297,76 @@ class PairedConnection implements MemoryTransportConnection {
     return subscribeListener(this.#closeListeners, listener);
   }
 
-  onError(): () => void {
-    // An in-memory pair has no transport to fail; nothing ever emits here. Returning an inert
-    // unsubscriber keeps the port's shape honest rather than pretending errors are possible.
-    return () => {};
+  onError(listener: (error: Error) => void): () => void {
+    return subscribeListener(this.#errorListeners, listener);
   }
 
-  readonly unsentBytes = 0;
-
-  async writeBinary(): Promise<void> {}
-
-  onBinary(): () => void {
-    return () => {};
+  get unsentBytes(): number {
+    return this.#unsent;
   }
 
-  onSent(): () => void {
-    return () => {};
+  onBinary(listener: (bytes: Uint8Array) => void): () => void {
+    return subscribeListener(this.#binaryListeners, listener);
   }
 
-  hold(): void {}
+  onSent(listener: () => void): () => void {
+    return subscribeListener(this.#sentListeners, listener);
+  }
 
-  release(): void {}
+  hold(): void {
+    this.#held = true;
+  }
 
-  fail(): void {}
+  release(): void {
+    this.#held = false;
+    while (this.#queue.length > 0) {
+      const entry = this.#queue.shift();
+      if (entry === undefined) break;
+      this.#unsent -= entry.size;
+      this.#deliver(entry.message);
+      entry.resolve();
+    }
+    this.#unsent = 0;
+    for (const listener of this.#sentListeners) listener();
+  }
+
+  fail(error: Error): void {
+    for (const listener of this.#errorListeners) listener(error);
+    void this.close();
+  }
 
   async write(contents: string): Promise<void> {
-    const peer = this.#peer;
-    if (this.#closed || peer === undefined || peer.#closed) return;
-    if (peer.#dataListeners.size === 0) {
-      peer.#pending.push(contents);
+    await this.#send({ kind: "text", text: contents }, Buffer.byteLength(contents));
+  }
+
+  async writeBinary(bytes: Uint8Array): Promise<void> {
+    await this.#send({ kind: "binary", bytes }, bytes.length);
+  }
+
+  async #send(message: PairedMessage, size: number): Promise<void> {
+    if (this.#closed) return;
+    if (!this.#held) {
+      this.#deliver(message);
       return;
     }
-    for (const listener of peer.#dataListeners) listener(contents);
+    this.#unsent += size;
+    await new Promise<void>((resolve) => {
+      this.#queue.push({ message, resolve, size });
+    });
+  }
+
+  #deliver(message: PairedMessage): void {
+    const peer = this.#peer;
+    if (this.#closed || peer === undefined || peer.#closed) return;
+    if (message.kind === "binary") {
+      for (const listener of peer.#binaryListeners) listener(message.bytes);
+      return;
+    }
+    if (peer.#dataListeners.size === 0) {
+      peer.#pending.push(message.text);
+      return;
+    }
+    for (const listener of peer.#dataListeners) listener(message.text);
   }
 
   async close(): Promise<void> {
@@ -330,6 +378,8 @@ class PairedConnection implements MemoryTransportConnection {
   #close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#unsent = 0;
+    for (const entry of this.#queue.splice(0)) entry.resolve();
     for (const listener of this.#closeListeners) listener();
   }
 }
