@@ -79,7 +79,8 @@ offers two things, and nothing else:
   matching channel with `acceptChannel(id)`. A channel carries bytes both
   ways. Closing the `writable` ends that direction; cancelling the
   `readable` tells the peer to stop sending that direction, whose writer
-  then errors with `stopped` and acknowledges with `END`, while the other
+  then errors with `stopped` and acknowledges with `END` (a `STOP` that
+  crosses an `END` already sent needs no answer), while the other
   direction goes on; `abort`
   ends both, on both sides. A channel ends once both directions are done.
   The id is 1–32 characters of `[A-Za-z0-9-]`; a user passes it to its
