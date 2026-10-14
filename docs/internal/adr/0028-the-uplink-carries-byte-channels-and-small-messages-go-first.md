@@ -81,15 +81,21 @@ offers two things, and nothing else:
   both sides. A user passes the id to its peer in a message and reads no
   meaning into it. `acceptChannel` throws for an id the peer never opened,
   one already accepted, and one already ended.
+- **Credit is visible.** A channel writer's `desiredSize` is the number of
+  bytes it may still send without waiting, and its `ready` resolves when
+  more credit arrives. A writer can therefore skip data instead of waiting,
+  as a live stream drops frames for a viewer that fell behind.
 
 A channel fails, and both its streams error, when the peer aborts it, when
 the peer breaks the link's rules on it (§2), when the peer does not accept
-it within 30 s, when its writer has waited 60 s for the reader to make room
-(§2), or when the connection closes. The error says which of these it was.
+it within 30 s, when a write has waited 60 s for the reader to make room
+(§2), or when the connection closes. Only a write that is actually waiting
+counts toward the 60 s; a writer that checks `desiredSize` and skips is
+never reset. The error says which of these it was.
 That is the only way a user learns of anything inside the link. The link
 bounds only the waits it causes; a wait for bytes the peer has not sent yet
-is the user's to bound, as the relay's deadline does. A connection holds at most 64 open
-channels; a 65th `openChannel()` throws.
+is the user's to bound, as the relay's deadline does. A connection holds
+at most 64 open channels; a 65th `openChannel()` throws.
 
 The link wraps the transport connection where the uplink is made: the
 worker's `GatewayUplink` when it dials, the gateway when it accepts. Tests
@@ -115,7 +121,7 @@ names it.
 - **Credit.** Past the first 4 MiB, a side sends only as many bytes as the
   other side granted. A side grants more only as its user reads bytes off
   the `readable`. A reader that stops reading stops the sender of that
-  channel only. A side holds at most 4 MiB unread per channel. A writer
+  channel only. A side holds at most 4 MiB unread per channel. A write
   that has waited 60 s for credit resets the channel.
 - **Two lanes.** Each side sends through one scheduler per connection.
   Text messages, `OPEN`, `CREDIT` and `RESET` go in the priority lane;
@@ -169,36 +175,41 @@ is the only user of the binary half.
 ADR 0026 §2's operation changes as follows:
 
 - The gateway opens a channel for each relay, and `relay.request` names it.
-  The worker accepts it, hands its `readable` to the relay target as the
-  request body, and writes the target's response body to its `writable`.
+  The worker accepts it as soon as it reads the `relay.request`, before the
+  request waits out the worker's startup, hands its `readable` to the relay
+  target as the request body, and writes the target's response body to its
+  `writable`.
   So `DaemonServer`'s relay handling and `SimlockWire`'s relay pushes
   change; their message handling does not.
 - `relay.body` and the `relay-chunk` push are gone. `relay-head` stays, and
   `relay.request` still answers once the response body has ended or the
-  relay was cancelled.
+  relay was cancelled. The answer travels in the priority lane and can
+  arrive before the last body bytes, so the gateway ends the caller's body
+  only at the channel's `END`, never at the answer. A body whose channel
+  fails before its `END` errors; it never ends cleanly short.
 - `relay.cancel` stays. A cancel, an uplink drop, the deadline and every
   failure also abort the channel.
 - The gateway's limit of 4 unanswered `relay.body` calls and its 64 MiB
   unread buffer are gone: credit replaces both. A slow reader slows its own
   transfer and nothing else.
-- The gateway runs at most 4 relays at once per agent-device lease; the
-  next one for that lease waits, and the wait counts against its deadline.
-  A relay naming no lease (`GET /health`) counts against none. There is no
-  per-worker limit below the link's 64 channels, which also replaces the
-  worker's limit of 16 relays per connection. One agent's transfers never
-  queue another agent's command.
+- The relay has no limit of its own. Each relay takes one channel. When a
+  worker's 64 channels are all in use, the next relay waits for one to
+  free, and the wait counts against its deadline. The gateway's limit of 8
+  relays per worker and the worker's limit of 16 per connection are gone.
+  Below 64 relays on a worker, no relay waits for another.
 - A failed channel fails its relay. On the worker, a rule break by the
   gateway is `BAD_REQUEST`. On the gateway, a rule break by the worker is
-  `INTERNAL` (`worker <id> sent invalid relay data`), as invalid relay data
-  is today.
+  `INTERNAL` (`worker <id> sent an invalid relay response`), as invalid
+  relay data is today.
 - Unchanged: the 330 s deadline over the whole exchange, the header
   filtering, and the URL and header bounds.
 
 ### 5. The agent-device host caps a download at 2 GiB
 
 The agent-device host on the worker forwards every agent-device request,
-direct and relayed, and sees each response as agent-device's daemon sent
-it. It checks each response before passing it on:
+direct and relayed, and sees each response as agent-device's proxy hands
+it over. The proxy keeps `content-length` on artifact downloads only. The
+host checks each response before passing it on:
 
 - A `Content-Length` over 2 GiB (2 147 483 648 bytes): the host answers an
   error instead, before any body byte, with a message naming the 2 GB
@@ -206,6 +217,10 @@ it. It checks each response before passing it on:
 - No `Content-Length`: the host counts the bytes and aborts the response
   once it passes 2 GiB. The agent sees a failed transfer, never a short
   body that ends cleanly.
+
+agent-device's CLI reports any failed artifact download as `Failed to
+download remote artifact`; the host's message naming the limit is in the
+details it prints with its details flag.
 
 Uploads over 2 GiB are refused by agent-device's own daemon, when it
 decides; simlock does not check them again. The relay and the link know no
@@ -219,15 +234,17 @@ open, and an older CLI or client library is refused by the newer daemon.
 
 ## Consequences
 
-- Relayed bytes cost about 1% more on the wire (the envelope per 64 KiB),
-  not a third, and nothing is encoded.
+- A relayed transfer of 1 MB or more costs about 1% more on the wire (the
+  envelope per 64 KiB, plus the relay's messages), not a third, and nothing
+  is encoded.
 - A small message waits behind at most 256 KiB of bulk bytes and one 64 KiB
   message in simlock, plus the operating system's send buffer, which macOS
-  and Linux cap at 4 MiB by default. At 7 MB/s, the slowest link the size
-  promises need, that is under 0.7 s.
+  and Linux cap at 4 MiB by default, in each direction. On a link of 24
+  MB/s, the speed a 2 GiB download needs, that is under 0.2 s each way.
 - A relay's body, a command's included, waits behind at most one 64 KiB
   message per other active channel, since channels take turns and the first
   4 MiB needs no credit.
+- A relay waits for another only when 64 run on its worker at once.
 - Memory per transfer is bounded by credit: about 4 MiB per direction on
   each side, whatever the transfer's size and however slow its reader. A
   worker holds at most 64 channels per connection.
@@ -239,8 +256,14 @@ open, and an older CLI or client library is refused by the newer daemon.
   nothing slower.
 - Channels are not specific to the relay. Another module that needs bulk
   bytes over the uplink uses them as they are. The link bounds the waits it
-  causes (30 s to accept, 60 s for credit); the user bounds its wait for the
-  peer's bytes.
+  causes (30 s to accept, 60 s for a waiting write); the user bounds its
+  wait for the peer's bytes.
+- The link is ready for live streams without being changed. Either side
+  can open a channel, a producer can skip data instead of waiting, and a
+  skipping producer is never reset. A stream still needs its own rules
+  above the link: no 330 s total cap, its own message boundaries, and an
+  agent-facing endpoint. Adding a priority class for live channels later
+  is an ordinary protocol bump.
 - The link module is new code that every gateway–worker message goes
   through. Its tests own the envelope, credit and lane rules, against the
   in-memory pair and the real WebSocket.
@@ -254,6 +277,9 @@ open, and an older CLI or client library is refused by the newer daemon.
   authenticate, bound and test, and one more round trip per transfer.
 - **Credit as JSON calls.** Two messages per grant, waiting in the same
   queue as other calls, and the link's users would see them.
+- **At most 4 relays per agent-device lease.** One agent's transfers would
+  not queue another agent's command, but a lease's own heartbeat would
+  wait behind its own 4 transfers.
 - **Bodies on the call itself (`call(op, input, { body })`).** Hides channel
   ids from the relay too, but puts streams into every call `SimlockWire` and
   `DaemonServer` make, not only the relay's.
