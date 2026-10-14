@@ -161,9 +161,11 @@ names it.
   `DATA` over 64 KiB, `DATA` or `END` after that direction ended, a
   `CREDIT` of 0 or beyond 4 MiB outstanding, an unknown envelope type, and
   an envelope too short to read are dropped, never buffered. The channel they name, when
-  this side holds it, is reset, and the link logs why. A `RESET` for a
-  channel this side does not hold is dropped and never answered. The
-  connection stays up.
+  this side holds it, is reset, and the link logs why. Since numbers are
+  never reused, a message for a number the peer opened earlier but this
+  side no longer holds is late traffic for an ended channel: it is
+  dropped quietly and never answered. Only a number the peer never opened
+  is a rule break. The connection stays up.
 
 ```mermaid
 sequenceDiagram
