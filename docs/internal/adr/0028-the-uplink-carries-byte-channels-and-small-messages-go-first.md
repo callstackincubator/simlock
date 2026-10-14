@@ -83,9 +83,12 @@ offers two things, and nothing else:
   one already accepted, and one already ended.
 
 A channel fails, and both its streams error, when the peer aborts it, when
-the peer breaks the link's rules on it (§2), when no bytes move on it either
-way for 60 s, or when the connection closes. That is the only way a user
-learns of anything inside the link. A connection holds at most 64 open
+the peer breaks the link's rules on it (§2), when the peer does not accept
+it within 30 s, when its writer has waited 60 s for the reader to make room
+(§2), or when the connection closes. The error says which of these it was.
+That is the only way a user learns of anything inside the link. The link
+bounds only the waits it causes; a wait for bytes the peer has not sent yet
+is the user's to bound, as the relay's deadline does. A connection holds at most 64 open
 channels; a 65th `openChannel()` throws.
 
 The link wraps the transport connection where the uplink is made: the
@@ -112,7 +115,8 @@ names it.
 - **Credit.** Past the first 4 MiB, a side sends only as many bytes as the
   other side granted. A side grants more only as its user reads bytes off
   the `readable`. A reader that stops reading stops the sender of that
-  channel only. A side holds at most 4 MiB unread per channel.
+  channel only. A side holds at most 4 MiB unread per channel. A writer
+  that has waited 60 s for credit resets the channel.
 - **Two lanes.** Each side sends through one scheduler per connection.
   Text messages, `OPEN`, `CREDIT` and `RESET` go in the priority lane;
   `DATA` and `END` in the bulk lane. A bulk message is handed to the socket
@@ -234,8 +238,9 @@ open, and an older CLI or client library is refused by the newer daemon.
   24 MB/s (90 s), 2 GiB uploads about 7 MB/s (5 minutes). simlock promises
   nothing slower.
 - Channels are not specific to the relay. Another module that needs bulk
-  bytes over the uplink uses them as they are, and every wait on them is
-  bounded by the 60 s idle reset.
+  bytes over the uplink uses them as they are. The link bounds the waits it
+  causes (30 s to accept, 60 s for credit); the user bounds its wait for the
+  peer's bytes.
 - The link module is new code that every gateway–worker message goes
   through. Its tests own the envelope, credit and lane rules, against the
   in-memory pair and the real WebSocket.
