@@ -1513,7 +1513,7 @@ describe("DaemonServer relays during startup", () => {
     return new GatewayRelay({ directory });
   }
 
-  it("a relay sent while the worker is still starting holds its channel, and its 2 MiB upload arrives in full once startup converges", async () => {
+  it("a relay sent while the worker is still starting holds its channel, and its 8 MiB upload, twice the 4 MiB window, only finishes once startup converges and arrives in full", async () => {
     let received = "";
     let length = 0;
     let calls = 0;
@@ -1531,20 +1531,32 @@ describe("DaemonServer relays during startup", () => {
     const relay = await relaySupport.openRelay(
       uplink,
       relaySupport.relayInput({ hasBody: true, method: "PUT" }),
-      { upload: relaySupport.patternBytes(2 * relaySupport.MIB, 5) },
+      { keepOpen: true },
     );
+    // why: 8 MiB is twice the 4 MiB window, so a sender can only finish once the worker reads; a channel accepted but parked would let it write at most the window.
+    const upload = relaySupport.patternBytes(8 * relaySupport.MIB, 5);
+    const writer = relay.channel.writable.getWriter();
+    let written = 0;
+    const writing = (async () => {
+      for (let offset = 0; offset < upload.length; offset += relaySupport.MIB) {
+        await writer.write(upload.subarray(offset, offset + relaySupport.MIB));
+        written += relaySupport.MIB;
+      }
+      await writer.close();
+    })();
     await relaySupport.sleep(200);
     const callsWhileStarting = calls;
+    const writtenWhileStarting = written;
     converge.resolve();
     await startPromise;
     const outcome = await relaySupport.settleWithin(relay.result);
+    await writing;
 
     expect(callsWhileStarting).toBe(0);
+    expect(writtenWhileStarting).toBeLessThan(upload.length);
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
-    expect(length).toBe(2 * relaySupport.MIB);
-    expect(received).toBe(
-      relaySupport.digestOf([relaySupport.patternBytes(2 * relaySupport.MIB, 5)]),
-    );
+    expect(length).toBe(upload.length);
+    expect(received).toBe(relaySupport.digestOf([upload]));
   });
 
   it("a relay whose 8 MiB upload stays parked by worker startup for 60 s fails INTERNAL on the gateway with the 60 s message", async () => {

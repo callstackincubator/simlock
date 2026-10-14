@@ -53,7 +53,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     return dispatch(operation, input, adminSession);
   }
 
-  it("sends a 20 MiB response body on the channel byte for byte, then ends it, and answers relay.request {} only after the end", async () => {
+  it("sends a 20 MiB response body on the channel byte for byte, then ends it, and answers relay.request {}", async () => {
     behavior = () => Promise.resolve(new Response(patternStream(20 * MIB, 7)));
     await start();
 
@@ -266,7 +266,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     expect(codes).toEqual(["FORBIDDEN", "FORBIDDEN"]);
   });
 
-  it("fails a relay.request that reuses an active relayId with BAD_REQUEST, leaves the first relay running, and answers {} to a relay.cancel for an unknown relay id", async () => {
+  it("fails a relay.request that reuses an active relayId with BAD_REQUEST and its channel errored aborted, leaves the first relay running, and answers {} to a relay.cancel for an unknown relay id", async () => {
     const release = gate();
     behavior = async () => {
       await release.promise;
@@ -282,9 +282,11 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const unknownCancel = await settleWithin(
       uplink.wire.call("relay.cancel", { relayId: "relay-unknown" }),
     );
+    const reusedEnd = await second.readError();
     release.open();
 
     expect(reused).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
+    expect(reusedEnd).toEqual({ ended: false, reason: "aborted" });
     expect(unknownCancel).toEqual({ state: "fulfilled", value: {} });
     expect(await settleWithin(first.result)).toEqual({ state: "fulfilled", value: {} });
   });

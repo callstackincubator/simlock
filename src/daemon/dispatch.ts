@@ -123,7 +123,6 @@ export interface DispatchSession {
     status: number,
     headers: readonly (readonly [string, string])[],
   ) => Promise<void>;
-  // why: resolved once the part is written, so a target is read only as fast as the socket takes its parts.
   // why: accepted by the server when it read the `relay.request` line, before the call parked for startup (ADR 0028).
   readonly relayChannel?: LinkChannel;
   /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the

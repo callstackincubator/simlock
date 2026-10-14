@@ -1,6 +1,6 @@
 # 0028. The uplink carries byte channels beside its messages, and small messages go first
 
-- **Status:** Accepted — partly implemented: §1–3 (the link module and the transport port, #556); §4–6 (relays on channels, the download cap, the protocol bump) follow
+- **Status:** Accepted — partly implemented: §1–3 (the link module and the transport port, #556); §4 and §6 (relays on channels, the protocol bump, #558); §5 (the download cap, #557) follows
 - **Date:** 2026-10-14
 - **Issue:** [#552](https://github.com/callstackincubator/simlock/issues/552)
 - **Narrows:** [ADR 0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md)

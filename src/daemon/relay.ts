@@ -49,6 +49,8 @@ interface ActiveRelay {
 
 export class RelayConnection {
   readonly #active = new Map<string, ActiveRelay>();
+  // why: an id is taken from the duplicate check until the call ends, so two lines with one id in one read cannot both run their target while the first waits for credit.
+  readonly #reserved = new Set<string>();
   #closed = false;
 
   constructor(
@@ -79,9 +81,22 @@ export class RelayConnection {
   ): Promise<RelayResult> {
     // why: a request parked behind the startup gate reaches here after its connection closed; running its target would answer nobody.
     if (this.#closed) return { cancelled: true };
-    if (this.#active.has(input.relayId)) {
+    if (this.#reserved.has(input.relayId)) {
       throw new DispatchError("BAD_REQUEST", `Relay ${input.relayId} is already active`);
     }
+    this.#reserved.add(input.relayId);
+    try {
+      return await this.#admitted(input, push, channel);
+    } finally {
+      this.#reserved.delete(input.relayId);
+    }
+  }
+
+  async #admitted(
+    input: RelayRequestInput,
+    push: RelayPush,
+    channel: LinkChannel,
+  ): Promise<RelayResult> {
     const target = Object.hasOwn(this.targets, input.target)
       ? this.targets[input.target]
       : undefined;

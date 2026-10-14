@@ -10,6 +10,7 @@ describe("simlock/admin", () => {
     expectTypeOf<SimlockAdminClient>().not.toHaveProperty("relayRequest");
     expectTypeOf<SimlockAdminClient>().not.toHaveProperty("relayBody");
     expectTypeOf<SimlockAdminClient>().not.toHaveProperty("relayCancel");
+    expectTypeOf<SimlockAdminClient>().not.toHaveProperty("openChannel");
 
     const documented = readFileSync(new URL("../../docs/CLIENT.md", import.meta.url), "utf8");
     expect(Object.keys(admin).filter((name) => /relay/i.test(name))).toEqual([]);

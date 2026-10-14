@@ -1347,8 +1347,6 @@ export class DaemonServer {
     }
   }
 
-  // why: each push resolves once it is on the socket, so the relay reads its target only as fast as the socket takes the parts.
-
   #relayRequest(
     connection: Connection,
     requestId: RequestId,
