@@ -9,10 +9,7 @@ import {
   type MemoryTransportConnection,
   type UplinkTransportConnection,
 } from "../ports/index.js";
-import {
-  WebSocketUplinkConnector,
-  WebSocketUplinkListenerFactory,
-} from "../ports/uplink-websocket.js";
+import { WebSocketUplinkConnector, WebSocketUplinkListenerFactory } from "../ports/testing.js";
 import { createLink, type LinkChannel, type LinkConnection } from "./index.js";
 
 export const KiB = 1024;
