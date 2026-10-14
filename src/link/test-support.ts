@@ -160,6 +160,29 @@ export class RecordingLogger implements Logger {
   }
 }
 
+export type Outcome<T> =
+  | { readonly state: "resolved"; readonly value: T }
+  | { readonly state: "rejected"; readonly error: unknown }
+  | { readonly state: "pending" };
+
+export async function outcome<T>(promise: Promise<T>, ms = 2000): Promise<Outcome<T>> {
+  let timer: NodeJS.Timeout | undefined;
+  const pending = new Promise<Outcome<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ state: "pending" }), ms);
+  });
+  try {
+    return await Promise.race([
+      promise.then(
+        (value): Outcome<T> => ({ state: "resolved", value }),
+        (error: unknown): Outcome<T> => ({ state: "rejected", error }),
+      ),
+      pending,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function settle(): Promise<void> {
   for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 }

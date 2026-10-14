@@ -180,7 +180,12 @@ export class Channel implements BulkSource {
   }
 
   onEnd(): void {
-    if (this.#failure !== undefined) return;
+    if (this.#failure !== undefined) {
+      // why: the peer's END still ends its direction after this side failed; the slot frees once both are done.
+      this.#inEnded = true;
+      this.#checkDone();
+      return;
+    }
     if (this.#inEnded) return this.#invalid("END after the direction ended");
     this.#inEnded = true;
     this.#deliver();

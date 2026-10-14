@@ -36,12 +36,6 @@ import {
   type UplinkTransportConnection,
 } from "./uplink.js";
 
-/**
- * Wraps one WebSocket as the `IpcConnection` the daemon protocol expects. Each protocol frame
- * is sent as its own text message; frames are already newline-terminated by `serializeFrame`
- * and every reader buffers by newline, so a message boundary that does not line up with a
- * frame boundary is harmless either way.
- */
 function rawBytes(data: RawData): Buffer {
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);

@@ -172,7 +172,11 @@ const dropped: Dropped[] = [
   {
     name: "an unknown envelope type",
     run: async (peer) => {
-      await peer.raw.writeBinary(envelope(99, 4));
+      await acceptRaw(peer);
+      await peer.raw.writeBinary(envelope(99, 2));
+      await settle();
+      expect(peer.log.problems().join("\n")).toContain("an unknown envelope type");
+      expect(resets(peer, 2)).toEqual([]);
     },
   },
   {

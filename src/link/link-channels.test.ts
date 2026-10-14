@@ -9,6 +9,7 @@ import {
   KiB,
   linkPair,
   MiB,
+  outcome,
   pattern,
   patternHash,
   pump,
@@ -211,10 +212,14 @@ describe("link byte channels: transfer", () => {
     await settle();
     expect(resolved).toBe(false);
     const received = drain(w.readable);
-    await write;
+    expect((await outcome(write)).state).toBe("resolved");
     await writer.close();
 
-    expect(await received).toEqual({ hash: patternHash(20 * MiB), length: 20 * MiB });
+    const arrived = await outcome(received);
+    expect(arrived).toEqual({
+      state: "resolved",
+      value: { hash: patternHash(20 * MiB), length: 20 * MiB },
+    });
   });
 
   it("one channel's stalled reader does not slow another channel on the same link", async () => {
@@ -246,10 +251,14 @@ describe("link byte channels: credit and stalls", () => {
     pair.clock.advance(60_000);
     await settle();
 
-    await expect(writer.closed).rejects.toMatchObject({ reason: "stalled" });
-    await expect(errorOfRead(g.readable)).resolves.toMatchObject({ reason: "stalled" });
-    await expect(errorOfRead(w.readable)).resolves.toMatchObject({ reason: "stalled" });
-    await expect(errorOfWritable(w.writable)).resolves.toMatchObject({ reason: "stalled" });
+    const stalled = { state: "resolved", value: { reason: "stalled" } };
+    expect(await outcome(writer.closed)).toMatchObject({
+      state: "rejected",
+      error: { reason: "stalled" },
+    });
+    expect(await outcome(errorOfRead(g.readable))).toMatchObject(stalled);
+    expect(await outcome(errorOfRead(w.readable))).toMatchObject(stalled);
+    expect(await outcome(errorOfWritable(w.writable))).toMatchObject(stalled);
   });
 
   it("a reader that reads 64 KiB every 50 s keeps a 10 MiB transfer going without a reset", async () => {
@@ -302,8 +311,10 @@ describe("link byte channels: credit and stalls", () => {
     expect(resolved).toBe(false);
 
     await readAtLeast(w.readable.getReader(), 64 * KiB);
-    await waiting;
+    await settle();
 
+    expect(resolved).toBe(true);
+    await waiting;
     expect(g.credit).toBeGreaterThan(0);
   });
 
@@ -311,45 +322,50 @@ describe("link byte channels: credit and stalls", () => {
     const pair = linkPair();
     const { g, w } = await openPair(pair);
     await fillWindow(g.writable);
-    const failed = expect(g.whenCredit()).rejects.toMatchObject({ reason: "aborted" });
+    const waiting = outcome(g.whenCredit());
 
     w.abort();
 
-    await failed;
+    expect(await waiting).toMatchObject({ state: "rejected", error: { reason: "aborted" } });
   });
 
   it("whenCredit() rejects when the peer stops that direction", async () => {
     const pair = linkPair();
     const { g, w } = await openPair(pair);
     await fillWindow(g.writable);
-    const stopped = expect(g.whenCredit()).rejects.toMatchObject({ reason: "stopped" });
+    const waiting = outcome(g.whenCredit());
 
     await w.readable.cancel();
 
-    await stopped;
+    expect(await waiting).toMatchObject({ state: "rejected", error: { reason: "stopped" } });
   });
 
   it("whenCredit() rejects when this side closes its own writable", async () => {
     const pair = linkPair();
     const { g } = await openPair(pair);
     const writer = await fillWindow(g.writable);
-    const ended = expect(g.whenCredit()).rejects.toBeInstanceOf(Error);
+    const waiting = outcome(g.whenCredit());
 
     await writer.close();
 
-    await ended;
+    const ended = await waiting;
+    expect(ended.state).toBe("rejected");
+    expect((ended as { error: unknown }).error).toBeInstanceOf(Error);
   });
 
   it("a whenCredit() pending 60 s, with the peer holding every byte and granting nothing, errors the channel stalled", async () => {
     const pair = linkPair();
     const { g, w } = await openPair(pair);
     await fillWindow(g.writable);
-    const waiting = expect(g.whenCredit()).rejects.toMatchObject({ reason: "stalled" });
+    const waiting = outcome(g.whenCredit());
 
     pair.clock.advance(60_000);
-    await waiting;
 
-    await expect(errorOfRead(w.readable)).resolves.toMatchObject({ reason: "stalled" });
+    expect(await waiting).toMatchObject({ state: "rejected", error: { reason: "stalled" } });
+    expect(await outcome(errorOfRead(w.readable))).toMatchObject({
+      state: "resolved",
+      value: { reason: "stalled" },
+    });
   });
 
   it("with the transport held for 90 s and a write waiting behind it, the channel is not reset", async () => {
@@ -364,10 +380,13 @@ describe("link byte channels: credit and stalls", () => {
     await settle();
     pair.gatewayEnd.release();
     const received = drain(w.readable);
-    await write;
+    expect((await outcome(write)).state).toBe("resolved");
     await writer.close();
 
-    expect(await received).toEqual({ hash: patternHash(8 * MiB), length: 8 * MiB });
+    expect(await outcome(received)).toEqual({
+      state: "resolved",
+      value: { hash: patternHash(8 * MiB), length: 8 * MiB },
+    });
     expect(pair.gatewayLog.problems()).toEqual([]);
   });
 
@@ -406,6 +425,20 @@ describe("link byte channels: ending", () => {
     await writeAndClose(g, pattern(0, 1000));
 
     await expect(readAll(w.readable)).resolves.toEqual(pattern(0, 1000));
+  });
+
+  it("after one side closes its writable, the other side's bytes still travel back to the side that closed", async () => {
+    const pair = linkPair();
+    const { g, w } = await openPair(pair);
+
+    await g.writable.getWriter().close();
+    await settle();
+    await writeAndClose(w, pattern(0, 700));
+
+    expect(await outcome(readAll(g.readable))).toEqual({
+      state: "resolved",
+      value: pattern(0, 700),
+    });
   });
 
   it("cancelling a readable errors the peer's writable with stopped, and the other direction still carries bytes to its end", async () => {
@@ -656,6 +689,23 @@ describe("link byte channels: the 64 channel limit", () => {
     expect(state).toBe("opened");
   });
 
+  it("an abort after this side's END was written, with the peer's END still in flight, frees the slot once that END arrives", async () => {
+    const pair = linkPair();
+    const open = await open64(pair);
+    const { g, w } = open[0]!;
+    pair.workerEnd.hold();
+    await g.writable.getWriter().close();
+    await w.writable.getWriter().close();
+    await settle();
+
+    g.abort();
+    await settle();
+    pair.workerEnd.release();
+    const next = pair.gateway.openChannel({ signal: signal() });
+
+    expect((await outcome(next)).state).toBe("resolved");
+  });
+
   it("the 65th openChannel rejects with the signal's reason when its signal aborts first", async () => {
     const pair = linkPair();
     await open64(pair);
@@ -708,10 +758,22 @@ describe("link byte channels: the 64 channel limit", () => {
     const pair = linkPair();
     const open = await open64(pair);
     pair.gatewayEnd.hold();
+    // why: a held transport only refuses bulk messages once 256 KiB sit unsent, so fill it
+    // from another channel; this channel's END then waits behind it and is not yet written.
+    void open[1]!.g.writable
+      .getWriter()
+      .write(pattern(0, MiB))
+      .catch(() => undefined);
+    await settle();
 
-    const next = pair.gateway.openChannel({ signal: signal() });
+    let state = "pending";
+    const next = pair.gateway.openChannel({ signal: signal() }).then((opened) => {
+      state = "opened";
+      return opened;
+    });
     const ending = endChannel(open[0]!.g, open[0]!.w);
     await settle();
+    expect(state).toBe("pending");
     pair.gatewayEnd.release();
     await ending;
     const channel = await next;
