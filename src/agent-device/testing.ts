@@ -1,3 +1,5 @@
+import { createHash, type Hash } from "node:crypto";
+
 import type { AgentDeviceHealthProbe } from "./host/health.js";
 import type { AgentDeviceUpstream, AgentDeviceUpstreamState } from "./host/upstream.js";
 
@@ -137,6 +139,21 @@ function errorEnvelope(id: unknown, failure: FakeFailure): Response {
   });
 }
 
+const ARTIFACT_PIECE_BYTES = 64 * 1024;
+const UPLOAD_TEXT_LIMIT = 1024 * 1024;
+
+export interface FakeArtifact {
+  // why: the number of bytes the body would carry if read to its end.
+  readonly size: number;
+  // why: "size" states the size up front, "none" leaves the header off, any other string is sent as given (for a malformed one).
+  readonly contentLength: "size" | "none" | string;
+}
+
+export interface FakeUploadSummary {
+  readonly bytes: number;
+  readonly sha256: string;
+}
+
 export class FakeAgentDevice implements AgentDeviceUpstream {
   readonly requests: FakeAgentDeviceRequest[] = [];
   readonly leases = new Map<string, FakeAgentDeviceLease>();
@@ -145,7 +162,15 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   // why: the ids of releases whose request was hung up on before the fake answered, so a test can wait until the hang-up has reached the daemon side.
   readonly hungUpReleases: string[] = [];
   readonly refused: string[] = [];
+  // why: a direct upload keeps its text only up to 1 MiB, so a test can move 2 GiB; `uploadSummaries` holds each one's size and digest.
   readonly uploads: string[] = [];
+  readonly uploadSummaries: FakeUploadSummary[] = [];
+  // why: what the artifact route produced and whether its body was cancelled, so a test can tell a stream that stopped from one that was drained.
+  artifactBytesProduced = 0;
+  artifactBodyCancelled = false;
+  artifactRequests = 0;
+  #artifact: FakeArtifact | undefined;
+  #artifactHash: Hash = createHash("sha256");
   // why: the headers the proxy sent the daemon with each upload preflight, so a test can see which of the caller's credentials reached it.
   readonly preflightHeaders: Record<string, string>[] = [];
   baseUrl = "http://127.0.0.1:47001";
@@ -304,6 +329,71 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#releaseWaitsForCommands = false;
   }
 
+  serveArtifact(artifact: FakeArtifact): void {
+    this.#artifact = artifact;
+    this.artifactBytesProduced = 0;
+    this.artifactBodyCancelled = false;
+    this.#artifactHash = createHash("sha256");
+  }
+
+  // why: the digest of every byte the artifact route produced so far, to compare with what the agent received.
+  producedDigest(): string {
+    return this.#artifactHash.copy().digest("hex");
+  }
+
+  #artifactResponse(): Response {
+    const artifact = this.#artifact;
+    if (artifact === undefined) return new Response("Not found", { status: 404 });
+    this.artifactRequests += 1;
+    let produced = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        cancel: () => {
+          this.artifactBodyCancelled = true;
+        },
+        pull: (controller) => {
+          if (produced >= artifact.size) {
+            controller.close();
+            return;
+          }
+          const length = Math.min(ARTIFACT_PIECE_BYTES, artifact.size - produced);
+          const piece = new Uint8Array(length);
+          for (let index = 0; index < length; index += 1) piece[index] = (produced + index) % 251;
+          produced += length;
+          this.artifactBytesProduced += length;
+          this.#artifactHash.update(piece);
+          controller.enqueue(piece);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const headers = new Headers({ "content-type": "application/octet-stream" });
+    if (artifact.contentLength === "size") headers.set("content-length", String(artifact.size));
+    else if (artifact.contentLength !== "none")
+      headers.set("content-length", artifact.contentLength);
+    return new Response(body, { headers, status: 200 });
+  }
+
+  async #keepUpload(request: Request): Promise<void> {
+    const hash = createHash("sha256");
+    const kept: Uint8Array[] = [];
+    let bytes = 0;
+    const reader = request.body?.getReader();
+    for (;;) {
+      const next = await reader?.read();
+      if (next === undefined || next.done) break;
+      hash.update(next.value);
+      bytes += next.value.length;
+      if (bytes <= UPLOAD_TEXT_LIMIT) kept.push(next.value);
+    }
+    this.uploadSummaries.push({ bytes, sha256: hash.digest("hex") });
+    this.uploads.push(
+      bytes <= UPLOAD_TEXT_LIMIT
+        ? Buffer.concat(kept).toString("utf8")
+        : `<${String(bytes)} bytes>`,
+    );
+  }
+
   restart(): void {
     this.#restarts += 1;
     this.generation += 1;
@@ -350,8 +440,12 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     }
     if (url.pathname.startsWith("/upload/direct/")) {
       this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
-      this.uploads.push(await request.text());
+      await this.#keepUpload(request);
       return Response.json({ ok: true });
+    }
+    if (url.pathname.startsWith("/artifacts/")) {
+      this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
+      return this.#artifactResponse();
     }
     if (url.pathname !== "/rpc") {
       this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });

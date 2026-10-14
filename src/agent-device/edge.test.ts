@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -3701,3 +3702,160 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     expect(workers[0]?.capabilities).toEqual([{ name: "agent-device", state: "available" }]);
   });
 });
+
+const downloadLimit = 2_147_483_648;
+const tooLargeReply = (size: number) => ({
+  code: "INVALID_ARGS",
+  error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
+  ok: false,
+});
+
+async function drainDownload(response: Response): Promise<{
+  readonly bytes: number;
+  readonly digest: string;
+  readonly ended: boolean;
+}> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) return { bytes, digest: hash.digest("hex"), ended: true };
+      hash.update(next.value);
+      bytes += next.value.length;
+    }
+  } catch {
+    return { bytes, digest: "", ended: false };
+  }
+}
+
+describe(
+  "the agent-device front, through the whole worker daemon: downloads over 2 GiB",
+  {
+    timeout: 120_000,
+  },
+  () => {
+    it("an artifact download whose `content-length` is 2147483649 is answered 413 with simlock's reply; the fake produced 0 bytes and its body was cancelled", async () => {
+      const rig = await setUp();
+      rig.fake.serveArtifact({ contentLength: "size", size: downloadLimit + 1 });
+
+      const response = await send(rig, "/artifacts/a1");
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual(tooLargeReply(downloadLimit + 1));
+      expect(rig.fake.artifactBytesProduced).toBe(0);
+      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
+    });
+
+    it("an artifact download of exactly 2147483648 bytes with `content-length` arrives byte for byte", async () => {
+      const rig = await setUp();
+      rig.fake.serveArtifact({ contentLength: "size", size: downloadLimit });
+
+      const response = await send(rig, "/artifacts/a1");
+      const received = await drainDownload(response);
+
+      expect(response.status).toBe(200);
+      expect(received.ended).toBe(true);
+      expect(received.bytes).toBe(downloadLimit);
+      expect(received.digest).toBe(rig.fake.producedDigest());
+    });
+
+    it("a download with no `content-length` of exactly 2147483648 bytes arrives byte for byte", async () => {
+      const rig = await setUp();
+      rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit });
+
+      const response = await send(rig, "/artifacts/a1");
+      const received = await drainDownload(response);
+
+      expect(response.status).toBe(200);
+      expect(received.ended).toBe(true);
+      expect(received.bytes).toBe(downloadLimit);
+      expect(received.digest).toBe(rig.fake.producedDigest());
+    });
+
+    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly, and the fake's body is cancelled", async () => {
+      const rig = await setUp();
+      rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit + 1 });
+
+      const response = await send(rig, "/artifacts/a1");
+      const received = await drainDownload(response);
+
+      expect(received.ended).toBe(false);
+      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
+    });
+
+    it("an agent that cancels a 1 GiB download halfway cancels the fake's body", async () => {
+      const rig = await setUp();
+      rig.fake.serveArtifact({ contentLength: "none", size: 1_073_741_824 });
+
+      const response = await send(rig, "/artifacts/a1");
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      let bytes = 0;
+      while (bytes < 536_870_912) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytes += next.value.length;
+      }
+      await reader.cancel();
+
+      expect(bytes).toBeGreaterThanOrEqual(536_870_912);
+      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
+      expect(rig.fake.artifactBytesProduced).toBeLessThan(1_073_741_824);
+    });
+
+    it("an RPC reply and a preflight reply pass unchanged", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+
+      const reply = await command(rig, "snapshot", 1);
+      const preflight = await send(rig, "/upload/preflight", { body: "{}" });
+
+      expect(reply.status).toBe(200);
+      expect((await envelopeOf(reply)).result).toMatchObject({ ok: true });
+      expect(preflight.status).toBe(200);
+      expect(
+        ((await preflight.json()) as { upload: { url: string } }).upload.url.startsWith(
+          `${rig.origin}/v1/agent-device/upload/direct/`,
+        ),
+      ).toBe(true);
+    });
+
+    it("a 2147483648-byte upload reaches the fake byte for byte", async () => {
+      const rig = await setUp();
+      const preflight = await send(rig, "/upload/preflight", { body: "{}" });
+      const ticket = (
+        (await preflight.json()) as { upload: { url: string; headers: Record<string, string> } }
+      ).upload;
+      const hash = createHash("sha256");
+      let sent = 0;
+      const piece = new Uint8Array(65_536).fill(7);
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => {
+            if (sent >= downloadLimit) {
+              controller.close();
+              return;
+            }
+            sent += piece.length;
+            hash.update(piece);
+            controller.enqueue(piece);
+          },
+        },
+        { highWaterMark: 0 },
+      );
+
+      const put = await fetch(ticket.url, {
+        body,
+        duplex: "half",
+        headers: { ...ticket.headers, "content-length": String(downloadLimit) },
+        method: "PUT",
+      } as RequestInit);
+
+      expect(put.status).toBe(200);
+      expect(rig.fake.uploadSummaries).toEqual([
+        { bytes: downloadLimit, sha256: hash.copy().digest("hex") },
+      ]);
+    });
+  },
+);

@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2182,6 +2183,58 @@ describe(
         expect(beat.result).toMatchObject({ ok: true });
         await commandWorks(rig, member, 1);
       }
+    });
+  },
+);
+
+describe(
+  "the agent-device front, through a gateway: downloads over 2 GiB",
+  { timeout: 120_000 },
+  () => {
+    const limit = 2_147_483_648;
+
+    it("an artifact download whose `content-length` is 2147483649 gets the 413 reply; the worker's fake produced 0 bytes and its body was cancelled", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const worker = holderOf(rig, 1);
+      worker.fake.serveArtifact({ contentLength: "size", size: limit + 1 });
+
+      const response = await send(rig, "/artifacts/a1", { headers: leased(1) });
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        code: "INVALID_ARGS",
+        error: `the download is ${String(limit + 1)} bytes; simlock carries downloads up to 2 GB (2147483648 bytes)`,
+        ok: false,
+      });
+      expect(worker.fake.artifactBytesProduced).toBe(0);
+      await expect.poll(() => worker.fake.artifactBodyCancelled).toBe(true);
+    });
+
+    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly", async () => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const worker = holderOf(rig, 1);
+      worker.fake.serveArtifact({ contentLength: "none", size: limit + 1 });
+
+      const response = await send(rig, "/artifacts/a1", { headers: leased(1) });
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      const hash = createHash("sha256");
+      let ended = false;
+      try {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) {
+            ended = true;
+            break;
+          }
+          hash.update(next.value);
+        }
+      } catch {
+        ended = false;
+      }
+
+      expect(ended).toBe(false);
     });
   },
 );
