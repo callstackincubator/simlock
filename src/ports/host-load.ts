@@ -226,7 +226,7 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
 
 export class FakeHostLoadProbe implements HostLoadProbe {
   readonly #pending: ((answer: HostLoadCounters | Error) => void)[] = [];
-  #counters: HostLoadCounters | undefined;
+  readonly #counters: HostLoadCounters | undefined;
   #reads = 0;
 
   constructor(counters?: HostLoadCounters) {
@@ -235,10 +235,6 @@ export class FakeHostLoadProbe implements HostLoadProbe {
 
   get reads(): number {
     return this.#reads;
-  }
-
-  set(counters: HostLoadCounters): void {
-    this.#counters = counters;
   }
 
   answer(next: HostLoadCounters | Error): void {

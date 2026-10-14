@@ -94,6 +94,5 @@ export {
   type HostLoadProbe,
   LinuxHostLoadProbe,
   type MemoryCounters,
-  type MemoryPressure,
   productionHostLoadProbe,
 } from "./host-load.js";

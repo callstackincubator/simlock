@@ -34,13 +34,21 @@ describe.skipIf(process.platform === "darwin")("host load on a worker", () => {
         { interval: 500, label: "load carries cpu", timeout: 40_000 },
       );
 
-      expect(load?.cpu?.busyPercent).toBeGreaterThanOrEqual(0);
-      expect(load?.cpu?.busyPercent).toBeLessThanOrEqual(100);
-      expect(load?.cpu?.cores).toBeGreaterThan(0);
-      expect(load?.memory?.totalBytes).toBeGreaterThan(0);
-      expect(load?.memory).not.toHaveProperty("pressure");
-      expect(load?.disk?.totalBytes).toBeGreaterThanOrEqual(load?.disk?.freeBytes ?? Infinity);
-      expect(load?.disk?.totalBytes).toBeGreaterThan(0);
+      expect(load).toEqual(
+        expect.objectContaining({
+          cpu: expect.anything(),
+          disk: expect.anything(),
+          memory: expect.anything(),
+        }),
+      );
+      const { cpu, disk, memory } = load as Required<StatusLoad>;
+      expect(cpu.busyPercent).toBeGreaterThanOrEqual(0);
+      expect(cpu.busyPercent).toBeLessThanOrEqual(100);
+      expect(cpu.cores).toBeGreaterThan(0);
+      expect(memory.totalBytes).toBeGreaterThan(0);
+      expect(memory).not.toHaveProperty("pressure");
+      expect(disk.totalBytes).toBeGreaterThanOrEqual(disk.freeBytes);
+      expect(disk.totalBytes).toBeGreaterThan(0);
     },
   );
 });
