@@ -94,8 +94,10 @@ counts toward the 60 s; a writer that checks `desiredSize` and skips is
 never reset. The error says which of these it was.
 That is the only way a user learns of anything inside the link. The link
 bounds only the waits it causes; a wait for bytes the peer has not sent yet
-is the user's to bound, as the relay's deadline does. A connection holds
-at most 64 open channels; a 65th `openChannel()` throws.
+is the user's to bound, as the relay's deadline does. Each side opens at
+most 64 channels at once on a connection. A 65th `openChannel()` waits
+until one of them ends, and stops waiting when the caller's abort signal
+fires. A peer's 65th `OPEN` is a rule break (§2).
 
 The link wraps the transport connection where the uplink is made: the
 worker's `GatewayUplink` when it dials, the gateway when it accepts. Tests
@@ -132,7 +134,8 @@ names it.
   message for every 64 KiB of priority messages, so neither starves.
 - **Rule breaks fail one channel.** `DATA` past the allowed bytes, an
   envelope naming a channel number this side does not hold, an `OPEN`
-  reusing a live number or carrying the wrong parity, and an envelope too
+  reusing a live number, carrying the wrong parity or past the peer's 64,
+  and an envelope too
   short to read are dropped, never buffered. The channel they name, when
   this side holds it, is reset, and the link logs why. A `RESET` for a
   channel this side does not hold is dropped and never answered. The
@@ -192,9 +195,10 @@ ADR 0026 §2's operation changes as follows:
 - The gateway's limit of 4 unanswered `relay.body` calls and its 64 MiB
   unread buffer are gone: credit replaces both. A slow reader slows its own
   transfer and nothing else.
-- The relay has no limit of its own. Each relay takes one channel. When a
-  worker's 64 channels are all in use, the next relay waits for one to
-  free, and the wait counts against its deadline. The gateway's limit of 8
+- The relay has no limit of its own. Each relay takes one channel. When the
+  gateway has 64 channels open to a worker, the next relay's
+  `openChannel()` waits for one to free, and the wait counts against its
+  deadline. The gateway's limit of 8
   relays per worker and the worker's limit of 16 per connection are gone.
   Below 64 relays on a worker, no relay waits for another.
 - A failed channel fails its relay. On the worker, a rule break by the
@@ -246,8 +250,9 @@ open, and an older CLI or client library is refused by the newer daemon.
   4 MiB needs no credit.
 - A relay waits for another only when 64 run on its worker at once.
 - Memory per transfer is bounded by credit: about 4 MiB per direction on
-  each side, whatever the transfer's size and however slow its reader. A
-  worker holds at most 64 channels per connection.
+  each side, whatever the transfer's size and however slow its reader.
+  Each side opens at most 64 channels per connection, so a gateway buffers
+  at most about 512 MiB for one worker's relays.
 - One channel moves at most 4 MiB per round trip. On a LAN that is far above
   the link's speed; across a slow, distant link a single transfer is
   slower than a direct connection would be.
