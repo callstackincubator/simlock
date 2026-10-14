@@ -137,6 +137,7 @@ Each worker shows:
 | Version | The worker's Simlock version |
 | Devices | How many devices are running, and how many are leased |
 | Capacity | Devices running out of the limit, per platform |
+| Load | The machine's CPU, memory and disk use, such as `CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free`. A figure the worker limits itself to, such as a container's, is marked `(limit)`, and one it could not read says `unavailable`. A disconnected worker says "No reading while disconnected" |
 | Capabilities | Each optional module the worker knows of, such as agent-device: `available`, `off`, or `unavailable` with its reason |
 
 A worker the gateway could not read from yet says "Not reported" where it
@@ -167,6 +168,13 @@ Select a worker to open its page. It adds:
   each platform tool, such as Xcode or the Android emulator.
 - **Catalog**: the models and runtimes the worker can lease. It is read again
   straight after a component is installed, and otherwise every 30 seconds.
+- **Load**: how busy the machine is right now: CPU busy share and cores,
+  memory available of total, swap used, memory pressure (`normal`, `warn` or
+  `critical`, left out where the system does not report it), and disk free of
+  total. A part the worker could not read says `Unavailable`. **Read** says how
+  long ago the reading was taken, and it ticks up until the next one. A
+  worker that sent no load says "Not reported.", and a disconnected one "No
+  reading while disconnected."
 - **Warm pool**: whether the worker keeps devices warm, the running slots it
   holds back per platform, and a row for each kind of device the targets name
   (targets that resolve to the same device are one row, their counts added)
