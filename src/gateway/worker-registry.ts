@@ -227,8 +227,8 @@ export class WorkerRegistry {
    * saw, which is more useful to a console than an empty one.
    */
   connected(workerId: string, label: string | undefined, version: string | undefined): WorkerView {
-    // why: the catalog the last session read stays, so a reconnecting worker is still known from it
-    // (ADR 0009 §4); only when it was read is cleared, since nothing has been read this session.
+    // why: the catalog the last session read stays, so a reconnecting worker is still known from it;
+    // only when it was read is cleared, since nothing has been read this session.
     // why: a new session never shows the old session's reading.
     const { catalogReadAt: _stale, ...existing } = withoutLoad<Partial<WorkerView>>(
       this.#workers.get(workerId) ?? {},
@@ -344,8 +344,9 @@ export class WorkerRegistry {
 
   /**
    * why: replaces what the worker reports, and is partial on purpose: a refresh triggered by a lease event
-   * re-reads status and devices but not the catalog (§7), and an absent key leaves the previous
-   * value standing rather than blanking it -- except `load`, which a refresh without one removes, and a `starting` refresh, which says the
+   * re-reads status and devices but not the catalog, so an absent key leaves the previous
+   * value standing rather than blanking it, except `load` (a refresh without one removes it, since a
+   * stale load would mislead routing) and a `starting` refresh, which says the
    * worker has checked nothing: it drops capacity, catalog, catalogReadAt, devices, installs,
    * leases, queueDepth and waiting from the view (absent means "not known"), keeping the last
    * catalog, leases and physical devices aside for routing and retention. A refresh for a worker whose view is gone
