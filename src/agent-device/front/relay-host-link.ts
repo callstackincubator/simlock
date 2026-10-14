@@ -53,7 +53,7 @@ function tenantPart(value: string): string {
 }
 
 // why: `gw.<gateway instance id>.<principal>`, cut to 128 characters with a hash of the whole name when longer, so every input gives a tenant agent-device accepts and distinct inputs stay distinct.
-export function relayTenant(instanceId: string, principal: string): string {
+function relayTenant(instanceId: string, principal: string): string {
   const tenant = `gw.${tenantPart(instanceId)}.${tenantPart(principal)}`;
   if (tenant.length <= MAX_TENANT_CHARS) return tenant;
   const hash = createHash("sha256")
