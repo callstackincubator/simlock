@@ -2046,8 +2046,8 @@ claiming first:
   from the claim itself, before it does any device work — not after, as when
   convergence ran first.
 - `hello` and `status.get` answer immediately, `status.get` reporting
-  `health: "starting"` while convergence is in flight, with `daemon` and `host`
-  only, since the registry has not been checked yet, and `"running"`, with
+  `health: "starting"` while convergence is in flight, with `daemon`, `host` and
+  `load` (once read) only, since the registry has not been checked yet, and `"running"`, with
   everything, once it resolves. Every other request type parks on the same readiness promise
   `#awaitReady` awaits, and proceeds normally once convergence completes; no
   request can observe half-converged state, and in particular no lease is

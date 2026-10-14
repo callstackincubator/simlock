@@ -361,8 +361,8 @@ export class Dispatcher {
     const host = this.options.hostFacts();
     const load = this.options.load?.();
     const loadField = load === undefined ? {} : { load };
-    // While starting, the registry has not been checked against the machine: what it holds is
-    // a claim nobody has looked at, so the answer is the daemon and its host and nothing else.
+    // why: while starting, the registry has not been checked against the machine, so what it holds
+    // is a claim nobody has looked at; the answer is the daemon, its host and the load reading.
     if (daemon.health === "starting") return { daemon, host, ...loadField };
     const capabilities = await this.#readCapabilities();
     const snapshot = this.options.registry.snapshot;

@@ -369,9 +369,8 @@ export class WorkerLink {
   async #rebuildView(client: GatewayWorkerClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
     this.#consecutiveRefreshTimeouts = 0;
-    // A starting worker answers `status.get` with its health and host only, and everything else
-    // it would say is unchecked. Nothing more is asked of it, and its view is built from those
-    // two facts; the next refresh reads it in full once it answers `running`.
+    // why: a starting worker answers `status.get` with its health, host and load only, and the rest
+    // is unchecked, so its view is built from those facts; the next refresh reads it in full.
     if (status.daemon.health === "starting") {
       this.#refreshStarting(client, status);
       return;

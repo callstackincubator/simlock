@@ -1424,7 +1424,7 @@ devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
 
 While the daemon is starting, `simlock status` prints the daemon and host
-lines and one more line in place of everything else, because the daemon has not
+lines, the `Load:` line once a reading exists, and one more line in place of everything else, because the daemon has not
 yet checked what it holds:
 
 ```

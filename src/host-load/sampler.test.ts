@@ -261,6 +261,28 @@ describe("HostLoadSampler", () => {
     sampler.dispose();
   });
 
+  it("treats a probe whose read throws synchronously as a failed read, logs it once, and reads again", async () => {
+    const { probe, sampler, tick, warnings } = harness();
+    const read = probe.read.bind(probe);
+    let throwing = true;
+    probe.read = () => {
+      if (throwing) throw new Error("spawn exploded");
+      return read();
+    };
+    sampler.start();
+    await flush();
+
+    expect(sampler.current()).toBeDefined();
+    expect(sampler.current()?.memory).toBeUndefined();
+    expect(warnings()).toHaveLength(1);
+    expect(JSON.stringify(warnings()[0])).toContain("spawn exploded");
+
+    throwing = false;
+    await tick(counters(0, 100));
+    expect(sampler.current()?.memory).toEqual(MEMORY);
+    sampler.dispose();
+  });
+
   it("reports ageMs as the time since the read, 0 when the clock stepped back, and nothing before the first read finishes", async () => {
     const { clock, sampler, settle } = harness();
     sampler.start();

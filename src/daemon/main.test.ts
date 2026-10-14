@@ -2756,6 +2756,18 @@ describe("startDaemon host load", () => {
       });
   });
 
+  it("fits the load it answers with to the status.get bounds: an age over a day is capped at one day", async () => {
+    const probe = new FakeHostLoadProbe(COUNTERS);
+    const { clock, daemon } = await startOnClock({ hostLoadProbe: probe });
+    await expect.poll(async () => (await workerStatus(daemon)).load).toBeDefined();
+
+    // why: a stepped-over clock leaves the last reading older than the schema's one-day bound.
+    clock.advance(3 * 86_400_000);
+
+    const load = (await workerStatus(daemon)).load as { ageMs: number } | undefined;
+    expect(load?.ageMs).toBeLessThanOrEqual(86_400_000);
+  });
+
   it("with hostLoadProbe: null answers the same as with a probe, apart from load, and arms no host load timer", async () => {
     const withProbe = await startOnClock({ hostLoadProbe: new FakeHostLoadProbe(COUNTERS) });
     const without = await startOnClock({ hostLoadProbe: null });
