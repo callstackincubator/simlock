@@ -10,6 +10,8 @@
   // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
   // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; two of
   // them (budget-guard, comment-lint) import from their neighbours (usage, comments).
+  // .dependency-cruiser.cycles.mjs is named only by src/lint-rules.test.ts, which runs depcruise
+  // with it (ADR 0027).
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
@@ -17,7 +19,8 @@
     "ui/src/main.tsx",
     "e2e/console/*.spec.ts",
     "vitest.mutate.config.ts",
-    ".agents/scripts/*.mjs"
+    ".agents/scripts/*.mjs",
+    ".dependency-cruiser.cycles.mjs"
   ],
   "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
   // The web console's libraries are bundled into dist/ui at build time and ship as files, so
