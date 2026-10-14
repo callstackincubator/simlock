@@ -13,7 +13,6 @@ import {
 import { Scheduler } from "./scheduler.js";
 
 export { LinkChannelError } from "./channel.js";
-// fallow-ignore-next-line unused-type -- the link's public surface; the relay's tests name the reasons.
 export type { LinkChannel, LinkChannelErrorReason } from "./channel.js";
 
 export interface LinkConnection extends IpcConnection {

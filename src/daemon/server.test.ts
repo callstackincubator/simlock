@@ -1520,7 +1520,7 @@ describe("DaemonServer relays during startup", () => {
     const { converge, pair, startPromise } = await startParked({
       echo: async (request) => {
         calls += 1;
-        const parts = await relaySupport.readAll(request.body);
+        const parts = await relaySupport.readParts(request.body);
         received = relaySupport.digestOf(parts);
         length = parts.reduce((total, part) => total + part.length, 0);
         return new Response("ok");
@@ -1537,7 +1537,7 @@ describe("DaemonServer relays during startup", () => {
     const callsWhileStarting = calls;
     converge.resolve();
     await startPromise;
-    const outcome = await relaySupport.settle(relay.result);
+    const outcome = await relaySupport.settleWithin(relay.result);
 
     expect(callsWhileStarting).toBe(0);
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
@@ -1558,7 +1558,7 @@ describe("DaemonServer relays during startup", () => {
       method: "PUT",
     } as RequestInit);
 
-    const pending = relaySupport.settle(
+    const pending = relaySupport.settleWithin(
       relay.relay("wrk_a", { request, target: "echo", tenant: "gw.g1.alice" }),
       10_000,
     );
@@ -1593,7 +1593,7 @@ describe("DaemonServer relays during startup", () => {
     await relaySupport.sleep(100);
     converge.resolve();
     await startPromise;
-    const outcome = await relaySupport.settle(relay.result);
+    const outcome = await relaySupport.settleWithin(relay.result);
 
     expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(calls).toBe(0);
@@ -1609,7 +1609,7 @@ describe("DaemonServer relays during startup", () => {
 
     converge.reject(new Error("boom"));
     await startPromise.catch(() => undefined);
-    const outcome = await relaySupport.settle(relay.result);
+    const outcome = await relaySupport.settleWithin(relay.result);
     const read = await relay.readError();
 
     expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });

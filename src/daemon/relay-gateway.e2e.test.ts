@@ -21,8 +21,8 @@ import {
   patternBytes,
   patternDigest,
   patternStream,
-  readAll,
-  settle,
+  readParts,
+  settleWithin,
   sleep,
   startWorker,
   type WorkerFixture,
@@ -287,7 +287,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
     let received = "";
     behavior = async (request) => {
-      received = digestOf(await readAll(request.body));
+      received = digestOf(await readParts(request.body));
       return new Response(patternStream(20 * MIB, 9));
     };
     const { relay, taps, workerId } = await startFleet();
@@ -296,7 +296,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       workerId,
       buildCall({ body: patternStream(20 * MIB, 5), method: "PUT" }),
     );
-    const back = digestOf(await readAll(response.body));
+    const back = digestOf(await readParts(response.body));
     const dataBytes = taps
       .flatMap((tap) => tap.binaries(TYPE.DATA))
       .reduce((total, envelope) => total + envelope.payload.length, 0);
@@ -352,7 +352,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       buildCall({ body: patternStream(20 * MIB, 5), method: "PUT" }),
     );
     await midway.promise;
-    const renewed = await settle(
+    const renewed = await settleWithin(
       gateway.dispatch("lease.renew", { leaseId: grant.lease.id }, agent()),
       10_000,
     );
@@ -470,9 +470,9 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     const response = await relay.relay(WORKER_ID, buildCall({}));
     const reader = response.body?.getReader();
-    const first = await settle(reader?.read() ?? Promise.reject(new Error("no body")), 3_000);
+    const first = await settleWithin(reader?.read() ?? Promise.reject(new Error("no body")), 3_000);
     second.open();
-    const rest = await settle(reader?.read() ?? Promise.reject(new Error("no body")), 3_000);
+    const rest = await settleWithin(reader?.read() ?? Promise.reject(new Error("no body")), 3_000);
 
     expect(
       first.state === "fulfilled" ? new TextDecoder().decode(first.value.value) : first.state,
@@ -526,7 +526,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       buildCall({ url: "http://gateway.test:4321/agent-device/rpc?slow=1" }),
     );
     await sleep(500);
-    const quick = await settle(
+    const quick = await settleWithin(
       relay.relay(WORKER_ID, buildCall({})).then((response) => response.text()),
       5_000,
     );
@@ -546,7 +546,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const before = await startPair();
     const controller = new AbortController();
     const pendingBefore = before.relay.relay(WORKER_ID, buildCall({ signal: controller.signal }));
-    const settledBefore = settle(pendingBefore);
+    const settledBefore = settleWithin(pendingBefore);
     await poll(() => signal !== undefined).toBe(true);
     controller.abort(new Error("caller left before the head"));
     const failure = await settledBefore;
@@ -578,7 +578,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const reader = response.body?.getReader();
     await reader?.read();
     secondController.abort(new Error("caller left after the head"));
-    const bodyFailure = await settle(
+    const bodyFailure = await settleWithin(
       (async () => {
         for (;;) {
           const step = await reader?.read();
@@ -605,7 +605,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     let signal: AbortSignal | undefined;
     behavior = async (request) => {
       signal = request.signal;
-      await readAll(request.body).catch(() => undefined);
+      await readParts(request.body).catch(() => undefined);
       await aborted(request.signal);
       return new Response("late");
     };
@@ -619,7 +619,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       },
     });
 
-    const outcome = await settle(relay.relay(WORKER_ID, buildCall({ body, method: "PUT" })));
+    const outcome = await settleWithin(relay.relay(WORKER_ID, buildCall({ body, method: "PUT" })));
 
     expect(outcome).toMatchObject({ message: "upload broke", state: "rejected" });
     await poll(() => signal?.aborted).toBe(true);
@@ -633,7 +633,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       return new Response("late");
     };
     const never = await startPair({ deadlineMs: 200 });
-    const noHead = await settle(never.relay.relay(WORKER_ID, buildCall({})));
+    const noHead = await settleWithin(never.relay.relay(WORKER_ID, buildCall({})));
     await poll(() => signal?.aborted).toBe(true);
 
     behavior = () =>
@@ -650,7 +650,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const response = await stalling.relay.relay(WORKER_ID, buildCall({}));
     const reader = response.body?.getReader();
     await reader?.read();
-    const stalled = await settle(reader?.read() ?? Promise.reject(new Error("no body")));
+    const stalled = await settleWithin(reader?.read() ?? Promise.reject(new Error("no body")));
 
     const message = `worker ${WORKER_ID} did not finish the relayed request within 200 ms`;
     expect(noHead).toMatchObject({ code: "WORKER_UNREACHABLE", message, state: "rejected" });
@@ -665,7 +665,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       return new Response("late");
     };
     const before = await startPair();
-    const noHead = settle(before.relay.relay(WORKER_ID, buildCall({})));
+    const noHead = settleWithin(before.relay.relay(WORKER_ID, buildCall({})));
     await poll(() => signal !== undefined).toBe(true);
     await before.pair.gatewayEnd.close();
     const noHeadOutcome = await noHead;
@@ -689,7 +689,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const reader = response.body?.getReader();
     await reader?.read();
     await after.pair.gatewayEnd.close();
-    const bodyOutcome = await settle(reader?.read() ?? Promise.reject(new Error("no body")));
+    const bodyOutcome = await settleWithin(reader?.read() ?? Promise.reject(new Error("no body")));
 
     expect(noHeadOutcome).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
     expect(bodyOutcome).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
@@ -699,7 +699,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   it("a relay to a worker with no uplink fails with WORKER_UNREACHABLE and the target sees nothing", async () => {
     const { relay } = await startPair();
 
-    const outcome = await settle(relay.relay("wrk_nobody", buildCall({})));
+    const outcome = await settleWithin(relay.relay("wrk_nobody", buildCall({})));
     await sleep(100);
 
     expect(outcome).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
@@ -709,7 +709,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   it("a relay naming a target nobody registered fails with RELAY_TARGET_MISSING", async () => {
     const { relay } = await startPair();
 
-    const outcome = await settle(relay.relay(WORKER_ID, buildCall({ target: "nobody" })));
+    const outcome = await settleWithin(relay.relay(WORKER_ID, buildCall({ target: "nobody" })));
 
     expect(outcome).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
     expect(targetCalls).toEqual([]);
@@ -758,7 +758,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const { opened, relay } = await startPair();
 
     const calls = Array.from({ length: 64 }, () =>
-      settle(relay.relay(WORKER_ID, buildCall({})), 20_000),
+      settleWithin(relay.relay(WORKER_ID, buildCall({})), 20_000),
     );
     await poll(() => targetCalls.length, 10_000).toBe(64);
     const channels = opened();
@@ -779,7 +779,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const { opened, relay } = await startPair();
 
     const calls = Array.from({ length: 65 }, () =>
-      settle(relay.relay(WORKER_ID, buildCall({})), 20_000),
+      settleWithin(relay.relay(WORKER_ID, buildCall({})), 20_000),
     );
     await poll(() => targetCalls.length, 10_000).toBe(64);
     await sleep(200);
@@ -806,11 +806,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const long = makeRelay();
     const short = makeRelay({ deadlineMs: 200 });
     const holders = Array.from({ length: 64 }, () =>
-      settle(long.relay(WORKER_ID, buildCall({})), 20_000),
+      settleWithin(long.relay(WORKER_ID, buildCall({})), 20_000),
     );
     await poll(() => targetCalls.length, 10_000).toBe(64);
 
-    const outcome = await settle(short.relay(WORKER_ID, buildCall({})));
+    const outcome = await settleWithin(short.relay(WORKER_ID, buildCall({})));
     release.open();
     await Promise.all(holders);
 
@@ -830,11 +830,14 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     };
     const { relay } = await startPair();
     const holders = Array.from({ length: 64 }, () =>
-      settle(relay.relay(WORKER_ID, buildCall({})), 20_000),
+      settleWithin(relay.relay(WORKER_ID, buildCall({})), 20_000),
     );
     await poll(() => targetCalls.length, 10_000).toBe(64);
     const controller = new AbortController();
-    const waiting = settle(relay.relay(WORKER_ID, buildCall({ signal: controller.signal })), 3_000);
+    const waiting = settleWithin(
+      relay.relay(WORKER_ID, buildCall({ signal: controller.signal })),
+      3_000,
+    );
     await sleep(100);
 
     controller.abort(new Error("caller left while waiting"));
@@ -857,7 +860,9 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       name: "were cancelled",
       run: async (relay) => {
         const controller = new AbortController();
-        const pending = settle(relay.relay(WORKER_ID, buildCall({ signal: controller.signal })));
+        const pending = settleWithin(
+          relay.relay(WORKER_ID, buildCall({ signal: controller.signal })),
+        );
         await sleep(20);
         controller.abort(new Error("cancelled"));
         return pending;
@@ -866,11 +871,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     {
       name: "timed out",
       run: (_relay, makeRelay) =>
-        settle(makeRelay({ deadlineMs: 100 }).relay(WORKER_ID, buildCall({}))),
+        settleWithin(makeRelay({ deadlineMs: 100 }).relay(WORKER_ID, buildCall({}))),
     },
     {
       name: "failed with a missing target",
-      run: (relay) => settle(relay.relay(WORKER_ID, buildCall({ target: "nobody" }))),
+      run: (relay) => settleWithin(relay.relay(WORKER_ID, buildCall({ target: "nobody" }))),
     },
     {
       name: "had a target that answered without reading its upload",
@@ -879,7 +884,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
           WORKER_ID,
           buildCall({ body: patternStream(MIB, 3), method: "PUT" }),
         );
-        return settle(response.text());
+        return settleWithin(response.text());
       },
     },
   ];
@@ -902,7 +907,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       for (let batch = 0; batch < 4; batch += 1) {
         await Promise.all(Array.from({ length: 16 }, () => run(relay, makeRelay)));
       }
-      const last = settle(
+      const last = settleWithin(
         relay.relay(WORKER_ID, buildCall({ headers: { "x-marker": "last" } })),
         10_000,
       );
@@ -927,7 +932,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     await sleep(300);
     pair.workerEnd.release();
     const response = await pending;
-    const digest = digestOf(await readAll(response.body));
+    const digest = digestOf(await readParts(response.body));
 
     expect(digest).toBe(patternDigest(20 * MIB, 9));
     expect(spy.events).toContain("request-answered:{}");

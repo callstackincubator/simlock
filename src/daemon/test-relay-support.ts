@@ -69,7 +69,7 @@ export type Settled<T> =
   | { readonly state: "rejected"; readonly code?: unknown; readonly message: string }
   | { readonly state: "pending" };
 
-export async function settle<T>(promise: Promise<T>, withinMs = 5_000): Promise<Settled<T>> {
+export async function settleWithin<T>(promise: Promise<T>, withinMs = 5_000): Promise<Settled<T>> {
   const outcome = promise.then(
     (value): Settled<T> => ({ state: "fulfilled", value }),
     (error: unknown): Settled<T> => ({
@@ -129,7 +129,7 @@ export function patternStream(
   });
 }
 
-export async function readAll(stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array[]> {
+export async function readParts(stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array[]> {
   const parts: Uint8Array[] = [];
   if (stream === null) return parts;
   const reader = stream.getReader();
@@ -249,15 +249,15 @@ export async function openRelay(
   }
   const body = async (withinMs = 3_000): Promise<Settled<Uint8Array>> => {
     const read = (async () => {
-      const parts = await readAll(channel.readable);
+      const parts = await readParts(channel.readable);
       return new Uint8Array(Buffer.concat(parts));
     })();
-    return settle(read, withinMs);
+    return settleWithin(read, withinMs);
   };
   const readError = async (): Promise<{ reason?: string; ended: boolean }> => {
     const read = (async (): Promise<{ reason?: string; ended: boolean }> => {
       try {
-        await readAll(channel.readable);
+        await readParts(channel.readable);
         return { ended: true };
       } catch (error: unknown) {
         return { ended: false, reason: (error as { reason?: string }).reason ?? String(error) };

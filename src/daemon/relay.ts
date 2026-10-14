@@ -121,7 +121,6 @@ export class RelayConnection {
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
   cancel(relayId: string): void {
     this.#active.get(relayId)?.controller.abort();
   }

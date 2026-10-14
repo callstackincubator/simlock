@@ -14,9 +14,9 @@ import {
   patternDigest,
   digestOf,
   patternStream,
-  readAll,
+  readParts,
   relayInput,
-  settle,
+  settleWithin,
   sleep,
   startWorker,
   type Uplink,
@@ -58,7 +58,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
 
     const relay = await openRelay(uplink, relayInput());
     const body = await relay.body(30_000);
-    const outcome = await settle(relay.result, 30_000);
+    const outcome = await settleWithin(relay.result, 30_000);
 
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
     expect(relay.heads).toHaveLength(1);
@@ -71,7 +71,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     let received = "";
     let length = 0;
     behavior = async (request) => {
-      const parts = await readAll(request.body);
+      const parts = await readParts(request.body);
       received = digestOf(parts);
       length = parts.reduce((total, part) => total + part.length, 0);
       return new Response("got it");
@@ -81,7 +81,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const relay = await openRelay(uplink, relayInput({ hasBody: true, method: "PUT" }), {
       upload: patternBytes(2 * MIB, 3),
     });
-    const outcome = await settle(relay.result);
+    const outcome = await settleWithin(relay.result);
 
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
     expect(length).toBe(2 * MIB);
@@ -128,7 +128,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       behavior = () => Promise.resolve(new Response(entry.body, { status: entry.status }));
       const relay = await openRelay(uplink, relayInput({ method: entry.method }));
       const body = await relay.body();
-      const outcome = await settle(relay.result);
+      const outcome = await settleWithin(relay.result);
       seen.push({
         bytes: body.state === "fulfilled" ? body.value.length : body.state,
         result: outcome,
@@ -161,8 +161,10 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const relay = await openRelay(uplink, relayInput());
     await poll(() => relay.heads.length).toBe(1);
 
-    const cancelled = await settle(uplink.wire.call("relay.cancel", { relayId: relay.relayId }));
-    const result = await settle(relay.result);
+    const cancelled = await settleWithin(
+      uplink.wire.call("relay.cancel", { relayId: relay.relayId }),
+    );
+    const result = await settleWithin(relay.result);
     const read = await relay.readError();
 
     expect(cancelled).toEqual({ state: "fulfilled", value: {} });
@@ -183,7 +185,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     await poll(() => signal !== undefined).toBe(true);
 
     await uplink.wire.call("relay.cancel", { relayId: relay.relayId });
-    const result = await settle(relay.result);
+    const result = await settleWithin(relay.result);
     const read = await relay.readError();
 
     expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
@@ -207,7 +209,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     await second.pair.gatewayEnd.close();
 
     await poll(() => signal?.aborted).toBe(true);
-    await settle(relay.result, 200);
+    await settleWithin(relay.result, 200);
   });
 
   it("aborts the target's request and answers { cancelled: true } when the gateway aborts the channel", async () => {
@@ -222,7 +224,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     await poll(() => signal !== undefined).toBe(true);
 
     relay.channel.abort("caller left");
-    const result = await settle(relay.result);
+    const result = await settleWithin(relay.result);
 
     expect(signal?.aborted).toBe(true);
     expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
@@ -237,7 +239,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     const codes: unknown[] = [];
 
     for (const [operation, input] of attempts) {
-      const outcome = await settle(callAsAdmin(operation, input));
+      const outcome = await settleWithin(callAsAdmin(operation, input));
       codes.push(outcome.state === "rejected" ? outcome.code : outcome.state);
     }
 
@@ -253,18 +255,18 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     await start();
     const input = relayInput();
     const first = await openRelay(uplink, input);
-    await poll(async () => (await settle(first.result, 20)).state).toBe("pending");
+    await poll(async () => (await settleWithin(first.result, 20)).state).toBe("pending");
 
     const second = await openRelay(uplink, { ...input });
-    const reused = await settle(second.result);
-    const unknownCancel = await settle(
+    const reused = await settleWithin(second.result);
+    const unknownCancel = await settleWithin(
       uplink.wire.call("relay.cancel", { relayId: "relay-unknown" }),
     );
     release.open();
 
     expect(reused).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
     expect(unknownCancel).toEqual({ state: "fulfilled", value: {} });
-    expect(await settle(first.result)).toEqual({ state: "fulfilled", value: {} });
+    expect(await settleWithin(first.result)).toEqual({ state: "fulfilled", value: {} });
   });
 
   it.each([
@@ -279,9 +281,9 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       await start();
 
       const accepted = await openRelay(uplink, relayInput());
-      const acceptedOutcome = await settle(accepted.result);
+      const acceptedOutcome = await settleWithin(accepted.result);
       const refused = await openRelay(uplink, relayInput(), { channelName });
-      const refusedOutcome = await settle(refused.result);
+      const refusedOutcome = await settleWithin(refused.result);
 
       expect(acceptedOutcome).toEqual({ state: "fulfilled", value: {} });
       expect(refusedOutcome).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
@@ -296,10 +298,10 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     };
     await start();
     const first = await openRelay(uplink, relayInput(), { keepOpen: true });
-    await poll(async () => (await settle(first.result, 20)).state).toBe("pending");
+    await poll(async () => (await settleWithin(first.result, 20)).state).toBe("pending");
 
     const again = await openRelay(uplink, relayInput(), { channelName: first.channel.id });
-    const outcome = await settle(again.result);
+    const outcome = await settleWithin(again.result);
     release.open();
 
     expect(outcome).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
@@ -389,8 +391,8 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     async ({ atLimit, pastLimit }) => {
       await start();
 
-      const within = await settle((await openRelay(uplink, relayInput(atLimit))).result);
-      const past = await settle((await openRelay(uplink, relayInput(pastLimit))).result);
+      const within = await settleWithin((await openRelay(uplink, relayInput(atLimit))).result);
+      const past = await settleWithin((await openRelay(uplink, relayInput(pastLimit))).result);
 
       expect(within).toEqual({ state: "fulfilled", value: {} });
       expect(past).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
@@ -454,7 +456,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       behavior = target ?? behavior;
 
       const failing = await openRelay(uplink, relayInput(input ?? {}));
-      const outcome = await settle(failing.result);
+      const outcome = await settleWithin(failing.result);
       const end = await failing.readError();
 
       expect(goodEnd).toEqual({ ended: true });
@@ -475,7 +477,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       );
     await start();
 
-    const outcome = await settle((await openRelay(uplink, relayInput())).result);
+    const outcome = await settleWithin((await openRelay(uplink, relayInput())).result);
 
     expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
     expect(fixture.logger.problems()).toContain("at most 100 headers, got");
@@ -485,7 +487,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     behavior = () => Promise.reject(new Error("target exploded: reason-4471"));
     await start();
 
-    const outcome = await settle((await openRelay(uplink, relayInput())).result);
+    const outcome = await settleWithin((await openRelay(uplink, relayInput())).result);
 
     expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
     expect(fixture.logger.problems()).toContain("target exploded: reason-4471");
@@ -510,8 +512,8 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       }
     })();
 
-    const outcome = await settle(pushed, 10_000);
-    const result = await settle(relay.result);
+    const outcome = await settleWithin(pushed, 10_000);
+    const result = await settleWithin(relay.result);
 
     expect(result).toEqual({ state: "fulfilled", value: {} });
     expect(outcome).toEqual({ state: "fulfilled", value: "stopped" });
@@ -537,7 +539,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       }
     })();
 
-    const outcome = await settle(pushed, 10_000);
+    const outcome = await settleWithin(pushed, 10_000);
     release.open();
 
     expect(outcome).toEqual({ state: "fulfilled", value: "stopped" });

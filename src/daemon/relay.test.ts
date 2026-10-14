@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Logger } from "../ports/index.js";
 import { linkPair } from "../link/test-support.js";
 import { RelayConnection, type RelayPush, type RelayTarget } from "./relay.js";
-import { relayInput, settle } from "./test-relay-support.js";
+import { relayInput, settleWithin } from "./test-relay-support.js";
 
 const logger: Logger = {
   child: () => logger,
@@ -32,7 +32,7 @@ describe("a worker's relay connection", () => {
     const push: RelayPush = { head: () => Promise.resolve() };
 
     relays.abortAll();
-    const outcome = await settle(
+    const outcome = await settleWithin(
       relays.request(relayInput() as Input, push, await acceptedChannel()),
     );
 
@@ -62,7 +62,7 @@ describe("a worker's relay connection", () => {
       },
     };
 
-    const outcome = await settle(relays.request(input, push, await acceptedChannel()));
+    const outcome = await settleWithin(relays.request(input, push, await acceptedChannel()));
 
     expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(bodyCancelled).toBe(true);
