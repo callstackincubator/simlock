@@ -156,7 +156,7 @@ names it.
   send, the priority lane goes first, but the bulk lane sends at least one
   message for every 64 KiB of priority messages, so neither starves.
 - **Rule breaks fail one channel.** `DATA` past the allowed bytes, an
-  envelope naming a channel number this side does not hold, an `OPEN`
+  envelope naming a channel number the peer never opened, an `OPEN`
   reusing a live number, carrying the wrong parity or past the peer's 64,
   `DATA` over 64 KiB, `DATA` or `END` after that direction ended, a
   `CREDIT` of 0 or beyond 4 MiB outstanding, an unknown envelope type, and
