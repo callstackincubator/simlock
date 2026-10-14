@@ -163,6 +163,41 @@ interface CgroupLimits {
   readonly memory?: CgroupLimit;
 }
 
+function parseQuota(text: string | undefined): number | undefined {
+  const match = /^(max|[1-9]\d*) ([1-9]\d*)\n?$/.exec(text ?? "");
+  if (!match || match[1] === "max") return undefined;
+  return Number(match[1]) / Number(match[2]);
+}
+
+function parseLimit(text: string | undefined): number | undefined {
+  const match = /^(max|\d+)\n?$/.exec(text ?? "");
+  if (!match || match[1] === "max") return undefined;
+  return Number(match[1]);
+}
+
+function machineMemory(
+  totalBytes: number | undefined,
+  kib: (name: string) => number | undefined,
+): MemoryCounters | undefined {
+  const availableBytes = kib("MemAvailable");
+  const swapTotal = kib("SwapTotal");
+  const swapFree = kib("SwapFree");
+  if (
+    totalBytes === undefined ||
+    availableBytes === undefined ||
+    swapTotal === undefined ||
+    swapFree === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    availableBytes,
+    limited: false,
+    swapUsedBytes: Math.max(0, swapTotal - swapFree),
+    totalBytes,
+  };
+}
+
 export class LinuxHostLoadProbe implements HostLoadProbe {
   constructor(private readonly options: LinuxHostLoadProbeOptions) {}
 
@@ -206,15 +241,13 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
         this.#optional(`${folder}/cpu.max`),
         this.#optional(`${folder}/memory.max`),
       ]);
-      const cpuMatch = /^(max|[1-9]\d*) ([1-9]\d*)\n?$/.exec(cpuMax ?? "");
-      if (cpuMatch && cpuMatch[1] !== "max") {
-        const cores = Number(cpuMatch[1]) / Number(cpuMatch[2]);
-        if (cpu === undefined || cores < cpu.value) cpu = { folder, value: cores };
+      const cores = parseQuota(cpuMax);
+      if (cores !== undefined && (cpu === undefined || cores < cpu.value)) {
+        cpu = { folder, value: cores };
       }
-      const memoryMatch = /^(max|\d+)\n?$/.exec(memoryMax ?? "");
-      if (memoryMatch && memoryMatch[1] !== "max") {
-        const bytes = Number(memoryMatch[1]);
-        if (memory === undefined || bytes < memory.value) memory = { folder, value: bytes };
+      const bytes = parseLimit(memoryMax);
+      if (bytes !== undefined && (memory === undefined || bytes < memory.value)) {
+        memory = { folder, value: bytes };
       }
     }
     return { ...(cpu && { cpu }), ...(memory && { memory }) };
@@ -235,6 +268,14 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
           totalTime: now * limit.value,
         };
       }
+      return await this.#machineCpu(cores);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #machineCpu(cores: number): Promise<CpuCounters | undefined> {
+    try {
       const text = await this.options.filesystem.readFile("/proc/stat");
       const line = text.split("\n").find((candidate) => /^cpu\s/.test(candidate));
       if (line === undefined) return undefined;
@@ -275,23 +316,7 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
       if (limit !== undefined && (machineTotal === undefined || limit.value < machineTotal)) {
         return await this.#limitedMemory(limit);
       }
-      const availableBytes = kib("MemAvailable");
-      const swapTotal = kib("SwapTotal");
-      const swapFree = kib("SwapFree");
-      if (
-        machineTotal === undefined ||
-        availableBytes === undefined ||
-        swapTotal === undefined ||
-        swapFree === undefined
-      ) {
-        return undefined;
-      }
-      return {
-        availableBytes,
-        limited: false,
-        swapUsedBytes: Math.max(0, swapTotal - swapFree),
-        totalBytes: machineTotal,
-      };
+      return machineMemory(machineTotal, kib);
     } catch {
       return undefined;
     }
