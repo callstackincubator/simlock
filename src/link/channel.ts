@@ -120,10 +120,6 @@ export class Channel implements BulkSource {
     }
   }
 
-  get failed(): boolean {
-    return this.#failure !== undefined;
-  }
-
   get hasNext(): boolean {
     return this.#queue.length > 0;
   }

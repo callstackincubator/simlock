@@ -8,10 +8,14 @@ import {
   parseCredit,
   parseEnvelope,
   parseResetReason,
+  type ParsedEnvelope,
 } from "./envelope.js";
 import { Scheduler } from "./scheduler.js";
 
-export { LinkChannelError, type LinkChannel, type LinkChannelErrorReason } from "./channel.js";
+// fallow-ignore-next-line unused-re-export -- the link's public surface; #558 is its first user.
+export { LinkChannelError } from "./channel.js";
+// fallow-ignore-next-line unused-re-export-type -- the link's public surface; #558 is its first user.
+export type { LinkChannel, LinkChannelErrorReason } from "./channel.js";
 
 export interface LinkConnection extends IpcConnection {
   openChannel(options: { readonly signal: AbortSignal }): Promise<LinkChannel>;
@@ -228,6 +232,10 @@ class Link implements LinkConnection, ChannelHost {
       if (!this.#isLate(envelope.number)) this.#warn("a channel number the peer never opened");
       return;
     }
+    this.#dispatch(channel, envelope);
+  }
+
+  #dispatch(channel: Channel, envelope: ParsedEnvelope): void {
     switch (envelope.type) {
       case ENVELOPE.DATA:
         return channel.onData(envelope.payload);

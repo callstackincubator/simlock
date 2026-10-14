@@ -42,6 +42,11 @@ import {
  * and every reader buffers by newline, so a message boundary that does not line up with a
  * frame boundary is harmless either way.
  */
+function rawBytes(data: RawData): Buffer {
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+}
+
 class WebSocketUplinkConnection implements UplinkTransportConnection {
   readonly #socket: WebSocket;
   readonly #dataListeners = new Set<(chunk: string) => void>();
@@ -67,22 +72,13 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
   constructor(socket: WebSocket) {
     this.#socket = socket;
     socket.on("message", (data: RawData, isBinary: boolean) => {
+      const bytes = rawBytes(data);
       if (isBinary) {
         // why: with no listener the message is dropped, so nothing piles up before a link subscribes.
-        if (this.#binaryListeners.size === 0) return;
-        const bytes = Array.isArray(data)
-          ? Buffer.concat(data)
-          : Buffer.isBuffer(data)
-            ? data
-            : Buffer.from(data as ArrayBuffer);
         for (const listener of this.#binaryListeners) listener(bytes);
         return;
       }
-      const chunk = Array.isArray(data)
-        ? Buffer.concat(data).toString("utf8")
-        : Buffer.isBuffer(data)
-          ? data.toString("utf8")
-          : Buffer.from(data as ArrayBuffer).toString("utf8");
+      const chunk = bytes.toString("utf8");
       if (this.#dataListeners.size === 0) {
         this.#pending.push(chunk);
         return;

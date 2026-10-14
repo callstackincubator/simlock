@@ -35,7 +35,7 @@ export function envelope(type: number, number: number, payload = new Uint8Array(
   return bytes;
 }
 
-export function parseEnvelope(bytes: Uint8Array): Envelope {
+function parseEnvelope(bytes: Uint8Array): Envelope {
   return {
     type: bytes[0] ?? -1,
     number: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(1),

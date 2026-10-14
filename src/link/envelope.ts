@@ -6,7 +6,7 @@ export const MAX_CHANNEL_NUMBER = 0xffffffff;
 export const ENVELOPE = { OPEN: 1, DATA: 2, END: 3, STOP: 4, CREDIT: 5, RESET: 6 } as const;
 export type EnvelopeType = (typeof ENVELOPE)[keyof typeof ENVELOPE];
 
-export const RESET_CODES = { aborted: 1, stalled: 2, "not-accepted": 3, invalid: 4 } as const;
+const RESET_CODES = { aborted: 1, stalled: 2, "not-accepted": 3, invalid: 4 } as const;
 export type ResetReason = keyof typeof RESET_CODES;
 
 const HEADER_BYTES = 5;
