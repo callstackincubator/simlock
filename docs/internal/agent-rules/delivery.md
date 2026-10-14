@@ -307,14 +307,18 @@ is open, done means closed as completed.
     two runs at once produce timeouts that look like bugs. Agents run it
     only through the script [toolchain.md](toolchain.md) names, which holds
     a machine-wide lock, runs detached so no tool time limit kills it
-    halfway, and logs to a file. It runs once per PR, on the commit the last review round passed
-    (no blocking finding open), so review fixes do not each cost a lane run.
-    A failure gets one fix run, then the lane and the code review run again
-    on the new commit. With a person present the agent asks once per
-    delivery run, before the first lane, and that answer covers every PR in
-    the run. Unattended, it runs when the lock is free; when
-    the lock stays busy or the machine cannot run it, the PR gets
-    `needs-hardware` and waits for the maintainer.
+    halfway, and logs to a file. It runs once per PR, on the commit the
+    last review round passed (no blocking finding open), so review fixes do
+    not each cost a lane run. A failure starts a loop: a fix run that may
+    rerun the failing tests on the lane, then the whole lane again, until it
+    passes or six lane runs have failed. The loop's fixes are commits on the
+    PR's branch, even for code an earlier PR of the stack added, with no
+    review and no new PR in between; once the lane passes, one fix check
+    reviews every commit the loop added. The lane needs nobody's leave: it
+    runs when the lock is free, unless the delivery run was started with
+    `no-hardware`. When the lock stays busy, the machine cannot run it, or
+    the loop gives up, the PR gets `needs-hardware` and waits for the
+    maintainer.
 
 ## Procedures
 

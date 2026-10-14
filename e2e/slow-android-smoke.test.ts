@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { withDaemon } from "./helpers/index.js";
-import { waitFor } from "./helpers/wait.js";
+import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
 const ANDROID_HOME =
@@ -113,7 +113,7 @@ describe.skipIf(!hasAndroidSdk)(
               "android-smoke",
               "--detach",
             ],
-            { timeout: 240_000 },
+            { timeout: DEVICE_READY_MS },
           );
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
           const grant = lease.json as {

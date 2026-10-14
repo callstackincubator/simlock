@@ -15,7 +15,7 @@ export { freeLoopbackPort } from "./port.js";
 // A flow that factors its own setup out of a test body needs to name what `withDaemon` hands
 // back; every other flow keeps it inferred.
 export type { SharedTestEnv, TestEnv } from "./env.js";
-export { waitFor } from "./wait.js";
+export { DEVICE_READY_MS, waitFor } from "./wait.js";
 export { events } from "./events.js";
 export type { RecordedEvent } from "./events.js";
 export { waitForDeviceState, waitForLeaseCount } from "./status.js";

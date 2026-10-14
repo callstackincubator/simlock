@@ -15,18 +15,20 @@ You run the lane, read its result, and report. You fix nothing.
 
 Arguments: `pr`, `branch`, `lines` (Done when line numbers, counted in the
 PR body's checklist), and `files`, the test files that cover them, if
-known.
+known. This machine's settings, such as which build of another tool to
+use, come from the lane script (`toolchain.md`), never from your prompt.
 
 ## 1. Can this machine run it?
 
-Run the machine checks from `toolchain.md` for what each line needs. One
-fails: report `unavailable` with what is missing, and stop. Install nothing.
+Run the machine checks from `toolchain.md` for what each line needs, then
+the lane script's `check`. One fails: report `unavailable` with what is
+missing, and stop. Install nothing.
 
 ## 2. Run the lane
 
 From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
-none), start the lane script with the test files. It returns at once and
-prints the log path.
+none), start the lane script with the test files and `--bail=1`, so the
+first failure ends the run. It returns at once and prints the log path.
 
 Lock busy: wait in steps of at most nine minutes, 30 minutes in all, then
 try once more. Still busy: report `busy` with the holder the script printed.
@@ -39,8 +41,8 @@ Poll in steps of at most nine minutes until `$log.exit` exists:
 for _ in $(seq 18); do [ -f "$log.exit" ] && break; sleep 30; done; cat "$log.exit" 2>/dev/null
 ```
 
-Read only the summary lines and each failing test's title and assertion,
-not the whole log.
+Between polls, the lane script's `status` shows the tests so far. Read
+only its output and each failing test's assertion, not the whole log.
 
 ## Report
 

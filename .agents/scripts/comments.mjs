@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // `node .agents/scripts/comments.mjs [--all] <base> [<head>]`: every comment block a diff adds or
-// edits, each with the code line after it. `--all` lists every comment block in the files the
-// diff touches, unchanged ones too, for the weekly comment routine. Without <head>, the diff runs
-// from <base> to the working tree, untracked files included. Code files only (JavaScript,
-// TypeScript, shell); tool directives are left out. Prints nothing when no comment is listed.
+// edits since it left <base> (from their merge base), each with the code line after it. `--all`
+// lists every comment block in the files the diff touches, unchanged ones too, for the weekly
+// comment routine. Without <head>, the diff runs to the working tree, untracked files included.
+// Code files only (JavaScript, TypeScript, shell); tool directives are left out. Prints nothing
+// when no comment is listed.
 // `comment-lint.mjs` imports `listComments({ base, head, all, files })` for the same blocks as
 // data: `{ path, start, end, state, trailing, lines: [{ n, text }], next: { n, text } | null }`,
 // and `trailingText(line, shell)` for the comment part of a code line.
@@ -20,7 +21,9 @@ const QUOTES = new Set(['"', "'", "`"]);
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
 
 export function listComments({ base, head, all = false, files = null }) {
-  const range = head === undefined ? [base] : [base, head];
+  // why: from where the branch left <base>, so a comment <base> changed since is not blamed on it.
+  const from = git("merge-base", base, head ?? "HEAD").trim();
+  const range = head === undefined ? [from] : [from, head];
   const wanted = files === null ? null : new Set(files);
   const blocks = [];
   for (const path of touchedFiles(range, head, wanted)) {

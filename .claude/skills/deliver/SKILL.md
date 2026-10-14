@@ -65,16 +65,15 @@ single issue. The time is the `Local time` your last tool result ends with
 line says the computer slept, end the status line with `(slept <m> min)`.
 
 Asked how it is going: answer from the PR status lines (step 3) and the
-status lines so far. To look inside a running agent, ask it with
+status lines so far; for a running slow lane, from the lane script's
+`status` (`toolchain.md`). To look inside a running agent, ask it with
 SendMessage.
 
-**Ask once, then run.** With a person in the session, ask one question, the
-first time a report lists `hardware` lines: may the slow lane run for every PR
-of this run (rule 16). Record the answer in that PR's `### Status`. Then
-never stop to ask: post PR bodies and comments directly, merge every PR the
-gate accepts, and apply rule 14's round cap. Never ask anything else with
-a dialog: it stops every task in flight until someone answers. Unattended,
-ask nothing: the slow lane runs when its lock is free.
+**Never stop to ask.** Post PR bodies and comments directly, merge every
+PR the gate accepts, and apply rule 14's round cap. Never ask with a
+dialog: it stops every task in flight until someone answers. The slow lane
+runs whenever its lock is free (rule 16); the argument `no-hardware` turns
+it off for the run, and a PR that needs it parks as `needs-hardware`.
 
 **Decide, then tell.** A small spec gap is an `Assumption:` line (rule 3).
 A bigger one (`spec needs` in a report, or behaviour a user would see that
@@ -97,7 +96,7 @@ the feature after it merged.
 **Park only for:**
 
 - a contradiction with a rule or an accepted ADR;
-- a slow-lane check that cannot run;
+- a slow-lane check that cannot run, or a hardware loop that gave up;
 - a blocking finding the review reports open after its last round (rule 14);
 - what the gate refuses (step 3).
 
@@ -167,7 +166,8 @@ they name; never build again or restart review at round 1.
    finished CI run, which is often older than the head: newer pushes cancel
    theirs. Each failed test no open `flaky-test` issue names joins the fix
    run's `fixes` as `ci: <its line> run <id>`, and a conflict as a line
-   asking to merge the base branch. With no fix run due, they get one
+   asking to merge the base branch (`stack: gh stack sync` for a stacked
+   PR). With no fix run due, they get one
    before the round.
 3. **Decide** on the review report:
    - Fix lines with `Rerun: round 2` or `fix-check`: one `implementer` run
@@ -193,10 +193,13 @@ they name; never build again or restart review at round 1.
    - Spec needs: decide, then tell (above), before the fix run.
    - No Fix lines, and the audit reported `hardware` lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
-     commit the review passed (rule 16). On `fail`: one `implementer` fix
-     run with the Evidence lines, then `reviewer` with `fix-check`,
-     `previous <Commit>` and the Evidence lines as Fix lines, then
-     `hardware-verifier` again on the commit that check passes.
+     commit the review passed (rule 16). On `fail`, the hardware loop: one
+     `implementer` run with `mode: hardware-fix` and the Evidence lines
+     under `fixes`, then `hardware-verifier` again on its head; repeat until
+     `pass`, with no review in between. After six failed lane runs, park.
+     On `pass` after a loop: `reviewer` with `fix-check` and `previous
+<the commit the review passed>`, covering every loop commit; its
+     `text` fixes need no lane run, a `src` fix one more.
    - Hardware `busy` or `unavailable`: finish the checks, do steps 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
      and park instead of running the gate.
@@ -294,13 +297,12 @@ draft). Check the Depends on yourself; no workflow promotes tasks.
 
 - A task's red stage gets `base: <branch of the stack's top PR>`; with no
   PR yet, no `base` (it starts from `main`).
-- Its review passed (step 3, item 6): when its PR's base is no longer the
-  stack's top (another task joined meanwhile), one `implementer` fix run
-  merges the top's branch into it, then `gh pr edit <M> --base <top
-branch>`; a merge with conflicts gets a fix check. Then `gh pr ready <M>`
-  and `gh stack link <PR below> <M>` (PR numbers, bottom to top; none
-  below yet: nothing to link). PR body Status: `Gate: waiting for the
-stack`.
+- Its review passed (step 3, item 6): `gh pr ready <M>` and `gh stack link
+<PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to
+  link). When its branch did not start from the stack's top (another task
+  joined meanwhile), one `implementer` fix run with `fixes: stack: gh stack
+sync` brings every branch up to date; a conflict it resolved gets a fix
+  check on that PR. PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one
   task to move the other.
@@ -313,11 +315,10 @@ stack`.
 **Merging the stack.** When every task has joined the stack and nothing is
 in flight, run the gate on the top PR: `merge-pr.sh <top>` gates every PR
 in the stack and merges them all, bottom to top. A conflict with `main`
-(another feature merged meanwhile): one fix run on the bottom PR that merges
-`origin/main`, then one on each PR above that merges its base, bottom to
-top; a merge with conflicts gets a fix check; then the gate again. Red CI:
-the fix run goes to the lowest red PR, and the PRs above it merge its
-branch the same way.
+(another feature merged meanwhile): one `implementer` fix run with `fixes:
+stack: gh stack sync`, never one merge run per branch; a conflict it
+resolved gets a fix check on that PR; then the gate again. Red CI: the fix
+run goes to the lowest red PR, then the same sync carries it up.
 
 Stop when nothing is runnable and nothing is in flight.
 

@@ -9,3 +9,4 @@ dist/
 test-results/
 playwright-report/
 .agent-device
+.slow-lane.env

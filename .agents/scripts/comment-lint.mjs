@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `node .agents/scripts/comment-lint.mjs [--all] [--limit <n>] [--base <ref>] [--head <ref>]
-// [<files>...]`: the mechanical half of architecture rule 17. Every comment block the diff from
-// <base> (default origin/main) to <head> (default the working tree) adds or edits must be one of:
+// [<files>...]`: the mechanical half of architecture rule 17. Every comment block <head> (default
+// the working tree) adds or edits since it left <base> (default origin/main) must be one of:
 //
 //   why       its first words are `why:` (any case)
 //   link      it contains a URL (an upstream bug or a reference)

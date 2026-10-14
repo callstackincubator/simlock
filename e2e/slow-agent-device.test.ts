@@ -21,6 +21,7 @@ import {
   newAgentToken,
   waitForAgentDevice,
   waitFor,
+  DEVICE_READY_MS,
   withSharedDaemon,
   ANDROID,
   FIRST_SNAPSHOT,
@@ -272,7 +273,7 @@ function defineSuite(target: Target): void {
           const devices = await listDevices(env);
           return Date.now() - startedAt > 2_000 && devices.every((d) => d.state === "ready");
         },
-        { timeout: 240_000, interval: 250, label: "device ready after release --all" },
+        { timeout: DEVICE_READY_MS, interval: 250, label: "device ready after release --all" },
       );
       const released = await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
       expect(released.code, released.stderr).toBe(0);

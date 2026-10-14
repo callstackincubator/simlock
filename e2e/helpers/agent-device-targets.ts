@@ -8,7 +8,7 @@ import { expect } from "vitest";
 import type { AgentDeviceResult } from "./agent-device.js";
 import type { SharedTestEnv } from "./env.js";
 import { REPO_ROOT } from "./repo-root.js";
-import { waitFor } from "./wait.js";
+import { DEVICE_READY_MS, waitFor } from "./wait.js";
 
 export function succeeds(file: string, args: readonly string[]): boolean {
   try {
@@ -115,7 +115,7 @@ export async function waitForFree(env: SharedTestEnv): Promise<void> {
       );
     },
     {
-      timeout: 240_000,
+      timeout: DEVICE_READY_MS,
       interval: 1_000,
       label: () => `every device ready, no lease, no request; last observed: ${observed}`,
     },
@@ -158,7 +158,6 @@ export async function warmUp(daemon: SharedTestEnv, target: Target, count: numbe
     const released = await daemon.cli(["release", id], { timeout: 60_000 });
     expect(released.code, released.stderr).toBe(0);
   }
-  // why: a released Android device is shut down and boots again with a wiped disk; `count` of them boot at once on a loaded host, so the wait allows a lease's whole boot window (330 s) rather than one quiet boot.
   let observed = "nothing read yet";
   await waitFor(
     async () => {
@@ -167,7 +166,7 @@ export async function warmUp(daemon: SharedTestEnv, target: Target, count: numbe
       return devices.length >= count && devices.every((device) => device.state === "ready");
     },
     {
-      timeout: 330_000,
+      timeout: DEVICE_READY_MS,
       interval: 1_000,
       label: () => `${String(count)} warm-up devices ready; last observed: ${observed}`,
     },

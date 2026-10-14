@@ -21,12 +21,13 @@ red stage stacked on another PR's branch, and for some modes `map` or
 agent, so the work runs in short contexts. Steps 1 and 2 are every mode's;
 step 3 is the mode's own brief in `.agents/briefs/`:
 
-| Mode    | Brief                | Starts from                              | Ends with                              |
-| ------- | -------------------- | ---------------------------------------- | -------------------------------------- |
-| `red`   | `implement-red.md`   | the spec                                 | red commit, draft PR, `map`            |
-| `green` | `implement-green.md` | the branch and `map`                     | spec tests green, or `map` of the rest |
-| `audit` | `implement-audit.md` | the spec and `git diff origin/main` only | fixes, PR body done                    |
-| `fix`   | `implement-fix.md`   | the branch and `fixes`                   | each finding fixed                     |
+| Mode           | Brief                       | Starts from                              | Ends with                              |
+| -------------- | --------------------------- | ---------------------------------------- | -------------------------------------- |
+| `red`          | `implement-red.md`          | the spec                                 | red commit, draft PR, `map`            |
+| `green`        | `implement-green.md`        | the branch and `map`                     | spec tests green, or `map` of the rest |
+| `audit`        | `implement-audit.md`        | the spec and `git diff origin/main` only | fixes, PR body done                    |
+| `fix`          | `implement-fix.md`          | the branch and `fixes`                   | each finding fixed                     |
+| `hardware-fix` | `implement-hardware-fix.md` | the branch and failing slow-lane tests   | those tests pass on the lane           |
 
 ## 1. Workspace
 

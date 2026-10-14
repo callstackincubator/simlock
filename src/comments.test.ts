@@ -159,4 +159,21 @@ describe("comments.mjs", () => {
       "src/new.ts:1 (added)\n  1 | // Untracked.\n  2 > export const c = 3;",
     );
   });
+
+  it("leaves out a comment the base branch rewrote after the branch point", () => {
+    const dir = repo(
+      { "src/a.ts": "// Old wording.\nexport const a = 1;\n" },
+      { "src/b.ts": "// Branch's own.\nexport const b = 2;\n" },
+    );
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir });
+    git("switch", "-q", "base");
+    write(dir, { "src/a.ts": "// New wording.\nexport const a = 1;\n" });
+    git("commit", "-q", "-am", "base rewrites a comment");
+    git("switch", "-q", "work");
+
+    expect(list(dir, "base", "HEAD")).toBe(
+      "src/b.ts:1 (added)\n  1 | // Branch's own.\n  2 > export const b = 2;\n",
+    );
+  });
 });
