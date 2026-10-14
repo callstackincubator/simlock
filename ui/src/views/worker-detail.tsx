@@ -338,43 +338,29 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
   const memoryTone = memory?.pressure === undefined ? "idle" : pressureStatus(memory.pressure).tone;
   return (
     <dl className="facts">
-      <div>
-        <dt>CPU</dt>
-        <dd>
-          {cpu === undefined ? (
-            "Unavailable"
-          ) : (
-            <Gauged
-              figure={
-                <>
-                  {formatBusyPercent(cpu.busyPercent)} busy, {formatCores(cpu.cores)}
-                  <Limit limited={cpu.limited} />
-                </>
-              }
-              gauge={gauges.cpu}
-            />
-          )}
-        </dd>
-      </div>
-      <div>
-        <dt>Memory</dt>
-        <dd>
-          {memory === undefined ? (
-            "Unavailable"
-          ) : (
-            <Gauged
-              figure={
-                <>
-                  {formatBytes(memory.availableBytes)} of {formatBytes(memory.totalBytes)} available
-                  <Limit limited={memory.limited} />
-                </>
-              }
-              gauge={gauges.memory}
-              tone={memoryTone}
-            />
-          )}
-        </dd>
-      </div>
+      <FigureRow
+        label="CPU"
+        part={cpu}
+        gauge={gauges.cpu}
+        figure={(part) => (
+          <>
+            {formatBusyPercent(part.busyPercent)} busy, {formatCores(part.cores)}
+            <Limit limited={part.limited} />
+          </>
+        )}
+      />
+      <FigureRow
+        label="Memory"
+        part={memory}
+        gauge={gauges.memory}
+        tone={memoryTone}
+        figure={(part) => (
+          <>
+            {formatBytes(part.availableBytes)} of {formatBytes(part.totalBytes)} available
+            <Limit limited={part.limited} />
+          </>
+        )}
+      />
       {memory === undefined ? null : (
         <div>
           <dt>Swap</dt>
@@ -389,19 +375,12 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
           </dd>
         </div>
       )}
-      <div>
-        <dt>Disk</dt>
-        <dd>
-          {disk === undefined ? (
-            "Unavailable"
-          ) : (
-            <Gauged
-              figure={`${formatBytes(disk.freeBytes)} of ${formatBytes(disk.totalBytes)} free`}
-              gauge={gauges.disk}
-            />
-          )}
-        </dd>
-      </div>
+      <FigureRow
+        label="Disk"
+        part={disk}
+        gauge={gauges.disk}
+        figure={(part) => `${formatBytes(part.freeBytes)} of ${formatBytes(part.totalBytes)} free`}
+      />
       <div>
         <dt>Read</dt>
         <dd>{age} ago</dd>
@@ -410,17 +389,28 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
   );
 }
 
-function Gauged(props: {
-  readonly figure: ReactNode;
+function FigureRow<Part extends object>(props: {
+  readonly figure: (part: Part) => ReactNode;
   readonly gauge?: number | undefined;
+  readonly label: string;
+  readonly part: Part | undefined;
   readonly tone?: Tone;
 }) {
-  const { figure, gauge, tone = "idle" } = props;
+  const { figure, gauge, label, part, tone = "idle" } = props;
   return (
-    <span className="load-figure">
-      <span>{figure}</span>
-      {gauge === undefined ? null : <LoadGauge percent={gauge} tone={tone} />}
-    </span>
+    <div>
+      <dt>{label}</dt>
+      <dd>
+        {part === undefined ? (
+          "Unavailable"
+        ) : (
+          <span className="load-figure">
+            <span>{figure(part)}</span>
+            {gauge === undefined ? null : <LoadGauge percent={gauge} tone={tone} />}
+          </span>
+        )}
+      </dd>
+    </div>
   );
 }
 

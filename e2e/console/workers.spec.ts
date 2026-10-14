@@ -126,6 +126,50 @@ function fact(scope: Locator, label: string): Locator {
   return scope.locator("dt", { hasText: label }).locator("xpath=following-sibling::dd[1]");
 }
 
+interface PaintedGauge {
+  readonly track: number;
+  readonly fill: number;
+  readonly sliding: boolean;
+}
+
+// why: taken from the worker's own reading rather than from the page, so the console cannot agree
+// with itself; there is no expected level until the reading holds a figure for each of the three.
+function gaugePercents(load: NonNullable<WorkerView["load"]>): readonly number[] | undefined {
+  const { cpu, disk, memory } = load;
+  if (cpu === undefined || disk === undefined || memory === undefined) return undefined;
+  const whole = (percent: number) => Math.round(Math.min(100, Math.max(0, percent)));
+  return [
+    whole(cpu.busyPercent),
+    whole((1 - memory.availableBytes / memory.totalBytes) * 100),
+    whole((1 - disk.freeBytes / disk.totalBytes) * 100),
+  ];
+}
+
+function paintedGauges(panel: Locator): Promise<readonly PaintedGauge[]> {
+  return panel.locator(".load-bar").evaluateAll((bars) =>
+    bars.map((bar) => {
+      const fill = bar.firstElementChild as HTMLElement;
+      // why: the fill's own 120 ms ease means a width read mid-slide sits between two levels, so
+      // this asks the browser whether a transition is still running and reports it with the width.
+      return {
+        track: bar.getBoundingClientRect().width,
+        fill: fill.getBoundingClientRect().width,
+        sliding: fill.getAnimations().some((animation) => animation.playState === "running"),
+      };
+    }),
+  );
+}
+
+function fillsMatch(painted: readonly PaintedGauge[], percents: readonly number[]): boolean {
+  return (
+    painted.length === percents.length &&
+    painted.every((bar, index) => {
+      const percent = percents[index] ?? -1;
+      return Math.abs(bar.fill - (bar.track * percent) / 100) <= 1;
+    })
+  );
+}
+
 /** A device's row in a worker's device table. */
 function deviceRow(page: Page, id: string): Locator {
   return page.getByRole("row").filter({ has: page.getByRole("cell", { name: id, exact: true }) });
@@ -461,41 +505,58 @@ test.describe("the workers views", () => {
     await shown.getByRole("link", { name: host?.id ?? "" }).click();
 
     const panel = page.getByRole("region", { name: "Load", exact: true });
-    // why: the worker's reading turns over every 15 s, so this measures around it and retries when
-    // it changes mid-measurement — otherwise the bar and the figure compared are different readings.
+    // why: both the worker's reading (every 15 s) and the fill's own 120 ms slide can move between
+    // two measurements, so this measures around both and retries until the fill has settled at the
+    // level the reading implies — otherwise the bar and the figure compared are not the same pair.
     await waitFor(
       async () => {
         const before = (await workerList(daemon))[0]?.load;
-        if (before?.cpu === undefined || before.memory === undefined || before.disk === undefined)
-          return false;
-        const painted = await panel.locator(".load-bar").evaluateAll((bars) =>
-          bars.map((bar) => {
-            const fill = bar.firstElementChild as HTMLElement;
-            return {
-              track: bar.getBoundingClientRect().width,
-              fill: fill.getBoundingClientRect().width,
-            };
-          }),
-        );
-        const after = (await workerList(daemon))[0]?.load;
-        if (JSON.stringify(before) !== JSON.stringify(after)) return false;
-
-        const whole = (percent: number) => Math.round(Math.min(100, Math.max(0, percent)));
-        const wanted = [
-          whole(before.cpu.busyPercent),
-          whole((1 - before.memory.availableBytes / before.memory.totalBytes) * 100),
-          whole((1 - before.disk.freeBytes / before.disk.totalBytes) * 100),
-        ];
-        return (
-          painted.length === wanted.length &&
-          painted.every((bar, index) => {
-            const expected = (bar.track * wanted[index]) / 100;
-            return Math.abs(bar.fill - expected) <= 1;
-          })
-        );
+        const wanted = before === undefined ? undefined : gaugePercents(before);
+        if (wanted === undefined) return false;
+        const painted = await paintedGauges(panel);
+        const now = (await workerList(daemon))[0]?.load;
+        if (JSON.stringify(before) !== JSON.stringify(now)) return false;
+        if (painted.some((bar) => bar.sliding)) return false;
+        return fillsMatch(painted, wanted);
       },
       { interval: 500, timeout: 40_000, label: () => "the fill to match the figure" },
     );
+  });
+
+  test("a load gauge sits in a line of its own under its figure, capped rather than full width", async ({
+    daemon,
+    page,
+  }) => {
+    const [host] = await workerList(daemon);
+    await openConsole(page, daemon);
+    const shown = card(page, host?.id ?? "");
+    await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    await shown.getByRole("link", { name: host?.id ?? "" }).click();
+
+    const panel = page.getByRole("region", { name: "Load", exact: true });
+    const row = fact(panel, "Memory");
+    await expect(row.locator(".load-bar")).toBeVisible();
+    // why: the viewport is 1280 wide, so the value column is far wider than the cap; a bar that
+    // filled its column instead of capping, or sat beside the text instead of under it, fails here.
+    const geometry = await row.evaluate((cell) => {
+      const figure = cell.querySelector(".load-figure > span") as HTMLElement;
+      const bar = cell.querySelector(".load-bar") as HTMLElement;
+      const text = figure.getBoundingClientRect();
+      const track = bar.getBoundingClientRect();
+      return {
+        column: cell.getBoundingClientRect().width,
+        left: track.left - text.left,
+        root: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        top: track.top,
+        track: track.width,
+        textBottom: text.bottom,
+      };
+    });
+
+    expect(geometry.track).toBeCloseTo(20 * geometry.root, 0);
+    expect(geometry.track).toBeLessThan(geometry.column - 100);
+    expect(geometry.top).toBeGreaterThanOrEqual(geometry.textBottom);
+    expect(geometry.left).toBeCloseTo(0, 0);
   });
 
   test("a load gauge's fill takes its colour from the stylesheet and never the accent, in both themes", async ({
