@@ -318,7 +318,7 @@ export async function readAll(readable: ReadableStream<Uint8Array>): Promise<Uin
     if (done) break;
     parts.push(value);
   }
-  return Buffer.concat(parts);
+  return new Uint8Array(Buffer.concat(parts));
 }
 
 export async function writeAndClose(channel: LinkChannel, bytes: Uint8Array): Promise<void> {
