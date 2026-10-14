@@ -140,6 +140,7 @@ describe("transfers through a gateway keep their promises", () => {
     expect(downloaded).toBeLessThanOrEqual(1.05 * GIB);
   }, 180_000);
 
+  // fallow-ignore-next-line complexity -- one measurement: its windows and delays are read in order, and splitting them would hide what each number is measured against.
   it("while 10 relays each upload 64 MiB and 10 each download 64 MiB to one worker, a forwarded `lease.renew` and a relayed request whose target answers at once each answer at most 1 s later than with nothing running, and each of the 20 relays carried at least 1 MiB in the second before and the second after each answer came back", async () => {
     const samples = new Map<string, { at: number; total: number }[]>();
     const progress = (id: string, total: number) => {
