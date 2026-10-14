@@ -79,14 +79,15 @@ offers two things, and nothing else:
   matching channel with `acceptChannel(id)`. A channel carries bytes both
   ways. Closing the `writable` ends that direction; cancelling the
   `readable` tells the peer to stop sending that direction, whose writer
-  then errors with `stopped`, while the other direction goes on; `abort`
+  then errors with `stopped` and acknowledges with `END`, while the other
+  direction goes on; `abort`
   ends both, on both sides. A channel ends once both directions are done.
   The id is 1–32 characters of `[A-Za-z0-9-]`; a user passes it to its
   peer in a message and reads no other meaning into it. `acceptChannel` throws for an id the peer never opened,
   one already accepted, and one already ended.
 - **Credit is visible.** A channel's `credit` is the number of bytes its
-  writer may send now without waiting, and `whenCredit()` resolves when
-  more arrives. A writer that writes no more than `credit` never waits, so
+  writer may hand the link now without waiting, and `whenCredit()`
+  resolves when more arrives; waiting on it counts as a waiting write. A writer that writes no more than `credit` never waits, so
   it can skip data instead, as a live stream drops frames for a viewer that
   fell behind. The streams stay standard Web streams.
 
@@ -130,8 +131,8 @@ names it.
   `OPEN` goes out before any message written after `openChannel()`
   resolves, so a peer always knows a channel before a message names it.
 - **Numbers.** The side that opens a channel numbers it: the worker with
-  odd numbers, the gateway with even ones, so the two never collide. A
-  number is never reused on a connection.
+  odd numbers, the gateway with even ones, so the two never collide.
+  Numbers are 32-bit and never reused on a connection.
 - **Opening.** `openChannel()` sends `OPEN`. Each side may send 4 MiB on a
   channel before any `CREDIT`, so bytes can follow `OPEN` at once. The
   receiver holds up to 4 MiB for a channel its user has not accepted yet,
