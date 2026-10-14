@@ -1073,19 +1073,24 @@ function listedLease(
   entry: ReturnType<FleetLeaseIndex["all"]>[number],
 ): FleetLeaseFacts["listed"] {
   const record = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+  if (view === undefined || record === undefined) return undefined;
   const device = views
     .grantedDevices()
-    .find((granted) => granted.workerId === entry.workerId && granted.id === record?.deviceId);
-  const { platform, model } = device?.spec ?? {};
-  if (
-    record === undefined ||
-    device?.address === undefined ||
-    (platform !== "ios" && platform !== "android") ||
-    model === undefined
-  ) {
+    .find((granted) => granted.workerId === entry.workerId && granted.id === record.deviceId);
+  if (device === undefined) return undefined;
+  return describeDevice(view, record, device);
+}
+
+function describeDevice(
+  view: WorkerView,
+  record: { readonly ttlMs: number; readonly ttlDeadline: number },
+  device: ReturnType<FleetPortParts["views"]["grantedDevices"]>[number],
+): FleetLeaseFacts["listed"] {
+  const { platform, model } = device.spec;
+  if (device.address === undefined || (platform !== "ios" && platform !== "android")) {
     return undefined;
   }
-  const deviceClass = view?.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
+  const deviceClass = view.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
     model
   ];
   return {
