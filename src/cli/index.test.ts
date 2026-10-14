@@ -3020,7 +3020,9 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
       const lines = stdout.trimEnd().split("\n");
       const loadAfter = (id: string) => {
-        const index = lines.findIndex((line) => line.startsWith(`${id}:`));
+        const index = lines.findIndex(
+          (line) => line.startsWith(`${id}:`) || line.startsWith(`${id} (`),
+        );
         const next = lines[index + 1];
         return next?.startsWith("  Load:") === true ? next : undefined;
       };
