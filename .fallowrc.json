@@ -12,6 +12,8 @@
   // them (budget-guard, comment-lint) import from their neighbours (usage, comments).
   // .dependency-cruiser.cycles.mjs is named only by src/lint-rules.test.ts, which runs depcruise
   // with it (ADR 0027).
+  // tools/screen-capture/scripts/unframe.mjs is a diagnostic a person runs by hand against a
+  // captured file, the way the .agents scripts are.
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
@@ -20,7 +22,8 @@
     "e2e/console/*.spec.ts",
     "vitest.mutate.config.ts",
     ".agents/scripts/*.mjs",
-    ".dependency-cruiser.cycles.mjs"
+    ".dependency-cruiser.cycles.mjs",
+    "tools/screen-capture/scripts/*.mjs"
   ],
   "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
   // The web console's libraries are bundled into dist/ui at build time and ship as files, so

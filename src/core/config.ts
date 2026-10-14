@@ -255,6 +255,17 @@ export interface Config {
     readonly command: string;
     readonly leaseTtlCapMs?: number;
   };
+  readonly stream: {
+    // why: off by default, because a stream is a capture process pinned to a leased simulator and
+    // nothing should start one for a machine nobody is looking at. A gateway reads `enabled` alone:
+    // it answers a stream by relaying it, so the program and its picture settings belong to the
+    // worker that runs the capture.
+    readonly enabled: boolean;
+    readonly command: string;
+    readonly fps: number;
+    readonly maxDimension: number;
+    readonly bitrateKbps: number;
+  };
   /**
    * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
    * on `mode`:
@@ -483,6 +494,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "eventLog",
   "gateway",
   "agentDevice",
+  "stream",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
@@ -492,6 +504,15 @@ const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
 
 // why: `command` names the program a worker runs, and a gateway runs none.
 const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
+
+// why: the capture program and its picture settings are what a worker runs and encodes with; a
+// gateway relays a stream and never reads a video byte, so it has nothing to do with them.
+const WORKER_ONLY_STREAM_KEYS: readonly string[] = [
+  "bitrateKbps",
+  "command",
+  "fps",
+  "maxDimension",
+];
 
 /**
  * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -527,6 +548,15 @@ function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
       (key) =>
         `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
         `and this daemon runs in gateway mode.`,
+    );
+    warnWorkerOnlySubKeys(
+      object,
+      "stream",
+      WORKER_ONLY_STREAM_KEYS,
+      warn,
+      (key) =>
+        `Ignoring "stream.${key}": it configures the capture a worker runs, ` +
+        `and a gateway only relays a stream.`,
     );
   }
 }
@@ -761,6 +791,13 @@ function defaultConfig(
       },
     },
     agentDevice: { enabled: false, command: "agent-device" },
+    stream: {
+      enabled: false,
+      command: "simlock-screen-capture",
+      fps: 30,
+      maxDimension: 720,
+      bitrateKbps: 1_500,
+    },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
@@ -917,6 +954,13 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       enabled: booleanValue,
       command: nonEmptyString,
       leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
+    }),
+    stream: objectValidator({
+      enabled: booleanValue,
+      command: nonEmptyString,
+      fps: integerInRange(1, 60),
+      maxDimension: integerInRange(96, 4096),
+      bitrateKbps: integerInRange(64, 40_000),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),

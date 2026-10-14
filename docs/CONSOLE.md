@@ -212,6 +212,24 @@ and the id of the request that was granted the lease, while the daemon still
 keeps it. A lease that has been released or has
 expired says "Lease not found".
 
+### Watching a lease's screen
+
+A lease's page ends with a **Screen** panel: one button, **Show screen**, and
+while it is on, the device's picture with the facts beside it — its size and
+codec, the frames painted, the rate they arrive at, the bandwidth they cost, and
+how many were dropped rather than drawn behind an earlier one.
+
+Nothing runs while it is off, and the button is the only control. Pressing
+**Stop**, navigating away, closing the tab and signing out all stop the capture
+on the worker the same way, and a lease that ends — released, expired, or lost
+its device — ends the picture with it rather than leaving a frame that looks
+live on the page. What you are looking at is either moving or gone.
+
+The panel is there wherever the worker it runs on has screen streaming turned on
+(see [`stream.enabled`](CONFIGURATION.md)). Where it is off, or where the lease is
+on a device a screen cannot be captured from — an Android emulator or a physical
+iPhone — the panel says so, in the worker's own words, and starts nothing.
+
 ### Who holds a lease
 
 A lease taken over the HTTP API belongs to the token that took it. The console

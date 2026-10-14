@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { ApiError } from "../api";
+import { ScreenPane } from "../screen/viewer";
 import { Id, PageHeader, Panel, StatCards } from "../layout";
 import { useLiveResource, useNow } from "../live/live-context";
 import { Loaded } from "../live/route-state";
@@ -278,6 +279,7 @@ function Lease({ id }: { readonly id: string }) {
               </Panel>
             )}
           </Loaded>
+          <ScreenPane leaseId={id} />
         </>
       )}
     </>

@@ -610,6 +610,21 @@ input[aria-invalid="true"] {
   font-size: var(--text-sm);
 }
 
+/* The live screen. A device's picture is taller than it is wide and its own size is what the capture
+ * cost, so the canvas keeps the ratio it was painted at and is scaled to fit the panel: capped in
+ * height so a phone's picture does not push the rest of the page away, and in width so a landscape one
+ * never grows past the panel. Both maxima with both sides auto is what keeps the ratio. */
+.screen {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(60vh, 40rem);
+  margin: 0 auto var(--space-4);
+  background: var(--field);
+  border: 1px solid var(--border);
+}
+
 .panel-body > .facts {
   margin-top: 0;
 }

@@ -17,6 +17,13 @@ const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform:
 const config: Config = {
   mode: "worker",
   agentDevice: { command: "agent-device", enabled: false },
+  stream: {
+    bitrateKbps: 1500,
+    command: "simlock-screen-capture",
+    enabled: false,
+    fps: 30,
+    maxDimension: 720,
+  },
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   gateway: {

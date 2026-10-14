@@ -38,6 +38,11 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `agentDevice.enabled`             | **Both sides.** On a worker: run one agent-device daemon on this worker, started and watched by Simlock. It sees Simlock's devices and no others, refuses `boot` and `shutdown`, and keeps its files in `~/.simlock/agent-device`. If agent-device is missing, older than 0.21.25, speaks another RPC protocol or needs a newer Node than Simlock runs on, it is not started and Simlock runs on without it. A daemon a killed Simlock left behind is stopped at the next start. With `http.enabled` also `true`, the agent-device CLI reaches it at `/v1/agent-device` (see [HTTP-API.md](HTTP-API.md#v1agent-device)). On a gateway: serve `/v1/agent-device` and send each agent to a worker whose agent-device is available; the gateway runs no daemon of its own. | `false` |
 | `agentDevice.leaseTtlCapMs`       | **Both sides.** Caps the TTL of the leases the agent-device CLI makes and renews through Simlock: a longer `ttlMs` is lowered to it, and a lease that sends none gets it. A whole number of milliseconds from `5000` to `lease.maxTtlMs`; a value outside that range stops the daemon at start, on a gateway too. Used only when `agentDevice.enabled` is `true`. | unset (no cap) |
 | `agentDevice.command`             | **Worker side.** The agent-device executable: a name looked up on `PATH`, or a path. A gateway ignores it and logs a warning. Used only when `agentDevice.enabled` is `true`. | `agent-device` |
+| `stream.enabled`                  | **Both sides.** Offer a live view of a leased iOS simulator's screen. On a worker: answer `GET /v1/stream/leases/{leaseId}` (see [HTTP-API.md](HTTP-API.md#get-v1streamleasesleaseid)) by running the capture program for the device that lease holds. On a gateway: serve the same URL and relay each request to the worker that holds the lease. Off by default because a stream is a capture process pinned to a leased device — with it off, nothing is running until someone asks to look, and nothing is running when they stop. Read at start; changing it needs a restart. | `false` |
+| `stream.command`                  | **Worker side.** The capture program: a name looked up on `PATH`, or a path. A gateway ignores it and logs a warning. Used only when `stream.enabled` is `true`. A worker whose program is not there reports the capability as unavailable in `simlock status` and `simlock worker list`, and refuses a request with `STREAM_UNAVAILABLE` rather than failing one silently. | `simlock-screen-capture` |
+| `stream.fps`                      | **Worker side.** The frame rate the encoder is asked for. A capture only produces frames when the device's screen changes, so this is a ceiling and not a promise: an untouched home screen stays far below it, which is what keeps an idle stream cheap. A whole number from `1` to `60`. | `30` |
+| `stream.maxDimension`             | **Worker side.** Cap on the encoded picture's longest side, in pixels; the other side follows the device's aspect ratio. This is the lever that costs the most bandwidth — a device that encodes at about 6 Mbit/s native is nearer 1.4 Mbit/s at `720`. A whole number from `96` to `4096`. | `720` |
+| `stream.bitrateKbps`              | **Worker side.** Target bitrate in kilobits per second, handed to the encoder as an average rather than a ceiling; a frame that needs more takes it. A whole number from `64` to `40000`. | `1500` |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
 | `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1. Among the workers that can serve the request, in order: a worker whose health is not `running`, or that has requests of its own waiting, is left out; a worker holding a ready device that fits goes first (the device's mode must fit the request, a request with no mode fits a device that serves the worker's default mode, and its runtime must be the one requested or, with none requested, the one the worker would pick: the newest runtime the model pairs with); otherwise a worker with no free running slot for the platform or overall is left out (a running device that is not leased counts as free: the worker shuts it down to make room), a worker under its RAM budget for the platform is preferred over one at it (a worker at its budget is still asked when it is the only one left), and the one with the most free running capacity for the platform wins. A worker that is left out is busy, not unable: the request waits for it. Ties go to the lowest worker id. | `warm-then-free`                                                 |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
@@ -160,13 +165,16 @@ local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
-`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `gateway.*` and
-`agentDevice.*` (`enabled` and `leaseTtlCapMs` only). Every other key —
-capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
+`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*`, `gateway.*`, `agentDevice.*`
+(`enabled` and `leaseTtlCapMs` only) and `stream.*` (`enabled` only). Every
+other key — capacity, drivers, downloads, idle, warmPool, health, ios, android,
+stalledTransition —
 configures devices, which a gateway does not have; each one present in a
 gateway's config is reported with a warning and ignored, the same treatment an
-unknown key gets. The worker-side `gateway.url`/`token`/`label` and
-`agentDevice.command` are warned about there too. Nothing is stripped: the same file can be copied between a
+unknown key gets. The worker-side `gateway.url`/`token`/`label`,
+`agentDevice.command` and the `stream.command`/`fps`/`maxDimension`/`bitrateKbps`
+that configure a capture a gateway never run are warned about there too.
+Nothing is stripped: the same file can be copied between a
 worker and a gateway with only `mode` differing, and the warning is what makes
 the difference visible rather than silent.
 
@@ -566,6 +574,36 @@ snapshot.
 Only these four keys exist. There is no way to pass other emulator
 arguments from config, so nothing here can move an emulator's port or AVD
 home.
+
+## Screen streaming
+
+`stream.enabled` turns a leased device's screen into something you can look at:
+a worker runs a capture program for the device a lease holds, encodes its
+screen as H.264, and the bytes reach a browser as the body of one ordinary
+`GET /v1/stream/leases/{leaseId}` (see
+[HTTP-API.md](HTTP-API.md#get-v1streamleasesleaseid)). On a gateway the same URL
+relays the request to the worker that holds the lease, and the gateway forwards
+the bytes without reading one of them.
+
+Nothing is captured until someone asks to look, and asking is the only
+on-command there is: the request itself keeps the capture running, and closing
+it — pressing Stop, navigating away, closing the tab — is the off-command. A
+lease that ends by any other route stops the capture too, so a device never
+goes on being filmed after it has been handed back, and no stream outlives a
+viewer or a lease.
+
+What it costs is mostly `stream.maxDimension` and `stream.bitrateKbps`. Against
+a device whose screen is being actively redrawn on an Apple silicon Mac, the
+encoder's native settings produce about 6 Mbit/s; at `maxDimension` `720` and
+`bitrateKbps` `1500` the same motion is about 1.4 Mbit/s, and a device nobody is
+touching sits between 25 and 90 kbit/s because a screen that has not changed
+sends almost nothing. `stream.fps` is a ceiling rather than a rate for the same
+reason. The capture process itself costs about 50-80 MB of memory per device
+being watched.
+
+Only a simulator's screen can be streamed. A lease on an Android emulator or a
+physical iOS device is refused with `STREAM_NOT_SUPPORTED`, naming that as the
+reason rather than failing for one the reader has to guess.
 
 ## Capacity strategies
 

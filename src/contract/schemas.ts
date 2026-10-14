@@ -904,6 +904,17 @@ export const configSchema = z.object({
     command: z.string(),
     leaseTtlCapMs: z.number().optional(),
   }),
+  // why: optional because a worker older than the stream route answers `config.get` with no `stream`
+  // at all, and a gateway reading one must not fail to read its config over a feature it does not have.
+  stream: z
+    .object({
+      enabled: z.boolean(),
+      command: z.string(),
+      fps: z.number(),
+      maxDimension: z.number(),
+      bitrateKbps: z.number(),
+    })
+    .optional(),
   health: z.object({
     enabled: z.boolean(),
     probeIntervalMs: z.number(),

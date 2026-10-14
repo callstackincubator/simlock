@@ -903,6 +903,55 @@ Paths in `args` resolve on the daemon's filesystem
 that path to exist *there*). Getting a file onto that machine is not part of
 this API in this version — see [Not implemented](#not-implemented).
 
+### `GET /v1/stream/leases/{leaseId}`
+
+Streams the screen of the device one lease holds, for as long as the
+connection stays open. Offered only where `stream.enabled` is `true` (see
+[CONFIGURATION.md](CONFIGURATION.md)); a daemon without it never mounts this
+route and answers it like any path it has not heard of.
+
+The response has no declared length and does not end on its own. Its headers
+describe the picture before a byte of it is read:
+
+| Header | |
+|---|---|
+| `content-type` | `application/vnd.simlock.stream+h264`, or `+mjpeg` |
+| `simlock-stream-codec` | `h264` or `mjpeg` |
+| `simlock-stream-width` / `-height` | The encoded picture's size in pixels |
+| `simlock-stream-fps` | The frame rate the encoder was asked for |
+| `x-simlock-lease` | The lease id this stream is |
+
+The body is a sequence of frames, each one `4-byte big-endian length`, then a
+1-byte tag, then the payload. The length covers the tag byte. Tag `0x05` is a
+JSON frame naming the device's `codec`, `width`, `height` and `fps`, and it is
+always the first frame; `0x01` is the codec's parameter sets, `0x02` a key
+frame, `0x03` a delta. A key frame's and a delta's payload is length-prefixed
+AVCC NAL data, which is what a browser's `VideoDecoder` consumes directly, and
+the `0x01` payload is an `avcC` blob for its `configure` call — the bytes a
+capture wrote are the bytes a reader gets, re-framed by nothing on the way.
+
+**Closing the request is the only stop-command.** There is no stop endpoint and
+no stop frame: holding the connection open is what keeps the capture running,
+and a client that goes away — aborting the fetch, closing the tab, losing the
+network — ends it. A lease ending by any route stops it too, including while a
+viewer is still connected, so a stream cannot outlive the lease that authorises
+it. Nothing is captured before a request arrives, which is why this route is
+worth asking for twice rather than holding open in advance.
+
+Authorization is the same as every other lease route: a token sees its own
+leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTED`
+(415) means the device behind the lease can never produce a picture here — a
+physical iOS device or an Android emulator. `STREAM_UNAVAILABLE` (503) means it
+could but cannot now, usually a capture program that is not installed; asking
+again after its operator installs it is the right move. `WORKER_UNREACHABLE` on
+a gateway means the worker that holds the lease is gone.
+
+The body is the same bytes on a gateway as on the worker: a gateway relays a
+stream rather than reading one, so a client pointed at a gateway needs no second
+code path. A refusal, by contrast, keeps the shape every other route uses and
+the worker's own code — a viewer told `STREAM_NOT_SUPPORTED` by a gateway
+learned that from the machine that looked at the device.
+
 ### `POST /v1/components/install`
 
 Role: `operator`. Installs one iOS simulator runtime or Android system image
@@ -1692,7 +1741,7 @@ Every failure is the same shape the daemon protocol uses:
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
-| 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) , `UNKNOWN_DEVICE` (`DELETE /v1/devices/{id}` naming a device that is not enrolled) |
+| 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid); also `GET /v1/stream/leases/{leaseId}` naming a lease unknown, released, or another requester's — a stream reveals no lease that asking could not already list), `UNKNOWN_DEVICE` (`DELETE /v1/devices/{id}` naming a device that is not enrolled) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `LEASE_ID_TAKEN` (a `leaseId` an active lease or a waiting request holds; body carries `leaseId`; on a gateway, one of the gateway's own leases or requests, or a worker that refused it), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device or `leaseId`), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`), `DEVICE_BUSY` (`POST /v1/devices`, `DELETE /v1/devices/{id}` of a leased, reclaiming or held device; body carries `id` and `reason`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING` (a request required capabilities no worker able to serve it has available; body carries `capabilities`), `DEVICE_NOT_ENROLLABLE` (`POST /v1/devices`; body carries `id`, `platform`, `reason`, and `canonicalId` when known), `PASSTHROUGH_REFUSED` (a refused `exec` verb or `devicectl` command, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`, `POST /v1/devices`, `DELETE /v1/devices/{id}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |

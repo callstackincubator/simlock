@@ -3581,6 +3581,13 @@ function testConfig(
   return {
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
+    stream: {
+      bitrateKbps: 1500,
+      command: "simlock-screen-capture",
+      enabled: false,
+      fps: 30,
+      maxDimension: 720,
+    },
     gateway: {
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
