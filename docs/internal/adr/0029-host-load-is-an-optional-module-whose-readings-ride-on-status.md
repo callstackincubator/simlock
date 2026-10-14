@@ -1,4 +1,4 @@
-# 0028. Host load is an optional module whose readings ride on status
+# 0029. Host load is an optional module whose readings ride on status
 
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-13
