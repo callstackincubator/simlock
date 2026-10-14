@@ -292,7 +292,7 @@ function defineSuite(target: Target): void {
       await setLimits(worker, target, 2);
       await warmUp(worker, target, 2);
       await waitForCapacity(2);
-    }, 420_000);
+    }, 600_000);
 
     afterAll(async () => {
       await setLimits(worker, target, 1);

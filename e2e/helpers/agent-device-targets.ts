@@ -158,12 +158,19 @@ export async function warmUp(daemon: SharedTestEnv, target: Target, count: numbe
     const released = await daemon.cli(["release", id], { timeout: 60_000 });
     expect(released.code, released.stderr).toBe(0);
   }
+  // why: a released Android device is shut down and boots again with a wiped disk; `count` of them boot at once on a loaded host, so the wait allows a lease's whole boot window (330 s) rather than one quiet boot.
+  let observed = "nothing read yet";
   await waitFor(
     async () => {
       const devices = await listDevices(daemon);
+      observed = devices.map((device) => device.state).join(",") || "none";
       return devices.length >= count && devices.every((device) => device.state === "ready");
     },
-    { timeout: 240_000, interval: 1_000, label: "warm-up devices ready" },
+    {
+      timeout: 330_000,
+      interval: 1_000,
+      label: () => `${String(count)} warm-up devices ready; last observed: ${observed}`,
+    },
   );
 }
 

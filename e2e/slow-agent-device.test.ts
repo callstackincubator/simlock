@@ -559,7 +559,7 @@ function defineSuite(target: Target): void {
     afterAll(async () => {
       await setLimits(env, target, 1);
       await awaitAgentDevice();
-    }, 420_000);
+    }, 600_000);
 
     it(
       "with both devices ready, devices lists nothing before open, and after open only the device it bound, not the other ready device",
