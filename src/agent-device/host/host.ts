@@ -30,12 +30,11 @@ function stripBodyHeaders(headers: Headers): Headers {
 
 const DOWNLOAD_LIMIT = 2_147_483_648;
 
-function tooLarge(size: number | undefined): Response {
-  const shown = size === undefined ? "more than 2147483648" : String(size);
+function tooLarge(size: number): Response {
   return Response.json(
     {
       code: "INVALID_ARGS",
-      error: `the download is ${shown} bytes; simlock carries downloads up to 2 GB (${String(DOWNLOAD_LIMIT)} bytes)`,
+      error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (${String(DOWNLOAD_LIMIT)} bytes)`,
       ok: false,
     },
     { status: 413 },
