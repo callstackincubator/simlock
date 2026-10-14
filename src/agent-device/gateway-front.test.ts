@@ -1831,6 +1831,31 @@ describe(
       expectUnreachable(await envelopeOf(devices));
     });
 
+    it("with one of the token's two workers reconnected but not yet read and the other connected, `devices` answers `workerUnreachable()` and asks neither worker", async () => {
+      const rig = await twoLeasesOnTwoWorkers();
+      const gone = holderOf(rig, 1);
+      const kept = holderOf(rig, 2);
+      await listedByGateway(rig, 2);
+      await dropUplink(rig, gone);
+      gone.latency["listCatalog"] = slowCatalogMs;
+      await advance(rig, 2_000, 500);
+      await vi.waitFor(
+        async () => {
+          const view = await viewOf(rig, gone.label);
+          expect(view?.connection).toBe("connected");
+          expect(view?.catalogReadAt).toBeUndefined();
+        },
+        { timeout: 10_000 },
+      );
+      const received = [gone, kept].map((member) => member.fake.requests.length);
+
+      const devices = await command(rig, "devices", undefined);
+
+      expect(devices.status).toBe(503);
+      expectUnreachable(await envelopeOf(devices));
+      expect([gone, kept].map((member) => member.fake.requests.length)).toEqual(received);
+    });
+
     it("while the worker is disconnected, the simlock lease is not released, and the front's entry is not marked ended", async () => {
       const rig = await setUp();
       const member = first(rig);
