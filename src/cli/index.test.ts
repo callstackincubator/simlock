@@ -3040,6 +3040,14 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       expect(stdout).toContain(`  Load: ${READING} · read 0s ago\n`);
     });
 
+    it("simlock worker list rounds a reading's age up to whole seconds", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, load: { ...PARTS, readAt: NOW - 1_001 } },
+      ]);
+
+      expect(stdout).toContain(`  Load: ${READING} · read 2s ago\n`);
+    });
+
     it("simlock status against a gateway prints the gateway's own Load line, and each worker's Load line aged from the status time", async () => {
       const output = outputCapture();
       const status: StatusGetOutput = {
