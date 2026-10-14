@@ -9,7 +9,7 @@ import {
   signal,
   TYPE,
   type LinkPair,
-} from "./test-support.js";
+} from "./testing.js";
 
 async function openPair(pair: LinkPair) {
   const g = await pair.gateway.openChannel({ signal: signal() });

@@ -42,7 +42,7 @@ import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
-import { linkPair } from "../link/test-support.js";
+import { linkPair } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import { SimlockWire } from "../simlock-client/wire.js";
 import type { RelayTargets } from "./relay.js";

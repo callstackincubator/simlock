@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { FakeDriver } from "../core/testing.js";
 import { MemoryFilesystem, SystemClock, type Logger } from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
-import { linkPair, type LinkPair } from "../link/test-support.js";
+import { linkPair, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { RelayTargets } from "./relay.js";

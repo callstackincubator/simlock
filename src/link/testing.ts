@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 
 import {
   createConnectionPair,
@@ -9,7 +7,6 @@ import {
   type MemoryTransportConnection,
   type UplinkTransportConnection,
 } from "../ports/index.js";
-import { WebSocketUplinkConnector, WebSocketUplinkListenerFactory } from "../ports/testing.js";
 import { createLink, type LinkChannel, type LinkConnection } from "./index.js";
 
 export const KiB = 1024;
@@ -249,44 +246,6 @@ export function linkWithRawPeer(): RawPeer {
   raw.onData((chunk) => receivedText.push(chunk));
   link.onData((chunk) => linkText.push(chunk));
   return { clock, link, log, linkText, raw, received, receivedText, tap };
-}
-
-export async function startWebSocketPair(): Promise<{
-  worker: UplinkTransportConnection;
-  gateway: UplinkTransportConnection;
-  close(): Promise<void>;
-}> {
-  const factory = new WebSocketUplinkListenerFactory();
-  let accepted: ((connection: UplinkTransportConnection) => void) | undefined;
-  const acceptedConnection = new Promise<UplinkTransportConnection>((resolve) => {
-    accepted = resolve;
-  });
-  const listener = await factory.listen({
-    accept: (uplink) => accepted?.(uplink.connection),
-    authenticate: () => Promise.resolve("accept"),
-  });
-  const server: Server = createServer((_request, response) => {
-    response.writeHead(404).end();
-  });
-  factory.attach(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  const worker = await new WebSocketUplinkConnector().connect({
-    token: "join",
-    url: `ws://127.0.0.1:${String(port)}`,
-    workerId: "wrk_1",
-  });
-  const gateway = await acceptedConnection;
-  return {
-    close: async () => {
-      await worker.close();
-      await gateway.close();
-      await listener.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-    gateway,
-    worker,
-  };
 }
 
 export function pattern(offset: number, size: number): Uint8Array {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
 import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
-import { linkPair, TappedTransport, TYPE } from "../link/test-support.js";
+import { linkPair, TappedTransport, TYPE } from "../link/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import type { DispatchSession } from "./dispatch.js";

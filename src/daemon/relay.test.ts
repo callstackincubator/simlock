@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
 
 import type { Logger } from "../ports/index.js";
-import { linkPair } from "../link/test-support.js";
+import { linkPair } from "../link/testing.js";
 import { RelayConnection, type RelayPush, type RelayTarget } from "./relay.js";
 import { gate, relayInput, settleWithin } from "./test-relay-support.js";
 

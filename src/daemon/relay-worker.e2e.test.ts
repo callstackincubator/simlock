@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { creditEnvelope } from "../link/test-support.js";
+import { creditEnvelope } from "../link/testing.js";
 import type { DaemonServer } from "./server.js";
 import type { RelayTarget } from "./relay.js";
 import {

@@ -17,13 +17,13 @@ import {
   RecordingLogger,
   settle,
   signal,
-  startWebSocketPair,
   TappedTransport,
   TYPE,
   writeAndClose,
   writeUntilBlocked,
   type LinkPair,
-} from "./test-support.js";
+} from "./testing.js";
+import { startWebSocketPair } from "./test-websocket.js";
 import { FakeClock } from "../ports/index.js";
 
 async function openPair(pair: LinkPair): Promise<{ g: LinkChannel; w: LinkChannel }> {

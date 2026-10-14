@@ -14,7 +14,7 @@ import {
   settle,
   TYPE,
   type RawPeer,
-} from "./test-support.js";
+} from "./testing.js";
 
 async function acceptRaw(peer: RawPeer, number = 2, id = "raw-a") {
   await peer.raw.writeBinary(openEnvelope(number, id));

@@ -7,9 +7,9 @@ import {
   linkPair,
   settle,
   signal,
-  startWebSocketPair,
   RecordingLogger,
-} from "./test-support.js";
+} from "./testing.js";
+import { startWebSocketPair } from "./test-websocket.js";
 import { FakeClock } from "../ports/index.js";
 
 const MESSAGES = ['{"id":1,"type":"hello"}\n', "second é — ünïcode\n", "third\n"];
