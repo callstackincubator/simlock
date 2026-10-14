@@ -7,9 +7,9 @@ You start fresh on purpose: judge the diff, not how it was built.
 - **Removed.** Run `.agents/scripts/stale-refs.sh`: it lists every line in
   the repo that still names a path, declaration or quoted string the diff
   removed. Then, for every name, behaviour, limit or guarantee the diff
-  removes, renames or narrows, have an `Explore` agent search the whole
-  repo (comments, docs, test titles, config, help text) by its name and by
-  the plain words that describe it. Fix every line that still states the
+  removes, renames or narrows, have an `Explore` agent (`model: haiku`)
+  search the whole repo (comments, docs, test titles, config, help text) by
+  its name and by the plain words that describe it. Fix every line that still states the
   old fact.
 - **Replaced.** When one mechanism takes over another's job (a lint rule for
   a test, a type for a runtime check, a new module for an old one), list the
@@ -30,7 +30,10 @@ edited after the red commit:
   two claims has an assertion for each.
 - Break the code it covers once (flip the condition, drop the filter, return
   early) and run its file: it fails on the assertion its title names.
-  Restore the code. A test that stays green is vacuous: fix it.
+  Restore the code. A test that stays green is vacuous: fix it. Every
+  test, no skipping: a probe the audit skips, a reviewer does on a far
+  costlier model. Report `probed <p>/<t>` on the `audit:` line: `t` tests
+  added or changed, `p` probed.
 - A test comparing two outputs also asserts one of them against a literal.
 
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the

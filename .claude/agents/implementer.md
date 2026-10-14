@@ -60,13 +60,15 @@ Read code narrowly: find what you need with `grep -n`, then read only those
 lines. Never print a whole file to skim it: everything you read stays in
 your context and is paid for again on every later turn.
 
-**Delegate searches.** A question about the whole repo (every caller,
-reader or writer of a name; every doc, comment or test that states a fact)
-goes to an `Explore` agent: the question, then `Answer with path:line
-lines only, one per line, no prose.` Read only the lines it returns. Run
-`grep` yourself only for one name in files you already know. To check a
-library's or tool's documentation, fetch it (WebFetch, WebSearch); fetch
-nothing else.
+**Delegate searches.** A search across files you have not opened, or one
+likely to print more than about 20 lines (every caller, reader or writer of
+a name; every doc, comment or test that states a fact; the helper or
+fixture that already does X), goes to an `Explore` agent with
+`model: haiku`: the question, then `Answer with path:line lines only, one
+per line, no prose.` Read only the lines it returns. Run `grep` yourself
+only for one name in files you already know, with `-c` first when you
+cannot guess the count. To check a library's or tool's documentation, fetch it (WebFetch,
+WebSearch); fetch nothing else.
 
 **Helpers run in the foreground.** Start every helper agent of a step in
 one message, each an Agent call with `run_in_background: false`, so they
@@ -112,7 +114,7 @@ failing:
   <test file:line>
 map:
   <test file:line> -> <source paths>
-audit: stale <n>  replaced <n>  donewhen <k>/<n>
+audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>
 fixes:
   <finding path:line> -> found <n> fixed <n>
 run: pass | fail <test file:line>  ci: pass | fail | running | unchecked

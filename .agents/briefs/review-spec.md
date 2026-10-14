@@ -22,17 +22,17 @@ Answer four questions, and only these:
 delivered`, or `Done when 3: differently: <how, at most 15 words>`.
 2. Does the diff do anything the specification did not ask for? Anything
    `always-in-scope.md` lists is asked for: never a finding.
-3. For every test the diff adds or changes, by `file:line`: does its title
-   state a claim the specification made, and does its body assert that
-   claim? A title that promises more than the body proves is a defect. For
-   every change in Tests after red that deletes a test or removes or loosens
-   an assertion: which line of the specification is no longer proven?
+3. For every Tests line of the specification: the test in the diff that
+   proves it, by `file:line`, or `missing`. For every change in Tests after
+   red that deletes a test or removes or loosens an assertion: which line of
+   the specification is no longer proven? Whether a test's body proves its
+   title is the code review's question, not yours.
 4. For each assumption: is it the conservative choice, and consistent with
    the specification? One that contradicts a line of it, or decides
    behaviour a user would see that nobody decided, is blocking.
 
-Blocking: a line not delivered or delivered differently, a test whose body
-does not prove its title, a line of the specification left unproven, an
+Blocking: a line not delivered or delivered differently, a Tests line with
+no test, a line of the specification left unproven, an
 assumption that fails question 4, behaviour a user sees that the
 specification did not ask for, or a breach of a file in `spec/`.
 

@@ -5,12 +5,14 @@ rule it breaks), and ends in `src` (the fix changes production source) or
 `text` (a test, a comment, a doc or an assumption line is enough).
 
 1. **Find every instance.** The line is one instance of its class. Search
-   the whole diff for others, and for a stale claim have an `Explore` agent
-   search the whole repo. For an order, interleaving or conflict between two
+   the whole diff for others, and for a stale claim have an `Explore`
+   agent (`model: haiku`) search the whole repo. For an order, interleaving or conflict between two
    components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
    - behaviour: write the failing test first, then the fix;
+   - a broken rule (`[architecture N]`, `[safety N]`, ...): change the code
+     so it keeps the rule, never the doc that states the rule;
    - stale doc: fix it. Stale comment: delete it, or fix it if the comment
      rule allows it (it starts with `why:`). Each fact in the new text (who
      does it, which cases, which values) names the `path:line` that shows it
