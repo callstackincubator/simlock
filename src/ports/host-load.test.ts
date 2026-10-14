@@ -1,5 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, rm, statfs } from "node:fs/promises";
+import { cpus, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,11 @@ import {
   ScriptedProcessRunner,
   type CpuTimes,
 } from "./index.js";
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, cpus: vi.fn(actual.cpus) };
+});
 
 const MIB = 1024 * 1024;
 const MEMSIZE = 34_359_738_368;
@@ -278,6 +283,8 @@ describe("NodeFilesystem.diskSpace", () => {
 
     expect(freeBytes).toBeGreaterThan(0);
     expect(totalBytes).toBeGreaterThanOrEqual(freeBytes);
+    const details = await statfs(directory);
+    expect(totalBytes).toBe(details.blocks * details.bsize);
   });
 });
 
@@ -309,5 +316,21 @@ describe("productionHostLoadProbe", () => {
 
     expect(run).toHaveBeenCalledWith("sysctl", SYSCTL_ARGS, expect.anything());
     expect(counters.memory?.totalBytes).toBe(MEMSIZE);
+  });
+
+  it("counts the Linux probe's cores from os.cpus().length", async () => {
+    vi.mocked(cpus).mockReturnValue(
+      Array.from({ length: 3 }, () => ({}) as ReturnType<typeof cpus>[number]),
+    );
+    vi.spyOn(NodeFilesystem.prototype, "readFile").mockImplementation(async (path: string) =>
+      path === "/proc/stat" ? "cpu  10 0 10 80 0 0 0 0 0 0\n" : "",
+    );
+
+    const counters = await productionHostLoadProbe({
+      dataDirectory: tmpdir(),
+      platform: "linux",
+    }).read();
+
+    expect(counters.cpu).toStrictEqual({ busyTime: 20, cores: 3, limited: false, totalTime: 100 });
   });
 });

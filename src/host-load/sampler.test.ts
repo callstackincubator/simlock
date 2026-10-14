@@ -82,6 +82,22 @@ describe("HostLoadSampler", () => {
     sampler.dispose();
   });
 
+  it("keeps the 15 s beat when a read takes a few seconds", async () => {
+    const { clock, probe, sampler, settle } = harness();
+    sampler.start();
+    await settle(counters(0, 100));
+
+    clock.advance(15_000);
+    expect(probe.reads).toBe(2);
+    clock.advance(4_000);
+    await settle(counters(10, 200));
+    clock.advance(10_999);
+    expect(probe.reads).toBe(2);
+    clock.advance(1);
+    expect(probe.reads).toBe(3);
+    sampler.dispose();
+  });
+
   it("gives up on a read after 10 s, ignores its late answer, and starts no other read until it settles", async () => {
     const { clock, probe, sampler, settle } = harness();
     sampler.start();

@@ -816,6 +816,14 @@ describe("fitHostLoad", () => {
     expect(() => hostLoadSchema.parse(fitted)).not.toThrow();
   });
 
+  it("drops a memory part whose figures break the schema, keeping the others", () => {
+    const disk = { freeBytes: 1, totalBytes: 2 };
+
+    const fitted = fitHostLoad({ ageMs: 5, disk, memory: { ...memory, totalBytes: -1 } });
+
+    expect(fitted).toStrictEqual({ ageMs: 5, disk });
+  });
+
   it("leaves a reading that already fits as it is, and nothing as nothing", () => {
     const reading = {
       ageMs: 15,
