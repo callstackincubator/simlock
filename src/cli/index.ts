@@ -1881,7 +1881,7 @@ async function runWorkerList(
   if (values.json) writeResult(environment, result);
   else
     environment.stdout.write(
-      `${formatWorkers(result.workers, { installsAt: environment.clock.now() })}\n`,
+      `${formatWorkers(result.workers, { installs: true, now: environment.clock.now() })}\n`,
     );
   return 0;
 }
@@ -2191,29 +2191,19 @@ function installTargets(named: string[] | undefined, all: unknown): "all" | stri
   return "all";
 }
 
-/**
- * One line per worker, in the shape an operator scans: state first (that is the question), then
- * identity, then what it is carrying. `simlock worker list --json` is the machine-readable
- * answer, so this stays a summary rather than a dump.
- *
- * With `installsAt` (the time now), each worker's installs in progress follow it, indented.
- * `simlock status` leaves it out: it lists the fleet's installs on their own lines, each naming
- * its worker, the way it lists devices and leases.
- */
 function formatWorkers(
   workers: WorkerView[],
-  options: { readonly installsAt?: number } = {},
+  options: { readonly installs?: boolean; readonly now: number },
 ): string {
   if (workers.length === 0) return "No workers have connected to this gateway.";
-  const { installsAt } = options;
+  const { installs: showInstalls, now } = options;
   return workers
     .map((worker) => {
       const installs =
-        installsAt === undefined
-          ? ""
-          : (worker.installs ?? [])
-              .map((install) => `\n  ${formatInstall(install, installsAt)}`)
-              .join("");
+        showInstalls === true
+          ? (worker.installs ?? []).map((install) => `\n  ${formatInstall(install, now)}`).join("")
+          : "";
+      const load = workerLoadLine(worker, now);
       const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
       const state = workerState(worker);
       const capacity =
@@ -2234,9 +2224,16 @@ function formatWorkers(
             : ` -- ${entry.name} ${entry.state}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${capabilities}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${host}${capabilities}${load}${installs}`;
     })
     .join("\n");
+}
+
+function workerLoadLine(worker: WorkerView, now: number): string {
+  if (worker.connection === "disconnected") return "\n  Load: no reading while disconnected";
+  if (worker.load === undefined) return "";
+  const { readAt, ...parts } = worker.load;
+  return `\n  ${formatLoadLine(parts, Math.ceil(Math.max(0, now - readAt) / 1000), "leave out")}`;
 }
 
 /** A worker's state words: its connection, then `starting` while it has not finished starting, then `drained`. */
@@ -2411,17 +2408,24 @@ function formatLoadCores(cores: number): string {
   return String(roundHalfUp(cores, cores < 0.1 ? 2 : 1));
 }
 
-function formatLoadLine(load: NonNullable<StatusGetOutput["load"]>): string {
+function formatLoadLine(
+  load: Pick<NonNullable<StatusGetOutput["load"]>, "cpu" | "disk" | "memory">,
+  ageSeconds: number,
+  unreadParts: "say" | "leave out" = "say",
+): string {
   const { cpu, disk, memory } = load;
+  const unread = (text: string): string[] => (unreadParts === "say" ? [text] : []);
   const cpuPart =
     cpu === undefined
-      ? "CPU unavailable"
-      : `CPU ${roundHalfUp(cpu.busyPercent, 0)}% busy (${formatLoadCores(cpu.cores)} ${
-          cpu.cores === 1 ? "core" : "cores"
-        }${cpu.limited ? ", limit" : ""})`;
+      ? unread("CPU unavailable")
+      : [
+          `CPU ${roundHalfUp(cpu.busyPercent, 0)}% busy (${formatLoadCores(cpu.cores)} ${
+            cpu.cores === 1 ? "core" : "cores"
+          }${cpu.limited ? ", limit" : ""})`,
+        ];
   const memoryParts =
     memory === undefined
-      ? ["memory unavailable"]
+      ? unread("memory unavailable")
       : [
           `memory ${formatLoadBytes(memory.availableBytes)} of ${formatLoadBytes(memory.totalBytes)} available${memory.limited ? " (limit)" : ""}`,
           `swap ${formatLoadBytes(memory.swapUsedBytes)} used`,
@@ -2429,14 +2433,16 @@ function formatLoadLine(load: NonNullable<StatusGetOutput["load"]>): string {
         ];
   const diskPart =
     disk === undefined
-      ? "disk unavailable"
-      : `disk ${formatLoadBytes(disk.freeBytes)} of ${formatLoadBytes(disk.totalBytes)} free`;
-  const age = `read ${Math.ceil(load.ageMs / 1000)}s ago`;
-  return `Load: ${[cpuPart, ...memoryParts, diskPart, age].join(" · ")}`;
+      ? unread("disk unavailable")
+      : [`disk ${formatLoadBytes(disk.freeBytes)} of ${formatLoadBytes(disk.totalBytes)} free`];
+  const age = `read ${String(ageSeconds)}s ago`;
+  return `Load: ${[...cpuPart, ...memoryParts, ...diskPart, age].join(" · ")}`;
 }
 
 function loadLines(status: StatusGetOutput): string[] {
-  return status.load === undefined ? [] : [formatLoadLine(status.load)];
+  return status.load === undefined
+    ? []
+    : [formatLoadLine(status.load, Math.ceil(status.load.ageMs / 1000))];
 }
 
 /** The web console's address line, for `status` and `daemon start`: none when HTTP is off. */
@@ -2477,7 +2483,9 @@ function formatStatus(status: StatusGetOutput, now: number): string {
           `RAM budget: ${formatGibibytes(ramBudget.usedBytes)}/${formatGibibytes(ramBudget.limitBytes)} used${ramBudget.overLimit ? " (over limit)" : ""}`,
         ];
   const workerLines =
-    workers === undefined ? [] : [formatWorkers(workers), ""].filter((line) => line !== "");
+    workers === undefined
+      ? []
+      : [formatWorkers(workers, { now }), ""].filter((line) => line !== "");
   // A gateway keeps no pool of its own: each worker's is on its entry in the JSON.
   const warmPoolLines =
     status.warmPool === undefined || daemon.mode === "gateway"

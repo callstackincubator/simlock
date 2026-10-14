@@ -224,6 +224,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
       ...(options.gatewayUplinks === undefined ? {} : { gatewayUplinks: options.gatewayUplinks }),
       hostSystem,
+      ...(options.hostLoadProbe === undefined ? {} : { hostLoadProbe: options.hostLoadProbe }),
       idGenerator,
       ipc,
       logger,
@@ -697,6 +698,7 @@ interface GatewayDaemonOptions {
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
   /** The gateway's own machine. It runs no drivers, so its host facts carry no tools. */
   readonly hostSystem: HostSystem;
+  readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
@@ -840,11 +842,21 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     rejectHttpStarted = rejectStarted;
   });
 
+  const hostLoadProbe =
+    options.hostLoadProbe === undefined
+      ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
+      : options.hostLoadProbe;
+  const hostLoad =
+    hostLoadProbe === null
+      ? undefined
+      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
+
   const daemon = new DaemonServer({
     adminSecret,
     clock,
     config,
     defaultRequesterId: process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
+    ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: new GatewayDispatcher({
       awaitReady: () => Promise.resolve(),
@@ -859,6 +871,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       eventHistory,
       health: () => daemon.health,
       host: fitHostFacts({ ...options.hostSystem, tools: [] }),
+      ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
       leaseIndex,
       logger: logger.child("gateway"),
       tokens,

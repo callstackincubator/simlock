@@ -1300,11 +1300,28 @@ simulated (hence the thin Android catalog), trimmed to one worker:
         "osVersion": "26.6.1",
         "arch": "arm64",
         "tools": [{"platform": "ios", "name": "xcode", "version": "16.4", "build": "16F6"}]
+      },
+      "load": {
+        "readAt": 1790864078200,
+        "cpu": {"busyPercent": 34.2, "cores": 10, "limited": false},
+        "memory": {
+          "totalBytes": 34359738368,
+          "availableBytes": 10523000000,
+          "swapUsedBytes": 1288490188,
+          "pressure": "normal",
+          "limited": false
+        },
+        "disk": {"freeBytes": 120700000000, "totalBytes": 530800000000}
       }
     }
   ]
 }
 ```
+
+`load` is the worker's latest host load, from its own
+[`GET /v1/status`](#get-v1status), and `readAt` is when it was read, in
+milliseconds since the epoch on the gateway's clock. A disconnected or
+incompatible worker shows none, and so does a worker that does not send one.
 
 `catalogReadAt` is when the gateway last read that worker's catalog since the
 worker connected. It is absent until the first read, and again after the

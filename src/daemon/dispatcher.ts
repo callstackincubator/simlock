@@ -798,8 +798,13 @@ export class Dispatcher {
    * holds that flag, not this host.
    */
   #workerList: Handler<"worker.list"> = async (_input, session) => {
+    // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
+    let receivedAt = this.options.clock.now();
     const [status, devices, catalog] = await Promise.all([
-      this.#statusGet({}, session),
+      Promise.resolve(this.#statusGet({}, session)).then((answer) => {
+        receivedAt = this.options.clock.now();
+        return answer;
+      }),
       this.#listGet({ kind: "devices" }, session),
       this.#keptViewCatalog(session),
     ]);
@@ -811,6 +816,7 @@ export class Dispatcher {
             catalog: OPERATIONS["catalog.get"].output.parse(catalog),
             config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
             devices: OPERATIONS["list.get"].output.parse(devices),
+            receivedAt,
             status: OPERATIONS["status.get"].output.parse(status),
           }),
           connection: "connected",

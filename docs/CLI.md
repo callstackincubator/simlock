@@ -2382,9 +2382,15 @@ gateway to take it out of rotation or forget it.
 ```console
 $ simlock worker list
 wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9
+  Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 12s ago
   Install ios 26.4: downloading for 42s, 1 waiter
 wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s) -- macOS 14.7 x64; xcode 16.2 (16C5032a)
+  Load: no reading while disconnected
 ```
+
+A connected worker's `Load:` line is its latest host load and how long ago it
+was read; `load` in `--json` carries the same with `readAt`. A worker that
+sends none shows no line, and neither does an incompatible one.
 
 ## `simlock config [get <key>|set <key> <value>]`
 

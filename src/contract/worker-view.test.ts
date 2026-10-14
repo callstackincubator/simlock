@@ -46,6 +46,7 @@ describe("workerViewFields", () => {
     const reads = (devices: unknown[]) =>
       ({
         devices,
+        receivedAt: 0,
         status: {
           capacity: CAPACITY,
           daemon: { health: "running", mode: "worker" },
@@ -73,6 +74,7 @@ describe("workerViewFields", () => {
     const reads = (device: object) =>
       ({
         devices: [device],
+        receivedAt: 0,
         status: {
           capacity: CAPACITY,
           daemon: { health: "running", mode: "worker" },
@@ -106,6 +108,7 @@ describe("workerViewFields", () => {
     const reads = (device: object) =>
       ({
         devices: [device],
+        receivedAt: 0,
         status: {
           capacity: CAPACITY,
           daemon: { health: "running", mode: "worker" },
@@ -133,6 +136,7 @@ describe("workerViewFields", () => {
 
   it("builds a starting worker's view from its health and host alone, with every other field absent", () => {
     const view = workerViewFields({
+      receivedAt: 0,
       status: { daemon: { health: "starting", mode: "worker" }, host: HOST },
     });
 
@@ -141,6 +145,7 @@ describe("workerViewFields", () => {
 
   it("leaves a starting worker's view without the devices, catalog and config it would otherwise be given", () => {
     const view = workerViewFields({
+      receivedAt: 0,
       catalog: { platforms: [] },
       config: CONFIG,
       devices: [],
@@ -158,6 +163,7 @@ describe("workerViewFields", () => {
     };
 
     const running = workerViewFields({
+      receivedAt: 0,
       devices: [],
       status: {
         capacity: CAPACITY,
@@ -170,6 +176,7 @@ describe("workerViewFields", () => {
       },
     });
     const starting = workerViewFields({
+      receivedAt: 0,
       status: { daemon: { health: "starting", mode: "worker" }, host: HOST, warmPool },
     });
 
@@ -179,6 +186,7 @@ describe("workerViewFields", () => {
 
   it("copies every field a running worker reports, and makes an absent installs or waiting list empty", () => {
     const view = workerViewFields({
+      receivedAt: 0,
       devices: [],
       status: {
         capacity: CAPACITY,
@@ -213,7 +221,7 @@ describe("workerViewFields", () => {
       queueDepth: 2,
     } as unknown as Parameters<typeof workerViewFields>[0]["status"];
 
-    const view = workerViewFields({ devices: [], status });
+    const view = workerViewFields({ devices: [], receivedAt: 0, status });
 
     expect(view.queueDepth).toBe(2);
     expect(view).toHaveProperty("physicalQueueDepth", 1);
@@ -221,6 +229,7 @@ describe("workerViewFields", () => {
 
   it("leaves a field out of a running worker's view when the worker's answer has none, rather than making it empty", () => {
     const view = workerViewFields({
+      receivedAt: 0,
       status: { daemon: { health: "running", mode: "worker" }, host: HOST },
     });
 

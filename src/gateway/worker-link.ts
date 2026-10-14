@@ -368,17 +368,19 @@ export class WorkerLink {
    * -- application latency, not transport death, and P1's counter must not confuse the two. */
   async #rebuildView(client: GatewayWorkerClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
+    // why: taken the moment status answers, so a slow read beside it cannot make the load look fresher.
+    const receivedAt = this.options.clock.now();
     this.#consecutiveRefreshTimeouts = 0;
     // why: a starting worker answers `status.get` with its health, host and load only, and the rest
     // is unchecked, so its view is built from those facts; the next refresh reads it in full.
     if (status.daemon.health === "starting") {
-      this.#refreshStarting(client, status);
+      this.#refreshStarting(client, status, receivedAt);
       return;
     }
     // A starting answer dropped the view's catalog, and a refresh that does not read one would
     // leave the worker without it (and so not taking requests) until the next periodic read.
     const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
-    await this.#refreshRunning(client, status, includeCatalog || !catalogKnown);
+    await this.#refreshRunning(client, status, receivedAt, includeCatalog || !catalogKnown);
   }
 
   /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
@@ -386,6 +388,7 @@ export class WorkerLink {
   async #refreshRunning(
     client: GatewayWorkerClient,
     status: StatusGetOutput,
+    receivedAt: number,
     includeCatalog: boolean,
   ): Promise<void> {
     const [devices, catalog, config] = await this.#withTimeout(
@@ -414,6 +417,7 @@ export class WorkerLink {
     this.options.registry.refresh(this.workerId, {
       ...workerViewFields({
         devices,
+        receivedAt,
         status,
         ...(catalog === undefined ? {} : { catalog }),
         ...(config === undefined ? {} : { config }),
@@ -432,10 +436,10 @@ export class WorkerLink {
   /** A starting worker's view: its health and host, which `workerViewFields` builds from the
    * answer alone. Dropped for a link a reconnect or `stop()` has replaced, as `#rebuildView`'s own
    * write is (H2). */
-  #refreshStarting(client: GatewayWorkerClient, status: StatusGetOutput): void {
+  #refreshStarting(client: GatewayWorkerClient, status: StatusGetOutput, receivedAt: number): void {
     if (this.#superseded()) return;
     this.options.registry.refresh(this.workerId, {
-      ...workerViewFields({ status }),
+      ...workerViewFields({ receivedAt, status }),
       version: client.daemonVersion,
     });
   }

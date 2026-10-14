@@ -119,8 +119,7 @@ export interface GatewayDispatcherOptions {
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly health: () => "starting" | "running" | "failed";
   readonly host: AggregateStatusOptions["host"];
-  // why: placeholder so the red tests compile; green reads it into status.get's own load.
-  readonly load?: () => z.infer<(typeof OPERATIONS)["status.get"]["output"]>["load"];
+  readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
   readonly coordinator: Pick<
     FleetLeaseCoordinator,
@@ -236,15 +235,19 @@ export class GatewayDispatcher {
 
   #statusGet: Handler<"status.get"> = () => {
     const consoleUrl = consoleUrlField(this.options.config.http);
+    const load = this.options.load?.();
+    const loadField = load === undefined ? {} : { load };
     if (this.options.health() === "starting") {
       return {
         daemon: { health: "starting", mode: "gateway", ...consoleUrl },
         host: this.options.host,
+        ...loadField,
       };
     }
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       host: this.options.host,
+      ...(load === undefined ? {} : { load }),
       physicalQueueDepth: this.options.coordinator.physicalQueueDepth,
       queueDepth: this.options.coordinator.queueDepth,
       waiting: [...this.options.coordinator.waitingRequests()],

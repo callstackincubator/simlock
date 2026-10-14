@@ -46,6 +46,7 @@ const EMPTY_GLOBAL_CAPACITY = {
 export interface AggregateStatusOptions {
   readonly health: StatusOutput["daemon"]["health"];
   readonly host: StatusOutput["host"];
+  readonly load?: StatusOutput["load"];
   readonly queueDepth: number;
   readonly physicalQueueDepth?: number;
   readonly waiting?: StatusOutput["waiting"];
@@ -65,6 +66,7 @@ export function aggregateStatus(
     capacity: sumCapacity(views.filter((view) => view.connection === "connected")),
     daemon: { health: options.health, mode: "gateway" },
     host: options.host,
+    ...(options.load === undefined ? {} : { load: options.load }),
     installs: fleetInstalls(views),
     devices: views.flatMap((view) =>
       (view.devices ?? []).map((device) => ({ ...device, workerId: view.id })),
