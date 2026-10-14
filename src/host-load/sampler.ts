@@ -94,7 +94,8 @@ export class HostLoadSampler {
     };
     this.#boundTimer = clock.setTimer(READ_BOUND_MS, () => {
       this.#boundTimer = undefined;
-      give(undefined, new Error("host load read timed out"));
+      // why: an answer already queued behind the timer beats the bound, so a late tick cannot discard it.
+      void Promise.resolve().then(() => give(undefined, new Error("host load read timed out")));
     });
     const settled = (): void => {
       this.#inFlight = false;

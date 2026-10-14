@@ -304,6 +304,7 @@ function buildDispatcher(
     eventHistory: options.eventHistory,
     health: hooks.health,
     hostFacts: options.hostFacts,
+    ...(options.load === undefined ? {} : { load: options.load }),
     instanceId: options.instanceId,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -470,7 +471,14 @@ export class DaemonServer {
     // landing is not itself gated on convergence -- `hello` already verifies the in-memory
     // hash regardless -- but there is no reason to let two startup-time writes race each other
     // for no benefit.
-    await this.options.adminSecret?.persist();
+    this.options.hostLoad?.start();
+    try {
+      await this.options.adminSecret?.persist();
+    } catch (error: unknown) {
+      // why: startDaemon does not call stop() on a rejected start, and a pending timer would keep the process alive.
+      this.options.hostLoad?.dispose();
+      throw error;
+    }
     const readyPromise = this.#converge();
     this.#readyPromise = readyPromise;
     readyPromise.then(this.#beforeReady.resolve, this.#beforeReady.reject);
@@ -632,6 +640,7 @@ export class DaemonServer {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
+    this.options.hostLoad?.dispose();
     this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();

@@ -20,7 +20,8 @@ import {
   NodeAgentDeviceHealthProbe,
 } from "../agent-device/index.js";
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad } from "../contract/index.js";
+import { HostLoadSampler } from "../host-load/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -75,6 +76,7 @@ import {
   type Filesystem,
   type HostInfo,
   type HostLoadProbe,
+  productionHostLoadProbe,
   type HostSystem,
   type IdGenerator,
   type IpcConnector,
@@ -287,6 +289,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
+  const hostLoadProbe =
+    options.hostLoadProbe === undefined
+      ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
+      : options.hostLoadProbe;
+  const hostLoad =
+    hostLoadProbe === null
+      ? undefined
+      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
   // One gate for every registry write: leasing's, core's and the installer's records.
   const decisions = new SerializedDecision();
   // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
@@ -489,6 +499,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     healthMonitor: leasing.healthMonitor,
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
     hostFacts: () => fitHostFacts(hostFacts.current()),
+    ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
     instanceId,
     host: new DaemonEndpointHost({
       connector: ipc,

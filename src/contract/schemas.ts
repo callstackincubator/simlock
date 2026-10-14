@@ -506,28 +506,50 @@ export function fitHostFacts<Host extends HostFactsShape>(host: Host): Host {
   };
 }
 
+const MAX_LOAD_AGE_MS = 86_400_000;
+const loadNumber = z.number().finite().nonnegative();
+const loadCpuSchema = z.object({
+  busyPercent: loadNumber.max(100),
+  cores: loadNumber.positive(),
+  limited: z.boolean(),
+});
+const loadMemorySchema = z.object({
+  totalBytes: loadNumber,
+  availableBytes: loadNumber,
+  swapUsedBytes: loadNumber,
+  pressure: z.enum(["normal", "warn", "critical"]).optional(),
+  limited: z.boolean(),
+});
+const loadDiskSchema = z.object({ freeBytes: loadNumber, totalBytes: loadNumber });
+
+export const hostLoadSchema = z.object({
+  ageMs: z.number().int().min(0).max(MAX_LOAD_AGE_MS),
+  cpu: loadCpuSchema.optional(),
+  memory: loadMemorySchema.optional(),
+  disk: loadDiskSchema.optional(),
+});
+
 /** ADR 0028 §4: what `status.get` carries about the machine's load, as old as its last read. */
-export interface StatusLoad {
-  readonly ageMs: number;
-  readonly cpu?: {
-    readonly busyPercent: number;
-    readonly cores: number;
-    readonly limited: boolean;
-  };
-  readonly memory?: {
-    readonly totalBytes: number;
-    readonly availableBytes: number;
-    readonly swapUsedBytes: number;
-    readonly pressure?: "normal" | "warn" | "critical";
-    readonly limited: boolean;
-  };
-  readonly disk?: { readonly freeBytes: number; readonly totalBytes: number };
-}
+export type StatusLoad = z.infer<typeof hostLoadSchema>;
 
-export const hostLoadSchema: z.ZodType<StatusLoad> = z.custom<StatusLoad>(() => false);
-
+/**
+ * Brings a reading within `hostLoadSchema`'s bounds, so an odd figure cannot fail the daemon's own
+ * `status.get` output check (ADR 0028 §4): `ageMs` is capped at one day and a part whose figures
+ * break the schema is left out, as one that could not be read.
+ */
 export function fitHostLoad<Load extends StatusLoad>(load: Load | undefined): Load | undefined {
-  return load;
+  if (load === undefined) return undefined;
+  const { cpu, memory, disk, ...rest } = load;
+  const ageMs = Number.isFinite(load.ageMs)
+    ? Math.min(MAX_LOAD_AGE_MS, Math.max(0, Math.round(load.ageMs)))
+    : MAX_LOAD_AGE_MS;
+  return {
+    ...rest,
+    ageMs,
+    ...(cpu !== undefined && loadCpuSchema.safeParse(cpu).success && { cpu }),
+    ...(memory !== undefined && loadMemorySchema.safeParse(memory).success && { memory }),
+    ...(disk !== undefined && loadDiskSchema.safeParse(disk).success && { disk }),
+  } as Load;
 }
 
 export const platformCatalogSchema = z.object({

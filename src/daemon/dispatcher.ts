@@ -56,6 +56,7 @@ import {
   requestedDevice,
   type ComponentProgress,
   type OperationName,
+  type StatusLoad,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
@@ -178,6 +179,7 @@ export interface DispatcherOptions {
   readonly health: () => "starting" | "running" | "failed";
   /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
   readonly hostFacts: () => HostFacts;
+  readonly load?: () => StatusLoad | undefined;
   /**
    * ADR §2 step 4: every operation but `status.get` parks here before its handler runs.
    * `hello` never reaches `dispatch()` at all -- it is answered before a `Session` exists,
@@ -357,9 +359,11 @@ export class Dispatcher {
       ...consoleUrlField(this.options.config.http),
     };
     const host = this.options.hostFacts();
+    const load = this.options.load?.();
+    const loadField = load === undefined ? {} : { load };
     // While starting, the registry has not been checked against the machine: what it holds is
     // a claim nobody has looked at, so the answer is the daemon and its host and nothing else.
-    if (daemon.health === "starting") return { daemon, host };
+    if (daemon.health === "starting") return { daemon, host, ...loadField };
     const capabilities = await this.#readCapabilities();
     const snapshot = this.options.registry.snapshot;
     return {
@@ -368,6 +372,7 @@ export class Dispatcher {
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       daemon,
       host,
+      ...loadField,
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
       physicalQueueDepth: this.options.queue.physicalQueueDepth,
