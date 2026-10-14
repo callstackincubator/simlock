@@ -175,6 +175,15 @@ function parseLimit(text: string | undefined): number | undefined {
   return Number(match[1]);
 }
 
+function lower(
+  current: CgroupLimit | undefined,
+  folder: string,
+  value: number | undefined,
+): CgroupLimit | undefined {
+  if (value === undefined || (current !== undefined && value >= current.value)) return current;
+  return { folder, value };
+}
+
 function machineMemory(
   totalBytes: number | undefined,
   kib: (name: string) => number | undefined,
@@ -241,14 +250,8 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
         this.#optional(`${folder}/cpu.max`),
         this.#optional(`${folder}/memory.max`),
       ]);
-      const cores = parseQuota(cpuMax);
-      if (cores !== undefined && (cpu === undefined || cores < cpu.value)) {
-        cpu = { folder, value: cores };
-      }
-      const bytes = parseLimit(memoryMax);
-      if (bytes !== undefined && (memory === undefined || bytes < memory.value)) {
-        memory = { folder, value: bytes };
-      }
+      cpu = lower(cpu, folder, parseQuota(cpuMax));
+      memory = lower(memory, folder, parseLimit(memoryMax));
     }
     return { ...(cpu && { cpu }), ...(memory && { memory }) };
   }
