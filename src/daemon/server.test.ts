@@ -193,7 +193,10 @@ describe("DaemonServer", () => {
     [28, "cannot read config.get's lease.endWaitMs"],
     [29, "cannot read config.get's agentDevice"],
     [30, "cannot read the agent-device-unavailable finding in doctor.run"],
-    [32, "cannot read status.get's capabilities or send lease.request's requires"],
+    [
+      32,
+      "cannot read status.get's capabilities, send lease.request's requires, or call relay.request",
+    ],
   ])(
     "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 33, to a client on protocol %i, which %s",
     async (version) => {
