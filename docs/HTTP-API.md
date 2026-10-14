@@ -217,7 +217,8 @@ milliseconds up to one day. `cpu`, `memory` and `disk` are each left out when
 they could not be read; `cpu` is also left out for the first 15 seconds, since
 it is busy time between two reads. `pressure` (`normal`, `warn` or `critical`)
 is present only where the operating system reports one. `disk` is the folder
-Simlock keeps its data in. `limited` is `false` for the whole machine's figures.
+Simlock keeps its data in. `limited` is `false` for the whole machine's figures, and `true` when a Linux
+cgroup CPU or memory limit applies and the figures are measured against it.
 
 Under the `resource` capacity strategy, **`capacity.ramBudget`** reports the
 RAM budget; under `fixed` the field is absent:

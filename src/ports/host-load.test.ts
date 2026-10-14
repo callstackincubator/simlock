@@ -444,6 +444,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     const counters = await readCgroup("/../../system.slice/x", {
       "": { cpuMax: "200000 100000\n", ...USAGE },
       "system.slice/x": { cpuMax: "100000 100000\n", ...USAGE },
+      "../../system.slice/x": { cpuMax: "100000 100000\n", ...USAGE },
     });
 
     expect(counters.cpu).toStrictEqual(LIMITED_TWO_CORES);
@@ -601,6 +602,24 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
     expect(counters.memory).toStrictEqual(MACHINE_MEMORY);
   });
 
+  it("reports the machine's figures when /proc/self/cgroup has only cgroup v1 lines and no 0:: line", async () => {
+    const files = folderFiles("docker/abc", {
+      cpuMax: "200000 100000\n",
+      memoryMax: "8589934592\n",
+      ...USAGE,
+    });
+
+    const counters = await cgroupProbe(
+      await cgroupFilesystem(
+        "12:memory:/docker/abc\n10::/docker/abc\n1:name=systemd:/docker/abc\n",
+        files,
+      ),
+    ).read();
+
+    expect(counters.cpu).toMatchObject({ cores: 64, limited: false });
+    expect(counters.memory).toStrictEqual(MACHINE_MEMORY);
+  });
+
   it("shows a limit seeded between two reads on the second read, drops one removed between reads, and follows /proc/self/cgroup to a new folder between reads", async () => {
     const filesystem = await cgroupFilesystem("0::/a\n", {});
     const probe = cgroupProbe(filesystem);
@@ -646,6 +665,19 @@ describe("NodeFilesystem.diskSpace", () => {
     expect(totalBytes).toBeGreaterThanOrEqual(freeBytes);
     const details = await statfs(directory);
     expect(totalBytes).toBe(details.blocks * details.bsize);
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("production Linux probe on this machine", () => {
+  it("returns CPU counters, memory and disk from the real /proc and /sys", async () => {
+    const probe = productionHostLoadProbe({ platform: "linux", dataDirectory: tmpdir() });
+
+    const counters = await probe.read();
+
+    expect(counters.cpu?.totalTime).toBeGreaterThan(0);
+    expect(counters.cpu?.cores).toBeGreaterThan(0);
+    expect(counters.memory?.totalBytes).toBeGreaterThan(0);
+    expect(counters.disk?.totalBytes).toBeGreaterThan(0);
   });
 });
 
