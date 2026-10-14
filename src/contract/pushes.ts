@@ -2,8 +2,7 @@
  * why: server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `started`, `output`, `component-progress`, `relay-head`,
- *   `relay-chunk`): carries the
+ * - Request-scoped (`progress`, `started`, `output`, `component-progress`, `relay-head`): carries the
  *   originating request's frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
@@ -15,7 +14,7 @@
  */
 import { z } from "zod";
 
-import { relayChunkSchema, relayHeadersSchema } from "./relay.js";
+import { relayHeadersSchema } from "./relay.js";
 import { eventEnvelopeSchema, leaseProgressSchema } from "./schemas.js";
 
 /**
@@ -105,11 +104,6 @@ const relayHeadPushSchema = z.object({
   headers: relayHeadersSchema,
 });
 
-const relayChunkPushSchema = z.object({
-  requestId: requestIdSchema,
-  chunk: relayChunkSchema,
-});
-
 const leaseLostPushSchema = z.object({
   leaseId: z.string(),
   deviceId: z.string(),
@@ -139,7 +133,6 @@ export const PUSH_SCHEMAS = {
   started: startedPushSchema,
   "component-progress": componentProgressPushSchema,
   "relay-head": relayHeadPushSchema,
-  "relay-chunk": relayChunkPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Logger } from "../ports/index.js";
+import { linkPair } from "../link/test-support.js";
 import { RelayConnection, type RelayPush, type RelayTarget } from "./relay.js";
 import { relayInput, settle } from "./test-relay-support.js";
 
@@ -14,6 +15,12 @@ const logger: Logger = {
 
 type Input = Parameters<RelayConnection["request"]>[0];
 
+async function acceptedChannel() {
+  const pair = linkPair();
+  const opened = await pair.gateway.openChannel({ signal: new AbortController().signal });
+  return pair.worker.acceptChannel(opened.id);
+}
+
 describe("a worker's relay connection", () => {
   it("answers { cancelled: true } and never runs the target for a request that arrives after the connection closed", async () => {
     let ran = false;
@@ -22,10 +29,12 @@ describe("a worker's relay connection", () => {
       return Promise.resolve(new Response("late"));
     };
     const relays = new RelayConnection({ echo: target }, logger);
-    const push: RelayPush = { chunk: () => Promise.resolve(), head: () => Promise.resolve() };
+    const push: RelayPush = { head: () => Promise.resolve() };
 
     relays.abortAll();
-    const outcome = await settle(relays.request(relayInput() as Input, push));
+    const outcome = await settle(
+      relays.request(relayInput() as Input, push, await acceptedChannel()),
+    );
 
     expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(ran).toBe(false);
@@ -47,14 +56,13 @@ describe("a worker's relay connection", () => {
     const relays = new RelayConnection({ echo: target }, logger);
     const input = relayInput() as Input;
     const push: RelayPush = {
-      chunk: () => Promise.resolve(),
       head: () => {
         relays.cancel(input.relayId);
         return Promise.resolve();
       },
     };
 
-    const outcome = await settle(relays.request(input, push));
+    const outcome = await settle(relays.request(input, push, await acceptedChannel()));
 
     expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(bodyCancelled).toBe(true);

@@ -24,7 +24,8 @@ import {
 } from "../contract/index.js";
 import type { StatusGetOutput } from "../admin/index.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
-import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
+import type { LinkConnection } from "../link/index.js";
+import type { AcceptedUplink, Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
 import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
@@ -78,12 +79,12 @@ class WorkerCallTimeoutError extends Error {
 /** How the gateway turns an accepted uplink into a driven session. Injected so a test can
  * script a worker without a `DaemonServer` behind it. */
 export type WorkerClientFactory = (
-  connection: IpcConnection,
+  connection: LinkConnection,
   principal: string,
 ) => Promise<GatewayWorkerClient>;
 
 export interface WorkerLinkOptions {
-  readonly uplink: AcceptedUplink;
+  readonly uplink: Omit<AcceptedUplink, "connection"> & { readonly connection: LinkConnection };
   readonly registry: WorkerRegistry;
   readonly eventBus: EventBus;
   readonly clock: Clock;

@@ -199,7 +199,6 @@ export class GatewayDispatcher {
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
       "relay.request": relayRefused,
-      "relay.body": relayRefused,
       "relay.cancel": relayRefused,
       // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).

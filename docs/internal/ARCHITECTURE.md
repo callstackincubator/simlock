@@ -897,28 +897,26 @@ receives. The gateway's `GatewayRelay` hands one `Request` to the worker's
 `relayTargets` under the module's capability name, and answers the target's
 `Response` with its body streamed. The core names no target.
 
-Three admin operations carry it over the uplink, and a worker answers them
-only on the gateway's own uplink session (`FORBIDDEN` elsewhere; a gateway
-refuses them from everyone):
+Two admin operations and one byte channel carry it over the uplink, and a
+worker answers the operations only on the gateway's own uplink session
+(`FORBIDDEN` elsewhere; a gateway refuses them from everyone):
 
 - `relay.request` opens a relay (`relayId`, `target`, method, URL, headers,
-  tenant, lease id, `hasBody`) and answers `{}` once the response body has
-  ended, or `{ cancelled: true }` once a cancel took effect. The response
-  leaves as request-scoped `relay-head` and `relay-chunk` pushes keyed by its
-  frame id, each written before the next part of the target's body is read.
-- `relay.body` sends the request body in `seq` order, then `end`. A call is
-  answered once the target's stream has taken the chunk, so the gateway
-  keeps at most 4 unanswered.
+  tenant, lease id, `hasBody`, `channel`) and answers `{}` once the response
+  body has ended, or `{ cancelled: true }` once a cancel took effect. The head
+  leaves as a request-scoped `relay-head` push keyed by its frame id. The
+  request body arrives, and the response body leaves, on the byte channel
+  `channel` names (ADR 0028). The worker accepts the channel when it reads the
+  line, before the call parks for startup.
 - `relay.cancel` aborts the target's `Request` signal; so does the close of
   the connection the relay came on.
 
-The gateway bounds every wait: a deadline for the whole exchange
-(`WORKER_UNREACHABLE` when it passes), 8 relays at once per worker, and 64
-MiB of response a caller has not read. A lost uplink fails the call as
+The gateway bounds every wait: one deadline for the whole exchange, channel
+wait included (`WORKER_UNREACHABLE` when it passes). The link bounds the
+channels open to a worker at 64. A lost uplink fails the call as
 `WORKER_UNREACHABLE` through `isUplinkLost`, the one function the relay, the
-lease coordinator and the component relay all ask. The uplink is shared, so a
-large relay delays the other calls on it (no flow control; #511 accepts
-this).
+lease coordinator and the component relay all ask. A slow reader slows only
+its own channel, and small calls go first on the uplink.
 
 ### Aggregated reads
 

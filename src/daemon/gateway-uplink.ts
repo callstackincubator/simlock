@@ -7,7 +7,8 @@
  * `DaemonServer` (which serves it) and in the gateway (which drives it). All this class decides
  * is *when to dial*.
  */
-import type { Clock, IpcConnection, Logger, TimerHandle, UplinkConnector } from "../ports/index.js";
+import { createLink, type LinkConnection } from "../link/index.js";
+import type { Clock, Logger, TimerHandle, UplinkConnector } from "../ports/index.js";
 import { NoopLogger, UplinkError } from "../ports/index.js";
 
 export interface UplinkBackoff {
@@ -39,7 +40,7 @@ export interface GatewayUplinkOptions {
   /** This worker's instance id (`instance.json`) -- its fleet identity (§3a). */
   readonly workerId: string;
   /** Hands an established uplink to whoever serves it (`DaemonServer#acceptUplink`). */
-  readonly accept: (connection: IpcConnection) => void;
+  readonly accept: (connection: LinkConnection) => void;
   readonly logger?: Logger;
   readonly backoff?: UplinkBackoff;
   /** H1: how long a connection must stay up before `#attempt` resets to 0. Defaults to the
@@ -62,7 +63,7 @@ export class GatewayUplink {
   readonly #random: () => number;
   #attempt = 0;
   #timer: TimerHandle | undefined;
-  #connection: IpcConnection | undefined;
+  #connection: LinkConnection | undefined;
   #stopped = false;
   /** Guards against two dials in flight at once -- a `close` arriving while a dial is pending
    * would otherwise schedule a second one beside it. */
@@ -131,13 +132,18 @@ export class GatewayUplink {
         await connection.close();
         return;
       }
-      this.#connection = connection;
-      connection.onClose(() => this.#onClosed());
+      const link = createLink(connection, {
+        clock: this.options.clock,
+        end: "worker",
+        logger: this.#logger,
+      });
+      this.#connection = link;
+      link.onClose(() => this.#onClosed());
       this.#logger.info("Uplink to gateway established", {
         url: this.options.url,
         workerId: this.options.workerId,
       });
-      this.options.accept(connection);
+      this.options.accept(link);
       // H1: `#attempt` resets only once this link has actually stayed up for `#minStableMs` --
       // not the instant `connect()` resolves. Cancelled in `#onClosed`/`stop` if the close
       // beats it, which is exactly the accept-then-immediately-close case this guards against.

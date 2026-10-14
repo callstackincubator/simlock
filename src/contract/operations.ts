@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { parseOsConstraint } from "./os-range.js";
-import { relayChunkSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
+import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   capabilityNameSchema,
@@ -977,8 +977,9 @@ const relayUrlSchema = z
 
 /**
  * One HTTP exchange a gateway hands to a module on a worker, over the gateway's uplink. The
- * response leaves as `relay-head` and `relay-chunk` pushes keyed by this call's frame id; the
- * answer comes once its body has ended, or `{ cancelled: true }` once a `relay.cancel` took
+ * request body arrives, and the response body leaves, on the byte channel `channel` names (ADR 0028);
+ * the head leaves as a `relay-head` push keyed by this call's frame id. The
+ * answer comes once the response body has ended, or `{ cancelled: true }` once a `relay.cancel` took
  * effect. Admin only, and on a worker only the gateway's own uplink session may call it.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -996,27 +997,13 @@ export const relayRequest = defineOperation({
       tenant: z.string().min(1).max(300),
       leaseId: leaseIdSchema.optional(),
       hasBody: z.boolean(),
+      channel: relayChannelSchema,
     })
     .strict()
     .refine((input) => !input.hasBody || (input.method !== "GET" && input.method !== "HEAD"), {
       message: "hasBody is not allowed with GET or HEAD",
     }),
   output: z.object({ cancelled: z.literal(true).optional() }),
-});
-
-/** One part of a relayed request body, in `seq` order, or its end. */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const relayBody = defineOperation({
-  name: "relay.body",
-  role: "admin",
-  effect: "write",
-  input: z.union([
-    z
-      .object({ relayId: relayIdSchema, seq: z.number().int().min(0), chunk: relayChunkSchema })
-      .strict(),
-    z.object({ relayId: relayIdSchema, end: z.literal(true) }).strict(),
-  ]),
-  output: z.object({}),
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -1062,7 +1049,6 @@ export const OPERATIONS = {
   "device.add": deviceAdd,
   "device.remove": deviceRemove,
   "relay.request": relayRequest,
-  "relay.body": relayBody,
   "relay.cancel": relayCancel,
 } as const;
 

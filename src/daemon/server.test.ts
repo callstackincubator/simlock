@@ -17,7 +17,6 @@ import {
 } from "../core/index.js";
 import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
 import {
-  createConnectionPair,
   CryptoTokenSecrets,
   FakeClock,
   FakeSystemStats,
@@ -3005,9 +3004,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
    */
   it("grants an accepted uplink the admin role without a credential (ADR 0005 §5)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
@@ -3035,9 +3034,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 
   it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
@@ -3059,9 +3058,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       protocolVersion: previous,
       resolveRole: { resolve: () => "admin" },
     });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",

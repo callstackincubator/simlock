@@ -38,12 +38,14 @@ import {
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
   PUSH_SCHEMAS,
+  relayChannelSchema,
   type ComponentProgress,
   type OperationName,
   type OPERATIONS,
   type ProtocolRange,
   type Role,
 } from "../contract/index.js";
+import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 import type { TokenStore } from "../http/token-store.js";
 import {
@@ -101,6 +103,8 @@ interface Connection {
    * site that is actually the uplink, so a future forced role elsewhere cannot be mistaken for it.
    */
   readonly isGatewayUplink: boolean;
+  // why: set with `isGatewayUplink`; the link accepts the byte channels a relay names (ADR 0028).
+  readonly link: LinkConnection | undefined;
   /**
    * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
@@ -325,6 +329,8 @@ export class DaemonServer {
   #stopPromise: Promise<void> | undefined;
   #health: DaemonHealth = "starting";
   #readyPromise: Promise<void> | undefined;
+  // why: a request that arrives on an uplink before `start()` has claimed its socket parks here, so it never runs ahead of convergence.
+  readonly #beforeReady = quietDeferred();
   /**
    * Every `#dispatchLine` call that starts while `#health` is still `"starting"`,
    * tracked so a convergence failure can genuinely drain them -- await each one's
@@ -445,6 +451,15 @@ export class DaemonServer {
    * well before this promise settles.
    */
   async start(): Promise<void> {
+    try {
+      await this.#start();
+    } catch (error: unknown) {
+      this.#beforeReady.reject(error);
+      throw error;
+    }
+  }
+
+  async #start(): Promise<void> {
     await this.options.host.start((connection) => this.#accept(connection));
     // ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
     // the start race throws out of `host.start()` and never reaches this line, so it never
@@ -455,6 +470,7 @@ export class DaemonServer {
     await this.options.adminSecret?.persist();
     const readyPromise = this.#converge();
     this.#readyPromise = readyPromise;
+    readyPromise.then(this.#beforeReady.resolve, this.#beforeReady.reject);
     // See `onSocketClaimed`'s doc: fired only after `#readyPromise` is assigned, so a request
     // the auxiliary frontend starts serving as an immediate result of this call already parks
     // on it correctly via `#awaitReady()`.
@@ -586,9 +602,8 @@ export class DaemonServer {
   }
 
   async #awaitReady(): Promise<void> {
-    if (this.#readyPromise === undefined) return;
     try {
-      await this.#readyPromise;
+      await (this.#readyPromise ?? this.#beforeReady.promise);
     } catch {
       throw new StartupFailedError();
     }
@@ -648,11 +663,11 @@ export class DaemonServer {
    * kind of statement §5 says admin authority may come from. An operator who does not want a
    * gateway administering this machine removes two config keys.
    */
-  acceptUplink(connection: IpcConnection): void {
-    this.#accept(connection, "admin", true);
+  acceptUplink(connection: LinkConnection): void {
+    this.#accept(connection, "admin", connection);
   }
 
-  #accept(socket: IpcConnection, forcedRole?: Role, isGatewayUplink = false): void {
+  #accept(socket: IpcConnection, forcedRole?: Role, link?: LinkConnection): void {
     if (this.#stopping) {
       void socket.close();
       return;
@@ -662,7 +677,8 @@ export class DaemonServer {
       closed: false,
       forcedRole,
       helloReceived: false,
-      isGatewayUplink,
+      isGatewayUplink: link !== undefined,
+      link,
       // Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `#handleHello` until then).
@@ -743,6 +759,9 @@ export class DaemonServer {
       return;
     }
 
+    // why: accepted here, in the same turn the line was read, so a request that parks for startup already holds its channel (ADR 0028).
+    const relayChannel = this.#acceptRelayChannel(connection, frame);
+
     // `daemon.stop` is a frozen exception (ADR 0003 §6), but only with respect to the
     // *protocol-version* gate: "the daemon accepts it at any protocol version it has ever
     // spoken". It is not frozen with respect to authentication or role -- §3's operation matrix
@@ -773,6 +792,7 @@ export class DaemonServer {
     }
 
     if (connection.protocolMismatch) {
+      relayChannel?.abort();
       await this.#respondError(
         connection.socket,
         frame.id,
@@ -784,6 +804,7 @@ export class DaemonServer {
     }
 
     if (this.#stopping) {
+      relayChannel?.abort();
       await this.#respondError(
         connection.socket,
         frame.id,
@@ -794,9 +815,10 @@ export class DaemonServer {
     }
 
     try {
-      const payload = await this.#handleRequest(connection, frame);
+      const payload = await this.#handleRequest(connection, frame, relayChannel);
       await writeFrame(connection.socket, { id: frame.id, ok: true, payload });
     } catch (error: unknown) {
+      relayChannel?.abort();
       const code = errorCode(error);
       // A handled error is already on the dispatcher's `operation` line; this one adds the stack.
       if (code === "INTERNAL") {
@@ -974,7 +996,11 @@ export class DaemonServer {
    * on failure, only a push to suppress while it is in flight.
    */
   // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
-  async #handleRequest(connection: Connection, frame: RequestFrame): Promise<unknown> {
+  async #handleRequest(
+    connection: Connection,
+    frame: RequestFrame,
+    relayChannel: LinkChannel | undefined,
+  ): Promise<unknown> {
     switch (frame.type) {
       case "lease.request":
         return this.#requestLease(connection, frame.id, frame.payload);
@@ -1106,9 +1132,7 @@ export class DaemonServer {
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
       case "relay.request":
-        return this.#relayRequest(connection, frame.id, frame.payload);
-      case "relay.body":
-        return this.#dispatcher.dispatch("relay.body", frame.payload, this.#session(connection));
+        return this.#relayRequest(connection, frame.id, frame.payload, relayChannel);
       case "relay.cancel":
         return this.#dispatcher.dispatch("relay.cancel", frame.payload, this.#session(connection));
       case "config.get":
@@ -1178,6 +1202,20 @@ export class DaemonServer {
       // role there), so it never reaches `#handleRequest`.
       default:
         throw new ProtocolError("UNKNOWN_REQUEST", `Unknown request type: ${frame.type}`);
+    }
+  }
+
+  // why: `channel` is wire input, so its shape is checked before it names a channel; a name that fails, or one the link never saw, accepts nothing and the call fails `BAD_REQUEST` later.
+  #acceptRelayChannel(connection: Connection, frame: RequestFrame): LinkChannel | undefined {
+    if (frame.type !== "relay.request" || connection.link === undefined) return undefined;
+    const payload: unknown = frame.payload;
+    if (typeof payload !== "object" || payload === null) return undefined;
+    const name = relayChannelSchema.safeParse((payload as { channel?: unknown }).channel);
+    if (!name.success) return undefined;
+    try {
+      return connection.link.acceptChannel(name.data);
+    } catch {
+      return undefined;
     }
   }
 
@@ -1311,18 +1349,15 @@ export class DaemonServer {
 
   // why: each push resolves once it is on the socket, so the relay reads its target only as fast as the socket takes the parts.
 
-  #relayRequest(connection: Connection, requestId: RequestId, value: unknown): Promise<unknown> {
+  #relayRequest(
+    connection: Connection,
+    requestId: RequestId,
+    value: unknown,
+    relayChannel: LinkChannel | undefined,
+  ): Promise<unknown> {
     return this.#dispatcher.dispatch("relay.request", value, {
       ...this.#session(connection),
-      onRelayChunk: (chunk) =>
-        writeFrame(connection.socket, {
-          push: "relay-chunk",
-          payload: this.#parseOutput(
-            PUSH_SCHEMAS["relay-chunk"],
-            { chunk, requestId },
-            "push:relay-chunk",
-          ),
-        }),
+      ...(relayChannel === undefined ? {} : { relayChannel }),
       onRelayHead: (status, headers) =>
         writeFrame(connection.socket, {
           push: "relay-head",
@@ -1578,6 +1613,22 @@ export class DaemonServer {
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;
   }
+}
+
+// why: nobody may be parked on the gate when it rejects, and an unobserved rejection would end the process.
+function quietDeferred(): {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  promise.catch(() => undefined);
+  return { promise, reject, resolve };
 }
 
 /**

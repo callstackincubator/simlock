@@ -17,6 +17,7 @@ import type { z } from "zod";
 
 import type { Clock } from "../ports/clock.js";
 import type { Logger } from "../ports/logger.js";
+import type { LinkChannel } from "../link/index.js";
 import type { RelayConnection } from "./relay.js";
 import {
   describeSchemaIssues,
@@ -123,7 +124,8 @@ export interface DispatchSession {
     headers: readonly (readonly [string, string])[],
   ) => Promise<void>;
   // why: resolved once the part is written, so a target is read only as fast as the socket takes its parts.
-  readonly onRelayChunk?: (chunk: string) => Promise<void>;
+  // why: accepted by the server when it read the `relay.request` line, before the call parked for startup (ADR 0028).
+  readonly relayChannel?: LinkChannel;
   /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
    * transport), so the dispatcher's handler for them does nothing but call this: `true` to
    * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */

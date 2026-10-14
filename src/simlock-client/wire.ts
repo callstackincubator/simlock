@@ -56,7 +56,6 @@ export interface CallHooks {
     | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
     | undefined;
   readonly onRelayHead?: ((head: RelayHead) => void) | undefined;
-  readonly onRelayChunk?: ((chunk: string) => void) | undefined;
   readonly onRelayInvalid?: (() => void) | undefined;
 }
 
@@ -331,22 +330,15 @@ export class SimlockWire {
         this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress, parsed.data.workerId);
         return;
       }
-      case "relay-head":
-      case "relay-chunk": {
+      case "relay-head": {
         // why: routed by `requestId` before the rest of the push is checked, so a push that breaks its schema still reaches its relay as invalid instead of being dropped (ADR 0026).
         const id = relayRequestId(payload);
         const pending = id === undefined ? undefined : this.#pending.get(id);
         if (pending === undefined) return;
-        if (push === "relay-head") {
-          const parsed = PUSH_SCHEMAS["relay-head"].safeParse(payload);
-          if (parsed.success) {
-            pending.onRelayHead?.({ headers: parsed.data.headers, status: parsed.data.status });
-          } else pending.onRelayInvalid?.();
-        } else {
-          const parsed = PUSH_SCHEMAS["relay-chunk"].safeParse(payload);
-          if (parsed.success) pending.onRelayChunk?.(parsed.data.chunk);
-          else pending.onRelayInvalid?.();
-        }
+        const parsed = PUSH_SCHEMAS["relay-head"].safeParse(payload);
+        if (parsed.success) {
+          pending.onRelayHead?.({ headers: parsed.data.headers, status: parsed.data.status });
+        } else pending.onRelayInvalid?.();
         return;
       }
       case "lease-lost": {

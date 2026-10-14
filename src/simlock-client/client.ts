@@ -24,6 +24,7 @@ import {
   type OperationName,
   type Role,
 } from "../contract/index.js";
+import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { IpcConnection, IpcConnector } from "../ports/index.js";
 import { SimlockWire, WireCallError, type CallHooks, type LeaseScopedPush } from "./wire.js";
 import type {
@@ -311,9 +312,10 @@ type OperationOutput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[N
 export interface RelayClientMethods {
   relayRequest(
     input: OperationInput<"relay.request">,
-    hooks: Pick<CallHooks, "onRelayHead" | "onRelayChunk" | "onRelayInvalid">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayInvalid">,
   ): Promise<OperationOutput<"relay.request">>;
-  relayBody(input: OperationInput<"relay.body">): Promise<OperationOutput<"relay.body">>;
+  // why: rejects on a connection that holds no link, since a channel is a link's (ADR 0028).
+  openChannel(options: { readonly signal: AbortSignal }): Promise<LinkChannel>;
   relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">>;
 }
 
@@ -351,7 +353,13 @@ export async function connectSimlockClient(
     await connection.close();
     throw error;
   }
-  const impl = new SimlockClientImpl(wire, hello.role, hello.principal, hello.daemonVersion);
+  const impl = new SimlockClientImpl(
+    wire,
+    hello.role,
+    hello.principal,
+    hello.daemonVersion,
+    isLinkConnection(connection) ? connection : undefined,
+  );
   return admin ? impl.asAdmin() : impl;
 }
 
@@ -444,10 +452,14 @@ function buildDegradedClient(
     addDevice: () => rejected(),
     removeDevice: () => rejected(),
     relayRequest: () => rejected(),
-    relayBody: () => rejected(),
+    openChannel: () => rejected(),
     relayCancel: () => rejected(),
   };
   return client;
+}
+
+function isLinkConnection(connection: IpcConnection): connection is LinkConnection {
+  return typeof (connection as Partial<LinkConnection>).openChannel === "function";
 }
 
 async function resolveConnection(options: ConnectOptions): Promise<IpcConnection> {
@@ -462,6 +474,7 @@ async function resolveConnection(options: ConnectOptions): Promise<IpcConnection
 
 class SimlockClientImpl {
   readonly #wire: SimlockWire;
+  readonly #link: LinkConnection | undefined;
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
   readonly #deviceRecoveredListeners = new Set<(push: DeviceRecoveredPush) => void>();
@@ -473,8 +486,10 @@ class SimlockClientImpl {
     readonly role: Role,
     readonly principal: string,
     readonly daemonVersion: string,
+    link?: LinkConnection,
   ) {
     this.#wire = wire;
+    this.#link = link;
     wire.onLeaseScopedPush((push) => this.#handleLeaseScopedPush(push));
     wire.onDeath((error) => this.#handleConnectionLost(error));
   }
@@ -578,14 +593,16 @@ class SimlockClientImpl {
 
   async relayRequest(
     input: OperationInput<"relay.request">,
-    hooks: Pick<CallHooks, "onRelayHead" | "onRelayChunk" | "onRelayInvalid">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayInvalid">,
   ): Promise<OperationOutput<"relay.request">> {
     const payload = await this.#callRaw("relay.request", input, hooks);
     return this.#parseOutput("relay.request", payload);
   }
 
-  relayBody(input: OperationInput<"relay.body">): Promise<OperationOutput<"relay.body">> {
-    return this.#call("relay.body", input);
+  openChannel(options: { readonly signal: AbortSignal }): Promise<LinkChannel> {
+    const link = this.#link;
+    if (link === undefined) return Promise.reject(new Error("The connection carries no link"));
+    return link.openChannel(options);
   }
 
   relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">> {

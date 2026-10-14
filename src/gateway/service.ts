@@ -19,6 +19,7 @@ import type {
 import { WORKER_VIEW_REFRESH_INTERVAL_MS } from "../contract/index.js";
 import { NoopLogger, uplinkOutcome } from "../ports/index.js";
 import type { DrainStore } from "./drain-store.js";
+import { createLink } from "../link/index.js";
 import { WorkerLink, type WorkerClientFactory } from "./worker-link.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
@@ -247,7 +248,14 @@ export class GatewayService {
       },
       principal: this.options.principal,
       registry: this.#registry,
-      uplink,
+      uplink: {
+        ...uplink,
+        connection: createLink(uplink.connection, {
+          clock: this.options.clock,
+          end: "gateway",
+          logger: this.#logger,
+        }),
+      },
       ...(this.options.connect === undefined ? {} : { connect: this.options.connect }),
     });
     this.#links.set(uplink.workerId, link);

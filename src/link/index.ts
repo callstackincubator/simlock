@@ -12,9 +12,8 @@ import {
 } from "./envelope.js";
 import { Scheduler } from "./scheduler.js";
 
-// fallow-ignore-next-line unused-export -- the link's public surface; #558 is its first user.
 export { LinkChannelError } from "./channel.js";
-// fallow-ignore-next-line unused-type -- the link's public surface; #558 is its first user.
+// fallow-ignore-next-line unused-type -- the link's public surface; the relay's tests name the reasons.
 export type { LinkChannel, LinkChannelErrorReason } from "./channel.js";
 
 export interface LinkConnection extends IpcConnection {

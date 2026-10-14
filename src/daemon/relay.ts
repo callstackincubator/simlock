@@ -6,13 +6,12 @@ import type { z } from "zod";
 
 import {
   OPERATIONS,
-  RELAY_MAX_CHUNK_BYTES,
   RELAY_MAX_HEADERS,
-  RELAY_MAX_PUSH_BYTES,
   isRelayFramingHeader,
   relayHeaderPairs,
   relayHeadersSchema,
 } from "../contract/index.js";
+import { LinkChannelError, type LinkChannel } from "../link/index.js";
 import type { Logger } from "../ports/index.js";
 import { DispatchError } from "./dispatch.js";
 
@@ -25,86 +24,27 @@ export type RelayTarget = (
 export type RelayTargets = Readonly<Record<string, RelayTarget>>;
 
 type RelayRequestInput = z.infer<(typeof OPERATIONS)["relay.request"]["input"]>;
-type RelayBodyInput = z.infer<(typeof OPERATIONS)["relay.body"]["input"]>;
 
-// why: each call resolves once the frame is on the socket, so the relay reads its target only as fast as the socket drains.
+// why: the call resolves once the frame is on the socket, so the relay writes the response body only after its head.
 export interface RelayPush {
   head(status: number, headers: readonly (readonly [string, string])[]): Promise<void>;
-  chunk(base64: string): Promise<void>;
 }
 
-const MAX_ACTIVE_RELAYS = 16;
+type RelayResult = { readonly cancelled?: true };
+
 const NO_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 
 interface ActiveRelay {
   readonly controller: AbortController;
-  readonly feed: RelayBodyFeed | undefined;
+  readonly channel: LinkChannel;
   // why: the Request's signal follows ours through a weak reference, so a target that keeps only the signal would never see an abort once the Request is collected.
   request: Request | undefined;
-}
-
-// why: a `relay.body` call is answered once the stream has handed its chunk to the target, which is what holds the gateway's sender back.
-
-class RelayBodyFeed {
-  readonly stream: ReadableStream<Uint8Array>;
-  readonly #queue: { readonly bytes: Uint8Array; readonly handed: () => void }[] = [];
-  #wake: (() => void) | undefined;
-  #nextSeq = 0;
-  #ended = false;
-  #aborted = false;
-
-  constructor() {
-    this.stream = new ReadableStream<Uint8Array>({
-      pull: async (controller) => {
-        while (this.#queue.length === 0 && !this.#ended && !this.#aborted) {
-          await new Promise<void>((resolve) => {
-            this.#wake = resolve;
-          });
-        }
-        const next = this.#queue.shift();
-        if (next !== undefined) {
-          controller.enqueue(next.bytes);
-          next.handed();
-        } else if (this.#aborted) {
-          controller.error(new Error("The relay ended before its body did"));
-        } else {
-          controller.close();
-        }
-      },
-    });
-  }
-
-  push(seq: number, bytes: Uint8Array): Promise<void> {
-    if (this.#aborted) return Promise.resolve();
-    if (this.#ended) throw new Error("A chunk arrived after the end of the body");
-    if (seq !== this.#nextSeq)
-      throw new Error(`Expected chunk ${String(this.#nextSeq)}, got ${String(seq)}`);
-    this.#nextSeq += 1;
-    return new Promise<void>((handed) => {
-      this.#queue.push({ bytes, handed });
-      this.#signal();
-    });
-  }
-
-  end(): void {
-    if (this.#aborted) return;
-    if (this.#ended) throw new Error("The body already ended");
-    this.#ended = true;
-    this.#signal();
-  }
-
-  // why: a sender must never wait on a target that stopped reading.
-  abort(): void {
-    this.#aborted = true;
-    for (const item of this.#queue.splice(0)) item.handed();
-    this.#signal();
-  }
-
-  #signal(): void {
-    const wake = this.#wake;
-    this.#wake = undefined;
-    wake?.();
-  }
+  // why: the first failure the channel reports decides how the call answers (ADR 0028's failure table).
+  failure: unknown;
+  // why: set once the target has answered; what the target has not read of the request body is dropped from then on.
+  abandoned: boolean;
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  readonly writer: WritableStreamDefaultWriter<Uint8Array>;
 }
 
 export class RelayConnection {
@@ -116,17 +56,31 @@ export class RelayConnection {
     private readonly logger: Logger,
   ) {}
 
-  async request(input: RelayRequestInput, push: RelayPush): Promise<{ readonly cancelled?: true }> {
+  // why: every way the call fails or is cancelled aborts the channel it owns; only a `{}` answer leaves it to end on its own.
+  async request(
+    input: RelayRequestInput,
+    push: RelayPush,
+    channel: LinkChannel,
+  ): Promise<RelayResult> {
+    try {
+      const result = await this.#request(input, push, channel);
+      if (result.cancelled === true) channel.abort();
+      return result;
+    } catch (error: unknown) {
+      channel.abort();
+      throw error;
+    }
+  }
+
+  async #request(
+    input: RelayRequestInput,
+    push: RelayPush,
+    channel: LinkChannel,
+  ): Promise<RelayResult> {
     // why: a request parked behind the startup gate reaches here after its connection closed; running its target would answer nobody.
     if (this.#closed) return { cancelled: true };
     if (this.#active.has(input.relayId)) {
       throw new DispatchError("BAD_REQUEST", `Relay ${input.relayId} is already active`);
-    }
-    if (this.#active.size >= MAX_ACTIVE_RELAYS) {
-      throw new DispatchError(
-        "BAD_REQUEST",
-        `A connection holds at most ${String(MAX_ACTIVE_RELAYS)} active relays`,
-      );
     }
     const target = Object.hasOwn(this.targets, input.target)
       ? this.targets[input.target]
@@ -140,43 +94,34 @@ export class RelayConnection {
         },
       );
     }
+    // why: a channel that failed while the request waited for startup answers by the failure table without running its target.
+    try {
+      await channel.whenCredit();
+    } catch (error: unknown) {
+      return this.#answerFailure(error);
+    }
     const controller = new AbortController();
-    const feed = input.hasBody ? new RelayBodyFeed() : undefined;
-    const active: ActiveRelay = { controller, feed, request: undefined };
+    const active: ActiveRelay = {
+      abandoned: false,
+      channel,
+      controller,
+      failure: undefined,
+      reader: undefined,
+      request: undefined,
+      writer: channel.writable.getWriter(),
+    };
+    // why: the writable errors the moment the channel fails or the peer stops this direction, so a target that never reads its body still ends with its channel.
+    active.writer.closed.catch((error: unknown) => this.#note(active, error));
+    controller.signal.addEventListener("abort", () => channel.abort(), { once: true });
     this.#active.set(input.relayId, active);
     try {
       return await this.#run(input, target, active, push);
     } finally {
-      feed?.abort();
       this.#active.delete(input.relayId);
     }
   }
 
-  // why: a relay the worker does not hold answers `{}`; the gateway learns the outcome from `relay.request`.
   // fallow-ignore-next-line unused-class-member -- reached only through the dispatcher's session (`session.relays`), which the audit cannot follow.
-  body(input: RelayBodyInput): Promise<void> {
-    const relay = this.#active.get(input.relayId);
-    if (relay === undefined) return Promise.resolve();
-    try {
-      if (relay.feed === undefined) throw new Error("The relay was opened without a body");
-      if ("end" in input) {
-        relay.feed.end();
-        return Promise.resolve();
-      }
-      const bytes = Buffer.from(input.chunk, "base64");
-      if (bytes.length > RELAY_MAX_CHUNK_BYTES) {
-        throw new Error(`A chunk is at most ${String(RELAY_MAX_CHUNK_BYTES)} bytes`);
-      }
-      return relay.feed.push(input.seq, bytes);
-    } catch (violation: unknown) {
-      relay.controller.abort();
-      throw new DispatchError(
-        "BAD_REQUEST",
-        violation instanceof Error ? violation.message : String(violation),
-      );
-    }
-  }
-
   cancel(relayId: string): void {
     this.#active.get(relayId)?.controller.abort();
   }
@@ -186,24 +131,71 @@ export class RelayConnection {
     for (const relay of this.#active.values()) relay.controller.abort();
   }
 
+  #note(active: ActiveRelay, error: unknown): void {
+    if (active.failure !== undefined || active.controller.signal.aborted) return;
+    active.failure = error;
+    active.controller.abort();
+  }
+
+  // why: a peer that broke a link rule is the one failure the worker reports to its caller; every other reason ends the call as a cancel.
+  #answerFailure(error: unknown): RelayResult {
+    if (error instanceof LinkChannelError && error.reason === "invalid") {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `The relay's channel broke a link rule: ${error.message}`,
+      );
+    }
+    return { cancelled: true };
+  }
+
+  #finished(active: ActiveRelay): RelayResult {
+    return active.failure === undefined ? { cancelled: true } : this.#answerFailure(active.failure);
+  }
+
+  #requestBody(active: ActiveRelay): ReadableStream<Uint8Array> {
+    const reader = active.channel.readable.getReader();
+    active.reader = reader;
+    return new ReadableStream<Uint8Array>(
+      {
+        cancel: () => reader.cancel().catch(() => undefined),
+        pull: async (controller) => {
+          try {
+            const step = await reader.read();
+            if (active.abandoned) {
+              controller.error(new Error("The relay answered before its request body ended"));
+            } else if (step.done) controller.close();
+            else controller.enqueue(step.value);
+          } catch (error: unknown) {
+            this.#note(active, error);
+            controller.error(error);
+          }
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
   async #run(
     input: RelayRequestInput,
     target: RelayTarget,
     active: ActiveRelay,
     push: RelayPush,
-  ): Promise<{ readonly cancelled?: true }> {
-    const { controller, feed } = active;
+  ): Promise<RelayResult> {
+    const { controller } = active;
     const { signal } = controller;
     const cancelled = new Promise<"cancelled">((resolve) => {
       signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
     });
     let request: Request;
     try {
+      const body = input.hasBody ? this.#requestBody(active) : undefined;
+      // why: a relay with no body reads nothing, so the peer is told to stop that direction at once.
+      if (body === undefined) void active.channel.readable.cancel().catch(() => undefined);
       request = new Request(input.url, {
         headers: new Headers(input.headers.filter(([name]) => !isRelayFramingHeader(name))),
         method: input.method,
         signal,
-        ...(feed === undefined ? {} : { body: feed.stream, duplex: "half" }),
+        ...(body === undefined ? {} : { body, duplex: "half" }),
       } as RequestInit);
     } catch (error: unknown) {
       throw new DispatchError(
@@ -221,25 +213,29 @@ export class RelayConnection {
       void answered
         .then((late) => ("response" in late ? late.response.body?.cancel() : undefined))
         .catch(() => undefined);
-      return { cancelled: true };
+      return this.#finished(active);
     }
     if ("error" in first) {
-      if (signal.aborted) return { cancelled: true };
+      if (signal.aborted) return this.#finished(active);
       this.logger.error("Relay target failed", {
         message: describe(first.error),
         target: input.target,
       });
       throw new Error("The relay target failed");
     }
-    return this.#respond(input, first.response, signal, push);
+    // why: the target has answered, so the unread rest of the request body is stopped on the channel.
+    active.abandoned = true;
+    void active.reader?.cancel().catch(() => undefined);
+    return this.#respond(input, first.response, active, push);
   }
 
   async #respond(
     input: RelayRequestInput,
     response: Response,
-    signal: AbortSignal,
+    active: ActiveRelay,
     push: RelayPush,
-  ): Promise<{ readonly cancelled?: true }> {
+  ): Promise<RelayResult> {
+    const { signal } = active.controller;
     const headers = relayHeaderPairs(response.headers, { dropCredentials: false });
     const broken = headerViolation(headers);
     if (broken !== undefined) {
@@ -252,47 +248,63 @@ export class RelayConnection {
     }
     if (signal.aborted) {
       void response.body?.cancel().catch(() => undefined);
-      return { cancelled: true };
+      return this.#finished(active);
     }
-    await push.head(response.status, headers);
+    try {
+      await push.head(response.status, headers);
+    } catch (error: unknown) {
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+    const { writer } = active;
     const noBody =
       input.method === "HEAD" || NO_BODY_STATUSES.has(response.status) || response.body === null;
     if (noBody) {
       void response.body?.cancel().catch(() => undefined);
-      return signal.aborted ? { cancelled: true } : {};
+      return this.#close(active, writer);
     }
-    return this.#stream(input, response.body, signal, push);
+    return this.#stream(input, response.body, active, writer);
+  }
+
+  async #close(
+    active: ActiveRelay,
+    writer: WritableStreamDefaultWriter<Uint8Array>,
+  ): Promise<RelayResult> {
+    try {
+      await writer.close();
+    } catch (error: unknown) {
+      this.#note(active, error);
+      return this.#finished(active);
+    }
+    return active.controller.signal.aborted ? this.#finished(active) : {};
   }
 
   async #stream(
     input: RelayRequestInput,
     body: ReadableStream<Uint8Array>,
-    signal: AbortSignal,
-    push: RelayPush,
-  ): Promise<{ readonly cancelled?: true }> {
+    active: ActiveRelay,
+    writer: WritableStreamDefaultWriter<Uint8Array>,
+  ): Promise<RelayResult> {
+    const { signal } = active.controller;
     const reader = body.getReader();
     const stop = () => void reader.cancel().catch(() => undefined);
-    // why: a cancel that landed while the head was being written already fired its event, so no listener would ever stop this reader.
-    if (signal.aborted) {
-      stop();
-      return { cancelled: true };
-    }
     signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
     try {
       for (;;) {
         const step = await reader.read();
-        if (signal.aborted) return { cancelled: true };
-        if (step.done) return {};
-        for (let offset = 0; offset < step.value.length; offset += RELAY_MAX_PUSH_BYTES) {
-          const piece = step.value.subarray(offset, offset + RELAY_MAX_PUSH_BYTES);
-          await push.chunk(
-            Buffer.from(piece.buffer, piece.byteOffset, piece.byteLength).toString("base64"),
-          );
-          if (signal.aborted) return { cancelled: true };
+        if (signal.aborted) return this.#finished(active);
+        if (step.done) break;
+        try {
+          await writer.write(step.value);
+        } catch (error: unknown) {
+          this.#note(active, error);
+          return this.#finished(active);
         }
+        if (signal.aborted) return this.#finished(active);
       }
     } catch (error: unknown) {
-      if (signal.aborted) return { cancelled: true };
+      if (signal.aborted) return this.#finished(active);
       this.logger.error("Relay target's response body failed", {
         message: describe(error),
         target: input.target,
@@ -301,6 +313,7 @@ export class RelayConnection {
     } finally {
       signal.removeEventListener("abort", stop);
     }
+    return this.#close(active, writer);
   }
 }
 

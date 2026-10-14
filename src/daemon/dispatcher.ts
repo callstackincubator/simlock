@@ -277,7 +277,6 @@ export class Dispatcher {
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
       "relay.request": this.#relayRequest,
-      "relay.body": this.#relayBody,
       "relay.cancel": this.#relayCancel,
       "doctor.run": this.#doctorRun,
       "lease.release-all": this.#leaseReleaseAll,
@@ -588,15 +587,19 @@ export class Dispatcher {
     return session.relays;
   }
 
-  #relayRequest: Handler<"relay.request"> = (input, session) =>
-    this.#relays(session).request(input, {
-      chunk: (chunk) => session.onRelayChunk?.(chunk) ?? Promise.resolve(),
-      head: (status, headers) => session.onRelayHead?.(status, headers) ?? Promise.resolve(),
-    });
-
-  #relayBody: Handler<"relay.body"> = async (input, session) => {
-    await this.#relays(session).body(input);
-    return {};
+  #relayRequest: Handler<"relay.request"> = (input, session) => {
+    const relays = this.#relays(session);
+    if (session.relayChannel === undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `The relay's channel ${input.channel} was not accepted`,
+      );
+    }
+    return relays.request(
+      input,
+      { head: (status, headers) => session.onRelayHead?.(status, headers) ?? Promise.resolve() },
+      session.relayChannel,
+    );
   };
 
   #relayCancel: Handler<"relay.cancel"> = (input, session) => {
