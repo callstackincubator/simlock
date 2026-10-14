@@ -100,6 +100,7 @@ import {
   FileDrainStore,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
+  type WorkerRegistry,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
   GatewayRelay,
@@ -809,6 +810,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
           instanceId,
           leaseIndex,
           relay: gatewayRelay,
+          startedAt: clock.now(),
           views: gatewayService.workers,
         }),
         clock,
@@ -978,7 +980,8 @@ interface FleetPortParts {
   readonly instanceId: string;
   readonly leaseIndex: FleetLeaseIndex;
   readonly relay: GatewayRelay;
-  readonly views: FleetViews;
+  readonly startedAt: number;
+  readonly views: FleetViews & Pick<WorkerRegistry, "grantedDevices">;
 }
 
 const AGENT_DEVICE = "agent-device";
@@ -986,7 +989,13 @@ const AGENT_DEVICE = "agent-device";
 type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
 
 // why: the agent-device edge imports nothing from the gateway, so this is the one place the gateway's parts become its port.
-function agentDeviceFleetPort({ instanceId, leaseIndex, relay, views }: FleetPortParts): FleetPort {
+function agentDeviceFleetPort({
+  instanceId,
+  leaseIndex,
+  relay,
+  startedAt,
+  views,
+}: FleetPortParts): FleetPort {
   const serving = (view: WorkerView, withDrained: boolean): FleetWorker | undefined => {
     const maxTtlMs = view.lease?.maxTtlMs;
     const available = view.capabilities?.some(
@@ -1017,6 +1026,21 @@ function agentDeviceFleetPort({ instanceId, leaseIndex, relay, views }: FleetPor
       return view === undefined ? undefined : serving(view, true);
     },
     instanceId,
+    leasesOf: (ownerId) =>
+      leaseIndex
+        .all()
+        .filter((entry) => entry.ownerId === ownerId)
+        .map((entry) => leaseFacts(views, entry)),
+    reach: (workerId) => {
+      const view = views.view(workerId);
+      return view === undefined
+        ? undefined
+        : {
+            connected: view.connection === "connected",
+            refreshed: view.catalogReadAt !== undefined,
+          };
+    },
+    startedAt,
     leaseOf: (leaseId) => {
       const entry = leaseIndex.resolve(leaseId);
       return entry === undefined ? undefined : { ownerId: entry.ownerId, workerId: entry.workerId };
@@ -1037,6 +1061,52 @@ function agentDeviceFleetPort({ instanceId, leaseIndex, relay, views }: FleetPor
         tenant,
         ...(leaseId === undefined ? {} : { leaseId }),
       }),
+  };
+}
+
+type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
+
+function leaseFacts(
+  views: FleetPortParts["views"],
+  entry: ReturnType<FleetLeaseIndex["all"]>[number],
+): FleetLeaseFacts {
+  const view = views.view(entry.workerId);
+  const record = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+  const device =
+    record === undefined
+      ? undefined
+      : views
+          .grantedDevices()
+          .find((granted) => granted.workerId === entry.workerId && granted.id === record.deviceId);
+  const { platform, model } = device?.spec ?? {};
+  const base = {
+    connected: view?.connection === "connected",
+    leaseId: entry.gatewayLeaseId,
+    refreshed: view?.catalogReadAt !== undefined,
+    requesterId: entry.requesterId,
+    workerId: entry.workerId,
+  };
+  if (
+    record === undefined ||
+    device?.address === undefined ||
+    (platform !== "ios" && platform !== "android") ||
+    model === undefined
+  ) {
+    return base;
+  }
+  const deviceClass = view?.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
+    model
+  ];
+  return {
+    ...base,
+    listed: {
+      address: device.address,
+      model,
+      platform,
+      ttlDeadline: record.ttlDeadline,
+      ttlMs: record.ttlMs,
+      ...(deviceClass === undefined ? {} : { deviceClass }),
+    },
   };
 }
 

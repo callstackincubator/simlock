@@ -5,7 +5,14 @@ import { buildHttpSession } from "../../http/dispatcher-session.js";
 import { mapError } from "../../http/errors.js";
 import type { TokenIdentity } from "../../http/token-store.js";
 import type { Clock } from "../../ports/index.js";
-import { frontReply, failure, notAvailable, refusal, type FrontReply } from "../shared/replies.js";
+import {
+  frontReply,
+  failure,
+  notAvailable,
+  refusal,
+  workerUnreachable,
+  type FrontReply,
+} from "../shared/replies.js";
 import { validDeviceKey } from "../shared/release-scope.js";
 import { leaseCallFields, leaseIdOf, replyData, type RpcRead } from "../shared/rpc.js";
 import { addressField, asRecord } from "../shared/selectors.js";
@@ -184,6 +191,7 @@ async function requestLease(
   };
   signal.addEventListener("abort", onAbort, { once: true });
   context.map.startWaiting(plan.leaseId);
+  context.link.asked?.(plan.leaseId);
   try {
     const grant = await context.dispatch(
       "lease.request",
@@ -275,8 +283,9 @@ export async function allocate(
       : frontReply(failure("simlock granted a device with no address; nothing was leased"), call);
   }
   const holder = await context.link.status(plan.leaseId, identity);
-  if (holder.state === "unavailable" || holder.leaseMaxTtlMs === undefined) {
+  if (holder.state !== "running" || holder.leaseMaxTtlMs === undefined) {
     await releaseSimlock(context, identity, plan.leaseId);
+    if (holder.state === "unreachable") return frontReply(workerUnreachable(), call);
     return frontReply(
       notAvailable(holder.state === "unavailable" ? holder.reason : NO_CEILING),
       call,

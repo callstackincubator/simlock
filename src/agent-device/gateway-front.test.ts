@@ -1122,6 +1122,8 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const received = member.fake.rpcRequests("agent_device.command").length;
 
     const other = await command(rig, "snapshot", 1, { token: secrets.two });
+    // why: within 60 s of the gateway starting, a lease it does not know answers "try again" (#517); past that, a refusal.
+    rig.clock.advance(60_000);
     const unknown = await command(rig, "snapshot", 9);
 
     expect(other.status).toBe(403);
@@ -1966,7 +1968,9 @@ describe(
 
 async function restarted(rig: Rig, member: Member, leases: number): Promise<void> {
   await rig.restart();
-  await untilConnected(rig, member);
+  // why: the worker's redial delay doubles with each restart in a row (1 s, 2 s, 4 s ... up to its jitter), so one test that restarts four times waits up to 8 s.
+  await advance(rig, 8_000, 500);
+  await untilRead(rig, member);
   await expect.poll(async () => (await fleetLeases(rig)).length).toBe(leases);
 }
 

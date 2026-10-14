@@ -3,7 +3,7 @@ import type { HttpMount } from "../http/app.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { FrontMap } from "./front/front-map.js";
 import { createFront } from "./front/front.js";
-import { InProcessHostLink, type HostLink } from "./front/host-link.js";
+import { InProcessHostLink, type HostLink, type LinkStatus } from "./front/host-link.js";
 import { RelayHostLink, type FleetPort } from "./front/relay-host-link.js";
 import { frontReplyFor, notAvailable } from "./shared/replies.js";
 import { Renewals } from "./front/renewals.js";
@@ -80,7 +80,8 @@ export function agentDeviceCapabilitySource(parts: AgentDeviceEdgeParts): {
   return {
     name: "agent-device",
     read: async () => {
-      const status = await parts.link.status();
+      // why: a status read without a lease id is never "unreachable"; only a lease has a worker to reach.
+      const status = (await parts.link.status()) as Exclude<LinkStatus, { state: "unreachable" }>;
       return status.state === "running"
         ? { state: "available" }
         : { reason: status.reason, state: "unavailable" };

@@ -29,6 +29,26 @@ export function notAvailable(reason: string): FrontReply {
   };
 }
 
+/** why: the gateway keeps a disconnected worker's lease, so a request for it is answered before it is relayed; `details.reason` lets a caller tell it from agent-device being unavailable. */
+export function workerUnreachable(): FrontReply {
+  return {
+    ...notAvailable("the worker holding this device is not connected to the gateway; try again"),
+    details: { reason: "WORKER_UNREACHABLE" },
+  };
+}
+
+const unreachableAnswers = new WeakSet<Response>();
+
+// why: a command answered "try again" may still run on its worker, so the front keeps renewing its lease until the run limit; this tells that answer from any other.
+export function markUnreachableAnswer(response: Response): Response {
+  unreachableAnswers.add(response);
+  return response;
+}
+
+export function isUnreachableAnswer(response: Response): boolean {
+  return unreachableAnswers.has(response);
+}
+
 export function refusal(message: string, status = 400): FrontReply {
   return { code: "INVALID_ARGS", message, status };
 }

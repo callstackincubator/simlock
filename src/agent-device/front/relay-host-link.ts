@@ -5,8 +5,13 @@ import type { Clock, TimerHandle } from "../../ports/index.js";
 import type { AgentDevicePlatform } from "../host/agent-device-supervisor.js";
 import { agentDeviceLeaseMaxTtlMs } from "../shared/daemon-environment.js";
 import { FRONT_PREFIX } from "../shared/paths.js";
-import { frontReplyFor, refusal } from "../shared/replies.js";
-import type { HostLink, LinkStatus } from "./host-link.js";
+import {
+  frontReplyFor,
+  markUnreachableAnswer,
+  refusal,
+  workerUnreachable,
+} from "../shared/replies.js";
+import type { AdoptableLease, HostLink, LinkStatus } from "./host-link.js";
 
 export interface FleetWorker {
   readonly id: string;
@@ -19,14 +24,38 @@ export interface PlacedLease {
   readonly ownerId: string;
 }
 
+// why: a lease the index holds for a principal, with what the view of its worker says.
+export interface FleetLeaseFacts {
+  readonly leaseId: string;
+  readonly requesterId: string;
+  readonly workerId: string;
+  readonly connected: boolean;
+  // why: true once the worker's view was read since it connected.
+  readonly refreshed: boolean;
+  // why: present only when the view lists the lease and its device.
+  readonly listed?: {
+    readonly address: string;
+    readonly platform: "ios" | "android";
+    readonly model: string;
+    readonly deviceClass?: string;
+    readonly ttlMs: number;
+    readonly ttlDeadline: number;
+  };
+}
+
 // why: the edge imports nothing from the gateway, so the gateway's parts reach the link only through this port, built where the gateway is composed.
 export interface FleetPort {
   readonly instanceId: string;
+  // why: when this gateway process started, which opens the window in which a lease it cannot place may still come back.
+  readonly startedAt: number;
   leaseOf(leaseId: string): PlacedLease | undefined;
   // why: connected, not drained, agent-device available, catalog read and `lease.maxTtlMs` known.
   capableWorkers(): readonly FleetWorker[];
   // why: a drained worker keeps serving the leases it holds, so a lease's holder is judged without the drain flag.
   holder(workerId: string): FleetWorker | undefined;
+  // why: whether the lease's worker is connected and read; undefined for a worker the gateway has no view of.
+  reach(workerId: string): { readonly connected: boolean; readonly refreshed: boolean } | undefined;
+  leasesOf(ownerId: string): readonly FleetLeaseFacts[];
   relay(workerId: string, request: Request, tenant: string, leaseId?: string): Promise<Response>;
   onLeaseRemoved(listener: (lease: PlacedLease & { readonly leaseId: string }) => void): void;
 }
@@ -45,6 +74,10 @@ const TOO_OLD = "refused: this agent-device is too old to use through a gateway;
 const MAX_TENANT_CHARS = 128;
 const HASH_CHARS = 27;
 const SWEEP_MS = 60_000;
+// why: after a restart the workers reconnect within this long; until then a lease the index lacks may still be one of theirs.
+const START_WINDOW_MS = 60_000;
+const WORKER_UNREACHABLE = "WORKER_UNREACHABLE";
+const TARGET_OF_CLASS: Record<string, string> = { desktop: "desktop", tv: "tv" };
 const FORBIDDEN = 403;
 
 // why: a character agent-device refuses (or a dot, the separator) becomes `_<hex>_`, so two names never share a tenant.
@@ -60,6 +93,12 @@ function relayTenant(instanceId: string, principal: string): string {
     .update(JSON.stringify([instanceId, principal]))
     .digest("hex");
   return `${tenant.slice(0, MAX_TENANT_CHARS - HASH_CHARS - 1)}.${hash.slice(0, HASH_CHARS)}`;
+}
+
+const UNREACHABLE: LinkStatus = { state: "unreachable" };
+
+function isRpcCall(request: Request): boolean {
+  return request.method === "POST" && new URL(request.url).pathname === `${FRONT_PREFIX}/rpc`;
 }
 
 interface Kept extends PlacedLease {
@@ -78,17 +117,26 @@ export class RelayHostLink implements HostLink {
   readonly leaseRequires: readonly string[] = ["agent-device"];
   readonly readsLeaseHeader = true;
   readonly #kept = new Map<string, Kept>();
+  readonly #asked = new Set<string>();
   #sweep: TimerHandle | undefined;
   #disposed = false;
 
   constructor(private readonly options: RelayHostLinkOptions) {
-    options.fleet.onLeaseRemoved((lease) => this.#keep(lease));
+    options.fleet.onLeaseRemoved((lease) => {
+      this.#asked.delete(lease.leaseId);
+      this.#keep(lease);
+    });
   }
 
   status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus> {
     if (leaseId !== undefined && identity !== undefined) {
       const placed = this.#place(leaseId);
+      if (placed === undefined && this.#inStartWindow()) return Promise.resolve(UNREACHABLE);
       if (placed?.ownerId === identity.requesterId) {
+        const reach = this.options.fleet.reach(placed.workerId);
+        if (reach !== undefined && !(reach.connected && reach.refreshed)) {
+          return Promise.resolve(UNREACHABLE);
+        }
         const holder = this.options.fleet.holder(placed.workerId);
         return Promise.resolve(
           holder === undefined
@@ -111,7 +159,37 @@ export class RelayHostLink implements HostLink {
     if (placed === undefined || placed.ownerId !== identity.requesterId) {
       return refuseRequest(request, notYours(leaseId), FORBIDDEN);
     }
-    return this.options.fleet.relay(placed.workerId, request, tenant, leaseId);
+    return this.#relay(placed.workerId, request, tenant, leaseId);
+  }
+
+  asked(leaseId: string): void {
+    this.#asked.add(leaseId);
+  }
+
+  adoptable(identity: TokenIdentity): readonly AdoptableLease[] {
+    return this.options.fleet.leasesOf(identity.requesterId).flatMap((facts) => {
+      const { listed } = facts;
+      if (
+        facts.requesterId !== facts.leaseId ||
+        this.#asked.has(facts.leaseId) ||
+        !facts.connected ||
+        !facts.refreshed ||
+        listed === undefined
+      ) {
+        return [];
+      }
+      return [
+        {
+          address: listed.address,
+          leaseId: facts.leaseId,
+          model: listed.model,
+          platform: listed.platform,
+          target: TARGET_OF_CLASS[listed.deviceClass ?? ""] ?? "mobile",
+          ttlDeadline: listed.ttlDeadline,
+          ttlMs: listed.ttlMs,
+        },
+      ];
+    });
   }
 
   dispose(): void {
@@ -119,6 +197,27 @@ export class RelayHostLink implements HostLink {
     if (this.#sweep !== undefined) this.options.clock.cancel(this.#sweep);
     this.#sweep = undefined;
     this.#kept.clear();
+    this.#asked.clear();
+  }
+
+  #inStartWindow(): boolean {
+    return this.options.clock.now() - this.options.fleet.startedAt < START_WINDOW_MS;
+  }
+
+  // why: the relay fails with WORKER_UNREACHABLE when the uplink drops mid-call, and this link is the one place that names that to the agent.
+  async #relay(
+    workerId: string,
+    request: Request,
+    tenant: string,
+    leaseId?: string,
+  ): Promise<Response> {
+    const asked = isRpcCall(request) ? request.clone() : request;
+    try {
+      return await this.options.fleet.relay(workerId, request, tenant, leaseId);
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code !== WORKER_UNREACHABLE) throw error;
+      return markUnreachableAnswer(await frontReplyFor(asked, workerUnreachable()));
+    }
   }
 
   #anyStatus(): LinkStatus {

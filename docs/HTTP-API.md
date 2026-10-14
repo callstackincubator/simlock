@@ -1554,6 +1554,22 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   agent ended through `close` or `disconnect` answers agent-device's own
   `LEASE_NOT_FOUND`, so `close` then `open` works. A heartbeat Simlock cannot
   renew for another reason answers `COMMAND_FAILED` with Simlock's message.
+- **An unreachable worker answers "try again".** Through a gateway, when the
+  worker holding the agent's device is not connected, or has reconnected and
+  the gateway has not read it yet, every request for that device (a command,
+  heartbeat, `close`, an upload naming the lease, and `devices`) answers
+  `agent-device is not available on this simlock: the worker holding this
+  device is not connected to the gateway; try again` with status 503. A
+  `/rpc` answer carries `details.reason` `WORKER_UNREACHABLE`. Nothing is sent
+  to the worker and the Simlock lease is untouched; once the worker is back and
+  read, before the lease ran out, the next request works. A command running
+  when the connection drops answers the same. The same answer covers a lease
+  the gateway does not know yet in the first 60 seconds after it starts.
+- **A gateway restart keeps the agent's device.** Once the worker reconnects,
+  the agent's next request of any kind works on the same device, with no
+  `open`. A lease the agent did not make through this front (another token's,
+  or one made under another requester) is not picked up. On a worker, a
+  restart of Simlock still ends the agent-device lease.
 
 What `open` asks Simlock for:
 

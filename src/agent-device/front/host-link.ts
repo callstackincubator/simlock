@@ -9,7 +9,20 @@ export type LinkStatus =
       readonly leaseMaxTtlMs?: number;
       readonly platforms: readonly AgentDevicePlatform[];
     }
-  | { readonly state: "unavailable"; readonly reason: string };
+  | { readonly state: "unavailable"; readonly reason: string }
+  // why: the lease may still exist, but only its worker can say, and the worker is not connected or not yet read.
+  | { readonly state: "unreachable" };
+
+// why: a lease the front may rebuild an entry for after a gateway restart, with what the entry needs.
+export interface AdoptableLease {
+  readonly leaseId: string;
+  readonly address: string;
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly target: string;
+  readonly ttlMs: number;
+  readonly ttlDeadline: number;
+}
 
 export interface HostLink {
   // why: only a link that serves many hosts routes non-RPC requests by the lease header and fans out `devices`; a worker never reads the header.
@@ -18,6 +31,10 @@ export interface HostLink {
   readonly leaseRequires?: readonly string[];
   status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus>;
   forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response>;
+  // why: only a link that serves many hosts can see leases made before the front's map was empty; a worker's map is never empty of its own leases.
+  adoptable?(identity: TokenIdentity): readonly AdoptableLease[];
+  // why: a lease the front asked for in this process is its allocate's to keep or release, never to adopt.
+  asked?(leaseId: string): void;
   dispose?(): void;
 }
 

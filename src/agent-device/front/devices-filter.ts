@@ -1,5 +1,5 @@
 import type { TokenIdentity } from "../../http/token-store.js";
-import { failure, frontReply } from "../shared/replies.js";
+import { failure, frontReply, workerUnreachable } from "../shared/replies.js";
 import { readBounded, readReply } from "../shared/rpc.js";
 import { asRecord } from "../shared/selectors.js";
 import { relay, type FrontContext } from "./context.js";
@@ -39,6 +39,18 @@ export async function filterDevices(
   const body = JSON.parse(text) as { result: { data: Record<string, unknown> } };
   body.result.data["devices"] = kept;
   return relay({ response, text: JSON.stringify(body) });
+}
+
+// why: one lease the gateway cannot reach makes the whole list unknown, so `devices` answers it rather than a list missing that device.
+export async function anyUnreachable(
+  context: FrontContext,
+  identity: TokenIdentity,
+  leases: readonly { readonly leaseId: string }[],
+): Promise<boolean> {
+  for (const lease of leases) {
+    if ((await context.link.status(lease.leaseId, identity)).state === "unreachable") return true;
+  }
+  return false;
 }
 
 interface GatewayDevices {
@@ -101,6 +113,7 @@ export async function devicesThroughGateway(
     return frontReply(failure(error.message), read);
   }
   if (held.length === 0) return emptyList(read);
+  if (await anyUnreachable(context, identity, held)) return frontReply(workerUnreachable(), read);
   const cancel = new AbortController();
   const signal = AbortSignal.any([request.signal, cancel.signal]);
   const pieces = await Promise.all(

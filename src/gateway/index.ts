@@ -20,6 +20,7 @@ export { GatewayDispatcher } from "./dispatcher.js";
 export type { GatewayTokenStore } from "./dispatcher.js";
 export { GatewayService, type GatewayServiceOptions } from "./service.js";
 export type { FleetViews } from "./fleet-ports.js";
+export type { WorkerRegistry } from "./worker-registry.js";
 export type { WorkerDirectory } from "./fleet-ports.js";
 // fallow-ignore-next-line unused-type -- see FleetViews above.
 export type { WorkerDispatchTarget } from "./fleet-ports.js";
