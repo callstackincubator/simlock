@@ -37,7 +37,9 @@ export {
   type UplinkConnector,
   type UplinkDialOptions,
   type UplinkListener,
+  type MemoryTransportConnection,
   type UplinkListenerFactory,
+  type UplinkTransportConnection,
 } from "./uplink.js";
 // fallow-ignore-next-line unused-type -- public port contract for consumers that branch on why a dial failed.
 export type { UplinkErrorCode } from "./uplink.js";

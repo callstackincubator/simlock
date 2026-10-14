@@ -19,7 +19,7 @@ import type { Duplex } from "node:stream";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import { subscribeListener, type IpcConnection } from "./ipc.js";
+import { subscribeListener } from "./ipc.js";
 import {
   resolveUplinkUrl,
   uplinkOutcome,
@@ -33,6 +33,7 @@ import {
   type UplinkHandlers,
   type UplinkListener,
   type UplinkListenerFactory,
+  type UplinkTransportConnection,
 } from "./uplink.js";
 
 /**
@@ -41,7 +42,7 @@ import {
  * and every reader buffers by newline, so a message boundary that does not line up with a
  * frame boundary is harmless either way.
  */
-class WebSocketUplinkConnection implements IpcConnection {
+class WebSocketUplinkConnection implements UplinkTransportConnection {
   readonly #socket: WebSocket;
   readonly #dataListeners = new Set<(chunk: string) => void>();
   readonly #closeListeners = new Set<() => void>();
@@ -110,6 +111,18 @@ class WebSocketUplinkConnection implements IpcConnection {
 
   onError(listener: (error: Error) => void): () => void {
     return subscribeListener(this.#errorListeners, listener);
+  }
+
+  readonly unsentBytes = 0;
+
+  async writeBinary(): Promise<void> {}
+
+  onBinary(): () => void {
+    return () => {};
+  }
+
+  onSent(): () => void {
+    return () => {};
   }
 
   async write(contents: string): Promise<void> {
@@ -249,7 +262,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
 
 /** The worker's half: dials `gateway.url` with the join token and its instance id. */
 export class WebSocketUplinkConnector implements UplinkConnector {
-  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+  async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     // `options.url` is `gateway.url`, the gateway's base URL; the endpoint is this worker's to
     // derive (ADR 0005 §4), so an operator configures one URL and never an internal path.
     const socket = new WebSocket(resolveUplinkUrl(options.url), {

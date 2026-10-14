@@ -198,3 +198,56 @@ describe("resolveUplinkUrl", () => {
     expect(resolveUplinkUrl("wss://ci.example/simlock")).toBe("wss://ci.example/simlock/v1/uplink");
   });
 });
+
+describe("createConnectionPair binary messages", () => {
+  it("carries a binary message from one end to the other's onBinary listeners", async () => {
+    const [left, right] = createConnectionPair();
+    const received: number[][] = [];
+    right.onBinary((bytes) => received.push([...bytes]));
+
+    await left.writeBinary(new Uint8Array([1, 2, 3]));
+
+    expect(received).toEqual([[1, 2, 3]]);
+  });
+
+  it("drops a binary message that arrives with no onBinary listener", async () => {
+    const [left, right] = createConnectionPair();
+    await left.writeBinary(new Uint8Array([9]));
+    const received: number[][] = [];
+    right.onBinary((bytes) => received.push([...bytes]));
+
+    await left.writeBinary(new Uint8Array([1]));
+
+    expect(received).toEqual([[1]]);
+  });
+
+  it("while held, unsentBytes counts what is written (text in UTF-8 bytes), nothing arrives and the write promises stay pending, until release delivers them in order and fires onSent", async () => {
+    const [left, right] = createConnectionPair();
+    const arrived: string[] = [];
+    right.onData((chunk) => arrived.push(`text:${chunk}`));
+    right.onBinary((bytes) => arrived.push(`binary:${String(bytes.length)}`));
+    const onSent = vi.fn();
+    left.onSent(onSent);
+    left.hold();
+    const settled: string[] = [];
+
+    const writes = [
+      left.write("é").then(() => settled.push("first")),
+      left.writeBinary(new Uint8Array([1, 2, 3])).then(() => settled.push("second")),
+      left.write("x\n").then(() => settled.push("third")),
+    ];
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(left.unsentBytes).toBe(2 + 3 + 2);
+    expect(arrived).toEqual([]);
+    expect(settled).toEqual([]);
+
+    left.release();
+    await Promise.all(writes);
+
+    expect(arrived).toEqual(["text:é", "binary:3", "text:x\n"]);
+    expect(settled).toEqual(["first", "second", "third"]);
+    expect(left.unsentBytes).toBe(0);
+    expect(onSent).toHaveBeenCalled();
+  });
+});

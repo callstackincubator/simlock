@@ -55,13 +55,26 @@ export function resolveUplinkUrl(baseUrl: string): string {
   return new URL(UPLINK_PATH.slice(1), base).toString();
 }
 
+export interface UplinkTransportConnection extends IpcConnection {
+  writeBinary(bytes: Uint8Array): Promise<void>;
+  onBinary(listener: (bytes: Uint8Array) => void): () => void;
+  readonly unsentBytes: number;
+  onSent(listener: () => void): () => void;
+}
+
+export interface MemoryTransportConnection extends UplinkTransportConnection {
+  hold(): void;
+  release(): void;
+  fail(error: Error): void;
+}
+
 /** One accepted uplink: who opened it, and the frames it carries. */
 export interface AcceptedUplink {
   /** The worker's instance id, from `WORKER_ID_HEADER`. */
   readonly workerId: string;
   /** `gateway.label`, when the worker sent one. Display only. */
   readonly label?: string;
-  readonly connection: IpcConnection;
+  readonly connection: UplinkTransportConnection;
   /**
    * The join token record's own id, when `authenticate` reported one alongside `accept`
    * (C-2, ADR 0005 §8: "revoking closes the uplink"). Recorded here so `GatewayService` can
@@ -154,7 +167,7 @@ export interface UplinkDialOptions {
 }
 
 export interface UplinkConnector {
-  connect(options: UplinkDialOptions): Promise<IpcConnection>;
+  connect(options: UplinkDialOptions): Promise<UplinkTransportConnection>;
 }
 
 /**
@@ -199,7 +212,7 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
     };
   }
 
-  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+  async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     const handlers = this.#handlers;
     if (handlers === undefined) {
       throw new UplinkError("unreachable", `No gateway is listening at ${options.url}`);
@@ -230,7 +243,7 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
  * that needs a bare pair (a scripted worker on one end, a real `DaemonServer` on the other)
  * does not have to build one.
  */
-export function createConnectionPair(): [IpcConnection, IpcConnection] {
+export function createConnectionPair(): [MemoryTransportConnection, MemoryTransportConnection] {
   const left = new PairedConnection();
   const right = new PairedConnection();
   left.pair(right);
@@ -238,7 +251,7 @@ export function createConnectionPair(): [IpcConnection, IpcConnection] {
   return [left, right];
 }
 
-class PairedConnection implements IpcConnection {
+class PairedConnection implements MemoryTransportConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
   /** Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
@@ -279,6 +292,24 @@ class PairedConnection implements IpcConnection {
     // unsubscriber keeps the port's shape honest rather than pretending errors are possible.
     return () => {};
   }
+
+  readonly unsentBytes = 0;
+
+  async writeBinary(): Promise<void> {}
+
+  onBinary(): () => void {
+    return () => {};
+  }
+
+  onSent(): () => void {
+    return () => {};
+  }
+
+  hold(): void {}
+
+  release(): void {}
+
+  fail(): void {}
 
   async write(contents: string): Promise<void> {
     const peer = this.#peer;
