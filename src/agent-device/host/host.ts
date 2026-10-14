@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { TokenIdentity } from "../../http/token-store.js";
 import type { AgentDevicePlatform } from "./agent-device-supervisor.js";
 import { FRONT_PREFIX, PROXY_BASE_PATH } from "../shared/paths.js";
+import { frontReply, refusal } from "../shared/replies.js";
 import { recordingFetch, ReleaseScopeRecord } from "./lease-end.js";
 import type { AgentDeviceUpstream } from "./upstream.js";
 
@@ -31,13 +32,12 @@ function stripBodyHeaders(headers: Headers): Headers {
 const DOWNLOAD_LIMIT = 2_147_483_648;
 
 function tooLarge(size: number): Response {
-  return Response.json(
-    {
-      code: "INVALID_ARGS",
-      error: `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (${String(DOWNLOAD_LIMIT)} bytes)`,
-      ok: false,
-    },
-    { status: 413 },
+  return frontReply(
+    refusal(
+      `the download is ${String(size)} bytes; simlock carries downloads up to 2 GB (${String(DOWNLOAD_LIMIT)} bytes)`,
+      413,
+    ),
+    undefined,
   );
 }
 
