@@ -454,7 +454,8 @@ test.describe("the workers views", () => {
     try {
       await openConsole(page, fleet.gateway);
       const load = fact(card(page, "worker-b"), "Load");
-      await expect(load).toHaveText(/^CPU /);
+      // why: the gateway shows a worker's first reading after its refresh, so allow twice the default 5 s wait.
+      await expect(load).toHaveText(/^CPU /, { timeout: 10_000 });
 
       await (fleet.workers[1] as RunningDaemon).stop();
       await untilTheGatewaySays(
