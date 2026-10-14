@@ -425,6 +425,49 @@ test.describe("the workers views", () => {
     }
   });
 
+  test("on a single host, a card shows its Load row and the detail shows the Load panel with an age that ticks", async ({
+    daemon,
+    page,
+  }) => {
+    const [host] = await workerList(daemon);
+    await openConsole(page, daemon);
+
+    const shown = card(page, host?.id ?? "");
+    await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    await shown.getByRole("link", { name: host?.id ?? "" }).click();
+
+    const panel = page.getByRole("region", { name: "Load", exact: true });
+    const read = fact(panel, "Read");
+    await expect(read).toHaveText(/^\d+ s ago$/);
+    const first = await read.textContent();
+    await expect(read).not.toHaveText(first ?? "", { timeout: 10_000 });
+    await expect(fact(panel, "CPU")).toContainText("busy");
+  });
+
+  test("a disconnected worker's Load row says No reading while disconnected within a second", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: IOS }, label: "worker-b" },
+    ]);
+    try {
+      await openConsole(page, fleet.gateway);
+      const load = fact(card(page, "worker-b"), "Load");
+      await expect(load).toHaveText(/^CPU /);
+
+      await (fleet.workers[1] as RunningDaemon).stop();
+      await untilTheGatewaySays(
+        fleet.gateway,
+        (views) => views.find((view) => view.label === "worker-b")?.connection === "disconnected",
+      );
+
+      await expect(load).toHaveText("No reading while disconnected", { timeout: 1_000 });
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
   test("a disconnected worker shows as disconnected within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },

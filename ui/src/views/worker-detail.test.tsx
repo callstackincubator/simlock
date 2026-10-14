@@ -267,11 +267,13 @@ describe("the warm pool section of a worker's page", () => {
     expect(shown).toContain("Reserved running slots iOS 1, Android 0");
   });
 
-  it("says Not reported for a worker whose status never carried the block", () => {
+  it("the warm pool's Not reported test checks the Warm pool panel alone", () => {
     const shown = detail(RUNNING);
+    const start = shown.indexOf("The devices the worker keeps booted ahead of demand");
+    const panel = shown.slice(start, shown.indexOf("Installs in progress", start));
 
-    expect(shown).toContain("Warm pool");
-    expect(shown).toContain("Not reported.");
+    expect(start).toBeGreaterThan(-1);
+    expect(panel).toContain("Not reported.");
   });
 
   it("shows none for a worker that is still starting", () => {
@@ -354,5 +356,203 @@ describe("the Capabilities row of a worker's page", () => {
     );
 
     expect(card).toContain("Capabilities agent-device available");
+  });
+});
+
+const GIB = 1024 ** 3;
+
+const LOAD = {
+  cpu: { busyPercent: 34, cores: 10, limited: false },
+  disk: { freeBytes: 112.4 * GIB, totalBytes: 494.4 * GIB },
+  memory: {
+    availableBytes: 9.8 * GIB,
+    limited: false,
+    pressure: "normal" as const,
+    swapUsedBytes: 1.2 * GIB,
+    totalBytes: 32 * GIB,
+  },
+  readAt: NOW - 12_000,
+};
+
+const STARTING: WorkerView = {
+  connection: "connected",
+  drained: false,
+  health: "starting",
+  host: RUNNING.host,
+  id: "wrk_1",
+  lastSeenAt: NOW,
+};
+
+const LOAD_DESCRIPTION = "How busy the machine is right now";
+
+function detailAt(worker: WorkerView, now: number): string {
+  return text(renderToStaticMarkup(<WorkerDetail id="wrk_1" workers={[worker]} now={now} />));
+}
+
+function loadPanel(shown: string): string {
+  const start = shown.indexOf(LOAD_DESCRIPTION);
+  if (start === -1) return "";
+  const ends = ["Warm pool", "Devices, leases and capacity appear"]
+    .map((marker) => shown.indexOf(marker, start))
+    .filter((index) => index !== -1);
+  return shown.slice(start, ends.length === 0 ? undefined : Math.min(...ends));
+}
+
+describe("a worker's card shows its load", () => {
+  const card = (worker: WorkerView) => text(renderToStaticMarkup(<WorkerFacts worker={worker} />));
+
+  it("a running worker's card shows the Load row right after Capacity, and a starting worker's right after Version", () => {
+    const running = card({ ...RUNNING, load: LOAD });
+    expect(running).toContain("Load CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free");
+    expect(running.indexOf("Capacity")).toBeGreaterThan(-1);
+    expect(running.indexOf("Load")).toBeGreaterThan(running.indexOf("Capacity"));
+
+    const starting = card({ ...STARTING, load: LOAD, version: "1.2.3" });
+    expect(starting).toContain("Version 1.2.3 Load CPU 34% · memory 9.8 of 32.0 GiB");
+    expect(starting).not.toContain("Devices");
+  });
+
+  it("a worker card says Not reported for a connected worker with no load, and No reading while disconnected for a disconnected one", () => {
+    expect(card(RUNNING)).toContain("Load Not reported");
+    expect(card({ ...RUNNING, connection: "disconnected", load: LOAD })).toContain(
+      "Load No reading while disconnected",
+    );
+  });
+
+  it("an incompatible worker's card and page have no Load row or panel", () => {
+    const incompatible: WorkerView = {
+      connection: "incompatible",
+      drained: false,
+      id: "wrk_1",
+      lastSeenAt: NOW,
+      load: LOAD,
+      protocol: { gateway: { max: 35, min: 35 }, worker: { max: 30, min: 30 } },
+    };
+
+    expect(card(incompatible)).not.toContain("Load");
+    const page = detailAt(incompatible, NOW);
+    expect(page).not.toContain("Load ");
+    expect(page).not.toContain(LOAD_DESCRIPTION);
+  });
+});
+
+describe("a worker's page shows its load", () => {
+  it("a running worker's detail shows the Load panel after Host and Catalog, with CPU, memory, swap, pressure, disk and the reading's age", () => {
+    const shown = detailAt({ ...RUNNING, load: LOAD }, NOW);
+
+    expect(shown.indexOf(LOAD_DESCRIPTION)).toBeGreaterThan(
+      shown.indexOf("The models and runtimes it can lease."),
+    );
+    expect(shown.indexOf("The models and runtimes it can lease.")).toBeGreaterThan(
+      shown.indexOf("The machine the worker runs on."),
+    );
+    const panel = loadPanel(shown);
+    expect(panel).toContain("CPU 34% busy, 10 cores");
+    expect(panel).toContain("Memory 9.8 GiB of 32.0 GiB available");
+    expect(panel).toContain("Swap 1.2 GiB used");
+    expect(panel).toContain("Pressure normal");
+    expect(panel).toContain("Disk 112.4 GiB of 494.4 GiB free");
+    expect(panel).toContain("Read 12 s ago");
+  });
+
+  it("a starting worker's detail shows the Load panel after Host and before the startup line", () => {
+    const shown = detailAt({ ...STARTING, load: LOAD }, NOW);
+    const at = shown.indexOf(LOAD_DESCRIPTION);
+
+    expect(at).toBeGreaterThan(shown.indexOf("The machine the worker runs on."));
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(shown.indexOf("Devices, leases and capacity appear once startup"));
+  });
+
+  it("a worker's detail leaves out Pressure when the view has none, and leaves out Swap and Pressure when memory is absent", () => {
+    const { pressure: _pressure, ...noPressure } = LOAD.memory;
+    const withoutPressure = loadPanel(
+      detailAt({ ...RUNNING, load: { ...LOAD, memory: noPressure } }, NOW),
+    );
+    expect(withoutPressure).toContain("Swap 1.2 GiB used");
+    expect(withoutPressure).not.toContain("Pressure");
+
+    const { memory: _memory, ...noMemory } = LOAD;
+    const withoutMemory = loadPanel(detailAt({ ...RUNNING, load: noMemory }, NOW));
+    expect(withoutMemory).toContain("CPU 34% busy");
+    expect(withoutMemory).not.toContain("Swap");
+    expect(withoutMemory).not.toContain("Pressure");
+  });
+
+  it("a worker's detail shows pressure normal, warn and critical in the ok, warn and error tones", () => {
+    const tone = (pressure: "normal" | "warn" | "critical") =>
+      renderToStaticMarkup(
+        <WorkerDetail
+          id="wrk_1"
+          workers={[{ ...RUNNING, load: { ...LOAD, memory: { ...LOAD.memory, pressure } } }]}
+          now={NOW}
+        />,
+      );
+    const status = (kind: string, word: string) =>
+      `<span class="status status-${kind}"><span class="status-dot" aria-hidden="true"></span>${word}</span>`;
+
+    expect(tone("normal")).toContain(status("ok", "normal"));
+    expect(tone("warn")).toContain(status("warn", "warn"));
+    expect(tone("critical")).toContain(status("error", "critical"));
+  });
+
+  it("a worker's detail says Unavailable in the row of an absent CPU, memory or disk", () => {
+    const { cpu: _cpu, ...noCpu } = LOAD;
+    const { memory: _memory, ...noMemory } = LOAD;
+    const { disk: _disk, ...noDisk } = LOAD;
+
+    expect(loadPanel(detailAt({ ...RUNNING, load: noCpu }, NOW))).toContain("CPU Unavailable");
+    expect(loadPanel(detailAt({ ...RUNNING, load: noMemory }, NOW))).toContain(
+      "Memory Unavailable",
+    );
+    expect(loadPanel(detailAt({ ...RUNNING, load: noDisk }, NOW))).toContain("Disk Unavailable");
+  });
+
+  it("a worker's detail says Not reported. in the Load panel with no load, and No reading while disconnected. for a disconnected worker", () => {
+    expect(loadPanel(detailAt(RUNNING, NOW))).toContain("Not reported.");
+    expect(
+      loadPanel(detailAt({ ...RUNNING, connection: "disconnected", load: LOAD }, NOW)),
+    ).toContain("No reading while disconnected.");
+  });
+
+  it("a worker's detail ages the reading as now minus readAt rounded up to a whole second, and shows a larger age for a later now", () => {
+    const worker = { ...RUNNING, load: { ...LOAD, readAt: NOW - 4_100 } };
+
+    expect(loadPanel(detailAt(worker, NOW))).toContain("Read 5 s ago");
+    expect(loadPanel(detailAt(worker, NOW + 10_000))).toContain("Read 15 s ago");
+    expect(
+      loadPanel(detailAt({ ...worker, load: { ...LOAD, readAt: NOW + 3_000 } }, NOW)),
+    ).toContain("Read 0 s ago");
+  });
+
+  it("the Status panel's description reads the worker's connection, health, capacity and load, and the Load panel's How busy the machine is right now", () => {
+    const shown = detailAt({ ...RUNNING, load: LOAD }, NOW);
+
+    expect(shown).toContain("The worker's connection, health, capacity and load.");
+    expect(shown).toContain("How busy the machine is right now");
+  });
+
+  it("a worker's detail writes (limit) as muted text after a limited CPU or memory figure", () => {
+    const html = renderToStaticMarkup(
+      <WorkerDetail
+        id="wrk_1"
+        workers={[
+          {
+            ...RUNNING,
+            load: {
+              ...LOAD,
+              cpu: { busyPercent: 61, cores: 2, limited: true },
+              memory: { ...LOAD.memory, limited: true },
+            },
+          },
+        ]}
+        now={NOW}
+      />,
+    );
+    const panel = loadPanel(text(html));
+
+    expect(panel).toContain("CPU 61% busy, 2 cores (limit)");
+    expect(panel).toContain("Memory 9.8 GiB of 32.0 GiB available (limit)");
+    expect(html.match(/<span class="muted">\(limit\)<\/span>/g)).toHaveLength(2);
   });
 });
