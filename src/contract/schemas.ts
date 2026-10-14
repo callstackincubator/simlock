@@ -530,7 +530,7 @@ export const hostLoadSchema = z.object({
 });
 
 /** ADR 0029 §5: a worker's load as its view carries it: when it was read, on the viewer's clock. */
-export const workerLoadSchema = z.object({
+const workerLoadSchema = z.object({
   readAt: z.number().int().min(0),
   cpu: loadCpuSchema.optional(),
   memory: loadMemorySchema.optional(),
