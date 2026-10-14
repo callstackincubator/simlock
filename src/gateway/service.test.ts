@@ -171,6 +171,33 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("WorkerLink stamps a view's load with the gateway clock's time when status.get answered", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    harness.clock.advance(19_000);
+    // why: the device read lands later than status, so a stamp taken after it would be 5 s fresher.
+    class SlowDevices extends ScriptedWorkerClient {
+      override async list(input: { readonly kind?: string }): Promise<unknown> {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        harness.clock.advance(5_000);
+        return super.list(input);
+      }
+    }
+    const worker = new SlowDevices();
+    worker.status = statusFixture({
+      load: { ageMs: 2_000, disk: { freeBytes: 120, totalBytes: 500 } },
+    });
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.load).toBeDefined());
+
+    expect(harness.service.workers.view("wrk_1")?.load).toEqual({
+      disk: { freeBytes: 120, totalBytes: 500 },
+      readAt: 18_000,
+    });
+    await harness.service.stop();
+  });
+
   it("builds a starting worker's view from health and host alone, asks it for nothing else, and builds the full view once it answers running", async () => {
     const harness = fleet();
     await harness.service.start();

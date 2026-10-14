@@ -38,6 +38,7 @@ export type WorkerViewSnapshot = Pick<
   | "installs"
   | "lease"
   | "leases"
+  | "load"
   | "queueDepth"
   | "version"
   | "waiting"

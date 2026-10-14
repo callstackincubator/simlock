@@ -136,6 +136,7 @@ function harness(
     readonly http?: (typeof gatewayConfig)["http"];
     /** The gateway's own health; `running` by default. */
     readonly health?: "starting" | "running" | "failed";
+    readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -193,6 +194,7 @@ function harness(
       }),
     health: () => options.health ?? "running",
     host: GATEWAY_HOST,
+    ...(options.load === undefined ? {} : { load: options.load }),
     leaseIndex,
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
@@ -340,6 +342,24 @@ describe("GatewayDispatcher", () => {
       mode: "gateway",
     });
     expect(status.host).toEqual(GATEWAY_HOST);
+  });
+
+  it("a gateway's status.get carries the gateway machine's own load, not its workers', on the starting answer and the running one", async () => {
+    const own = { ageMs: 3_000, disk: { freeBytes: 10, totalBytes: 100 } };
+    const workerLoad = { readAt: 500, disk: { freeBytes: 99, totalBytes: 100 } };
+    const askStatus = async (health: "starting" | "running") => {
+      const { dispatcher, workers } = harness({ health, load: () => own });
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", { health: "running", load: workerLoad });
+      return dispatcher.dispatch("status.get", {}, session());
+    };
+
+    const starting = await askStatus("starting");
+    const running = await askStatus("running");
+
+    expect(starting.load).toEqual(own);
+    expect(running.load).toEqual(own);
+    expect(running.workers?.[0]?.load).toEqual(workerLoad);
   });
 
   it("status.get carries consoleUrl when HTTP is enabled and omits it when disabled", async () => {

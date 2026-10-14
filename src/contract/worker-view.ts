@@ -42,6 +42,8 @@ export interface WorkerReads {
   readonly devices?: Output<"list.get">;
   readonly catalog?: Output<"catalog.get">;
   readonly config?: Output<"config.get">;
+  // why: placeholder so the red tests compile; green makes it required and reads it.
+  readonly receivedAt?: number;
 }
 
 export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
@@ -56,6 +58,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
       | "installs"
       | "lease"
       | "leases"
+      | "load"
       | "physicalQueueDepth"
       | "queueDepth"
       | "waiting"

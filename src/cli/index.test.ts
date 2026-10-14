@@ -2941,6 +2941,136 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     );
   });
 
+  describe("a worker's Load line", () => {
+    const GIB = 2 ** 30;
+    const PARTS = {
+      cpu: { busyPercent: 34.2, cores: 10, limited: false },
+      disk: { freeBytes: 120_688_581_018, totalBytes: 530_857_957_786 },
+      memory: {
+        availableBytes: 10_522_669_875,
+        limited: false,
+        pressure: "normal" as const,
+        swapUsedBytes: 1_288_490_189,
+        totalBytes: 32 * GIB,
+      },
+    };
+    const READING =
+      "CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free";
+    const NOW = 61_000;
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 1_000,
+      state: "downloading" as const,
+      waiters: 2,
+    };
+    const printWorkers = async (workers: unknown[]) => {
+      const output = outputCapture();
+      await runCli(
+        ["worker", "list"],
+        output.environmentWith({
+          clock: new FakeClock(NOW),
+          connectAdmin: async () =>
+            fakeClient({ listWorkers: () => Promise.resolve({ workers } as never) }),
+        }),
+      );
+      return output.stdout;
+    };
+
+    it("simlock worker list prints a connected or starting worker's Load line after its own line and before its install lines", async () => {
+      const stdout = await printWorkers([
+        {
+          ...connectedWorker,
+          installs: [install],
+          load: { ...PARTS, readAt: NOW - 12_000 },
+        },
+        {
+          connection: "connected",
+          drained: false,
+          health: "starting",
+          id: "wrk_2",
+          lastSeenAt: 1,
+          load: { memory: PARTS.memory, readAt: NOW - 3_000 },
+        },
+      ]);
+
+      const lines = stdout.trimEnd().split("\n");
+      expect(lines[0]).toMatch(/^wrk_1 \(mac-mini-1\): connected -- /);
+      expect(lines[1]).toBe(`  Load: ${READING} · read 12s ago`);
+      expect(lines[2]).toMatch(/^ {2}Install ios 26\.4: downloading for 60s, 2 waiters$/);
+      expect(lines[3]).toMatch(/^wrk_2: connected, starting/);
+      expect(lines[4]).toBe(
+        "  Load: memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · read 3s ago",
+      );
+    });
+
+    it("simlock worker list prints `no reading while disconnected` for a disconnected worker, and no Load line for an incompatible one or one that sent none", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, connection: "disconnected", drained: true, id: "wrk_a" },
+        {
+          connection: "incompatible",
+          drained: false,
+          id: "wrk_b",
+          lastSeenAt: 1,
+          protocol: { gateway: { max: 35, min: 35 }, worker: { max: 4, min: 4 } },
+        },
+        { ...connectedWorker, id: "wrk_c" },
+        { ...connectedWorker, id: "wrk_d", load: { ...PARTS, readAt: NOW - 1_000 } },
+      ]);
+
+      const lines = stdout.trimEnd().split("\n");
+      const loadAfter = (id: string) => {
+        const index = lines.findIndex((line) => line.startsWith(`${id}:`));
+        const next = lines[index + 1];
+        return next?.startsWith("  Load:") === true ? next : undefined;
+      };
+      expect(loadAfter("wrk_d")).toBe(`  Load: ${READING} · read 1s ago`);
+      expect(loadAfter("wrk_a")).toBe("  Load: no reading while disconnected");
+      expect(loadAfter("wrk_b")).toBeUndefined();
+      expect(loadAfter("wrk_c")).toBeUndefined();
+    });
+
+    it("simlock worker list prints `read 0s ago` for a readAt ahead of its clock", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, load: { ...PARTS, readAt: NOW + 9_000 } },
+      ]);
+
+      expect(stdout).toContain(`  Load: ${READING} · read 0s ago\n`);
+    });
+
+    it("simlock status against a gateway prints the gateway's own Load line, and each worker's Load line aged from the status time", async () => {
+      const output = outputCapture();
+      const status: StatusGetOutput = {
+        ...EMPTY_STATUS,
+        daemon: { health: "running", mode: "gateway" },
+        load: { ageMs: 4_000, ...PARTS },
+        workers: [
+          {
+            catalog: [],
+            connection: "connected",
+            devices: [],
+            drained: false,
+            id: "wrk_1",
+            lastSeenAt: 1,
+            leases: [],
+            load: { ...PARTS, readAt: NOW - 12_000 },
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          clock: new FakeClock(NOW),
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+
+      expect(output.stdout).toContain(`\nLoad: ${READING} · read 4s ago\n`);
+      expect(output.stdout).toContain(`\n  Load: ${READING} · read 12s ago\n`);
+    });
+  });
+
   it("prints a starting worker as starting, with its leases unknown rather than none", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

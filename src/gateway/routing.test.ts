@@ -70,6 +70,21 @@ describe("the registered warm-then-free policy", () => {
     });
   });
 
+  it("the gateway picks the same worker for a request whether or not the views carry load", () => {
+    const load = { cpu: { busyPercent: 100, cores: 2, limited: false }, readAt: 1 };
+    const quiet = view("wrk_a_quiet", { capacity: withIos({ maxRunning: 5 }) });
+    const busy = view("wrk_z_busy", { capacity: withIos({ maxRunning: 9 }) });
+
+    const without = policy.select(REQUEST, [quiet, busy]);
+    const withLoad = policy.select(REQUEST, [
+      { ...quiet, load: { readAt: 1 } },
+      { ...busy, load },
+    ]);
+
+    expect(without).toMatchObject({ workerId: "wrk_z_busy" });
+    expect(withLoad).toEqual(without);
+  });
+
   it("picks a worker with a warm device over a cold one with more free running capacity", () => {
     // The warm worker sorts last by id and has less room, so only warm-hit can pick it.
     const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });

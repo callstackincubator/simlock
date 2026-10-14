@@ -400,6 +400,68 @@ describe("WorkerRegistry", () => {
     },
   );
 
+  describe("a worker's load on its view", () => {
+    const load = {
+      cpu: { busyPercent: 34, cores: 10, limited: false },
+      readAt: 900,
+    };
+    const incompatible = (workers: ReturnType<typeof registry>["workers"], workerId: string) =>
+      workers.incompatible(
+        workerId,
+        undefined,
+        { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+        "0.2.0",
+      );
+
+    it("the registry drops a worker's load when it disconnects, turns incompatible, or connects again", () => {
+      const { workers } = registry();
+      for (const id of ["wrk_1", "wrk_2", "wrk_3"]) {
+        workers.connected(id, undefined, "0.3.0");
+        workers.refresh(id, { load });
+      }
+      expect(workers.view("wrk_1")?.load).toEqual(load);
+
+      workers.disconnected("wrk_1");
+      const turned = incompatible(workers, "wrk_2");
+      const reconnected = workers.connected("wrk_3", undefined, "0.3.0");
+
+      expect(workers.view("wrk_1")).not.toHaveProperty("load");
+      expect(turned).not.toHaveProperty("load");
+      expect(workers.view("wrk_2")).not.toHaveProperty("load");
+      expect(reconnected).not.toHaveProperty("load");
+      expect(workers.view("wrk_3")).not.toHaveProperty("load");
+    });
+
+    it("a refresh without load leaves the view without load, after one with load", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", { load });
+      expect(workers.view("wrk_1")?.load).toEqual(load);
+
+      workers.refresh("wrk_1", { queueDepth: 1 });
+
+      expect(workers.view("wrk_1")?.queueDepth).toBe(1);
+      expect(workers.view("wrk_1")).not.toHaveProperty("load");
+    });
+
+    it("a refresh that reaches a disconnected or an incompatible view leaves no load on it", () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.connected("wrk_2", undefined, "0.3.0");
+      workers.refresh("wrk_1", { load });
+      workers.disconnected("wrk_1");
+      incompatible(workers, "wrk_2");
+
+      workers.refresh("wrk_1", { load });
+      workers.refresh("wrk_2", { load });
+
+      expect(workers.view("wrk_1")?.connection).toBe("disconnected");
+      expect(workers.view("wrk_1")).not.toHaveProperty("load");
+      expect(workers.view("wrk_2")?.connection).toBe("incompatible");
+      expect(workers.view("wrk_2")).not.toHaveProperty("load");
+    });
+  });
+
   it("drops a worker's installs from its view when it disconnects or turns incompatible", () => {
     const { workers } = registry();
     const installs = [

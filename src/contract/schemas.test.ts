@@ -15,6 +15,7 @@ import {
   leaseRequestRecordSchema,
   platformCatalogSchema,
   statusDeviceSchema,
+  workerViewSchema,
 } from "./schemas.js";
 
 /**
@@ -834,5 +835,45 @@ describe("fitHostLoad", () => {
 
     expect(fitHostLoad(reading)).toStrictEqual(reading);
     expect(fitHostLoad(undefined)).toBeUndefined();
+  });
+});
+
+describe("the worker view's load", () => {
+  const view = {
+    connection: "connected" as const,
+    drained: false,
+    id: "wrk_1",
+    lastSeenAt: 1,
+  };
+  const load = {
+    cpu: { busyPercent: 34.2, cores: 10, limited: false },
+    disk: { freeBytes: 120, totalBytes: 500 },
+    memory: {
+      availableBytes: 4_000,
+      limited: false,
+      pressure: "normal" as const,
+      swapUsedBytes: 100,
+      totalBytes: 16_000,
+    },
+    readAt: 8_000,
+  };
+
+  it("the worker view schema round-trips load, and refuses a negative readAt, a negative figure or a busy % over 100", () => {
+    expect(workerViewSchema.parse({ ...view, load })).toEqual({ ...view, load });
+    expect(workerViewSchema.parse({ ...view, load: { readAt: 0 } })).toEqual({
+      ...view,
+      load: { readAt: 0 },
+    });
+
+    expect(() => workerViewSchema.parse({ ...view, load: { ...load, readAt: -1 } })).toThrow();
+    expect(() =>
+      workerViewSchema.parse({ ...view, load: { ...load, disk: { ...load.disk, freeBytes: -1 } } }),
+    ).toThrow();
+    expect(() =>
+      workerViewSchema.parse({
+        ...view,
+        load: { ...load, cpu: { ...load.cpu, busyPercent: 100.5 } },
+      }),
+    ).toThrow();
   });
 });

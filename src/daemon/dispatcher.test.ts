@@ -229,6 +229,7 @@ async function buildDispatcher(
     readonly state?: object;
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
+    readonly load?: DispatcherOptions["load"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -333,6 +334,7 @@ async function buildDispatcher(
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     instanceId: "instance-1",
     leases: engine,
+    ...(overrides.load === undefined ? {} : { load: overrides.load }),
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
@@ -514,6 +516,28 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       version: "1.2.3",
     });
     expect(workers[0]).not.toHaveProperty("protocol");
+  });
+
+  it("a worker's own worker.list carries its load with readAt taken when its status answered, not after its catalog read", async () => {
+    const clock = new FakeClock(10_000);
+    const base = await buildDispatcher({ clock });
+    const slowCatalog: CatalogReader = {
+      async listCatalog(...arguments_) {
+        // why: a later macrotask, so status's own answer has already been taken by then.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        clock.advance(5_000);
+        return base.engine.listCatalog(...arguments_);
+      },
+    };
+    const { dispatcher } = await buildDispatcher({
+      catalog: slowCatalog,
+      clock,
+      load: () => ({ ageMs: 2_000, disk: { freeBytes: 120, totalBytes: 500 } }),
+    });
+
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(workers[0]?.load).toEqual({ disk: { freeBytes: 120, totalBytes: 500 }, readAt: 8_000 });
   });
 
   it("worker.list on a worker carries gateway.label as label, and no label when it is unset", async () => {

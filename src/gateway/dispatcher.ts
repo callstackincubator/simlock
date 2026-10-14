@@ -119,6 +119,8 @@ export interface GatewayDispatcherOptions {
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly health: () => "starting" | "running" | "failed";
   readonly host: AggregateStatusOptions["host"];
+  // why: placeholder so the red tests compile; green reads it into status.get's own load.
+  readonly load?: () => z.infer<(typeof OPERATIONS)["status.get"]["output"]>["load"];
   readonly awaitReady: () => Promise<void>;
   readonly coordinator: Pick<
     FleetLeaseCoordinator,

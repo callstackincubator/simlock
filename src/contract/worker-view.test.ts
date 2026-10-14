@@ -226,4 +226,72 @@ describe("workerViewFields", () => {
 
     expect(Object.keys(view).sort()).toEqual(["health", "host", "installs", "waiting"]);
   });
+  describe("a worker's load", () => {
+    const LOAD = {
+      ageMs: 4_000,
+      cpu: { busyPercent: 34.2, cores: 10, limited: false },
+      disk: { freeBytes: 120, totalBytes: 500 },
+      memory: {
+        availableBytes: 4_000,
+        limited: false,
+        pressure: "normal" as const,
+        swapUsedBytes: 100,
+        totalBytes: 16_000,
+      },
+    };
+    const { ageMs: _ageMs, ...PARTS } = LOAD;
+    const running = (load?: typeof LOAD) =>
+      ({
+        capacity: CAPACITY,
+        daemon: { health: "running", mode: "worker" },
+        devices: [],
+        host: HOST,
+        leases: [],
+        queueDepth: 0,
+        ...(load === undefined ? {} : { load }),
+      }) as unknown as Parameters<typeof workerViewFields>[0]["status"];
+
+    it("workerViewFields turns a status load's ageMs into readAt on the given receive time, keeping every part, and floors readAt at 0", () => {
+      const view = workerViewFields({ receivedAt: 10_000, status: running(LOAD) });
+
+      expect(view.load).toEqual({ readAt: 6_000, ...PARTS });
+      expect(workerViewFields({ receivedAt: 4_000, status: running(LOAD) }).load).toMatchObject({
+        readAt: 0,
+      });
+      expect(workerViewFields({ receivedAt: 1_000, status: running(LOAD) }).load).toMatchObject({
+        readAt: 0,
+      });
+    });
+
+    it("workerViewFields copies load from a starting worker's status", () => {
+      const status = {
+        daemon: { health: "starting", mode: "worker" },
+        host: HOST,
+        load: LOAD,
+      } as unknown as Parameters<typeof workerViewFields>[0]["status"];
+
+      const view = workerViewFields({ receivedAt: 10_000, status });
+
+      expect(view).toEqual({
+        health: "starting",
+        host: HOST,
+        load: { readAt: 6_000, ...PARTS },
+      });
+    });
+
+    it("workerViewFields leaves load out when the status has none", () => {
+      const starting = {
+        daemon: { health: "starting", mode: "worker" },
+        host: HOST,
+      } as unknown as Parameters<typeof workerViewFields>[0]["status"];
+
+      expect(workerViewFields({ receivedAt: 10_000, status: running(LOAD) })).toHaveProperty(
+        "load",
+      );
+      expect(workerViewFields({ receivedAt: 10_000, status: running() })).not.toHaveProperty(
+        "load",
+      );
+      expect(workerViewFields({ receivedAt: 10_000, status: starting })).not.toHaveProperty("load");
+    });
+  });
 });

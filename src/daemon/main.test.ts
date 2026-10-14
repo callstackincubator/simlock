@@ -2851,3 +2851,121 @@ describe("startDaemon host load", () => {
     expect(withProbe.clock.pendingTimerCount).toBe(without.clock.pendingTimerCount);
   });
 });
+
+describe("startDaemon in gateway mode host load", () => {
+  const COUNTERS: HostLoadCounters = {
+    cpu: { busyTime: 100, cores: 4, limited: false, totalTime: 1_000 },
+    disk: { freeBytes: 120, totalBytes: 500 },
+    memory: {
+      availableBytes: 4_000,
+      limited: false,
+      pressure: "normal",
+      swapUsedBytes: 100,
+      totalBytes: 16_000,
+    },
+  };
+  const operator = {
+    manageEventSubscription: () => undefined,
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startGateway(
+    overrides: Partial<StartDaemonOptions> & { readonly directory?: string } = {},
+  ) {
+    const { directory: given, ...rest } = overrides;
+    const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-load-")));
+    if (given === undefined) temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        mode: "gateway",
+      },
+      dataDirectory: directory,
+      drivers: [],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+      ...rest,
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { clock, daemon, directory };
+  }
+
+  const statusOf = async (daemon: DaemonServer) =>
+    (await daemon.dispatch("status.get", {}, operator)) as Record<string, unknown>;
+
+  it("a gateway started with a probe answers status.get with the gateway machine's load from it", async () => {
+    const probe = new FakeHostLoadProbe(COUNTERS);
+    const { daemon } = await startGateway({ hostLoadProbe: probe });
+
+    await expect
+      .poll(async () => (await statusOf(daemon)).load)
+      .toEqual({ ageMs: 0, disk: COUNTERS.disk, memory: COUNTERS.memory });
+    expect(probe.reads).toBe(1);
+  });
+
+  it("a gateway started with hostLoadProbe: null answers status.get without load, and arms no host load timer", async () => {
+    const withProbe = await startGateway({ hostLoadProbe: new FakeHostLoadProbe(COUNTERS) });
+    const without = await startGateway({ hostLoadProbe: null });
+
+    await expect.poll(async () => (await statusOf(withProbe.daemon)).load).toBeDefined();
+
+    expect(await statusOf(without.daemon)).not.toHaveProperty("load");
+    expect(withProbe.clock.pendingTimerCount).toBeGreaterThan(without.clock.pendingTimerCount);
+  });
+
+  it("a gateway started with no hostLoadProbe builds the production probe, the same factory a worker uses", async () => {
+    const { daemon } = await startGateway({});
+
+    await expect
+      .poll(
+        async () => ((await statusOf(daemon)).load as { memory?: { totalBytes: number } })?.memory,
+      )
+      .toMatchObject({ totalBytes: expect.any(Number) });
+  });
+
+  it("a stopped gateway, and one that lost the start race, leave no host load timer pending", async () => {
+    const probe = new FakeHostLoadProbe(COUNTERS);
+    const withProbe = await startGateway({ hostLoadProbe: probe });
+    const without = await startGateway({ hostLoadProbe: null });
+    expect(withProbe.clock.pendingTimerCount).toBeGreaterThan(without.clock.pendingTimerCount);
+
+    await withProbe.daemon.stop("test");
+    await without.daemon.stop("test");
+
+    expect(withProbe.clock.pendingTimerCount).toBe(without.clock.pendingTimerCount);
+
+    const first = await startGateway({ hostLoadProbe: null });
+    const lost = async (hostLoadProbe: FakeHostLoadProbe | null) => {
+      const clock = new FakeClock(1_000);
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: {
+            http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+            mode: "gateway",
+          },
+          dataDirectory: first.directory,
+          drivers: [],
+          filesystem: new MemoryFilesystem(),
+          hostLoadProbe,
+          statePath: join(first.directory, "state.json"),
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      ).rejects.toThrow();
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      return clock.pendingTimerCount;
+    };
+    const losingProbe = new FakeHostLoadProbe(COUNTERS);
+
+    const withLoser = await lost(losingProbe);
+    const withoutLoser = await lost(null);
+
+    expect(losingProbe.reads).toBe(0);
+    expect(withLoser).toBe(withoutLoser);
+  });
+});

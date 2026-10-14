@@ -1096,6 +1096,8 @@ export function capabilityReason(text: string): string {
  */
 export const workerViewSchema = z.object({
   capabilities: capabilityListSchema.optional(),
+  // why: placeholder so the red tests compile; green replaces it with the readAt-and-parts shape.
+  load: z.unknown().optional(),
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
    * restarts, unique by construction, opaque to clients. Never a host name or an address. */
   id: z.string(),
