@@ -137,8 +137,8 @@ Each worker shows:
 | Version | The worker's Simlock version |
 | Devices | How many devices are running, and how many are leased |
 | Capacity | Devices running out of the limit, per platform |
-| Load | The machine's CPU, memory and disk use, such as `CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free`. A figure the worker limits itself to, such as a container's, is marked `(limit)`, and one it could not read says `unavailable`. A disconnected worker says "No reading while disconnected" |
 | Capabilities | Each optional module the worker knows of, such as agent-device: `available`, `off`, or `unavailable` with its reason |
+| Load | The machine's CPU, memory and disk use, such as `CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free`. A figure the worker limits itself to, such as a container's, is marked `(limit)`, and one it could not read says `unavailable`. A disconnected worker says "No reading while disconnected" |
 
 A worker the gateway could not read from yet says "Not reported" where it
 has nothing to show. A worker that is still starting shows its health as

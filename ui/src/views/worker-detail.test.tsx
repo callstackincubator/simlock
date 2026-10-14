@@ -402,11 +402,11 @@ function loadPanel(shown: string): string {
 describe("a worker's card shows its load", () => {
   const card = (worker: WorkerView) => text(renderToStaticMarkup(<WorkerFacts worker={worker} />));
 
-  it("a running worker's card shows the Load row right after Capacity, and a starting worker's right after Version", () => {
+  it("a running worker's card shows the Load row right after Capabilities, and a starting worker's right after Version", () => {
     const running = card({ ...RUNNING, load: LOAD });
     expect(running).toContain("Load CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free");
-    expect(running.indexOf("Capacity")).toBeGreaterThan(-1);
-    expect(running.indexOf("Load")).toBeGreaterThan(running.indexOf("Capacity"));
+    expect(running.indexOf("Capabilities")).toBeGreaterThan(running.indexOf("Capacity"));
+    expect(running.indexOf("Load")).toBeGreaterThan(running.indexOf("Capabilities"));
 
     const starting = card({ ...STARTING, load: LOAD, version: "1.2.3" });
     expect(starting).toContain("Version 1.2.3 Load CPU 34% · memory 9.8 of 32.0 GiB");

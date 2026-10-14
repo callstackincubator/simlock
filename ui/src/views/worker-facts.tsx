@@ -64,7 +64,6 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
                     .join(", ")}
             </dd>
           </div>
-          <LoadRow worker={worker} />
           <div>
             <dt>Capabilities</dt>
             <dd>
@@ -79,6 +78,7 @@ export function WorkerFacts({ worker }: { readonly worker: WorkerView }) {
                   ))}
             </dd>
           </div>
+          <LoadRow worker={worker} />
         </>
       )}
     </dl>

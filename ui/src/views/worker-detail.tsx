@@ -72,7 +72,6 @@ export function WorkerDetail(props: {
   );
 }
 
-/** What a worker that has finished starting reports: its devices, leases, host, catalog and installs. */
 function WorkerReads(props: {
   readonly worker: WorkerView;
   readonly workers: readonly WorkerView[];
