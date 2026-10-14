@@ -141,7 +141,10 @@ names it.
   other side granted. A side grants more only as its user reads bytes off
   the `readable`. A reader that stops reading stops the sender of that
   channel only. A side holds at most 4 MiB unread per channel. A write
-  that has waited 60 s for credit resets the channel.
+  that has waited 60 s for credit, while the peer already holds every
+  byte this channel sent, resets the channel; waiting behind the bulk
+  lane never counts. The link takes a chunk larger than the credit in
+  parts.
 - **Two lanes.** Each side sends through one scheduler per connection.
   Text messages, `OPEN`, `STOP`, `CREDIT` and `RESET` go in the priority lane;
   `DATA` and `END` in the bulk lane. A bulk message is handed to the socket
