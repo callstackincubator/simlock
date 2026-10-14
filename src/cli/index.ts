@@ -316,6 +316,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     private readonly ipc: IpcConnector,
     private readonly clock: Clock,
     private readonly launcher: DaemonLauncher,
+    private readonly checkConfig: () => Promise<void>,
   ) {}
 
   async connect(endpoint: string): Promise<IpcConnection> {
@@ -324,6 +325,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
     }
+    await this.checkConfig();
     await this.launcher.launch();
     const deadline = this.clock.now() + 5_000;
     let lastError: unknown;
@@ -392,7 +394,11 @@ export function buildCliEnvironment(
   // per-invocation `--agent-id` flag on `lease` (parsed at that command's own boundary) takes
   // precedence over this default.
   const requesterId = resolveRequesterId(env, String(process.pid));
-  const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher);
+  // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
+  // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
+  const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher, async () => {
+    await loadConfig({ configPath, filesystem, systemStats });
+  });
 
   // ADR §5 / B2: the raw connection (and, for `connectAdmin`, any auto-launch it triggers) is
   // established *before* `resolveCredential` is ever called -- `admin.token` is written only

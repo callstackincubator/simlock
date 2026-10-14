@@ -2294,13 +2294,14 @@ A daemon that refuses to boot because of its configuration — a
 either, `mode: "gateway"` with `http.enabled: false`, or, in worker mode,
 `gateway.url` without `gateway.token` or the reverse; see
 [CONFIGURATION.md](CONFIGURATION.md) for the full set — fails the start
-rather than picking a value the operator did not write. That validation runs
-before the socket is claimed, so a command that auto-starts the daemon
-(`simlock lease`, the MCP server) never gets a daemon to talk to: the launch
-times out and the command fails with exit 1 (`INTERNAL`). The error line says nothing
-about the config, because nothing ever answered — the reason is in `simlock
-daemon logs`, which reads the log file directly and so works even though the
-daemon never came up.
+rather than picking a value the operator did not write. A command that
+would auto-start the daemon (`simlock daemon start`, `simlock lease`) loads
+`config.json` first. When the config is invalid it starts no daemon, prints the
+error line with the config message (for example `Invalid config value for
+"capacity.config.limits.android.maxDevices": expected a positive integer`), and
+exits 1 (`INTERNAL`). A daemon that is already running is not affected. The
+daemon logs the same reason, and `simlock daemon logs` reads it even when no
+daemon is up.
 
 The daemon writes one JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields). The log says what the

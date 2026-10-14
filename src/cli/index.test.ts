@@ -1208,6 +1208,32 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
     expect(output.stderr).not.toContain("notice");
   });
 
+  it("daemon start reports the config error and launches nothing when config.json is invalid", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(
+      "/simlock/config.json",
+      JSON.stringify({ capacity: { config: { limits: { android: { maxDevices: 0 } } } } }),
+    );
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(["daemon", "start"], output.environmentWith());
+    expect(exitCode).toBe(1);
+    expect(launcher.launches).toBe(0);
+    expect(output.stderr).toContain("limits.android.maxDevices");
+    expect(output.stderr).not.toContain("Timed out");
+  });
+
   it("B1: a stale admin.token degrades to an agent session instead of bricking the invocation", async () => {
     const filesystem = new MemoryFilesystem();
     const ipcTransport = new MemoryIpcTransport();
