@@ -255,7 +255,7 @@ describe("RelayHostLink", () => {
 
       expect(answer.status).toBe(503);
       expect(await answer.json()).toMatchObject({
-        error: { data: { details: { reason: "WORKER_UNREACHABLE" } }, id: undefined },
+        error: { data: { details: { reason: "WORKER_UNREACHABLE" } } },
         id: 7,
       });
       relay.mockRejectedValueOnce(new Error("other"));
