@@ -1,4 +1,4 @@
-# 0027. Host load is an optional module whose readings ride on status
+# 0028. Host load is an optional module whose readings ride on status
 
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-13
@@ -45,10 +45,10 @@ already polls `GET /v1/workers` every second.
 reading's types. It depends on ports only: `Clock`, `Logger` and the new
 `HostLoadProbe` (§2). It imports nothing from `core`, `leasing`, `gateway`,
 `drivers`, `contract` or any frontend, and none of `core`, `leasing`,
-`drivers`, `gateway` or `contract` imports it. Lint enforces both
-directions. A boundary test, modelled on
-`src/core/warm-pool/boundary.test.ts`, keeps every file outside the
-directory off everything but `index.ts`.
+`drivers`, `gateway` or `contract` imports it. dependency-cruiser (ADR 0027)
+checks both
+directions, and keeps every file outside the directory off everything but
+`index.ts`.
 
 It sits outside `src/core/` because a gateway runs it too, and a gateway
 has no core.
@@ -197,8 +197,10 @@ running one alike, in both modes:
   so the schema bounds all of it. `fitHostLoad` caps `ageMs` at one day and
   drops a part whose figures break the bounds, so a bad read never fails
   `status.get`.
-- The protocol moves up by one. The CLI and the console read the block
-  only when it is present.
+- The protocol version moves: `PROTOCOL_VERSION_RANGE` in
+  `src/contract/protocol.ts` moves both ends, because the bump leaves no
+  shim behind. The CLI and the console read the block only when it is
+  present.
 
 ### 5. In a worker view, the age becomes a time on the view holder's clock
 
@@ -267,9 +269,12 @@ bytes to each gateway refresh.
 - The disk pressure cleanup is unchanged. It still reads `diskFree`
   itself, on its own tick, against its own threshold. The two numbers come
   from the same `statfs` call, at different moments.
-- An older worker sends no `load`, and its view has none. The CLI prints
-  no Load line for it. The console says `Not reported`, as it does for
-  every other fact a worker did not send.
+- A worker on the older protocol version is incompatible (ADR 0008 §10)
+  and does not connect until it is upgraded, so every connected worker
+  sends `load` when it has a reading. A worker with no reading yet sends
+  none, and its view has none. The CLI prints no Load line for it. The
+  console says `Not reported`, as it does for every other fact a worker
+  did not send.
 
 ## Alternatives considered
 
