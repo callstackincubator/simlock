@@ -2394,6 +2394,51 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
   environment.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function roundHalfUp(value: number, decimals: number): number {
+  const scale = 10 ** decimals;
+  return Math.floor(value * scale + 0.5) / scale;
+}
+
+function formatLoadBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const mebibytes = Math.floor(bytes / 2 ** 20 + 0.5);
+  if (mebibytes < 1024) return `${mebibytes} MiB`;
+  return `${roundHalfUp(bytes / 2 ** 30, 1).toFixed(1)} GiB`;
+}
+
+function formatLoadCores(cores: number): string {
+  if (cores < 0.005) return "<0.01";
+  return String(roundHalfUp(cores, cores < 0.1 ? 2 : 1));
+}
+
+function formatLoadLine(load: NonNullable<StatusGetOutput["load"]>): string {
+  const { cpu, disk, memory } = load;
+  const cpuPart =
+    cpu === undefined
+      ? "CPU unavailable"
+      : `CPU ${roundHalfUp(cpu.busyPercent, 0)}% busy (${formatLoadCores(cpu.cores)} ${
+          cpu.cores === 1 ? "core" : "cores"
+        }${cpu.limited ? ", limit" : ""})`;
+  const memoryParts =
+    memory === undefined
+      ? ["memory unavailable"]
+      : [
+          `memory ${formatLoadBytes(memory.availableBytes)} of ${formatLoadBytes(memory.totalBytes)} available${memory.limited ? " (limit)" : ""}`,
+          `swap ${formatLoadBytes(memory.swapUsedBytes)} used`,
+          ...(memory.pressure === undefined ? [] : [`pressure ${memory.pressure}`]),
+        ];
+  const diskPart =
+    disk === undefined
+      ? "disk unavailable"
+      : `disk ${formatLoadBytes(disk.freeBytes)} of ${formatLoadBytes(disk.totalBytes)} free`;
+  const age = `read ${Math.ceil(load.ageMs / 1000)}s ago`;
+  return `Load: ${[cpuPart, ...memoryParts, diskPart, age].join(" · ")}`;
+}
+
+function loadLines(status: StatusGetOutput): string[] {
+  return status.load === undefined ? [] : [formatLoadLine(status.load)];
+}
+
 /** The web console's address line, for `status` and `daemon start`: none when HTTP is off. */
 function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
@@ -2415,6 +2460,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
       `Daemon: ${daemon.health} (${daemon.mode})`,
       ...consoleLines(daemon),
       `Host: ${formatHost(host)}`,
+      ...loadLines(status),
       "Devices, leases and capacity appear once startup finishes.",
     ].join("\n");
   }
@@ -2459,6 +2505,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     `Daemon: ${daemon.health} (${daemon.mode})`,
     ...consoleLines(daemon),
     `Host: ${formatHost(host)}`,
+    ...loadLines(status),
     globalLine,
     ...capacityLines,
     ...ramLines,

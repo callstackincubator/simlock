@@ -75,8 +75,8 @@ export default {
     ),
     direction(
       "no-fs-or-process",
-      "core, leasing and agent-device reach the filesystem and processes only through injected ports",
-      "^src/(core|leasing|agent-device)/",
+      "core, leasing, agent-device and host-load reach the filesystem and processes only through injected ports",
+      "^src/(core|leasing|agent-device|host-load)/",
       { dependencyTypes: ["core"], path: fsOrProcess },
     ),
     direction(
@@ -84,6 +84,18 @@ export default {
       "the core, leasing and the drivers import nothing from the agent-device edge",
       "^src/(core|leasing|drivers)/",
       { path: "^src/agent-device/" },
+    ),
+    direction(
+      "host-load-imports-ports-only",
+      "host-load reads the machine through the HostLoadProbe port and imports no other component",
+      "^src/host-load/",
+      { path: "^src/(core|leasing|gateway|drivers|contract|http|cli|mcp|daemon)/" },
+    ),
+    direction(
+      "not-host-load",
+      "core, leasing, the drivers, the gateway and the contract import nothing from host-load",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/host-load/" },
     ),
     direction(
       "gateway-not-edges",
