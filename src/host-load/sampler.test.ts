@@ -5,6 +5,8 @@ import {
   FakeHostLoadProbe,
   type HostLoadCounters,
   JsonLinesLogger,
+  LinuxHostLoadProbe,
+  MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
 import { HostLoadSampler } from "./index.js";
@@ -314,5 +316,44 @@ describe("HostLoadSampler", () => {
     expect(sampler.current()?.memory).toEqual(MEMORY);
     expect(warnings()).toEqual([]);
     expect(clock.pendingTimerCount).toBe(0);
+  });
+});
+
+describe("HostLoadSampler under a cgroup CPU limit", () => {
+  it("reports busy % as the cgroup's usage over elapsed time times the limit's cores, from two reads", async () => {
+    const filesystem = new MemoryFilesystem();
+    const write = async (path: string, contents: string): Promise<void> => {
+      await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")));
+      await filesystem.writeFileAtomic(path, contents);
+    };
+    await write("/proc/stat", "cpu  100 10 50 300 20 5 7 3 99 98\n");
+    await write(
+      "/proc/meminfo",
+      "MemTotal: 16000000 kB\nMemAvailable: 4000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n",
+    );
+    await write("/proc/self/cgroup", "0::/x\n");
+    await write("/sys/fs/cgroup/x/cpu.max", "200000 100000\n");
+    await write("/sys/fs/cgroup/x/cpu.stat", "usage_usec 1000000\n");
+    let now = 10_000_000;
+    const clock = new FakeClock(1_000);
+    const sampler = new HostLoadSampler({
+      clock,
+      probe: new LinuxHostLoadProbe({
+        cores: () => 64,
+        dataDirectory: "/data",
+        filesystem,
+        nowMicros: () => now,
+      }),
+    });
+    sampler.start();
+    await flush();
+
+    now = 20_000_000;
+    await write("/sys/fs/cgroup/x/cpu.stat", "usage_usec 7100000\n");
+    clock.advance(15_000);
+    await flush();
+
+    expect(sampler.current()?.cpu).toStrictEqual({ busyPercent: 61, cores: 2, limited: true });
+    sampler.dispose();
   });
 });

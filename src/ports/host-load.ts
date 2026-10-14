@@ -148,6 +148,7 @@ export interface LinuxHostLoadProbeOptions {
   readonly filesystem: Pick<Filesystem, "diskSpace" | "readFile">;
   readonly dataDirectory: string;
   readonly cores: () => number;
+  readonly nowMicros?: () => number;
 }
 
 export class LinuxHostLoadProbe implements HostLoadProbe {
