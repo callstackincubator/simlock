@@ -23,7 +23,7 @@ them (from `node_modules/.bin` or any other path): `pnpm check`, `pnpm test`,
 `pnpm format`, `pnpm format:check`,
 `pnpm fallow`, `pnpm mutate` (outside the `harden-tests` routine), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
-`oxlint`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
+`oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine). A PreToolUse hook
 (`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent; keep its
 list and this one the same.

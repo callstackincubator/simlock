@@ -3,3 +3,8 @@ allowBuilds:
 overrides:
   "@hono/node-server": 2.0.10
   ip-address: ">=10.3.1"
+packageExtensions:
+  # dependency-cruiser parses TypeScript with the typescript package beside it, and supports only typescript <7; the project itself builds with 7.
+  dependency-cruiser@18:
+    dependencies:
+      typescript: 6.0.3

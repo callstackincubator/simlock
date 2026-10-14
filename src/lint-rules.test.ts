@@ -1,13 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const oxlint = join(repoRoot, "node_modules", ".bin", "oxlint");
+const depcruise = join(repoRoot, "node_modules", ".bin", "depcruise");
 const scratch = mkdtempSync(join(tmpdir(), "simlock-lint-rules-"));
 let counter = 0;
 
@@ -18,7 +28,7 @@ afterAll(() => {
 /** Lints one fixture file, placed at `path` in a fresh directory laid out like the repo and given a
  * copy of the repo's `.oxlintrc.json`. Nothing is written under the real `src/`. */
 function lint(path: string, source: string): { passes: boolean; rules: string[]; output: string } {
-  const dir = join(scratch, String(counter++));
+  const dir = join(scratch, `oxlint-${counter++}`);
   mkdirSync(dirname(join(dir, path)), { recursive: true });
   // Re-export every imported name so the fixture never trips `no-unused-vars`.
   const names = [...source.matchAll(/import (?:type )?\{ (\w+) \}/g)].map((match) => match[1]);
@@ -45,99 +55,7 @@ function expectLintPass(path: string, source: string): void {
   expect(result.passes).toBe(true);
 }
 
-describe("import rules enforced by pnpm lint", () => {
-  it("fails a daemon file importing a private core file", () => {
-    expectLintError("src/daemon/x.ts", `import { LeasePorts } from "../core/lease-ports.js";\n`);
-  });
-
-  it("passes a daemon file importing core's index", () => {
-    expectLintPass("src/daemon/x.ts", `import { Registry } from "../core/index.js";\n`);
-  });
-
-  it("fails a file two levels deep importing a file inside core's component directory", () => {
-    expectLintError(
-      "src/http/deep/x.ts",
-      `import { limits } from "../../core/capacity/limits.js";\n`,
-    );
-  });
-
-  it("fails a driver importing core's private driver file", () => {
-    expectLintError(
-      "src/drivers/ios/x.ts",
-      `import type { Driver } from "../../core/driver.js";\n`,
-    );
-  });
-
-  it("fails a file importing a compiled private core file", () => {
-    expectLintError("e2e/fake-driver/x.ts", `import { x } from "../../dist/core/driver.js";\n`);
-  });
-
-  it("passes a file importing core's compiled index", () => {
-    expectLintPass("e2e/fake-driver/x.ts", `import { x } from "../../dist/core/index.js";\n`);
-  });
-
-  it("fails a file importing a private gateway file", () => {
-    expectLintError("src/cli/x.ts", `import { x } from "../gateway/queue.js";\n`);
-  });
-
-  it("fails a daemon file importing core's testing helpers", () => {
-    expectLintError("src/daemon/x.ts", `import { x } from "../core/testing.js";\n`);
-  });
-
-  it("passes core's testing helpers in a daemon test file and in an http test helper", () => {
-    expectLintPass("src/daemon/x.test.ts", `import { x } from "../core/testing.js";\n`);
-    expectLintPass("src/http/test-fakes.ts", `import { x } from "../core/testing.js";\n`);
-  });
-
-  it("passes a core test file importing node:fs/promises, and fails the same import in a core file", () => {
-    expectLintPass("src/core/x.test.ts", `import { readFile } from "node:fs/promises";\n`);
-    expectLintError("src/core/x.ts", `import { readFile } from "node:fs/promises";\n`);
-  });
-
-  it("fails a core file importing fs, child_process or a driver", () => {
-    expectLintError("src/core/x.ts", `import { x } from "fs";\n`);
-    expectLintError("src/core/x.ts", `import { x } from "node:child_process";\n`);
-    expectLintError("src/core/x.ts", `import { x } from "child_process";\n`);
-    expectLintError("src/core/x.ts", `import { x } from "../drivers/ios/index.js";\n`);
-  });
-
-  it("fails a core file importing inside capacity, and passes capacity's index", () => {
-    expectLintError("src/core/x.ts", `import { x } from "./capacity/limits.js";\n`);
-    expectLintPass("src/core/x.ts", `import { x } from "./capacity/index.js";\n`);
-  });
-
-  it("fails a file importing a private driver file, and passes the driver's index", () => {
-    expectLintError("src/http/x.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
-    expectLintError("src/http/x.ts", `import { x } from "../drivers/android/prerequisites.js";\n`);
-    expectLintError("src/daemon/main.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
-    expectLintError(
-      "src/daemon/x.ts",
-      `import { x } from "../drivers/android/prerequisites.js";\n`,
-    );
-    expectLintError("src/daemon/x.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
-    expectLintPass("src/daemon/main.ts", `import { x } from "../drivers/ios/index.js";\n`);
-  });
-
-  it("fails a core file importing a private gateway file", () => {
-    expectLintError("src/core/x.ts", `import { x } from "../gateway/queue.js";\n`);
-  });
-
-  it("fails a test file importing a private file, and passes the component's testing file", () => {
-    expectLintError("src/http/x.test.ts", `import { x } from "../core/lease-ports.js";\n`);
-    expectLintError("src/http/x.test.ts", `import { x } from "../gateway/queue.js";\n`);
-    expectLintError("src/http/x.test.ts", `import { x } from "../drivers/ios/prerequisites.js";\n`);
-    expectLintError(
-      "src/http/x.test.ts",
-      `import { x } from "../drivers/android/prerequisites.js";\n`,
-    );
-    expectLintError("src/core/x.test.ts", `import { x } from "./capacity/limits.js";\n`);
-    expectLintPass("src/core/x.test.ts", `import { x } from "./capacity/testing.js";\n`);
-  });
-
-  it("passes a file inside capacity importing its sibling", () => {
-    expectLintPass("src/core/capacity/x.ts", `import { x } from "./limits.js";\n`);
-  });
-
+describe("import-name rules enforced by oxlint", () => {
   it("fails a gateway file importing Registry from core's index", () => {
     expectLintError("src/gateway/x.ts", `import { Registry } from "../core/index.js";\n`);
   });
@@ -146,112 +64,11 @@ describe("import rules enforced by pnpm lint", () => {
     expectLintPass("src/gateway/x.ts", `import { LeaseRecord } from "../core/index.js";\n`);
   });
 
-  it("fails a gateway file importing from drivers, http, cli or mcp", () => {
-    for (const dir of ["drivers", "http", "cli", "mcp"]) {
-      expectLintError("src/gateway/x.ts", `import { x } from "../${dir}/index.js";\n`);
-    }
-  });
-
-  it("fails a gateway file importing the daemon server, and passes the dispatch contract", () => {
-    expectLintError("src/gateway/x.ts", `import { x } from "../daemon/server.js";\n`);
-    expectLintPass("src/gateway/x.ts", `import { x } from "../daemon/dispatch.js";\n`);
-  });
-
-  it("fails a nested gateway file importing a private core file", () => {
-    expectLintError("src/gateway/routing/x.ts", `import { x } from "../../core/registry.js";\n`);
-  });
-
-  it("fails a daemon file importing the gateway, and passes the same import in main.ts", () => {
-    expectLintError("src/daemon/x.ts", `import { x } from "../gateway/index.js";\n`);
-    expectLintPass("src/daemon/main.ts", `import { x } from "../gateway/index.js";\n`);
-  });
-
-  it("fails a contract file importing anything outside the contract", () => {
-    expectLintError("src/contract/x.ts", `import { x } from "../core/index.js";\n`);
-    expectLintError("src/contract/x.ts", `import { x } from "../bus/index.js";\n`);
-    expectLintError("src/contract/x.ts", `import { x } from "./sub/../../core/index.js";\n`);
-    expectLintError("src/contract/sub/x.ts", `import { x } from "./../../bus/index.js";\n`);
-    expectLintError("src/contract/x.ts", `import { x } from "/abs/core/index.js";\n`);
-  });
-
-  it("passes a contract file importing a package and its own siblings", () => {
-    expectLintPass("src/contract/x.ts", `import { z } from "zod";\nimport { y } from "./y.js";\n`);
-  });
-
-  it("fails a file inside drivers importing past the ios or android index from outside it, and passes the index", () => {
-    expectLintError(
-      "src/drivers/installer-process.ts",
-      `import { x } from "./ios/prerequisites.js";\n`,
-    );
-    expectLintError("src/drivers/android/x.ts", `import { x } from "../ios/simctl.js";\n`);
-    expectLintError("src/drivers/x.ts", `import { x } from "./android/prerequisites.js";\n`);
-    expectLintError("src/drivers/ios/x.ts", `import { x } from "../android/adb.js";\n`);
-    expectLintPass("src/drivers/x.ts", `import { x } from "./ios/index.js";\n`);
-    expectLintPass("src/drivers/android/x.ts", `import { x } from "../ios/index.js";\n`);
-  });
-
-  it("passes a file inside a driver importing its sibling", () => {
-    expectLintPass("src/drivers/ios/x.ts", `import { x } from "./simctl.js";\n`);
-    expectLintPass("src/drivers/android/sub/x.ts", `import { x } from "../adb.js";\n`);
-  });
-
-  it("fails a test file outside core importing capacity's testing file or index through core", () => {
-    expectLintError("src/http/x.test.ts", `import { x } from "../core/capacity/testing.js";\n`);
-    expectLintError("src/http/x.test.ts", `import { x } from "../core/capacity/index.js";\n`);
-    expectLintError("src/http/test-fakes.ts", `import { x } from "../core/capacity/testing.js";\n`);
-  });
-
-  it("fails a testing.ts file breaking its module's direction rule", () => {
-    expectLintError("src/core/testing.ts", `import { x } from "node:fs";\n`);
-    expectLintError("src/core/testing.ts", `import { x } from "../drivers/ios/index.js";\n`);
-    expectLintError("src/core/capacity/testing.ts", `import { x } from "node:fs";\n`);
-  });
-
-  it("fails a production file importing a testing.js or test-*.js file", () => {
-    expectLintError("src/core/x.ts", `import { x } from "./testing.js";\n`);
-    expectLintError("src/core/x.ts", `import { x } from "./test-wiring.js";\n`);
-    expectLintError("src/core/x.ts", `import { x } from "./capacity/testing.js";\n`);
-    expectLintError("src/core/capacity/x.ts", `import { x } from "./testing.js";\n`);
-    expectLintError("src/gateway/x.ts", `import { x } from "./testing.js";\n`);
-    expectLintError("src/daemon/x.ts", `import { x } from "./test-helpers.js";\n`);
-    expectLintError("src/daemon/main.ts", `import { x } from "./testing.js";\n`);
-    expectLintError("src/http/x.ts", `import { x } from "./test-fakes.js";\n`);
-    expectLintError("src/contract/x.ts", `import { x } from "./testing.js";\n`);
-  });
-
-  it("passes a test file importing its own module's testing.js or test-*.js file", () => {
-    expectLintPass("src/core/x.test.ts", `import { x } from "./testing.js";\n`);
-    expectLintPass("src/http/x.test.ts", `import { x } from "./test-fakes.js";\n`);
-  });
-  it("fails a core file importing leasing's index, and passes leasing's testing file in a core test", () => {
-    expectLintError("src/core/x.ts", `import { x } from "../leasing/index.js";\n`);
-    expectLintPass("src/core/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
-  });
-
-  it("fails a core test importing a private leasing file", () => {
-    expectLintError("src/core/x.test.ts", `import { x } from "../leasing/wait-queue.js";\n`);
-  });
-
-  it("fails a daemon file importing a private leasing file, and passes leasing's index", () => {
-    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/wait-queue.js";\n`);
-    expectLintPass("src/daemon/x.ts", `import { x } from "../leasing/index.js";\n`);
-  });
-
-  it("fails a leasing file importing node:fs, child_process or a driver", () => {
-    expectLintError("src/leasing/x.ts", `import { x } from "node:fs";\n`);
-    expectLintError("src/leasing/x.ts", `import { x } from "child_process";\n`);
-    expectLintError("src/leasing/x.ts", `import { x } from "../drivers/ios/index.js";\n`);
-  });
-
-  it("passes leasing's testing file in a daemon test file, and fails the same import in a daemon file", () => {
-    expectLintPass("src/daemon/x.test.ts", `import { x } from "../leasing/testing.js";\n`);
-    expectLintError("src/daemon/x.ts", `import { x } from "../leasing/testing.js";\n`);
-  });
-
   it("fails a gateway file importing createLeasing from leasing's index, and passes LeaseRequestBook", () => {
     expectLintError("src/gateway/x.ts", `import { createLeasing } from "../leasing/index.js";\n`);
     expectLintPass("src/gateway/x.ts", `import { LeaseRequestBook } from "../leasing/index.js";\n`);
   });
+
   it("fails a gateway file importing a leasing name from core's index, and a leasing name outside its allow-list", () => {
     expectLintError("src/gateway/x.ts", `import { WaitQueue } from "../core/index.js";\n`);
     expectLintError(
@@ -261,68 +78,443 @@ describe("import rules enforced by pnpm lint", () => {
     expectLintPass("src/gateway/x.ts", `import { WaitQueue } from "../leasing/index.js";\n`);
   });
 
-  it("fails a leasing file importing a private core file, and passes core's index; a leasing test may import core's testing file", () => {
-    expectLintError("src/leasing/x.ts", `import { x } from "../core/registry.js";\n`);
-    expectLintError("src/leasing/x.ts", `import { x } from "../core/testing.js";\n`);
-    expectLintPass("src/leasing/x.ts", `import { x } from "../core/index.js";\n`);
-    expectLintPass("src/leasing/x.test.ts", `import { x } from "../core/testing.js";\n`);
-    expectLintError("src/leasing/x.test.ts", `import { x } from "../core/registry.js";\n`);
+  it("passes a gateway test file importing a name outside the allow-list", () => {
+    expectLintPass("src/gateway/x.test.ts", `import { Registry } from "../core/index.js";\n`);
   });
+});
 
-  it("fails leasing's testing file breaking leasing's direction rule, and core's testing file importing leasing", () => {
-    expectLintError("src/leasing/testing.ts", `import { x } from "node:fs";\n`);
-    expectLintError("src/core/testing.ts", `import { x } from "../leasing/testing.js";\n`);
+interface Violation {
+  readonly from: string;
+  readonly to: string;
+  readonly rule: { readonly name: string };
+}
+
+function cruise(dir: string, args: readonly string[]): Violation[] {
+  const result = spawnSync(depcruise, [...args, "--output-type", "json"], {
+    cwd: dir,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
   });
+  const parsed = JSON.parse(result.stdout) as { summary: { violations: Violation[] } };
+  return parsed.summary.violations;
+}
 
-  it("passes the composition root importing leasing's index", () => {
-    expectLintPass("src/daemon/main.ts", `import { x } from "../leasing/index.js";\n`);
-    expectLintError("src/daemon/main.ts", `import { x } from "../leasing/wait-queue.js";\n`);
-  });
+function componentsOf(dir: string): string[] {
+  const entries = readdirSync(join(repoRoot, dir), { withFileTypes: true });
+  const here = entries.some((entry) => entry.isFile() && entry.name === "index.ts") ? [dir] : [];
+  return here.concat(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry) => componentsOf(`${dir}/${entry.name}`)),
+  );
+}
 
-  it("fails a file under core, leasing, drivers/ios or drivers/android importing agent-device's index", () => {
-    expectLintError("src/core/x.ts", `import { x } from "../agent-device/index.js";\n`);
-    expectLintError("src/leasing/x.ts", `import { x } from "../agent-device/index.js";\n`);
-    expectLintError("src/drivers/ios/x.ts", `import { x } from "../../agent-device/index.js";\n`);
-    expectLintError(
-      "src/drivers/android/x.ts",
-      `import { x } from "../../agent-device/index.js";\n`,
-    );
-  });
+type Verdict = "fails" | "passes";
+type Expectation = readonly [Verdict, path: string, specifier: string, unbuilt?: "unbuilt"];
 
-  it("fails a daemon file importing agent-device's supervisor file, and passes its index", () => {
-    expectLintError(
-      "src/daemon/x.ts",
-      `import { x } from "../agent-device/host/agent-device-supervisor.js";\n`,
-    );
-    expectLintPass("src/daemon/x.ts", `import { x } from "../agent-device/index.js";\n`);
-  });
-
-  it("passes agent-device's testing file in a daemon test file and in agent-device's own test, and fails it in a daemon file", () => {
-    expectLintPass("src/daemon/x.test.ts", `import { x } from "../agent-device/testing.js";\n`);
-    expectLintPass("src/agent-device/host/x.test.ts", `import { x } from "../testing.js";\n`);
-    expectLintError("src/daemon/x.ts", `import { x } from "../agent-device/testing.js";\n`);
-  });
-
-  it.each([
+// why: one dependency-cruiser run serves every case, so a fixture named x.ts gets its case's number to keep cases apart; main.ts and testing.ts collect every case's imports.
+const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
+  [
+    "fails a daemon file importing a private core file, and passes core's index",
+    [
+      ["fails", "src/daemon/x.ts", "../core/lease-ports.js"],
+      ["passes", "src/daemon/x.ts", "../core/index.js"],
+    ],
+  ],
+  [
+    "fails a file two levels deep importing a file inside core's component directory",
+    [["fails", "src/http/deep/x.ts", "../../core/capacity/limits.js"]],
+  ],
+  [
+    "fails a driver importing core's private driver file",
+    [["fails", "src/drivers/ios/x.ts", "../../core/driver.js"]],
+  ],
+  [
+    "fails a file importing a compiled private core file, and passes core's compiled index",
+    [
+      ["fails", "e2e/fake-driver/x.ts", "../../dist/core/driver.js"],
+      ["passes", "e2e/fake-driver/x.ts", "../../dist/core/index.js"],
+    ],
+  ],
+  [
+    "fails a file importing a compiled private core file while dist/ is not built",
+    [["fails", "e2e/fake-driver/x.ts", "../../dist/core/registry.js", "unbuilt"]],
+  ],
+  [
+    "fails a file importing a private gateway file",
+    [["fails", "src/cli/x.ts", "../gateway/queue.js"]],
+  ],
+  [
+    "guards a component that no config names, from the moment it has an index",
+    [
+      ["fails", "src/cli/x.ts", "../bus/event-file.js"],
+      ["passes", "src/cli/x.ts", "../bus/index.js"],
+    ],
+  ],
+  [
+    "fails a daemon file importing core's testing helpers",
+    [["fails", "src/daemon/x.ts", "../core/testing.js"]],
+  ],
+  [
+    "passes core's testing helpers in a daemon test file and in an http test helper",
+    [
+      ["passes", "src/daemon/x.test.ts", "../core/testing.js"],
+      ["passes", "src/http/test-fakes.ts", "../core/testing.js"],
+    ],
+  ],
+  [
+    "passes a core test file importing node:fs/promises, and fails the same import in a core file",
+    [
+      ["passes", "src/core/x.test.ts", "node:fs/promises"],
+      ["fails", "src/core/x.ts", "node:fs/promises"],
+    ],
+  ],
+  [
+    "fails a core file importing fs, child_process or a driver",
+    [
+      ["fails", "src/core/x.ts", "fs"],
+      ["fails", "src/core/x.ts", "node:child_process"],
+      ["fails", "src/core/x.ts", "child_process"],
+      ["fails", "src/core/x.ts", "../drivers/ios/index.js"],
+    ],
+  ],
+  [
+    "fails a core file importing inside capacity, and passes capacity's index",
+    [
+      ["fails", "src/core/x.ts", "./capacity/limits.js"],
+      ["passes", "src/core/x.ts", "./capacity/index.js"],
+    ],
+  ],
+  [
+    "fails a file importing a private driver file, and passes the driver's index",
+    [
+      ["fails", "src/http/x.ts", "../drivers/ios/prerequisites.js"],
+      ["fails", "src/http/x.ts", "../drivers/android/prerequisites.js"],
+      ["fails", "src/daemon/main.ts", "../drivers/ios/prerequisites.js"],
+      ["fails", "src/daemon/x.ts", "../drivers/android/prerequisites.js"],
+      ["passes", "src/daemon/main.ts", "../drivers/ios/index.js"],
+    ],
+  ],
+  [
+    "fails a core file importing a private gateway file",
+    [["fails", "src/core/x.ts", "../gateway/queue.js"]],
+  ],
+  [
+    "fails a test file importing a private file, and passes the component's testing file",
+    [
+      ["fails", "src/http/x.test.ts", "../core/lease-ports.js"],
+      ["fails", "src/http/x.test.ts", "../gateway/queue.js"],
+      ["fails", "src/http/x.test.ts", "../drivers/ios/prerequisites.js"],
+      ["fails", "src/http/x.test.ts", "../drivers/android/prerequisites.js"],
+      ["fails", "src/core/x.test.ts", "./capacity/limits.js"],
+      ["passes", "src/core/x.test.ts", "./capacity/testing.js"],
+    ],
+  ],
+  [
+    "passes a file inside capacity importing its sibling",
+    [["passes", "src/core/capacity/x.ts", "./limits.js"]],
+  ],
+  [
+    "fails a gateway file importing from drivers, http, cli or mcp",
+    [
+      ["fails", "src/gateway/x.ts", "../drivers/ios/index.js"],
+      ["fails", "src/gateway/x.ts", "../http/index.js"],
+      ["fails", "src/gateway/x.ts", "../cli/index.js"],
+      ["fails", "src/gateway/x.ts", "../mcp/index.js"],
+    ],
+  ],
+  [
+    "fails a gateway file importing the daemon server, and passes the dispatch contract",
+    [
+      ["fails", "src/gateway/x.ts", "../daemon/server.js"],
+      ["passes", "src/gateway/x.ts", "../daemon/dispatch.js"],
+    ],
+  ],
+  [
+    "fails a nested gateway file importing a private core file",
+    [["fails", "src/gateway/routing/x.ts", "../../core/registry.js"]],
+  ],
+  [
+    "fails a daemon file importing the gateway, and passes the same import in main.ts",
+    [
+      ["fails", "src/daemon/x.ts", "../gateway/index.js"],
+      ["passes", "src/daemon/main.ts", "../gateway/index.js"],
+    ],
+  ],
+  [
+    "fails a contract file importing anything outside the contract",
+    [
+      ["fails", "src/contract/x.ts", "../core/index.js"],
+      ["fails", "src/contract/x.ts", "../bus/index.js"],
+      ["fails", "src/contract/x.ts", "./sub/../../core/index.js"],
+      ["fails", "src/contract/sub/x.ts", "./../../bus/index.js"],
+      ["fails", "src/contract/x.ts", "/abs/core/index.js", "unbuilt"],
+    ],
+  ],
+  [
+    "passes a contract file importing a package and its own siblings",
+    [
+      ["passes", "src/contract/x.ts", "zod", "unbuilt"],
+      ["passes", "src/contract/x.ts", "./y.js"],
+    ],
+  ],
+  [
+    "fails a file inside drivers importing past the ios or android index from outside it, and passes the index",
+    [
+      ["fails", "src/drivers/installer-process.ts", "./ios/prerequisites.js"],
+      ["fails", "src/drivers/android/x.ts", "../ios/simctl.js"],
+      ["fails", "src/drivers/x.ts", "./android/prerequisites.js"],
+      ["fails", "src/drivers/ios/x.ts", "../android/adb.js"],
+      ["passes", "src/drivers/x.ts", "./ios/index.js"],
+      ["passes", "src/drivers/android/x.ts", "../ios/index.js"],
+    ],
+  ],
+  [
+    "passes a file inside a driver importing its sibling",
+    [
+      ["passes", "src/drivers/ios/x.ts", "./simctl.js"],
+      ["passes", "src/drivers/android/sub/x.ts", "../adb.js"],
+    ],
+  ],
+  [
+    "fails a test file outside core importing capacity's testing file or index through core",
+    [
+      ["fails", "src/http/x.test.ts", "../core/capacity/testing.js"],
+      ["fails", "src/http/x.test.ts", "../core/capacity/index.js"],
+      ["fails", "src/http/test-fakes.ts", "../core/capacity/testing.js"],
+    ],
+  ],
+  [
+    "fails a testing.ts file breaking its module's direction rule",
+    [
+      ["fails", "src/core/testing.ts", "node:fs"],
+      ["fails", "src/core/testing.ts", "../drivers/ios/index.js"],
+      ["fails", "src/core/capacity/testing.ts", "node:fs"],
+    ],
+  ],
+  [
+    "fails a production file importing a testing.js or test-*.js file",
+    [
+      ["fails", "src/core/x.ts", "./testing.js"],
+      ["fails", "src/core/x.ts", "./test-wiring.js"],
+      ["fails", "src/core/x.ts", "./capacity/testing.js"],
+      ["fails", "src/core/capacity/x.ts", "./testing.js"],
+      ["fails", "src/gateway/x.ts", "./testing.js"],
+      ["fails", "src/daemon/x.ts", "./test-helpers.js"],
+      ["fails", "src/daemon/main.ts", "./testing.js"],
+      ["fails", "src/http/x.ts", "./test-fakes.js"],
+      ["fails", "src/contract/x.ts", "./testing.js"],
+    ],
+  ],
+  [
+    "passes a test file importing its own module's testing.js or test-*.js file",
+    [
+      ["passes", "src/core/x.test.ts", "./testing.js"],
+      ["passes", "src/http/x.test.ts", "./test-fakes.js"],
+    ],
+  ],
+  [
+    "fails a core file importing leasing's index, and passes leasing's testing file in a core test",
+    [
+      ["fails", "src/core/x.ts", "../leasing/index.js"],
+      ["passes", "src/core/x.test.ts", "../leasing/testing.js"],
+    ],
+  ],
+  [
+    "fails a core test importing a private leasing file",
+    [["fails", "src/core/x.test.ts", "../leasing/wait-queue.js"]],
+  ],
+  [
+    "fails a daemon file importing a private leasing file, and passes leasing's index",
+    [
+      ["fails", "src/daemon/x.ts", "../leasing/wait-queue.js"],
+      ["passes", "src/daemon/x.ts", "../leasing/index.js"],
+    ],
+  ],
+  [
+    "fails a leasing file importing node:fs, child_process or a driver",
+    [
+      ["fails", "src/leasing/x.ts", "node:fs"],
+      ["fails", "src/leasing/x.ts", "child_process"],
+      ["fails", "src/leasing/x.ts", "../drivers/ios/index.js"],
+    ],
+  ],
+  [
+    "passes leasing's testing file in a daemon test file, and fails the same import in a daemon file",
+    [
+      ["passes", "src/daemon/x.test.ts", "../leasing/testing.js"],
+      ["fails", "src/daemon/x.ts", "../leasing/testing.js"],
+    ],
+  ],
+  [
+    "fails a leasing file importing a private core file, and passes core's index; a leasing test may import core's testing file",
+    [
+      ["fails", "src/leasing/x.ts", "../core/registry.js"],
+      ["fails", "src/leasing/x.ts", "../core/testing.js"],
+      ["passes", "src/leasing/x.ts", "../core/index.js"],
+      ["passes", "src/leasing/x.test.ts", "../core/testing.js"],
+      ["fails", "src/leasing/x.test.ts", "../core/registry.js"],
+    ],
+  ],
+  [
+    "fails leasing's testing file breaking leasing's direction rule, and core's testing file importing leasing",
+    [
+      ["fails", "src/leasing/testing.ts", "node:fs"],
+      ["fails", "src/core/testing.ts", "../leasing/testing.js"],
+    ],
+  ],
+  [
+    "passes the composition root importing leasing's index",
+    [
+      ["passes", "src/daemon/main.ts", "../leasing/index.js"],
+      ["fails", "src/daemon/main.ts", "../leasing/wait-queue.js"],
+    ],
+  ],
+  [
+    "fails a file under core, leasing, drivers/ios or drivers/android importing agent-device's index",
+    [
+      ["fails", "src/core/x.ts", "../agent-device/index.js"],
+      ["fails", "src/leasing/x.ts", "../agent-device/index.js"],
+      ["fails", "src/drivers/ios/x.ts", "../../agent-device/index.js"],
+      ["fails", "src/drivers/android/x.ts", "../../agent-device/index.js"],
+    ],
+  ],
+  [
+    "fails a daemon file importing agent-device's supervisor file, and passes its index",
+    [
+      ["fails", "src/daemon/x.ts", "../agent-device/host/agent-device-supervisor.js"],
+      ["passes", "src/daemon/x.ts", "../agent-device/index.js"],
+    ],
+  ],
+  [
+    "passes agent-device's testing file in a daemon test file and in agent-device's own test, and fails it in a daemon file",
+    [
+      ["passes", "src/daemon/x.test.ts", "../agent-device/testing.js"],
+      ["passes", "src/agent-device/host/x.test.ts", "../testing.js"],
+      ["fails", "src/daemon/x.ts", "../agent-device/testing.js"],
+    ],
+  ],
+  ...[
     "src/agent-device/host/x.ts",
     "src/agent-device/shared/x.ts",
     "src/agent-device/index.ts",
-  ])(
-    "fails %s importing fs, node:fs, node:fs/promises, child_process or node:child_process",
-    (path) => {
-      for (const module of [
-        "fs",
-        "node:fs",
-        "node:fs/promises",
-        "child_process",
-        "node:child_process",
-      ]) {
-        expectLintError(path, `import { x } from "${module}";\n`);
-      }
-    },
-  );
+  ].map(
+    (path) =>
+      [
+        `fails ${path} importing fs, node:fs, node:fs/promises, child_process or node:child_process`,
+        ["fs", "node:fs", "node:fs/promises", "child_process", "node:child_process"].map(
+          (module) => ["fails", path, module] as const,
+        ),
+      ] as const,
+  ),
+  [
+    "passes an agent-device test file importing node:fs",
+    [["passes", "src/agent-device/host/x.test.ts", "node:fs"]],
+  ],
+];
 
-  it("passes an agent-device test file importing node:fs", () => {
-    expectLintPass("src/agent-device/host/x.test.ts", `import { x } from "node:fs";\n`);
+function fixturePath(path: string, caseIndex: number): string {
+  return path.replace(/\/x(\.test)?\.ts$/, `/x${caseIndex}$1.ts`);
+}
+
+function targetOf(from: string, specifier: string, unbuilt: boolean): string {
+  if (unbuilt || !specifier.startsWith(".")) return specifier.replace(/^node:/, "");
+  const joined = posix.normalize(posix.join(posix.dirname(from), specifier));
+  return joined.startsWith("dist/") ? joined : joined.replace(/\.js$/, ".ts");
+}
+
+function touch(dir: string, path: string): void {
+  if (existsSync(join(dir, path))) return;
+  mkdirSync(dirname(join(dir, path)), { recursive: true });
+  writeFileSync(join(dir, path), "export {};\n");
+}
+
+describe("import-path rules enforced by dependency-cruiser", () => {
+  let violations: Violation[] = [];
+
+  beforeAll(() => {
+    const dir = join(scratch, "depcruise");
+    const imports = new Map<string, string[]>();
+    for (const component of componentsOf("src")) touch(dir, `${component}/index.ts`);
+    pathCases.forEach(([, expectations], caseIndex) => {
+      for (const [, path, specifier, unbuilt] of expectations) {
+        const from = fixturePath(path, caseIndex);
+        imports.set(from, [...(imports.get(from) ?? []), `import "${specifier}";\n`]);
+        if (unbuilt === undefined && specifier.startsWith(".")) {
+          touch(dir, targetOf(from, specifier, false));
+        }
+      }
+    });
+    for (const [from, lines] of imports) {
+      mkdirSync(dirname(join(dir, from)), { recursive: true });
+      writeFileSync(join(dir, from), `${lines.join("")}export {};\n`);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    violations = cruise(dir, ["src", "e2e", "dist"]);
+  });
+
+  it.each(
+    pathCases.map(([title, expectations], caseIndex) => ({ title, expectations, caseIndex })),
+  )("$title", ({ expectations, caseIndex }) => {
+    for (const [verdict, path, specifier, unbuilt] of expectations) {
+      const from = fixturePath(path, caseIndex);
+      const to = targetOf(from, specifier, unbuilt !== undefined);
+      const found = violations.filter((v) => v.from === from && v.to === to);
+      if (verdict === "fails") expect(found, `${from} -> ${specifier}`).not.toEqual([]);
+      else expect(found, `${from} -> ${specifier}`).toEqual([]);
+    }
+  });
+});
+
+describe("the cycle check between components", () => {
+  function cycleWorld(files: Record<string, string>): Violation[] {
+    const dir = join(scratch, `cycles-${counter++}`);
+    for (const [path, source] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), source);
+    }
+    for (const config of [".dependency-cruiser.mjs", ".dependency-cruiser.cycles.mjs"]) {
+      copyFileSync(join(repoRoot, config), join(dir, config));
+    }
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src", "--config", ".dependency-cruiser.cycles.mjs"]);
+  }
+
+  it("fails two components that import each other through files that form no file-level cycle", () => {
+    const found = cycleWorld({
+      "src/a/index.ts": 'import "../b/index.js";\nexport {};\n',
+      "src/a/leaf.ts": "export {};\n",
+      "src/b/index.ts": 'import "../a/leaf.js";\nexport {};\n',
+    });
+    expect(found.map((v) => v.rule.name)).toContain("no-cycle-between-components");
+  });
+
+  it("passes a cycle that runs only through test files and testing.ts", () => {
+    const found = cycleWorld({
+      "src/a/index.ts": "export {};\n",
+      "src/a/x.test.ts": 'import "../b/testing.js";\nexport {};\n',
+      "src/b/index.ts": "export {};\n",
+      "src/b/testing.ts": 'import "../a/index.js";\nexport {};\n',
+    });
+    expect(found).toEqual([]);
+  });
+});
+
+describe("the repo's known violations", () => {
+  const read = (file: string): Violation[] =>
+    JSON.parse(readFileSync(join(repoRoot, file), "utf8")) as Violation[];
+  const key = (v: Violation): string => `${v.rule.name} ${v.from} -> ${v.to}`;
+
+  it("lists every cycle between components the repo has, and no cycle it no longer has", () => {
+    const found = cruise(repoRoot, ["src", "--config", ".dependency-cruiser.cycles.mjs"]);
+    expect(found.map(key).sort()).toEqual(
+      read(".dependency-cruiser-known-cycles.json").map(key).sort(),
+    );
+  });
+
+  it("never grows past what the repo had when dependency-cruiser was adopted", () => {
+    expect(read(".dependency-cruiser-known-violations.json").length).toBeLessThanOrEqual(24);
+    expect(read(".dependency-cruiser-known-cycles.json").length).toBeLessThanOrEqual(6);
   });
 });

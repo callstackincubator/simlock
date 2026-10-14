@@ -41,6 +41,7 @@ describe("tool-guard.mjs", () => {
     "timeout 100 pnpm fallow",
     "pnpm tsc --noEmit",
     "pnpm oxlint src",
+    "pnpm exec depcruise src e2e ui --ignore-known",
     "pnpm --dir . check",
     "pnpm --workspace check",
     "pnpm -C . run lint",

@@ -1,0 +1,266 @@
+[
+  {
+    "type": "dependency",
+    "from": "src/agent-device/dispose.test.ts",
+    "to": "src/ports/clock.ts",
+    "unresolvedTo": "../ports/clock.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/agent-device/gateway-front.test.ts",
+    "to": "src/ports/uplink-websocket.ts",
+    "unresolvedTo": "../ports/uplink-websocket.js",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/bus/event-file.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../contract/schemas.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/cli/index.ts",
+    "to": "src/contract/duration.ts",
+    "unresolvedTo": "../contract/duration.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/capacity/coordinator.test.ts",
+    "to": "src/core/capacity/strategies/resource/index.ts",
+    "unresolvedTo": "./strategies/resource/index.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/capacity/index.ts",
+    "to": "src/core/capacity/strategies/resource/index.ts",
+    "unresolvedTo": "./strategies/resource/index.js",
+    "dependencyTypes": ["local", "export"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/capacity/testing.ts",
+    "to": "src/core/capacity/strategies/resource/index.ts",
+    "unresolvedTo": "./strategies/resource/index.js",
+    "dependencyTypes": ["local", "export"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/config.test.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../contract/schemas.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/doctor.ts",
+    "to": "src/contract/os-range.ts",
+    "unresolvedTo": "../contract/os-range.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/domain.ts",
+    "to": "src/contract/operations.ts",
+    "unresolvedTo": "../contract/operations.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/domain.ts",
+    "to": "src/contract/os-range.ts",
+    "unresolvedTo": "../contract/os-range.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/warm-pool/config.ts",
+    "to": "src/contract/os-range.ts",
+    "unresolvedTo": "../../contract/os-range.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/core/warm-pool/config.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../../contract/schemas.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/daemon/dispatch.ts",
+    "to": "src/ports/clock.ts",
+    "unresolvedTo": "../ports/clock.js",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/daemon/dispatch.ts",
+    "to": "src/ports/logger.ts",
+    "unresolvedTo": "../ports/logger.js",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/daemon/main.ts",
+    "to": "src/ports/uplink-websocket.ts",
+    "unresolvedTo": "../ports/uplink-websocket.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/gateway/routing/request-match.ts",
+    "to": "src/contract/os-range.ts",
+    "unresolvedTo": "../../contract/os-range.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/http/app.ts",
+    "to": "src/contract/duration.ts",
+    "unresolvedTo": "../contract/duration.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/http/token-store.test.ts",
+    "to": "src/ports/token-secrets.ts",
+    "unresolvedTo": "../ports/token-secrets.js",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/leasing/lease-acquisition-coordinator.ts",
+    "to": "src/contract/os-range.ts",
+    "unresolvedTo": "../contract/os-range.js",
+    "dependencyTypes": ["local", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/simlock-client/types.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../contract/schemas.js",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "ui/src/views/leases-model.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../../../src/contract/schemas",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "ui/src/views/waiting-model.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../../../src/contract/schemas",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "ui/src/views/workers-model.ts",
+    "to": "src/contract/schemas.ts",
+    "unresolvedTo": "../../../src/contract/schemas",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  }
+]

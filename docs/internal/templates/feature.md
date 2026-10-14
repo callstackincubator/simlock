@@ -125,6 +125,15 @@ crosses a process or a network hop (CLI, daemon, driver, gateway, worker,
 HTTP or MCP client), add a Mermaid sequence diagram of one request through
 it, including the failure reply. Skip a diagram that would show one box. -->
 
+### Surface and extension points
+
+<!-- For each module this adds or whose `index.ts` it grows: the factory
+and the handle it returns (architecture rule 18). If the change adds a
+second implementation of something simlock already does, or an accepted
+ADR or this spec names one: what varies, the definition type and the
+registry (architecture rules 19, 20). Delete this section when neither
+applies. -->
+
 ### Contract and event changes
 
 <!-- Every new or changed event needs its EVENTS.md entry named here. -->

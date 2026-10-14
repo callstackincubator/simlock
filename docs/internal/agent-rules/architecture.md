@@ -69,6 +69,14 @@ grounds for rejecting a change even if it works.
     So when a review finding says "and the same check in the other path
     needs updating too", treat that sentence as the finding. Fix the
     duplication, not the symptom.
+
+    The same holds for knowledge. A constant, an environment key, an id
+    format or a list of allowed values (the platforms) is known to one
+    module, and the others ask it through its surface. Where a boundary
+    forbids the import (the contract imports nothing, ADR 0003), the copy
+    is checked by a test that fails when the two disagree. The
+    agent-device lease TTL floor, 5 s, is set in core config and again in
+    agent-device's own check: the day one changes, the other is wrong.
 11. **Every wait that crosses a process boundary is bounded, and the budget
     does not reset.** An RPC to a worker, a handshake, a subscription, a
     forwarded command: each needs an explicit deadline, and a caller that
@@ -98,11 +106,16 @@ grounds for rejecting a change even if it works.
     outside the directory imports a file inside it; the directory's own
     tests may, and another component's tests may import its `testing.ts`,
     which holds fakes and test wiring and nothing production code uses.
-    `pnpm lint` enforces this (ADR 0018). `src/core/capacity/` is the
-    model. A single-file component's
-    surface is what the file exports, and a component whose surface has
-    grown past one file becomes a directory with an index, not a second
-    file others reach into. The inventory in
+    Every directory under `src/` with an `index.ts` is a component without
+    being listed anywhere, and `pnpm lint` enforces this for all of them
+    (ADR 0027). Two components never import each other, directly or
+    through a third: a cycle means they are one module or a decision sits
+    in the wrong one; a unit test enforces it. The breaches that predate
+    the check are listed in `.dependency-cruiser-known-violations.json` and
+    `.dependency-cruiser-known-cycles.json`; those lists only shrink. A single-file
+    component's surface is what the file exports, and a component whose
+    surface has grown past one file becomes a directory with an index, not
+    a second file others reach into. The inventory in
     [../COMPONENTS.md](../COMPONENTS.md) names each component and its
     surface.
 15. **Dependencies point from the optional to the required, never back.**
@@ -119,16 +132,21 @@ grounds for rejecting a change even if it works.
     minus the improvement. A required component that "just needs one
     answer" from an optional one has the dependency backwards: either the
     answer belongs in the core, or the optional component should react to
-    the core's committed fact instead.
+    the core's committed fact instead. When the required side calls the
+    optional one through an interface, the required side declares it and
+    exports it from its index: leasing declares `LeaseEndParticipant`,
+    agent-device implements it, and leasing never learns agent-device
+    exists.
 16. **Policy is a pure function; the mechanism that acts on it is separate.**
     A component whose behaviour is meant to be tuned — a routing policy, a
     cleanup rule, a capacity strategy, a warm-pool policy — keeps its
     decision in a pure function over a view, returning proposals, with the
     executor that claims, reserves and calls drivers beside it and shared.
     Changing the algorithm then changes the pure function and its tests
-    and nothing else; swapping it is a name in config, not an edit to the
-    executor. `src/gateway/routing/`, `src/core/cleanup/` and
-    `src/core/capacity/strategies/` are the precedents.
+    and nothing else. `src/gateway/routing/`, `src/core/cleanup/` and
+    `src/core/capacity/strategies/` are the precedents for the split;
+    rules 19 and 20 say when a second policy gets a registry and what
+    shape it takes.
 17. **A comment says why, or it goes.** A comment starts with `why:` and
     says why the code does something a reader would not expect: a
     workaround for an upstream bug or unexpected behaviour (link it), a
@@ -147,3 +165,43 @@ grounds for rejecting a change even if it works.
     the code does is still a comment to delete, and a `why:` that is false
     is a claims finding (rule 13). Older comments are the weekly
     `garden-comments` routine's.
+18. **A module hands out a capability, not its parts.** A module a change
+    adds, or whose `index.ts` a change grows, exports a factory that takes
+    its dependencies and returns a handle holding what a host plugs in (a
+    lease-end participant, an HTTP mount, findings, `start` and `stop`),
+    plus the types a caller passes or reads. It does not export the
+    classes it is built from or pieces the caller must assemble; knowing
+    its internal objects, the order to call them in or its shutdown order
+    is the module's job. The test: the composition root imports from it
+    only the factory and those types. An index that predates this rule is
+    not a finding until a change grows it.
+19. **An extension point is added when a second implementation is named,
+    not before.** Add an interface and a registry when a second
+    implementation exists or is being built, or when an accepted ADR or
+    the spec names one. Otherwise write a plain module behind its
+    `index.ts` and no interface: an interface with one implementation and
+    none named is a guess the second implementation usually proves wrong.
+20. **Every extension point has the same shape.** The host that owns it
+    declares:
+    - a definition type (`<Thing>Definition`: `name`, its config schema
+      and defaults, and `create`), exported from the host's `index.ts`
+      when an implementation lives outside the host;
+    - one registry keyed by name, and config and wire enums of the names
+      derived from it, or, where a boundary forbids the import, checked
+      against it by a test (rule 10);
+    - one directory per implementation, entered through its `index.ts`;
+    - one conformance suite every registered implementation runs
+      (`describe.each` over the registry), beside each implementation's
+      own tests.
+
+    Adding an implementation is then a new directory, one registry line
+    and its docs. `src/core/capacity/strategies/` is the closest
+    precedent; its contract schemas are typed out by hand with no test
+    that they match.
+21. **A host never names an implementation.** The module that owns an
+    extension point has no `kind === "<implementation>"`, no comparison
+    against one stage's or rule's name, and no union of implementation
+    names in its types. What varies by implementation comes from the
+    implementation: a doctor finding carries its module, message and
+    remedy instead of the host knowing `agent-device-unavailable`. The
+    test: a new implementation changes no file of the host.

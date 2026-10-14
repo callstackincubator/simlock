@@ -26,7 +26,7 @@ const SCRIPTS = new Set([
   "fallow",
   "mutate",
 ]);
-const TOOLS = new Set(["tsc", "oxlint", "oxfmt", "fallow", "stryker"]);
+const TOOLS = new Set(["tsc", "oxlint", "depcruise", "oxfmt", "fallow", "stryker"]);
 const NODE_SCRIPTS = new Set(["comment-lint.mjs", "mutate.mjs"]);
 const WRAPPERS = new Set(["time", "nice", "env", "command", "exec"]);
 const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "-F", "--filter", "--reporter"]);

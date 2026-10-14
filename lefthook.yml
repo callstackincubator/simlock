@@ -11,6 +11,11 @@ pre-commit:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+    # Which file may import which path is a whole-graph question, so this checks every import; it takes seconds.
+    boundaries:
+      glob: "*.{ts,tsx,js,mjs,mts,cts,json}"
+      run: pnpm exec depcruise src e2e ui --ignore-known
+      fail_text: "An import crosses a component's index or a direction rule (architecture rule 14, ADR 0027)."
     # A comment the commit adds or edits starts with "why:" or goes (architecture rule 17).
     comments:
       glob: "*.{ts,tsx,js,mjs,mts,cts,sh}"

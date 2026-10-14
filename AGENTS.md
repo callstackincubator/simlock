@@ -11,7 +11,10 @@ changes in this repo:
 - [architecture.md](docs/internal/agent-rules/architecture.md) — loosely coupled
   modules; platform-agnostic core; iOS and Android encapsulated in their own
   driver modules; event bus for observers only; one place enforces a rule;
-  bounded cross-process waits; every exit leaves one named state.
+  bounded cross-process waits; every exit leaves one named state; a module
+  hands out a capability, not its parts; an extension point only when a
+  second implementation is named, in one shape; a host never names an
+  implementation.
 - [events.md](docs/internal/agent-rules/events.md) — event naming
   (`subject.past-tense-fact`), post-commit emission, payload contracts,
   keeping EVENTS.md in sync.

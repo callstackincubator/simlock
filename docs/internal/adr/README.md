@@ -56,7 +56,7 @@ the status is stale.
 | [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted — not yet implemented; §3 narrowed by 0022 for physical devices; §3–5 narrowed by 0025 on Android |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — not yet implemented; §6's fleet join and a Consequence superseded by 0021 |
 | [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — not yet implemented |
-| [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — not yet implemented |
+| [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — not yet implemented; §4's path rules superseded by 0027 |
 | [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted — not yet implemented; §1–2 narrowed by 0022 for physical devices |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted — not yet implemented |
 | [0021](0021-a-gateway-dispatch-is-a-probe-and-names-its-fleet-request.md) | A gateway dispatch is a probe, and the gateway records every fleet request's outcome | Accepted — not yet implemented |
@@ -65,3 +65,4 @@ the status is stale.
 | [0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) | Leasing calls lease-end participants before it reclaims a device | Accepted — not yet implemented |
 | [0025](0025-simlock-ships-android-profiles-and-a-model-pairs-only-with-images-that-fit.md) | Simlock ships Android device profiles, and a model pairs only with images that fit it | Accepted — not yet implemented |
 | [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted — not yet implemented |
+| [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |

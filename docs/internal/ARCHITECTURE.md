@@ -229,7 +229,7 @@ Every daemon operation is declared exactly once, in `src/contract/`: a name
 output schema, and an optional `authorize` hook. Public TypeScript types are
 inferred from those schemas, never hand-written a second time. The contract
 module imports nothing from `core`, `daemon`, or `drivers` (enforced by
-`pnpm lint`, `.oxlintrc.json`) — core's own domain records
+`pnpm lint`, `.dependency-cruiser.mjs`) — core's own domain records
 (`DeviceRecord`, `LeaseRecord`, `LeaseGrant`) stay private, and the daemon
 maps them onto the contract's shapes in exactly one place
 (`src/daemon/dispatcher.ts`'s handlers). If a core type's shape changes
@@ -1050,8 +1050,8 @@ UDID, an AVD, a snapshot, or an adb port — and from `leasing` only the request
 book, the in-memory store, the wait queue, their errors and their types, never
 `createLeasing`, the acquisition coordinator or the lifecycle; from `core` only
 the shapes those are typed against and catalog matching, never the registry,
-capacity, or lifecycle modules. `pnpm lint` enforces it (`.oxlintrc.json`: the gateway
-override allows only the core and leasing names its allow-lists give). The rule is not stylistic: a
+capacity, or lifecycle modules. `pnpm lint` enforces it (`.dependency-cruiser.mjs` for the
+paths; `.oxlintrc.json`'s gateway override allows only the core and leasing names its allow-lists give). The rule is not stylistic: a
 gateway that could reach a registry module is a gateway that could grow a
 device-state opinion, and the safety argument above rests on it having none.
 
