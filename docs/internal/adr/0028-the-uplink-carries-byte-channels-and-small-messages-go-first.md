@@ -81,23 +81,27 @@ offers two things, and nothing else:
   both sides. A user passes the id to its peer in a message and reads no
   meaning into it. `acceptChannel` throws for an id the peer never opened,
   one already accepted, and one already ended.
-- **Credit is visible.** A channel writer's `desiredSize` is the number of
-  bytes it may still send without waiting, and its `ready` resolves when
-  more credit arrives. A writer can therefore skip data instead of waiting,
-  as a live stream drops frames for a viewer that fell behind.
+- **Credit is visible.** A channel's `credit` is the number of bytes its
+  writer may send now without waiting, and `whenCredit()` resolves when
+  more arrives. A writer that writes no more than `credit` never waits, so
+  it can skip data instead, as a live stream drops frames for a viewer that
+  fell behind. The streams stay standard Web streams.
 
 A channel fails, and both its streams error, when the peer aborts it, when
 the peer breaks the link's rules on it (§2), when the peer does not accept
 it within 30 s, when a write has waited 60 s for the reader to make room
 (§2), or when the connection closes. Only a write that is actually waiting
-counts toward the 60 s; a writer that checks `desiredSize` and skips is
-never reset. The error says which of these it was.
+counts toward the 60 s; a writer that writes no more than `credit` never
+waits and is never reset. The error says which of these it was.
 That is the only way a user learns of anything inside the link. The link
 bounds only the waits it causes; a wait for bytes the peer has not sent yet
 is the user's to bound, as the relay's deadline does. Each side opens at
 most 64 channels at once on a connection. A 65th `openChannel()` waits
 until one of them ends, and stops waiting when the caller's abort signal
-fires. A peer's 65th `OPEN` is a rule break (§2).
+fires. A peer's 65th `OPEN` is a rule break (§2). A channel stops counting
+once this side's `END` or `RESET` has been written to the transport and
+the peer's `END` or `RESET` has arrived, so a new `OPEN` can never reach
+the peer before the end of the channel it replaces.
 
 The link wraps the transport connection where the uplink is made: the
 worker's `GatewayUplink` when it dials, the gateway when it accepts. Tests
@@ -115,7 +119,8 @@ names it.
   `CREDIT` (the sender may send this many more bytes), `RESET` (the channel
   is aborted). Text messages stay as they are.
 - **Numbers.** The side that opens a channel numbers it: the worker with
-  odd numbers, the gateway with even ones, so the two never collide.
+  odd numbers, the gateway with even ones, so the two never collide. A
+  number is never reused on a connection.
 - **Opening.** `openChannel()` sends `OPEN`. Each side may send 4 MiB on a
   channel before any `CREDIT`, so bytes can follow `OPEN` at once. The
   receiver holds up to 4 MiB for a channel its user has not accepted yet,
@@ -222,9 +227,10 @@ host checks each response before passing it on:
   once it passes 2 GiB. The agent sees a failed transfer, never a short
   body that ends cleanly.
 
-agent-device's CLI reports any failed artifact download as `Failed to
-download remote artifact`; the host's message naming the limit is in the
-details it prints with its details flag.
+agent-device's CLI reports the up-front refusal as `Failed to download
+remote artifact`, with the host's message naming the limit in the details
+it prints with its details flag. A download aborted midway is reported as
+agent-device's own transfer error.
 
 Uploads over 2 GiB are refused by agent-device's own daemon, when it
 decides; simlock does not check them again. The relay and the link know no
@@ -249,6 +255,9 @@ open, and an older CLI or client library is refused by the newer daemon.
   message per other active channel, since channels take turns and the first
   4 MiB needs no credit.
 - A relay waits for another only when 64 run on its worker at once.
+- A relay sent to a worker that is still starting holds its channel, but
+  its upload waits for credit until the worker's relay starts reading. An
+  upload parked that way for over 60 s fails, and the agent retries.
 - Memory per transfer is bounded by credit: about 4 MiB per direction on
   each side, whatever the transfer's size and however slow its reader.
   Each side opens at most 64 channels per connection, so a gateway buffers
@@ -264,8 +273,8 @@ open, and an older CLI or client library is refused by the newer daemon.
   causes (30 s to accept, 60 s for a waiting write); the user bounds its
   wait for the peer's bytes.
 - The link is ready for live streams without being changed. Either side
-  can open a channel, a producer can skip data instead of waiting, and a
-  skipping producer is never reset. A stream still needs its own rules
+  can open a channel, and a producer that writes no more than `credit`
+  skips data instead of waiting and is never reset. A stream still needs its own rules
   above the link: no 330 s total cap, its own message boundaries, and an
   agent-facing endpoint. Adding a priority class for live channels later
   is an ordinary protocol bump.
