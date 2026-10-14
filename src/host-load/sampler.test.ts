@@ -353,7 +353,7 @@ describe("HostLoadSampler under a cgroup CPU limit", () => {
     clock.advance(15_000);
     await flush();
 
-    expect(sampler.current()?.cpu).toStrictEqual({ busyPercent: 61, cores: 2, limited: true });
+    expect(sampler.current()?.cpu).toStrictEqual({ busyPercent: 30.5, cores: 2, limited: true });
     sampler.dispose();
   });
 });

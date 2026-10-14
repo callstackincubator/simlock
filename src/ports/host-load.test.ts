@@ -474,7 +474,7 @@ describe("LinuxHostLoadProbe under cgroup v2 limits", () => {
   ])("treats cpu.max %j as no limit at that level", async (value) => {
     const accepted = await readCgroup("/x", {
       "": { cpuMax: "300000 100000\n", ...USAGE },
-      x: { cpuMax: "200000 100000\n" },
+      x: { cpuMax: "200000 100000\n", ...USAGE },
     });
     expect(accepted.cpu).toMatchObject({ cores: 2, limited: true });
 
