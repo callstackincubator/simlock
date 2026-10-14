@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  KiB,
-  linkPair,
-  MiB,
-  pattern,
-  settle,
-  signal,
-  TYPE,
-  type LinkPair,
-} from "./testing.js";
+import { KiB, linkPair, MiB, pattern, settle, signal, TYPE, type LinkPair } from "./testing.js";
 
 async function openPair(pair: LinkPair) {
   const g = await pair.gateway.openChannel({ signal: signal() });
