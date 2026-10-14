@@ -10,3 +10,4 @@ test-results/
 playwright-report/
 .agent-device
 .slow-lane.env
+tools/screen-capture/.build/
