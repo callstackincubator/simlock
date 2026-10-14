@@ -196,6 +196,13 @@ principal and its requester is the lease id itself (the mark every
 agent-device lease the front makes carries). Any other lease gets the
 answer a worker gives today for a lease the front does not know.
 
+Until the workers reconnect the front cannot tell a lease it lost from one it
+never had. For 60 seconds after the gateway starts, a heartbeat, command,
+release or upload for a lease the index lacks, before its worker has
+reconnected, gets the unreachable answer (`WORKER_UNREACHABLE`) and the
+entry is kept for the rebuild; the agent's session does not end. After the
+window an unknown lease gets the unknown-lease answer.
+
 ```mermaid
 sequenceDiagram
   participant CLI as agent-device CLI
