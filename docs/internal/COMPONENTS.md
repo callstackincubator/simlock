@@ -133,6 +133,15 @@ modules with.
 | Installer process | `src/drivers/installer-process.ts` | Running a platform's installer command with streamed progress. | Decide whether to install. |
 | `FakeDriver` | `src/core/fake-driver.ts`, exported from `src/core/testing.ts` | A scripted in-memory driver for the fast test lane and `SIMLOCK_DRIVERS_MODULE` setups. | Touch a real device. |
 
+## Host load
+
+`src/host-load/` is entered only through its `index.ts` and imports nothing but `src/ports/` (ADR 0028). Core, leasing, the drivers, the gateway and the contract never import it; the composition root wires it.
+
+| Component | Where | Owns | Does not |
+|---|---|---|---|
+| `HostLoadSampler` | `src/host-load/sampler.ts` | The machine's CPU, memory and disk load: one read at start and every 15 s, one read at a time and each bounded at 10 s, busy % from two successive CPU counters, the age of the reading, and one warn when a part that was read fails. Served from memory through `current()`. | Read the machine: the `HostLoadProbe` port does. Shape the wire block: the contract's `fitHostLoad` does. |
+| `HostLoadProbe` adapters | `src/ports/host-load.ts` | `DarwinHostLoadProbe` (`sysctl`, `os.cpus()`), `LinuxHostLoadProbe` (`/proc/stat`, `/proc/meminfo`), `FakeHostLoadProbe`, and `productionHostLoadProbe`. Each part is read on its own and left out when it fails. | Compute a percentage. |
+
 ## Event bus
 
 | Component | Where | Owns | Does not |
@@ -165,6 +174,6 @@ Every external API the core and the daemon touch sits behind an interface in
 `src/ports/`, each with a Node adapter and an in-memory fake (architecture
 rule 9): `Clock`, `Filesystem`, `ProcessRunner` (and the logging wrapper),
 `ProcessSupervisor`, `SystemStats`, `HostInfo`, `IdGenerator`, `IpcTransport`,
-`Logger` and log sinks, `ParentWatch`, `TcpProbe`, `TokenSecrets`,
+`HostLoadProbe`, `Logger` and log sinks, `ParentWatch`, `TcpProbe`, `TokenSecrets`,
 `DaemonLauncher`, the uplink transport and its WebSocket adapters, and the
 path helpers.

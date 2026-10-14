@@ -10,20 +10,20 @@ import {
   type TimerHandle,
 } from "../ports/index.js";
 
-export interface HostLoadCpu {
+interface HostLoadCpu {
   readonly busyPercent: number;
   readonly cores: number;
   readonly limited: boolean;
 }
 
-export interface HostLoadReading {
+interface HostLoadReading {
   readonly ageMs: number;
   readonly cpu?: HostLoadCpu;
   readonly memory?: MemoryCounters;
   readonly disk?: DiskCounters;
 }
 
-export interface HostLoadSamplerOptions {
+interface HostLoadSamplerOptions {
   readonly clock: Clock;
   readonly probe: HostLoadProbe;
   readonly logger?: Logger;

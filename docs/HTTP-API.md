@@ -157,7 +157,7 @@ nothing for, `short` — one of `disabled`, `no-driver`, `runtime-missing`,
 is on its entry in `workers`.
 
 While the daemon is starting (`daemon.health` is `starting`), the answer is
-`200` with the `daemon` block and `host` only: it has not yet checked what it
+`200` with the `daemon` block, `host` and, once read, `load` only: it has not yet checked what it
 holds, so `capabilities`, `devices`, `leases`, `capacity`, `queueDepth`, `physicalQueueDepth`, `installs`,
 `waiting`, `warmPool` and `workers` are absent, not empty. They are all there once `health` is
 `running`, and also when it is `failed`.
@@ -199,6 +199,25 @@ versions are read at start and again in the background once a minute has
 passed, so this endpoint never waits for them. Right after a start, or for a
 tool that is not installed, `tools` has no entry for it; if a later read
 fails, the last version read stays.
+
+**`load`** is how busy the machine is, as of the daemon's last read, which it
+makes every 15 seconds. It is absent until the first read finishes, and on
+both the starting and the running answer once it is there:
+
+```json
+"load": { "ageMs": 4120,
+  "cpu": { "busyPercent": 34.2, "cores": 10, "limited": false },
+  "memory": { "totalBytes": 34359738368, "availableBytes": 10522669875,
+              "swapUsedBytes": 1288490188, "pressure": "normal", "limited": false },
+  "disk": { "freeBytes": 120689623040, "totalBytes": 530870820864 } }
+```
+
+`ageMs` is how old the reading is when the daemon answers, a whole number of
+milliseconds up to one day. `cpu`, `memory` and `disk` are each left out when
+they could not be read; `cpu` is also left out for the first 15 seconds, since
+it is busy time between two reads. `pressure` (`normal`, `warn` or `critical`)
+is present only where the operating system reports one. `disk` is the folder
+Simlock keeps its data in. `limited` is `false` for the whole machine's figures.
 
 Under the `resource` capacity strategy, **`capacity.ramBudget`** reports the
 RAM budget; under `fixed` the field is absent:

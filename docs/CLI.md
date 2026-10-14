@@ -1430,8 +1430,17 @@ yet checked what it holds:
 ```
 Daemon: starting (worker)
 Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago
 Devices, leases and capacity appear once startup finishes.
 ```
+
+The `Load:` line is the machine's load, read every 15 seconds and shown as of
+the last read (`read 4s ago`), so `simlock status` never waits for a reading.
+CPU is busy time since the previous read, so it reads `CPU unavailable` for the
+first 15 seconds after a start. A part that could not be read says
+`unavailable`. `pressure` is shown where the operating system reports one
+(macOS). Until the first reading finishes the line is absent, and `--json`
+carries no `load`.
 
 `--json` prints the answer as the daemon sent it, with `devices`, `leases`,
 `capacity`, `queueDepth` and `physicalQueueDepth` absent. On a gateway, a worker that is still starting
@@ -1441,7 +1450,8 @@ lease count, in the same way.
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
 [CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on
-(`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
+(`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), its load
+(`Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · ...`; `load` in `--json`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
 managed device with its state and device mode
