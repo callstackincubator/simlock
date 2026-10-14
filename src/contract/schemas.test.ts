@@ -6,9 +6,11 @@ import {
   deviceRecordSchema,
   doctorReportSchema,
   fitHostFacts,
+  fitHostLoad,
   fitPlatformCatalog,
   grantedDeviceSchema,
   hostFactsSchema,
+  hostLoadSchema,
   leaseGrantSchema,
   leaseRequestRecordSchema,
   platformCatalogSchema,
@@ -744,5 +746,85 @@ describe("capabilityReason", () => {
     const cleaned = capabilityReason(`${"x".repeat(499)}\u{1F600}`);
 
     expect(cleaned).toBe("x".repeat(499));
+  });
+});
+
+describe("a status answer's load block", () => {
+  const load = {
+    ageMs: 4_120,
+    cpu: { busyPercent: 34.2, cores: 10, limited: false },
+    disk: { freeBytes: 120_689_623_040, totalBytes: 530_870_820_864 },
+    memory: {
+      availableBytes: 10_522_669_875,
+      limited: false,
+      pressure: "normal",
+      swapUsedBytes: 1_288_490_188,
+      totalBytes: 34_359_738_368,
+    },
+  };
+  const answer = (block: unknown) =>
+    statusGet.output.safeParse({
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "26.0", tools: [] },
+      load: block,
+    });
+
+  it("round-trips field for field", () => {
+    const parsed = answer(load);
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.load).toStrictEqual(load);
+  });
+
+  it.each([
+    ["a negative disk figure", { ...load, disk: { ...load.disk, freeBytes: -1 } }],
+    ["a negative age", { ...load, ageMs: -1 }],
+    ["an ageMs over one day", { ...load, ageMs: 86_400_001 }],
+    ["a busy % over 100", { ...load, cpu: { ...load.cpu, busyPercent: 100.1 } }],
+    ["cores of 0", { ...load, cpu: { ...load.cpu, cores: 0 } }],
+    ["an unknown pressure", { ...load, memory: { ...load.memory, pressure: "severe" } }],
+    ["a negative swap", { ...load, memory: { ...load.memory, swapUsedBytes: -5 } }],
+  ])("is refused with %s", (_why, refused) => {
+    expect(answer(load).success).toBe(true);
+
+    expect(answer(refused).success).toBe(false);
+  });
+
+  it("accepts an ageMs of exactly one day, half a core, and parts left out", () => {
+    expect(answer({ ageMs: 86_400_000 }).success).toBe(true);
+    expect(answer({ ageMs: 0, cpu: { ...load.cpu, cores: 0.5 } }).success).toBe(true);
+  });
+});
+
+describe("fitHostLoad", () => {
+  const memory = {
+    availableBytes: 4_000,
+    limited: false,
+    swapUsedBytes: 0,
+    totalBytes: 16_000,
+  };
+
+  it("caps ageMs at one day and drops a part whose figures break the schema, keeping the others", () => {
+    const fitted = fitHostLoad({
+      ageMs: 90_000_000,
+      cpu: { busyPercent: 150, cores: 4, limited: false },
+      disk: { freeBytes: -1, totalBytes: 500 },
+      memory,
+    });
+
+    expect(fitted).toStrictEqual({ ageMs: 86_400_000, memory });
+    expect(() => hostLoadSchema.parse(fitted)).not.toThrow();
+  });
+
+  it("leaves a reading that already fits as it is, and nothing as nothing", () => {
+    const reading = {
+      ageMs: 15,
+      cpu: { busyPercent: 12.5, cores: 0.5, limited: true },
+      disk: { freeBytes: 1, totalBytes: 2 },
+      memory,
+    };
+
+    expect(fitHostLoad(reading)).toStrictEqual(reading);
+    expect(fitHostLoad(undefined)).toBeUndefined();
   });
 });

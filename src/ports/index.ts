@@ -84,3 +84,16 @@ export {
   type StreamingProcessHandle,
   type StreamingProcessResult,
 } from "./process-runner.js";
+export {
+  type CpuCounters,
+  type CpuTimes,
+  DarwinHostLoadProbe,
+  type DiskCounters,
+  FakeHostLoadProbe,
+  type HostLoadCounters,
+  type HostLoadProbe,
+  LinuxHostLoadProbe,
+  type MemoryCounters,
+  type MemoryPressure,
+  productionHostLoadProbe,
+} from "./host-load.js";

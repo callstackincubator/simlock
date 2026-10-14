@@ -506,6 +506,30 @@ export function fitHostFacts<Host extends HostFactsShape>(host: Host): Host {
   };
 }
 
+/** ADR 0028 §4: what `status.get` carries about the machine's load, as old as its last read. */
+export interface StatusLoad {
+  readonly ageMs: number;
+  readonly cpu?: {
+    readonly busyPercent: number;
+    readonly cores: number;
+    readonly limited: boolean;
+  };
+  readonly memory?: {
+    readonly totalBytes: number;
+    readonly availableBytes: number;
+    readonly swapUsedBytes: number;
+    readonly pressure?: "normal" | "warn" | "critical";
+    readonly limited: boolean;
+  };
+  readonly disk?: { readonly freeBytes: number; readonly totalBytes: number };
+}
+
+export const hostLoadSchema: z.ZodType<StatusLoad> = z.custom<StatusLoad>(() => false);
+
+export function fitHostLoad<Load extends StatusLoad>(load: Load | undefined): Load | undefined {
+  return load;
+}
+
 export const platformCatalogSchema = z.object({
   platform: platformSchema,
   models: z.array(z.string()),

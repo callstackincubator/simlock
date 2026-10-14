@@ -74,6 +74,7 @@ import {
   type Clock,
   type Filesystem,
   type HostInfo,
+  type HostLoadProbe,
   type HostSystem,
   type IdGenerator,
   type IpcConnector,
@@ -138,6 +139,7 @@ export interface StartDaemonOptions {
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
+  readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;

@@ -408,6 +408,38 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
       ] as const,
   ),
   [
+    "fails a host-load file importing node:fs/promises, child_process or core",
+    [
+      ["fails", "src/host-load/x.ts", "node:fs/promises"],
+      ["fails", "src/host-load/x.ts", "fs"],
+      ["fails", "src/host-load/x.ts", "child_process"],
+      ["fails", "src/host-load/x.ts", "node:child_process"],
+      ["fails", "src/host-load/x.ts", "../core/index.js"],
+      ["fails", "src/host-load/x.ts", "../leasing/index.js"],
+      ["fails", "src/host-load/x.ts", "../gateway/index.js"],
+      ["fails", "src/host-load/x.ts", "../contract/index.js"],
+      ["passes", "src/host-load/x.ts", "../ports/index.js"],
+    ],
+  ],
+  [
+    "fails a core, leasing, driver, gateway or contract file importing host-load",
+    [
+      ["fails", "src/core/x.ts", "../host-load/index.js"],
+      ["fails", "src/leasing/x.ts", "../host-load/index.js"],
+      ["fails", "src/drivers/ios/x.ts", "../../host-load/index.js"],
+      ["fails", "src/drivers/android/x.ts", "../../host-load/index.js"],
+      ["fails", "src/gateway/x.ts", "../host-load/index.js"],
+      ["fails", "src/contract/x.ts", "../host-load/index.js"],
+    ],
+  ],
+  [
+    "passes the composition root importing host-load's index, and fails its private file",
+    [
+      ["passes", "src/daemon/main.ts", "../host-load/index.js"],
+      ["fails", "src/daemon/main.ts", "../host-load/sampler.js"],
+    ],
+  ],
+  [
     "passes an agent-device test file importing node:fs",
     [["passes", "src/agent-device/host/x.test.ts", "node:fs"]],
   ],

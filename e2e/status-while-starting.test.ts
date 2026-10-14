@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { waitFor, withHttpDaemon } from "./helpers/index.js";
 
 describe("status while the daemon is starting", () => {
-  it("a daemon held in starting answers simlock status with the starting line, and GET /v1/status with daemon and host only", async () => {
+  it("a daemon held in starting answers simlock status with the starting line, and GET /v1/status with daemon, host and load only", async () => {
     const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
     }));
@@ -33,13 +33,25 @@ describe("status while the daemon is starting", () => {
     expect(human.stdout).toContain("Devices, leases and capacity appear once startup finishes.");
     expect(human.stdout).not.toMatch(/^(Device |Lease |Capacity |Queue depth|Running global)/m);
 
-    const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
-      headers: { authorization: `Bearer ${secret}` },
-    });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { daemon: { health: string } };
-    expect(Object.keys(body).sort()).toEqual(["daemon", "host"]);
+    let body: { daemon: { health: string }; load?: unknown } = { daemon: { health: "" } };
+    await waitFor(
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: `Bearer ${secret}` },
+        });
+        expect(response.status).toBe(200);
+        body = (await response.json()) as typeof body;
+        return body.load !== undefined;
+      },
+      { label: "a starting worker's status carries load", timeout: 6_000 },
+    );
+    expect(Object.keys(body).sort()).toEqual(["daemon", "host", "load"]);
     expect(body.daemon.health).toBe("starting");
+    expect(body.load).toMatchObject({
+      ageMs: expect.any(Number),
+      disk: { freeBytes: expect.any(Number), totalBytes: expect.any(Number) },
+      memory: { availableBytes: expect.any(Number), totalBytes: expect.any(Number) },
+    });
 
     expect((await start.waitForExit(30_000)).code).toBe(0);
   });

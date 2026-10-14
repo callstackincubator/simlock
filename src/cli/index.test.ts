@@ -3541,6 +3541,123 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
   });
 
+  describe("the Load line", () => {
+    const GIB = 2 ** 30;
+    const MIB = 2 ** 20;
+    const LOAD = {
+      ageMs: 4_000,
+      cpu: { busyPercent: 34.2, cores: 10, limited: false },
+      disk: { freeBytes: 120_688_581_018, totalBytes: 530_857_957_786 },
+      memory: {
+        availableBytes: 10_522_669_875,
+        limited: false,
+        pressure: "normal" as const,
+        swapUsedBytes: 1_288_490_189,
+        totalBytes: 32 * GIB,
+      },
+    };
+    const FULL_LINE =
+      "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago\n";
+    const STARTING = {
+      daemon: { health: "starting" as const, mode: "worker" as const },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    };
+
+    const print = async (status: StatusGetOutput): Promise<string> => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const loadLine = async (load: StatusGetOutput["load"]): Promise<string> => {
+      const stdout = await print({ ...EMPTY_STATUS, load });
+      return stdout.split("\n").find((line) => line.startsWith("Load:")) ?? "";
+    };
+
+    it("simlock status prints the Load line after the Host line, on a starting daemon and a running one", async () => {
+      expect(await print({ ...STARTING, load: LOAD })).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          FULL_LINE +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+
+      expect(await print({ ...EMPTY_STATUS, load: LOAD })).toContain(
+        `Host: macOS 15.5 arm64\n${FULL_LINE}`,
+      );
+    });
+
+    it("simlock status prints CPU unavailable, memory unavailable or disk unavailable for an absent part, and no swap or pressure part when memory is absent", async () => {
+      const { cpu: _cpu, ...withoutCpu } = LOAD;
+      const { memory: _memory, ...withoutMemory } = LOAD;
+      const { disk: _disk, ...withoutDisk } = LOAD;
+
+      expect(await loadLine(withoutCpu)).toBe(
+        "Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(await loadLine(withoutMemory)).toBe(
+        "Load: CPU 34% busy (10 cores) · memory unavailable · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(await loadLine(withoutDisk)).toBe(
+        "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk unavailable · read 4s ago",
+      );
+    });
+
+    it("simlock status prints no pressure part when the reading has none, and limit on a limited CPU or memory", async () => {
+      const { pressure: _pressure, ...noPressure } = LOAD.memory;
+
+      expect(await loadLine({ ...LOAD, memory: noPressure })).toBe(
+        "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(
+        await loadLine({
+          ...LOAD,
+          cpu: { busyPercent: 34.2, cores: 2, limited: true },
+          memory: { ...LOAD.memory, availableBytes: 3 * GIB, limited: true, totalBytes: 8 * GIB },
+        }),
+      ).toBe(
+        "Load: CPU 34% busy (2 cores, limit) · memory 3.0 GiB of 8.0 GiB available (limit) · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+    });
+
+    it.each([
+      ["swap 0 B", { memory: { ...LOAD.memory, swapUsedBytes: 0 } }, "swap 0 B used"],
+      [
+        "swap 300 MiB",
+        { memory: { ...LOAD.memory, swapUsedBytes: 300 * MIB } },
+        "swap 300 MiB used",
+      ],
+      [
+        "swap 1023.6 MiB",
+        { memory: { ...LOAD.memory, swapUsedBytes: 1_073_322_394 } },
+        "swap 1.0 GiB used",
+      ],
+      ["busy 34.5", { cpu: { ...LOAD.cpu, busyPercent: 34.5 } }, "CPU 35% busy"],
+      ["cores 1", { cpu: { ...LOAD.cpu, cores: 1 } }, "(1 core)"],
+      ["cores 0.5", { cpu: { ...LOAD.cpu, cores: 0.5 } }, "(0.5 cores)"],
+      ["cores 10", { cpu: { ...LOAD.cpu, cores: 10 } }, "(10 cores)"],
+      ["cores 0.01", { cpu: { ...LOAD.cpu, cores: 0.01 } }, "(0.01 cores)"],
+      ["cores 0.001", { cpu: { ...LOAD.cpu, cores: 0.001 } }, "(<0.01 cores)"],
+      ["ageMs 4001", { ageMs: 4_001 }, "read 5s ago"],
+      ["ageMs 0", { ageMs: 0 }, "read 0s ago"],
+    ])("simlock status formats %s as in the inputs table", async (_row, change, fragment) => {
+      expect(await loadLine(LOAD)).toContain("CPU 34% busy (10 cores)");
+
+      expect(await loadLine({ ...LOAD, ...change })).toContain(fragment);
+    });
+
+    it("simlock status prints no Load line when the answer has no load block", async () => {
+      expect(await print({ ...EMPTY_STATUS, load: LOAD })).toContain("Load: ");
+
+      expect(await print(EMPTY_STATUS)).not.toContain("Load:");
+      expect(await print(STARTING)).not.toContain("Load:");
+    });
+  });
+
   it("simlock status prints the console address when HTTP is enabled", async () => {
     const print = async (status: StatusGetOutput) => {
       const output = outputCapture();

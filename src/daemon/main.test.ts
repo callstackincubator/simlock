@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,8 @@ import {
   CryptoTokenSecrets,
   FakeClock,
   FakeHostInfo,
+  FakeHostLoadProbe,
+  type HostLoadCounters,
   FakeProcessSupervisor,
   FakeTcpProbe,
   JsonLinesLogger,
@@ -71,6 +74,7 @@ async function start(
     dataDirectory: directory,
     drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
     filesystem: new MemoryFilesystem(),
+    hostLoadProbe: null,
     logger,
     statePath: join(directory, "state.json"),
     version: "1.2.3",
@@ -714,6 +718,7 @@ describe("startDaemon wires core and leasing together", () => {
         dataDirectory: directory,
         drivers: [driver],
         filesystem,
+        hostLoadProbe: null,
         logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
         statePath,
         version: "1.2.3",
@@ -989,6 +994,7 @@ describe("startDaemon stopped while starting", () => {
         }),
       ],
       filesystem,
+      hostLoadProbe: null,
       socketPath,
       statePath: join(directory, "state.json"),
       version: "1.2.3",
@@ -2636,5 +2642,200 @@ describe("startDaemon with the agent-device edge", () => {
 
       expect(agentDeviceFinding(report)).toBeUndefined();
     });
+  });
+});
+
+describe("startDaemon host load", () => {
+  const COUNTERS: HostLoadCounters = {
+    cpu: { busyTime: 100, cores: 4, limited: false, totalTime: 1_000 },
+    disk: { freeBytes: 120, totalBytes: 500 },
+    memory: {
+      availableBytes: 4_000,
+      limited: false,
+      pressure: "normal",
+      swapUsedBytes: 100,
+      totalBytes: 16_000,
+    },
+  };
+
+  async function startOnClock(overrides: Partial<StartDaemonOptions> = {}) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      filesystem: new MemoryFilesystem(),
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+      ...overrides,
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { clock, daemon, directory };
+  }
+
+  async function workerStatus(daemon: DaemonServer): Promise<Record<string, unknown>> {
+    return (await daemon.dispatch(
+      "status.get",
+      {},
+      { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+    )) as Record<string, unknown>;
+  }
+
+  it("answers status.get with load from the probe, on the starting answer and the running one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-slow-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
+    const startPromise = startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: new FakeHostLoadProbe(COUNTERS),
+      socketPath,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions).then((daemon) => {
+      runningDaemons.push(daemon);
+      return daemon;
+    });
+    const client = await connectRetrying(socketPath);
+    try {
+      await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      const statusLoad = async () =>
+        ((await client.request("status.get", {})).payload as { load?: unknown }).load;
+
+      await expect
+        .poll(statusLoad)
+        .toEqual({ ageMs: 0, disk: COUNTERS.disk, memory: COUNTERS.memory });
+      expect((await client.request("status.get", {})).payload).toMatchObject({
+        daemon: { health: "starting" },
+      });
+
+      clock.advance(30_000);
+      await startPromise;
+
+      expect((await client.request("status.get", {})).payload).toMatchObject({
+        daemon: { health: "running" },
+      });
+      expect(await statusLoad()).toMatchObject({
+        disk: COUNTERS.disk,
+        memory: COUNTERS.memory,
+      });
+    } finally {
+      client.socket.end();
+    }
+  });
+
+  it("answers status.get without load before the first read finishes, without waiting for it", async () => {
+    const probe = new FakeHostLoadProbe();
+    const { daemon } = await startOnClock({ hostLoadProbe: probe });
+
+    expect(probe.reads).toBe(1);
+    expect(await workerStatus(daemon)).not.toHaveProperty("load");
+
+    probe.answer(COUNTERS);
+    await expect
+      .poll(async () => (await workerStatus(daemon)).load)
+      .toMatchObject({
+        memory: COUNTERS.memory,
+      });
+  });
+
+  it("with hostLoadProbe: null answers the same as with a probe, apart from load, and arms no host load timer", async () => {
+    const withProbe = await startOnClock({ hostLoadProbe: new FakeHostLoadProbe(COUNTERS) });
+    const without = await startOnClock({ hostLoadProbe: null });
+
+    await expect.poll(async () => (await workerStatus(withProbe.daemon)).load).toBeDefined();
+    const { load: _load, ...probed } = await workerStatus(withProbe.daemon);
+    const bare = await workerStatus(without.daemon);
+
+    expect(bare).not.toHaveProperty("load");
+    expect(probed).toEqual(bare);
+    expect(withProbe.clock.pendingTimerCount).toBeGreaterThan(without.clock.pendingTimerCount);
+  });
+
+  it("starts the sampler only after the daemon holds its socket", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-socket-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    const socketAtRead: boolean[] = [];
+    class WatchingProbe extends FakeHostLoadProbe {
+      override read(): Promise<HostLoadCounters> {
+        socketAtRead.push(existsSync(socketPath));
+        return super.read();
+      }
+    }
+
+    await startOnClock({
+      dataDirectory: directory,
+      hostLoadProbe: new WatchingProbe(COUNTERS),
+      socketPath,
+    });
+
+    expect(socketAtRead).toEqual([true]);
+  });
+
+  it("leaves no host load timer pending when start fails after the sampler started", async () => {
+    class SecretRefusingFilesystem extends MemoryFilesystem {
+      override async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (arguments_[0].endsWith("admin.token")) throw new Error("disk is read-only");
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const failedStart = async (hostLoadProbe: FakeHostLoadProbe | null) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-load-fail-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      await expect(
+        startDaemon({
+          clock,
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          filesystem: new SecretRefusingFilesystem(),
+          hostLoadProbe,
+          socketPath: join(directory, "daemon.sock"),
+          statePath: join(directory, "state.json"),
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      ).rejects.toThrow("disk is read-only");
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      return clock.pendingTimerCount;
+    };
+    const probe = new FakeHostLoadProbe(COUNTERS);
+
+    const withProbe = await failedStart(probe);
+    const without = await failedStart(null);
+
+    expect(probe.reads).toBe(1);
+    expect(withProbe).toBe(without);
+  });
+
+  it("leaves no host load timer pending after a stop", async () => {
+    const probe = new FakeHostLoadProbe(COUNTERS);
+    const withProbe = await startOnClock({ hostLoadProbe: probe });
+    const without = await startOnClock({ hostLoadProbe: null });
+    expect(withProbe.clock.pendingTimerCount).toBeGreaterThan(without.clock.pendingTimerCount);
+
+    await withProbe.daemon.stop("test");
+    await without.daemon.stop("test");
+
+    expect(withProbe.clock.pendingTimerCount).toBe(without.clock.pendingTimerCount);
   });
 });

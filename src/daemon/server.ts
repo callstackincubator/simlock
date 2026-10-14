@@ -44,6 +44,7 @@ import {
   type OPERATIONS,
   type ProtocolRange,
   type Role,
+  type StatusLoad,
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { ConnectionHost } from "./connection-host.js";
@@ -148,6 +149,7 @@ export interface DaemonServerEngineOptions {
   readonly eventHistory: Pick<EventHistory, "replay">;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
+  readonly load?: () => StatusLoad | undefined;
   readonly instanceId: string;
   readonly queue: QueueControl;
   readonly presence?: DispatcherOptions["presence"];
@@ -176,6 +178,7 @@ export interface DaemonServerCommonOptions {
   readonly driverRejections?: readonly DriverRejection[];
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
+  readonly hostLoad?: { start(): void; dispose(): void };
   readonly logger?: Logger;
   /** Overrides the daemon's advertised protocol range (ADR 0003 §6); defaults to
    * `PROTOCOL_VERSION_RANGE`. A bare number is normalized to `{n, n}`, same as a client's. */
