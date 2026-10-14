@@ -5,13 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { FakeDriver } from "../core/testing.js";
-import {
-  createConnectionPair,
-  MemoryFilesystem,
-  SystemClock,
-  type IpcConnection,
-  type Logger,
-} from "../ports/index.js";
+import { MemoryFilesystem, SystemClock, type Logger } from "../ports/index.js";
+import type { LinkChannel, LinkConnection } from "../link/index.js";
+import { linkPair, type LinkPair } from "../link/test-support.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { RelayTargets } from "./relay.js";
@@ -181,14 +177,18 @@ export async function startWorker(
   return { directory, logger, worker };
 }
 
-export async function openUplink(
-  worker: DaemonServer,
-): Promise<{ readonly wire: SimlockWire; readonly gatewayEnd: IpcConnection }> {
-  const [workerEnd, gatewayEnd] = createConnectionPair();
-  worker.acceptUplink(workerEnd);
-  const wire = new SimlockWire(gatewayEnd);
+export interface Uplink {
+  readonly wire: SimlockWire;
+  readonly link: LinkConnection;
+  readonly pair: LinkPair;
+}
+
+export async function openUplink(worker: DaemonServer): Promise<Uplink> {
+  const pair = linkPair();
+  worker.acceptUplink(pair.worker);
+  const wire = new SimlockWire(pair.gateway);
   await wire.hello({ principal: "gw:test" });
-  return { gatewayEnd, wire };
+  return { link: pair.gateway, pair, wire };
 }
 
 let relaySequence = 0;
@@ -212,32 +212,63 @@ export function relayInput(overrides: Record<string, unknown> = {}): Record<stri
 
 export interface OpenedRelay {
   readonly relayId: string;
+  readonly channel: LinkChannel;
   readonly result: Promise<unknown>;
   readonly heads: RelayHead[];
-  readonly chunks: string[];
-  readonly bytes: () => Uint8Array[];
+  readonly body: (withinMs?: number) => Promise<Settled<Uint8Array>>;
+  readonly readError: () => Promise<{ readonly reason?: string; readonly ended: boolean }>;
 }
 
-export function openRelay(wire: SimlockWire, input: Record<string, unknown>): OpenedRelay {
+export interface OpenRelayOptions {
+  readonly upload?: Uint8Array;
+  readonly keepOpen?: boolean;
+  readonly channelName?: string | null;
+}
+
+export async function openRelay(
+  uplink: Pick<Uplink, "link" | "wire">,
+  input: Record<string, unknown>,
+  options: OpenRelayOptions = {},
+): Promise<OpenedRelay> {
+  const channel = await uplink.link.openChannel({ signal: new AbortController().signal });
   const heads: RelayHead[] = [];
-  const chunks: string[] = [];
-  const hooks: CallHooks = {
-    onRelayChunk: (chunk) => chunks.push(chunk),
-    onRelayHead: (head) => heads.push(head),
-  };
-  const result = wire.call("relay.request", input, hooks);
+  const hooks: CallHooks = { onRelayHead: (head) => heads.push(head) };
+  const named = options.channelName === null ? {} : { channel: options.channelName ?? channel.id };
+  const result = uplink.wire.call("relay.request", { ...input, ...named }, hooks);
   result.catch(() => undefined);
-  return {
-    bytes: () => chunks.map((chunk) => new Uint8Array(Buffer.from(chunk, "base64"))),
-    chunks,
-    heads,
-    relayId: String(input.relayId),
-    result,
+  if (options.keepOpen !== true) {
+    const writer = channel.writable.getWriter();
+    if (options.upload !== undefined) {
+      void writer
+        .write(options.upload)
+        .then(() => writer.close())
+        .catch(() => undefined);
+    } else {
+      void writer.close().catch(() => undefined);
+    }
+  }
+  const body = async (withinMs = 3_000): Promise<Settled<Uint8Array>> => {
+    const read = (async () => {
+      const parts = await readAll(channel.readable);
+      return new Uint8Array(Buffer.concat(parts));
+    })();
+    return settle(read, withinMs);
   };
-}
-
-export function base64Of(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+  const readError = async (): Promise<{ reason?: string; ended: boolean }> => {
+    const read = (async (): Promise<{ reason?: string; ended: boolean }> => {
+      try {
+        await readAll(channel.readable);
+        return { ended: true };
+      } catch (error: unknown) {
+        return { ended: false, reason: (error as { reason?: string }).reason ?? String(error) };
+      }
+    })();
+    return Promise.race([
+      read,
+      sleep(3_000).then(() => ({ ended: false, reason: "still open after 3 s" })),
+    ]);
+  };
+  return { body, channel, heads, readError, relayId: String(input.relayId), result };
 }
 
 export async function cleanUp(daemons: DaemonServer[], directories: string[]): Promise<void> {

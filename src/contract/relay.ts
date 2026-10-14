@@ -15,6 +15,8 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 
 export const relayIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/);
 
+export const relayChannelSchema = z.string();
+
 export const relayHeadersSchema = z
   .array(
     z.tuple([

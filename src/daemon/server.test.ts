@@ -42,6 +42,12 @@ import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
+import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
+import { linkPair } from "../link/test-support.js";
+import { connectSimlockClient } from "../simlock-client/client.js";
+import { SimlockWire } from "../simlock-client/wire.js";
+import type { RelayTargets } from "./relay.js";
+import * as relaySupport from "./test-relay-support.js";
 import { AdminSecretManager } from "./admin-secret.js";
 import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
@@ -197,8 +203,9 @@ describe("DaemonServer", () => {
       32,
       "cannot read status.get's capabilities, send lease.request's requires, or call relay.request",
     ],
+    [33, "cannot send relay.request's channel, or read a relayed body from its byte channel"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 33, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 34, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -208,7 +215,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 33, max: 33 } },
+          details: { client: { min: version, max: version }, daemon: { min: 34, max: 34 } },
         },
         ok: false,
       });
@@ -1468,6 +1475,146 @@ describe("DaemonServer stored lease requests", () => {
       ok: false,
     });
     expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+});
+
+describe("DaemonServer relays during startup", () => {
+  async function startParked(relayTargets: RelayTargets) {
+    const converge = deferred<void>();
+    const harness = await createHarness({
+      converge: () => converge.promise,
+      relayTargets,
+      start: false,
+    });
+    const startPromise = harness.daemon.start();
+    startPromise.catch(() => undefined);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    return { converge, harness, pair, startPromise };
+  }
+
+  async function wireOf(pair: ReturnType<typeof linkPair>) {
+    const wire = new SimlockWire(pair.gateway);
+    await wire.hello({ principal: "gw:test" });
+    await wire.call("status.get", {});
+    return { link: pair.gateway, wire };
+  }
+
+  async function gatewayRelayOf(pair: ReturnType<typeof linkPair>) {
+    const client = (await connectSimlockClient(
+      { connection: pair.gateway, principal: "gw:test" },
+      true,
+    )) as GatewayWorkerClient;
+    const directory: WorkerDirectory = {
+      target: (workerId) =>
+        workerId === "wrk_a"
+          ? { client: () => client, reachable: true, refresh: async () => undefined, workerId }
+          : undefined,
+    };
+    return new GatewayRelay({ directory });
+  }
+
+  it("a relay sent while the worker is still starting holds its channel, and its 2 MiB upload arrives in full once startup converges", async () => {
+    let received = "";
+    let length = 0;
+    let calls = 0;
+    const { converge, pair, startPromise } = await startParked({
+      echo: async (request) => {
+        calls += 1;
+        const parts = await relaySupport.readAll(request.body);
+        received = relaySupport.digestOf(parts);
+        length = parts.reduce((total, part) => total + part.length, 0);
+        return new Response("ok");
+      },
+    });
+    const uplink = await wireOf(pair);
+
+    const relay = await relaySupport.openRelay(
+      uplink,
+      relaySupport.relayInput({ hasBody: true, method: "PUT" }),
+      { upload: relaySupport.patternBytes(2 * relaySupport.MIB, 5) },
+    );
+    await relaySupport.sleep(200);
+    const callsWhileStarting = calls;
+    converge.resolve();
+    await startPromise;
+    const outcome = await relaySupport.settle(relay.result);
+
+    expect(callsWhileStarting).toBe(0);
+    expect(outcome).toEqual({ state: "fulfilled", value: {} });
+    expect(length).toBe(2 * relaySupport.MIB);
+    expect(received).toBe(
+      relaySupport.digestOf([relaySupport.patternBytes(2 * relaySupport.MIB, 5)]),
+    );
+  });
+
+  it("a relay whose 8 MiB upload stays parked by worker startup for 60 s fails INTERNAL on the gateway with the 60 s message", async () => {
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => Promise.resolve(new Response("ok")),
+    });
+    const relay = await gatewayRelayOf(pair);
+    const request = new Request("http://gateway.test:4321/agent-device/rpc", {
+      body: relaySupport.patternStream(8 * relaySupport.MIB, 2),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+
+    const pending = relaySupport.settle(
+      relay.relay("wrk_a", { request, target: "echo", tenant: "gw.g1.alice" }),
+      10_000,
+    );
+    await relaySupport.sleep(300);
+    pair.clock.advance(60_000);
+    const outcome = await pending;
+    converge.resolve();
+    await startPromise;
+
+    expect(outcome).toEqual({
+      code: "INTERNAL",
+      message: "worker wrk_a did not read the relayed request body for 60 s",
+      state: "rejected",
+    });
+  });
+
+  it("a parked relay whose channel failed while it waited answers { cancelled: true } without running its target", async () => {
+    let calls = 0;
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => {
+        calls += 1;
+        return Promise.resolve(new Response("ok"));
+      },
+    });
+    const uplink = await wireOf(pair);
+    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput(), {
+      keepOpen: true,
+    });
+    await relaySupport.sleep(100);
+
+    relay.channel.abort("caller left while the worker started");
+    await relaySupport.sleep(100);
+    converge.resolve();
+    await startPromise;
+    const outcome = await relaySupport.settle(relay.result);
+
+    expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
+    expect(calls).toBe(0);
+  });
+
+  it("a parked relay whose startup fails answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted", async () => {
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => Promise.resolve(new Response("ok")),
+    });
+    const uplink = await wireOf(pair);
+    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
+    await relaySupport.sleep(100);
+
+    converge.reject(new Error("boom"));
+    await startPromise.catch(() => undefined);
+    const outcome = await relaySupport.settle(relay.result);
+    const read = await relay.readError();
+
+    expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
+    expect(read).toEqual({ ended: false, reason: "aborted" });
   });
 });
 
@@ -3008,6 +3155,7 @@ async function createHarness(
     readonly host?: ConnectionHost;
     readonly protocolVersion?: ProtocolRange;
     readonly includeEnrollment?: boolean;
+    readonly relayTargets?: RelayTargets;
   } = {},
 ) {
   const directory =
@@ -3079,6 +3227,7 @@ async function createHarness(
     components: wiring.components,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
+    ...(options.relayTargets === undefined ? {} : { relayTargets: options.relayTargets }),
     ...(options.driverRejections === undefined
       ? {}
       : { driverRejections: options.driverRejections }),

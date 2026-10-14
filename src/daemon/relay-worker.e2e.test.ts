@@ -2,14 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { DaemonServer } from "./server.js";
 import type { RelayTarget } from "./relay.js";
-import type { SimlockWire } from "../simlock-client/wire.js";
 import {
   adminSession,
   aborted,
-  base64Of,
   cleanUp,
   gate,
-  KIB,
   MIB,
   openRelay,
   openUplink,
@@ -17,10 +14,12 @@ import {
   patternDigest,
   digestOf,
   patternStream,
+  readAll,
   relayInput,
   settle,
   sleep,
   startWorker,
+  type Uplink,
   type WorkerFixture,
 } from "./test-relay-support.js";
 
@@ -31,12 +30,12 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
   const directories: string[] = [];
   let behavior: RelayTarget = () => Promise.resolve(new Response("ok"));
   let fixture: WorkerFixture;
-  let wire: SimlockWire;
+  let uplink: Uplink;
 
   async function start(): Promise<void> {
     const target: RelayTarget = (request, tenant, leaseId) => behavior(request, tenant, leaseId);
     fixture = await startWorker(directories, daemons, { "agent-device": target, echo: target });
-    ({ wire } = await openUplink(fixture.worker));
+    uplink = await openUplink(fixture.worker);
   }
 
   afterEach(async () => {
@@ -53,22 +52,65 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     return dispatch(operation, input, adminSession);
   }
 
-  it("sends a 20 MiB response body in relay-chunk pushes of at most 256 KiB, byte for byte", async () => {
+  it("sends a 20 MiB response body on the channel byte for byte, then ends it, and answers relay.request {} only after the end", async () => {
     behavior = () => Promise.resolve(new Response(patternStream(20 * MIB, 7)));
     await start();
 
-    const relay = openRelay(wire, relayInput());
+    const relay = await openRelay(uplink, relayInput());
+    const body = await relay.body(30_000);
     const outcome = await settle(relay.result, 30_000);
 
     expect(outcome).toEqual({ state: "fulfilled", value: {} });
     expect(relay.heads).toHaveLength(1);
-    const pieces = relay.bytes();
-    expect(Math.max(...pieces.map((piece) => piece.length))).toBeLessThanOrEqual(256 * KIB);
-    expect(pieces.length).toBeGreaterThanOrEqual(80);
-    expect(digestOf(pieces)).toBe(patternDigest(20 * MIB, 7));
+    expect(body.state === "fulfilled" ? digestOf([body.value]) : body.state).toBe(
+      patternDigest(20 * MIB, 7),
+    );
   }, 60_000);
 
-  it("sends no relay-chunk for a 204, 205 or 304 answer or a HEAD answer", async () => {
+  it("hands the target a 2 MiB request body read from the channel, byte for byte", async () => {
+    let received = "";
+    let length = 0;
+    behavior = async (request) => {
+      const parts = await readAll(request.body);
+      received = digestOf(parts);
+      length = parts.reduce((total, part) => total + part.length, 0);
+      return new Response("got it");
+    };
+    await start();
+
+    const relay = await openRelay(uplink, relayInput({ hasBody: true, method: "PUT" }), {
+      upload: patternBytes(2 * MIB, 3),
+    });
+    const outcome = await settle(relay.result);
+
+    expect(outcome).toEqual({ state: "fulfilled", value: {} });
+    expect(length).toBe(2 * MIB);
+    expect(received).toBe(digestOf([patternBytes(2 * MIB, 3)]));
+  });
+
+  it("answers an empty upload (0 bytes) and a GET with the target's response on the channel", async () => {
+    let seen = -1;
+    behavior = async (request) => {
+      seen = (await request.arrayBuffer()).byteLength;
+      return new Response("fine");
+    };
+    await start();
+
+    const empty = await openRelay(uplink, relayInput({ hasBody: true, method: "PUT" }), {
+      upload: new Uint8Array(0),
+    });
+    const emptyBody = await empty.body();
+    const get = await openRelay(uplink, relayInput());
+    const getBody = await get.body();
+
+    expect(seen).toBe(0);
+    expect(emptyBody.state === "fulfilled" ? Buffer.from(emptyBody.value).toString() : "").toBe(
+      "fine",
+    );
+    expect(getBody.state === "fulfilled" ? Buffer.from(getBody.value).toString() : "").toBe("fine");
+  });
+
+  it("sends no response bytes for a 204, 205 or 304 answer or a HEAD answer, and ends the channel", async () => {
     await start();
     const cases: {
       readonly status: number;
@@ -80,25 +122,30 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       { body: null, method: "GET", status: 304 },
       { body: "not sent for a HEAD", method: "HEAD", status: 200 },
     ];
-    const seen: { status: number | undefined; chunks: number; result: unknown }[] = [];
+    const seen: { status: number | undefined; bytes: number | string; result: unknown }[] = [];
 
     for (const entry of cases) {
       behavior = () => Promise.resolve(new Response(entry.body, { status: entry.status }));
-      const relay = openRelay(wire, relayInput({ method: entry.method }));
+      const relay = await openRelay(uplink, relayInput({ method: entry.method }));
+      const body = await relay.body();
       const outcome = await settle(relay.result);
-      seen.push({ chunks: relay.chunks.length, result: outcome, status: relay.heads[0]?.status });
+      seen.push({
+        bytes: body.state === "fulfilled" ? body.value.length : body.state,
+        result: outcome,
+        status: relay.heads[0]?.status,
+      });
     }
 
     expect(seen).toEqual(
       cases.map((entry) => ({
-        chunks: 0,
+        bytes: 0,
         result: { state: "fulfilled", value: {} },
         status: entry.status,
       })),
     );
   });
 
-  it("aborts the target's request on relay.cancel, answers relay.request { cancelled: true } and sends no push after the cancel", async () => {
+  it("aborts the target's request on relay.cancel, answers relay.request { cancelled: true }, and aborts the channel", async () => {
     let signal: AbortSignal | undefined;
     behavior = (request) => {
       signal = request.signal;
@@ -111,21 +158,20 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       return Promise.resolve(new Response(body));
     };
     await start();
-    const relay = openRelay(wire, relayInput());
-    await poll(() => relay.chunks.length).toBeGreaterThan(1);
+    const relay = await openRelay(uplink, relayInput());
+    await poll(() => relay.heads.length).toBe(1);
 
-    const cancelled = await settle(wire.call("relay.cancel", { relayId: relay.relayId }));
-    const chunksAtCancel = relay.chunks.length;
+    const cancelled = await settle(uplink.wire.call("relay.cancel", { relayId: relay.relayId }));
     const result = await settle(relay.result);
-    await sleep(150);
+    const read = await relay.readError();
 
     expect(cancelled).toEqual({ state: "fulfilled", value: {} });
     expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(signal?.aborted).toBe(true);
-    expect(relay.chunks.length).toBe(chunksAtCancel);
+    expect(read).toEqual({ ended: false, reason: "aborted" });
   });
 
-  it("answers relay.request { cancelled: true } to a cancel that comes before the target answers", async () => {
+  it("answers relay.request { cancelled: true } to a cancel that comes before the target answers, and aborts the channel", async () => {
     let signal: AbortSignal | undefined;
     behavior = async (request) => {
       signal = request.signal;
@@ -133,15 +179,17 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       return new Response("late");
     };
     await start();
-    const relay = openRelay(wire, relayInput());
+    const relay = await openRelay(uplink, relayInput());
     await poll(() => signal !== undefined).toBe(true);
 
-    await wire.call("relay.cancel", { relayId: relay.relayId });
+    await uplink.wire.call("relay.cancel", { relayId: relay.relayId });
     const result = await settle(relay.result);
+    const read = await relay.readError();
 
     expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(signal?.aborted).toBe(true);
     expect(relay.heads).toEqual([]);
+    expect(read).toEqual({ ended: false, reason: "aborted" });
   });
 
   it("aborts the target's request when the connection the relay came on closes", async () => {
@@ -152,21 +200,38 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       return new Response("late");
     };
     await start();
-    const { wire: second, gatewayEnd } = await openUplink(fixture.worker);
-    const relay = openRelay(second, relayInput());
+    const second = await openUplink(fixture.worker);
+    const relay = await openRelay(second, relayInput());
     await poll(() => signal !== undefined).toBe(true);
 
-    await gatewayEnd.close();
+    await second.pair.gatewayEnd.close();
 
     await poll(() => signal?.aborted).toBe(true);
     await settle(relay.result, 200);
   });
 
-  it("answers relay.request, relay.body and relay.cancel FORBIDDEN from an admin session that is not the gateway's uplink", async () => {
+  it("aborts the target's request and answers { cancelled: true } when the gateway aborts the channel", async () => {
+    let signal: AbortSignal | undefined;
+    behavior = async (request) => {
+      signal = request.signal;
+      await aborted(request.signal);
+      return new Response("late");
+    };
+    await start();
+    const relay = await openRelay(uplink, relayInput(), { keepOpen: true });
+    await poll(() => signal !== undefined).toBe(true);
+
+    relay.channel.abort("caller left");
+    const result = await settle(relay.result);
+
+    expect(signal?.aborted).toBe(true);
+    expect(result).toEqual({ state: "fulfilled", value: { cancelled: true } });
+  });
+
+  it("answers relay.request and relay.cancel FORBIDDEN from an admin session that is not the gateway's uplink", async () => {
     await start();
     const attempts = [
-      ["relay.request", relayInput()],
-      ["relay.body", { end: true, relayId: "relay-x" }],
+      ["relay.request", relayInput({ channel: "chan-1" })],
       ["relay.cancel", { relayId: "relay-x" }],
     ] as const;
     const codes: unknown[] = [];
@@ -176,10 +241,10 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       codes.push(outcome.state === "rejected" ? outcome.code : outcome.state);
     }
 
-    expect(codes).toEqual(["FORBIDDEN", "FORBIDDEN", "FORBIDDEN"]);
+    expect(codes).toEqual(["FORBIDDEN", "FORBIDDEN"]);
   });
 
-  it("fails a relay.request that reuses an active relayId with BAD_REQUEST, answers {} to a relay.body for an unknown relay id, and {} to a relay.cancel for an unknown relay id", async () => {
+  it("fails a relay.request that reuses an active relayId with BAD_REQUEST, leaves the first relay running, and answers {} to a relay.cancel for an unknown relay id", async () => {
     const release = gate();
     behavior = async () => {
       await release.promise;
@@ -187,91 +252,58 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     };
     await start();
     const input = relayInput();
-    const first = openRelay(wire, input);
+    const first = await openRelay(uplink, input);
     await poll(async () => (await settle(first.result, 20)).state).toBe("pending");
 
-    const reused = await settle(wire.call("relay.request", { ...input }));
-    const unknownBody = await settle(
-      wire.call("relay.body", {
-        relayId: "relay-unknown",
-        chunk: base64Of(patternBytes(8)),
-        seq: 0,
-      }),
+    const second = await openRelay(uplink, { ...input });
+    const reused = await settle(second.result);
+    const unknownCancel = await settle(
+      uplink.wire.call("relay.cancel", { relayId: "relay-unknown" }),
     );
-    const unknownCancel = await settle(wire.call("relay.cancel", { relayId: "relay-unknown" }));
     release.open();
 
     expect(reused).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
-    expect(unknownBody).toEqual({ state: "fulfilled", value: {} });
     expect(unknownCancel).toEqual({ state: "fulfilled", value: {} });
     expect(await settle(first.result)).toEqual({ state: "fulfilled", value: {} });
   });
 
   it.each([
-    {
-      name: "a seq out of order",
-      steps: [{ seq: 1 }],
-    },
-    {
-      name: "a repeated seq",
-      steps: [{ seq: 0 }, { seq: 0 }],
-    },
-    {
-      name: "a chunk after end",
-      steps: [{ seq: 0 }, { end: true }, { seq: 1 }],
-    },
+    { channelName: "never-opened-by-gateway", name: "a channel the gateway never opened" },
+    { channelName: "", name: "an empty channel" },
+    { channelName: "c".repeat(33), name: "a 33-character channel" },
+    { channelName: "bad channel!", name: "a channel with a character outside [A-Za-z0-9-]" },
+    { channelName: null, name: "no channel" },
   ])(
-    "fails a relay.body with $name with BAD_REQUEST and aborts the target's request",
-    async ({ steps }) => {
-      let signal: AbortSignal | undefined;
-      behavior = async (request) => {
-        signal = request.signal;
-        await aborted(request.signal);
-        return new Response("late");
-      };
+    "fails a relay.request naming $name with BAD_REQUEST, and one naming a channel the gateway opened succeeds",
+    async ({ channelName }) => {
       await start();
-      const relayId = String(relayInput().relayId);
-      const relay = openRelay(wire, relayInput({ hasBody: true, method: "PUT", relayId }));
-      await poll(() => signal !== undefined).toBe(true);
 
-      const outcomes: unknown[] = [];
-      for (const step of steps) {
-        const payload =
-          "end" in step
-            ? { end: true, relayId }
-            : { chunk: base64Of(patternBytes(16)), relayId, seq: step.seq };
-        const outcome = await settle(wire.call("relay.body", payload));
-        outcomes.push(outcome.state === "rejected" ? outcome.code : outcome.state);
-      }
+      const accepted = await openRelay(uplink, relayInput());
+      const acceptedOutcome = await settle(accepted.result);
+      const refused = await openRelay(uplink, relayInput(), { channelName });
+      const refusedOutcome = await settle(refused.result);
 
-      expect(outcomes.slice(0, -1).every((outcome) => outcome === "fulfilled")).toBe(true);
-      expect(outcomes.at(-1)).toBe("BAD_REQUEST");
-      await poll(() => signal?.aborted).toBe(true);
-      await settle(relay.result, 200);
+      expect(acceptedOutcome).toEqual({ state: "fulfilled", value: {} });
+      expect(refusedOutcome).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
     },
   );
 
-  it("fails any relay.body for a relay opened with hasBody false with BAD_REQUEST and aborts the target's request", async () => {
-    let signal: AbortSignal | undefined;
-    behavior = async (request) => {
-      signal = request.signal;
-      await aborted(request.signal);
-      return new Response("late");
+  it("fails a relay.request naming a channel an earlier relay.request already accepted with BAD_REQUEST", async () => {
+    const release = gate();
+    behavior = async () => {
+      await release.promise;
+      return new Response("ok");
     };
     await start();
-    const relay = openRelay(wire, relayInput({ hasBody: false }));
-    await poll(() => signal !== undefined).toBe(true);
+    const first = await openRelay(uplink, relayInput(), { keepOpen: true });
+    await poll(async () => (await settle(first.result, 20)).state).toBe("pending");
 
-    const outcome = await settle(
-      wire.call("relay.body", {
-        chunk: base64Of(patternBytes(16)),
-        relayId: relay.relayId,
-        seq: 0,
-      }),
-    );
+    const again = await openRelay(uplink, relayInput(), { channelName: first.channel.id });
+    const outcome = await settle(again.result);
+    release.open();
 
     expect(outcome).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
-    await poll(() => signal?.aborted).toBe(true);
+    first.channel.abort("done");
   });
 
   const longName = (length: number): string => "x".repeat(length);
@@ -357,8 +389,8 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     async ({ atLimit, pastLimit }) => {
       await start();
 
-      const within = await settle(openRelay(wire, relayInput(atLimit)).result);
-      const past = await settle(openRelay(wire, relayInput(pastLimit)).result);
+      const within = await settle((await openRelay(uplink, relayInput(atLimit))).result);
+      const past = await settle((await openRelay(uplink, relayInput(pastLimit))).result);
 
       expect(within).toEqual({ state: "fulfilled", value: {} });
       expect(past).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
@@ -367,44 +399,69 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     },
   );
 
-  it("fails a relay.body chunk that is not standard base64, and one that decodes to 262 145 bytes, with BAD_REQUEST", async () => {
-    const release = gate();
-    behavior = async () => {
-      await release.promise;
-      return new Response("ok");
-    };
-    await start();
-    const relay = openRelay(wire, relayInput({ hasBody: true, method: "PUT" }));
-    const send = (seq: number, chunk: string) =>
-      settle(wire.call("relay.body", { chunk, relayId: relay.relayId, seq }));
+  const failures: readonly {
+    readonly name: string;
+    readonly target?: RelayTarget;
+    readonly input?: Record<string, unknown>;
+    readonly code: string;
+  }[] = [
+    { code: "BAD_REQUEST", input: { method: "TRACE" }, name: "fails on its schema" },
+    { code: "RELAY_TARGET_MISSING", input: { target: "nobody" }, name: "names a missing target" },
+    {
+      code: "INTERNAL",
+      name: "meets a target error",
+      target: () => Promise.reject(new Error("target exploded")),
+    },
+    {
+      code: "INTERNAL",
+      name: "meets target headers out of bounds",
+      target: () =>
+        Promise.resolve(
+          new Response("ok", {
+            headers: Array.from(
+              { length: 101 },
+              (_unused, index) => [`x-h-${String(index)}`, "v"] as [string, string],
+            ),
+          }),
+        ),
+    },
+    {
+      code: "INTERNAL",
+      name: "has a response body that fails after the head",
+      target: () => {
+        let step = 0;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                step += 1;
+                if (step === 1) controller.enqueue(new TextEncoder().encode("abc"));
+                else controller.error(new Error("body broke"));
+              },
+            }),
+          ),
+        );
+      },
+    },
+  ];
 
-    const atLimit = await send(0, base64Of(patternBytes(262_144)));
-    const urlSafe = await send(1, "_-_-");
-    const tooLong = await send(1, base64Of(patternBytes(262_145)));
-    release.open();
+  it.each(failures)(
+    "a relay.request that $name leaves the gateway's end of its channel errored aborted, while an accepted one ends it cleanly",
+    async ({ code, input, target }) => {
+      await start();
+      const good = await openRelay(uplink, relayInput());
+      const goodEnd = await good.readError();
+      behavior = target ?? behavior;
 
-    expect(atLimit).toEqual({ state: "fulfilled", value: {} });
-    expect(urlSafe).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
-    expect(tooLong).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
-  });
+      const failing = await openRelay(uplink, relayInput(input ?? {}));
+      const outcome = await settle(failing.result);
+      const end = await failing.readError();
 
-  it("fails the 17th relay on one connection with BAD_REQUEST", async () => {
-    const release = gate();
-    behavior = async () => {
-      await release.promise;
-      return new Response("ok");
-    };
-    await start();
-    const sixteen = Array.from({ length: 16 }, () => openRelay(wire, relayInput()));
-    await sleep(100);
-
-    const seventeenth = await settle(openRelay(wire, relayInput()).result);
-    release.open();
-
-    expect(seventeenth).toMatchObject({ code: "BAD_REQUEST", state: "rejected" });
-    const first = await Promise.all(sixteen.map((relay) => settle(relay.result)));
-    expect(first.every((outcome) => outcome.state === "fulfilled")).toBe(true);
-  });
+      expect(goodEnd).toEqual({ ended: true });
+      expect(outcome).toMatchObject({ code, state: "rejected" });
+      expect(end).toEqual({ ended: false, reason: "aborted" });
+    },
+  );
 
   it("fails the call with INTERNAL and logs the bound when a target answers 101 headers", async () => {
     behavior = () =>
@@ -418,7 +475,7 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
       );
     await start();
 
-    const outcome = await settle(openRelay(wire, relayInput()).result);
+    const outcome = await settle((await openRelay(uplink, relayInput())).result);
 
     expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
     expect(fixture.logger.problems()).toContain("at most 100 headers, got");
@@ -428,71 +485,61 @@ describe("a worker's relay targets over its uplink", { timeout: 15_000 }, () => 
     behavior = () => Promise.reject(new Error("target exploded: reason-4471"));
     await start();
 
-    const outcome = await settle(openRelay(wire, relayInput()).result);
+    const outcome = await settle((await openRelay(uplink, relayInput())).result);
 
     expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
     expect(fixture.logger.problems()).toContain("target exploded: reason-4471");
   });
 
-  it("fails the call with INTERNAL after the chunks already sent when a response body errors after the head", async () => {
-    behavior = () => {
-      let step = 0;
-      return Promise.resolve(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              step += 1;
-              if (step === 1) controller.enqueue(new TextEncoder().encode("abc"));
-              else controller.error(new Error("body broke"));
-            },
-          }),
-        ),
-      );
-    };
+  it("stops the request direction when the target answers without reading its 20 MiB upload, so the gateway's writer errors stopped", async () => {
+    behavior = () => Promise.resolve(new Response("nope", { status: 401 }));
     await start();
+    const relay = await openRelay(uplink, relayInput({ hasBody: true, method: "PUT" }), {
+      keepOpen: true,
+    });
+    const writer = relay.channel.writable.getWriter();
+    const pushed = (async () => {
+      try {
+        for (let offset = 0; offset < 20 * MIB; offset += MIB) {
+          await writer.write(patternBytes(MIB, 4, offset));
+        }
+        await writer.close();
+        return "wrote everything";
+      } catch (error: unknown) {
+        return (error as { reason?: string }).reason ?? String(error);
+      }
+    })();
 
-    const relay = openRelay(wire, relayInput());
-    const outcome = await settle(relay.result);
+    const outcome = await settle(pushed, 10_000);
+    const result = await settle(relay.result);
 
-    expect(outcome).toMatchObject({ code: "INTERNAL", state: "rejected" });
-    expect(relay.heads).toHaveLength(1);
-    expect(Buffer.concat(relay.bytes()).toString()).toBe("abc");
+    expect(result).toEqual({ state: "fulfilled", value: {} });
+    expect(outcome).toEqual({ state: "fulfilled", value: "stopped" });
   });
 
-  it("never drops a relay.body frame sent right behind its relay.request frame (seq 0 plus end, 50 times)", async () => {
-    behavior = async (request) => new Response(String((await request.arrayBuffer()).byteLength));
-    await start();
-    const outcomes: unknown[] = [];
-
-    for (let round = 0; round < 50; round += 1) {
-      const input = relayInput({ hasBody: true, method: "PUT" });
-      const relayId = String(input.relayId);
-      const relay = openRelay(wire, input);
-      const first = wire.call("relay.body", {
-        chunk: base64Of(patternBytes(100)),
-        relayId,
-        seq: 0,
-      });
-      const end = wire.call("relay.body", { end: true, relayId });
-      const [result, firstAnswer, endAnswer] = await Promise.all([
-        settle(relay.result, 2_000),
-        settle(first),
-        settle(end),
-      ]);
-      outcomes.push({
-        body: Buffer.concat(relay.bytes()).toString(),
-        end: endAnswer,
-        first: firstAnswer,
-        result,
-      });
-    }
-
-    const expected = {
-      body: "100",
-      end: { state: "fulfilled", value: {} },
-      first: { state: "fulfilled", value: {} },
-      result: { state: "fulfilled", value: {} },
+  it("stops a hasBody false relay's request direction at once, so bytes the gateway still writes error its writer stopped", async () => {
+    const release = gate();
+    behavior = async () => {
+      await release.promise;
+      return new Response("ok");
     };
-    expect(outcomes).toEqual(Array.from({ length: 50 }, () => expected));
-  }, 60_000);
+    await start();
+    const relay = await openRelay(uplink, relayInput({ hasBody: false }), { keepOpen: true });
+    const writer = relay.channel.writable.getWriter();
+    const pushed = (async () => {
+      try {
+        for (let offset = 0; offset < 8 * MIB; offset += MIB) {
+          await writer.write(patternBytes(MIB, 4, offset));
+        }
+        return "wrote everything";
+      } catch (error: unknown) {
+        return (error as { reason?: string }).reason ?? String(error);
+      }
+    })();
+
+    const outcome = await settle(pushed, 10_000);
+    release.open();
+
+    expect(outcome).toEqual({ state: "fulfilled", value: "stopped" });
+  });
 });

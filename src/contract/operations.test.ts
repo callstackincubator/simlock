@@ -8,6 +8,7 @@ import {
   requestedDevice,
 } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
+import { relayChannelSchema } from "./relay.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
@@ -80,7 +81,6 @@ const ROLE_MATRIX: ReadonlyArray<{
     },
     role: "admin",
   },
-  { name: "relay.body", input: { end: true, relayId: "r-1" }, role: "admin" },
   { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
 ];
 
@@ -162,7 +162,6 @@ const EFFECT_MATRIX: ReadonlyArray<{
     },
     effect: "write",
   },
-  { name: "relay.body", input: { end: true, relayId: "r-1" }, effect: "write" },
   { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
 ];
 
@@ -1554,5 +1553,42 @@ describe("lease.request requires", () => {
     expect(!both.success && both.error.issues.map((issue) => issue.message)).toContain(
       "requires cannot be combined with idempotencyKey",
     );
+  });
+});
+
+describe("relay.request on a byte channel", () => {
+  const request = {
+    hasBody: false,
+    headers: [],
+    method: "GET",
+    relayId: "r-1",
+    target: "agent-device",
+    tenant: "gw.g.a",
+    url: "http://gateway.test/x",
+  };
+  const parse = (input: Record<string, unknown>) =>
+    OPERATIONS["relay.request"].input.safeParse(input).success;
+
+  it("accepts a channel of 1 to 32 characters of [A-Za-z0-9-] and refuses an empty, a 33-character and a bad-character one, and a request without one", () => {
+    expect(parse({ ...request, channel: "a" })).toBe(true);
+    expect(parse({ ...request, channel: "Ab-9".repeat(8) })).toBe(true);
+    expect(parse({ ...request, channel: "" })).toBe(false);
+    expect(parse({ ...request, channel: "a".repeat(33) })).toBe(false);
+    expect(parse({ ...request, channel: "a b" })).toBe(false);
+    expect(parse({ ...request, channel: "a_b" })).toBe(false);
+    expect(parse(request)).toBe(false);
+  });
+
+  it("relayChannelSchema holds the same bound the operation uses", () => {
+    expect(relayChannelSchema.safeParse("a".repeat(32)).success).toBe(true);
+    expect(relayChannelSchema.safeParse("a".repeat(33)).success).toBe(false);
+    expect(relayChannelSchema.safeParse("").success).toBe(false);
+    expect(relayChannelSchema.safeParse("a b").success).toBe(false);
+  });
+
+  it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
+    expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
+    expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
+    expect(Object.keys(PUSH_SCHEMAS)).toContain("relay-head");
   });
 });
