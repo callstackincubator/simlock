@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { CliBackgroundHandle } from "./helpers/cli.js";
 import type { FakeDriverPlatformScript, ScriptedPhysicalDevice } from "./fake-driver/types.js";
 import {
-  freeLoopbackPort,
+  type CliResult,
+  type TestEnv,
   waitFor,
   waitForDeviceState,
   withDaemon,
-  type CliResult,
-  type TestEnv,
+  withHttpDaemon,
 } from "./helpers/index.js";
 
 const FAST = { timeout: 20_000 };
@@ -70,12 +70,11 @@ interface Fleet {
 }
 
 async function startFleet(specs: readonly WorkerSpec[]): Promise<Fleet> {
-  const port = await freeLoopbackPort();
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     agentId: "fleet-agent",
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   const { secret } = minted.json as { secret: string };

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 /**
  * A worker answers the fleet operations as a fleet of one: `worker list` and `GET /v1/workers`
@@ -28,10 +28,9 @@ interface HttpHost {
 
 /** A single host with HTTP on, an operator token and an agent token, once it answers. */
 async function httpHost(): Promise<HttpHost> {
-  const port = await freeLoopbackPort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-  });
+  }));
   const baseUrl = `http://127.0.0.1:${port}`;
   const bearer = async (role: string) => {
     const minted = await env.cli(["token", "create", "--role", role]);

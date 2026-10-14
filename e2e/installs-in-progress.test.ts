@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 interface Install {
   readonly platform: string;
@@ -29,11 +29,10 @@ async function viewInstalls(gateway: TestEnv): Promise<readonly Install[] | unde
 
 describe("installs in progress", () => {
   it("shows an install on the worker's status and on its gateway's worker list while it runs, and on neither after it ends", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     expect(minted.code, minted.stderr).toBe(0);
     const { secret } = minted.json as { secret: string };

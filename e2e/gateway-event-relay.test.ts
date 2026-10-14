@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
 /**
@@ -15,11 +15,10 @@ import type { RecordedEvent } from "./helpers/events.js";
  */
 
 async function gatewayWithWorker() {
-  const port = await freeLoopbackPort();
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   const { secret } = minted.json as { secret: string };
   const worker = await withDaemon({

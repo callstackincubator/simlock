@@ -5,13 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import {
-  freeLoopbackPort,
-  waitFor,
-  waitForDeviceState,
-  withDaemon,
-  type TestEnv,
-} from "./helpers/index.js";
+import { type TestEnv, waitFor, waitForDeviceState, withHttpDaemon } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -106,14 +100,13 @@ async function uninstallDirect(udid: string, bundle: string): Promise<void> {
 }
 
 async function rig(): Promise<Rig> {
-  const port = await freeLoopbackPort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
       health: { probeIntervalMs: PROBE_INTERVAL_MS, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
     },
     driver: "real",
-  });
+  }));
   const base = `http://127.0.0.1:${String(port)}`;
   await waitFor(
     async () => {

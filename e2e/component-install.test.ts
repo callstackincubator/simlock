@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   type CliResult,
   events,
-  freeLoopbackPort,
   type TestEnv,
   waitFor,
   withDaemon,
+  withHttpDaemon,
 } from "./helpers/index.js";
 
 const MISSING = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "19.0"] as const;
@@ -263,10 +263,9 @@ interface HttpDaemon {
 }
 
 async function httpDaemon(): Promise<HttpDaemon> {
-  const port = await freeLoopbackPort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-  });
+  }));
   const baseUrl = `http://127.0.0.1:${port}`;
   await waitFor(
     async () => {

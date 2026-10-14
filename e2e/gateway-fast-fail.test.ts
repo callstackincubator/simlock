@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { CliResult, TestEnv } from "./helpers/index.js";
 import type { FakeDriverScript } from "./fake-driver/types.js";
 
@@ -26,12 +26,11 @@ interface WorkerView {
 }
 
 async function startGateway() {
-  const port = await freeLoopbackPort();
   // `driver: "none"`: a gateway starts no drivers (ADR 0005 §2).
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   const { secret } = minted.json as { secret: string };

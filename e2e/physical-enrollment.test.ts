@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION_RANGE } from "../src/contract/index.js";
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
 import type { FakeDriverRefusalReason, ScriptedPhysicalDevice } from "./fake-driver/types.js";
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -84,7 +84,11 @@ async function startDaemon(
     readonly http?: number;
   } = {},
 ): Promise<TestEnv> {
-  return withDaemon({
+  return withDaemon(daemonOptions(options));
+}
+
+function daemonOptions(options: Parameters<typeof startDaemon>[0] = {}) {
+  return {
     ...(options.platforms === undefined ? {} : { fakeDriverPlatforms: options.platforms }),
     ...(options.http === undefined
       ? {}
@@ -93,7 +97,7 @@ async function startDaemon(
       android: { ...ANDROID_BASE, ...options.android },
       ios: { ...IOS_BASE, ...options.ios },
     },
-  });
+  };
 }
 
 async function rows(env: TestEnv): Promise<Row[]> {
@@ -135,8 +139,7 @@ async function httpDaemon(options: {
   readonly ios?: Record<string, unknown>;
   readonly android?: Record<string, unknown>;
 }): Promise<HttpDaemon> {
-  const port = await freeLoopbackPort();
-  const env = await startDaemon({ ...options, http: port });
+  const { env, port } = await withHttpDaemon((port) => daemonOptions({ ...options, http: port }));
   const base = `http://127.0.0.1:${String(port)}`;
   await waitFor(
     async () => {
@@ -594,11 +597,10 @@ describe("device add over HTTP", () => {
 
 describe("device add through a gateway", () => {
   async function fleet(): Promise<{ gateway: TestEnv; worker: TestEnv; workerId: string }> {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     expect(minted.code, minted.stderr).toBe(0);
     const { secret } = minted.json as { secret: string };

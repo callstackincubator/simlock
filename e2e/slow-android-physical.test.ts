@@ -2,13 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import {
-  freeLoopbackPort,
-  waitFor,
-  waitForDeviceState,
-  withDaemon,
-  type TestEnv,
-} from "./helpers/index.js";
+import { type TestEnv, waitFor, waitForDeviceState, withHttpDaemon } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,15 +70,14 @@ async function serverPid(): Promise<string> {
 }
 
 async function rig(execTimeoutMs?: number): Promise<Rig> {
-  const port = await freeLoopbackPort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
       ...(execTimeoutMs === undefined ? {} : { exec: { timeoutMs: execTimeoutMs } }),
       health: { probeIntervalMs: PROBE_INTERVAL_MS, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
     },
     driver: "real",
-  });
+  }));
   const base = `http://127.0.0.1:${String(port)}`;
   await waitFor(
     async () => {

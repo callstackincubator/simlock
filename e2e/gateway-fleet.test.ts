@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, waitForDeviceState, withDaemon } from "./helpers/index.js";
+import { waitFor, waitForDeviceState, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
@@ -132,13 +132,12 @@ function expectSameView(
 
 describe("gateway fleet", () => {
   it("two workers join, status aggregates them, a kill disconnects one, drain flags the other", async () => {
-    const port = await freeLoopbackPort();
     // `driver: "none"`: a gateway starts no drivers and warns about every worker-only key in
     // its config (ADR 0005 §2), so it gets no fake-driver wiring and no capacity seeding.
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
 
     // 1. The gateway mints a join token. `--role worker` is what makes it a join token and
     //    nothing else: it opens an uplink and no `/v1` route.
@@ -280,11 +279,10 @@ describe("gateway fleet", () => {
   });
 
   it("shows each worker's own pairings, other names, and images in the worker list and their union in the catalog", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
@@ -397,11 +395,10 @@ describe("gateway fleet", () => {
   });
 
   it("shows each worker's own custom models in the worker list, and marks a model custom in the catalog when any worker does", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
@@ -452,11 +449,10 @@ describe("gateway fleet", () => {
   });
 
   it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
@@ -529,11 +525,10 @@ describe("gateway fleet", () => {
   });
 
   it("grants --device 'iphone 16 pro' and --device pixel_7 through a gateway by the worker's own names", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     // The fake driver resolves model names exactly, so a grant proves the gateway sent the
@@ -577,11 +572,10 @@ describe("gateway fleet", () => {
   });
 
   it("grants an Android --class phone request on the worker holding a warm Pixel, not on one with free capacity", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     const pixels = {
@@ -654,11 +648,10 @@ describe("gateway fleet", () => {
   });
 
   it("grants --class phone with --os '>=18' through a gateway on a worker whose runtime is in the range, and nothing else", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
     const join = (label: string, osVersion: string) =>
@@ -702,11 +695,10 @@ describe("gateway fleet", () => {
   });
 
   it("refuses an uplink whose token is not a worker join token", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     // An operator token is a real credential that opens no uplink (ADR 0005 §25). The worker
     // keeps retrying at its backoff cap rather than giving up, so what this asserts is the
     // gateway's side: it never becomes a worker.
@@ -736,11 +728,10 @@ describe("gateway fleet", () => {
   });
 
   it("through a gateway, a caller-chosen lease ID comes back with no worker prefix, renews and releases by that ID, and a second request for it is LEASE_ID_TAKEN", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const { secret } = (await gateway.cli(["token", "create", "--role", "worker"])).json as {
       secret: string;
     };

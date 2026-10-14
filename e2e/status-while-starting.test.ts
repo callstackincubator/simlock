@@ -1,14 +1,13 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withHttpDaemon } from "./helpers/index.js";
 
 describe("status while the daemon is starting", () => {
   it("a daemon held in starting answers simlock status with the starting line, and GET /v1/status with daemon and host only", async () => {
-    const port = await freeLoopbackPort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-    });
+    }));
     // Minting a token is an operation that waits for a started daemon, so it comes first.
     const minted = await env.cli(["token", "create", "--role", "agent"]);
     expect(minted.code, minted.stderr).toBe(0);

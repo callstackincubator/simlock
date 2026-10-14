@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 /**
  * ADR 0005's happy path, over real transports: a real gateway process, real worker processes
@@ -59,14 +59,13 @@ interface Fleet {
  * these tests are about.
  */
 async function startFleet(specs: readonly WorkerSpec[], agentId: string): Promise<Fleet> {
-  const port = await freeLoopbackPort();
   // `driver: "none"`: a gateway starts no drivers and warns about every worker-only key in its
   // config (ADR 0005 §2), so it gets no fake-driver wiring and no capacity seeding.
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     agentId,
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
 
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code).toBe(0);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 /**
  * The daemon serves the built web console at `/` whenever HTTP is enabled, at the address
@@ -33,10 +33,9 @@ async function fetchWhenListening(url: string): Promise<Response> {
 
 describe("the web console", () => {
   it("GET / answers the console page when HTTP is enabled", async () => {
-    const port = await freeLoopbackPort();
-    const worker = await withDaemon({
+    const { env: worker, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-    });
+    }));
 
     const url = await consoleUrl(worker);
     expect(url).toBe(`http://127.0.0.1:${port}/`);
@@ -58,11 +57,10 @@ describe("the web console", () => {
   });
 
   it("a gateway serves the console page at the address simlock status prints", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
 
     const url = await consoleUrl(gateway);
     expect(url).toBe(`http://127.0.0.1:${port}/`);

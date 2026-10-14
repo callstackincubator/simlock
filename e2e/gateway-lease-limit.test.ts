@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FakeDriverScript } from "./fake-driver/types.js";
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { CliResult, TestEnv } from "./helpers/index.js";
 
 const FAST = { timeout: 20_000 };
@@ -11,15 +11,14 @@ const IPHONE_16: FakeDriverScript = {
 const TWO_DEVICES = { limits: { maxRunning: 2, ios: { maxDevices: 2, maxRunning: 2 } } };
 
 async function startGateway(maxPerRequester: number) {
-  const port = await freeLoopbackPort();
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: {
       http: { enabled: true, host: "127.0.0.1", port },
       lease: { maxPerRequester },
       mode: "gateway",
     },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   expect(minted.code, minted.stderr).toBe(0);
   const { secret } = minted.json as { secret: string };

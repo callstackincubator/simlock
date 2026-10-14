@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ScriptedPhysicalDevice } from "./fake-driver/types.js";
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import {
   PHYSICAL_AGENT,
   PHYSICAL_MODEL,
@@ -39,11 +39,10 @@ interface Row {
 }
 
 async function fleetWithIphone(): Promise<{ gateway: TestEnv; worker: TestEnv }> {
-  const port = await freeLoopbackPort();
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   const { secret } = minted.json as { secret: string };
   const worker = await withDaemon({
