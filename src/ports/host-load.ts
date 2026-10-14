@@ -151,20 +151,90 @@ export interface LinuxHostLoadProbeOptions {
   readonly nowMicros?: () => number;
 }
 
+const CGROUP_ROOT = "/sys/fs/cgroup";
+
+interface CgroupLimit {
+  readonly folder: string;
+  readonly value: number;
+}
+
+interface CgroupLimits {
+  readonly cpu?: CgroupLimit;
+  readonly memory?: CgroupLimit;
+}
+
 export class LinuxHostLoadProbe implements HostLoadProbe {
   constructor(private readonly options: LinuxHostLoadProbeOptions) {}
 
   async read(): Promise<HostLoadCounters> {
+    const limits = await this.#limits();
     const [cpu, memory, disk] = await Promise.all([
-      this.#cpu(),
-      this.#memory(),
+      this.#cpu(limits.cpu),
+      this.#memory(limits.memory),
       readDisk(this.options.filesystem, this.options.dataDirectory),
     ]);
     return { ...(cpu && { cpu }), ...(memory && { memory }), ...(disk && { disk }) };
   }
 
-  async #cpu(): Promise<CpuCounters | undefined> {
+  async #optional(path: string): Promise<string | undefined> {
     try {
+      return await this.options.filesystem.readFile(path);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #folders(): Promise<string[]> {
+    const line = (await this.#optional("/proc/self/cgroup"))
+      ?.split("\n")
+      .find((candidate) => candidate.startsWith("0::"));
+    if (line === undefined) return [];
+    const segments = line.slice(3).split("/").filter(Boolean);
+    if (segments.includes("..")) return [CGROUP_ROOT];
+    const folders = [CGROUP_ROOT];
+    for (const segment of segments) {
+      folders.push(`${folders[folders.length - 1]}/${segment}`);
+    }
+    return folders;
+  }
+
+  async #limits(): Promise<CgroupLimits> {
+    let cpu: CgroupLimit | undefined;
+    let memory: CgroupLimit | undefined;
+    for (const folder of await this.#folders()) {
+      const [cpuMax, memoryMax] = await Promise.all([
+        this.#optional(`${folder}/cpu.max`),
+        this.#optional(`${folder}/memory.max`),
+      ]);
+      const cpuMatch = /^(max|[1-9]\d*) ([1-9]\d*)\n?$/.exec(cpuMax ?? "");
+      if (cpuMatch && cpuMatch[1] !== "max") {
+        const cores = Number(cpuMatch[1]) / Number(cpuMatch[2]);
+        if (cpu === undefined || cores < cpu.value) cpu = { folder, value: cores };
+      }
+      const memoryMatch = /^(max|\d+)\n?$/.exec(memoryMax ?? "");
+      if (memoryMatch && memoryMatch[1] !== "max") {
+        const bytes = Number(memoryMatch[1]);
+        if (memory === undefined || bytes < memory.value) memory = { folder, value: bytes };
+      }
+    }
+    return { ...(cpu && { cpu }), ...(memory && { memory }) };
+  }
+
+  async #cpu(limit: CgroupLimit | undefined): Promise<CpuCounters | undefined> {
+    try {
+      const cores = this.options.cores();
+      if (limit !== undefined && limit.value < cores) {
+        const stat = await this.#optional(`${limit.folder}/cpu.stat`);
+        const usage = /^usage_usec (\d+)$/m.exec(stat ?? "");
+        if (!usage) return undefined;
+        const now = this.options.nowMicros?.() ?? Date.now() * 1000;
+        return {
+          busyTime: Number(usage[1]),
+          cores: limit.value,
+          limited: true,
+          totalTime: now * limit.value,
+        };
+      }
       const text = await this.options.filesystem.readFile("/proc/stat");
       const line = text.split("\n").find((candidate) => /^cpu\s/.test(candidate));
       if (line === undefined) return undefined;
@@ -185,7 +255,7 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
       const busyTime = user + nice + system + irq + softirq + steal;
       return {
         busyTime,
-        cores: this.options.cores(),
+        cores,
         limited: false,
         totalTime: busyTime + idle + iowait,
       };
@@ -194,19 +264,22 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
     }
   }
 
-  async #memory(): Promise<MemoryCounters | undefined> {
+  async #memory(limit: CgroupLimit | undefined): Promise<MemoryCounters | undefined> {
     try {
-      const text = await this.options.filesystem.readFile("/proc/meminfo");
+      const text = await this.#optional("/proc/meminfo");
       const kib = (name: string): number | undefined => {
-        const match = new RegExp(`^${name}:\\s+(\\d+)\\s*kB`, "m").exec(text);
+        const match = new RegExp(`^${name}:\\s+(\\d+)\\s*kB`, "m").exec(text ?? "");
         return match ? Number(match[1]) * 1024 : undefined;
       };
-      const totalBytes = kib("MemTotal");
+      const machineTotal = kib("MemTotal");
+      if (limit !== undefined && (machineTotal === undefined || limit.value < machineTotal)) {
+        return await this.#limitedMemory(limit);
+      }
       const availableBytes = kib("MemAvailable");
       const swapTotal = kib("SwapTotal");
       const swapFree = kib("SwapFree");
       if (
-        totalBytes === undefined ||
+        machineTotal === undefined ||
         availableBytes === undefined ||
         swapTotal === undefined ||
         swapFree === undefined
@@ -217,11 +290,29 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
         availableBytes,
         limited: false,
         swapUsedBytes: Math.max(0, swapTotal - swapFree),
-        totalBytes,
+        totalBytes: machineTotal,
       };
     } catch {
       return undefined;
     }
+  }
+
+  async #limitedMemory(limit: CgroupLimit): Promise<MemoryCounters | undefined> {
+    const [current, stat, swap] = await Promise.all([
+      this.#optional(`${limit.folder}/memory.current`),
+      this.#optional(`${limit.folder}/memory.stat`),
+      this.#optional(`${limit.folder}/memory.swap.current`),
+    ]);
+    const used = /^(\d+)\n?$/.exec(current ?? "");
+    const inactive = /^inactive_file (\d+)$/m.exec(stat ?? "");
+    if (!used || !inactive) return undefined;
+    const swapMatch = /^(\d+)\n?$/.exec(swap ?? "");
+    return {
+      availableBytes: Math.max(0, limit.value - (Number(used[1]) - Number(inactive[1]))),
+      limited: true,
+      swapUsedBytes: swapMatch ? Number(swapMatch[1]) : 0,
+      totalBytes: limit.value,
+    };
   }
 }
 
@@ -270,5 +361,6 @@ export function productionHostLoadProbe(options: ProductionHostLoadProbeOptions)
     cores: () => cpus().length,
     dataDirectory: options.dataDirectory,
     filesystem,
+    nowMicros: () => Number(process.hrtime.bigint() / 1000n),
   });
 }
