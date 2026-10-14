@@ -54,8 +54,93 @@ export class DarwinHostLoadProbe implements HostLoadProbe {
   constructor(private readonly options: DarwinHostLoadProbeOptions) {}
 
   async read(): Promise<HostLoadCounters> {
-    void this.options;
-    return {};
+    const [cpu, memory, disk] = await Promise.all([
+      this.#cpu(),
+      this.#memory(),
+      readDisk(this.options.filesystem, this.options.dataDirectory),
+    ]);
+    return { ...(cpu && { cpu }), ...(memory && { memory }), ...(disk && { disk }) };
+  }
+
+  async #cpu(): Promise<CpuCounters | undefined> {
+    try {
+      const cores = this.options.cpus();
+      if (cores.length === 0) return undefined;
+      let busyTime = 0;
+      let totalTime = 0;
+      for (const { times } of cores) {
+        const busy = times.user + times.nice + times.sys + times.irq;
+        busyTime += busy;
+        totalTime += busy + times.idle;
+      }
+      if (![busyTime, totalTime].every(Number.isFinite)) return undefined;
+      return { busyTime, cores: cores.length, limited: false, totalTime };
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #memory(): Promise<MemoryCounters | undefined> {
+    try {
+      const result = await this.options.processRunner.run("sysctl", SYSCTL_ARGS, {
+        timeoutMs: SYSCTL_TIMEOUT_MS,
+      });
+      if (result.code !== 0) return undefined;
+      const lines = result.stdout.split("\n").map((line) => line.trim());
+      const totalBytes = parseWhole(lines[0]);
+      const level = parseWhole(lines[1]);
+      const swapUsedBytes = parseSwapUsed(lines[3]);
+      if (totalBytes === undefined || level === undefined || level > 100) return undefined;
+      if (swapUsedBytes === undefined) return undefined;
+      const pressure = PRESSURE[lines[2] ?? ""];
+      return {
+        availableBytes: (totalBytes * level) / 100,
+        limited: false,
+        ...(pressure && { pressure }),
+        swapUsedBytes,
+        totalBytes,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+const SYSCTL_ARGS = [
+  "-n",
+  "hw.memsize",
+  "kern.memorystatus_level",
+  "kern.memorystatus_vm_pressure_level",
+  "vm.swapusage",
+];
+const SYSCTL_TIMEOUT_MS = 5_000;
+const PRESSURE: Record<string, MemoryPressure | undefined> = {
+  "1": "normal",
+  "2": "warn",
+  "4": "critical",
+};
+const SWAP_UNITS: Record<string, number> = { G: 1024 ** 3, K: 1024, M: 1024 ** 2 };
+
+function parseWhole(line: string | undefined): number | undefined {
+  if (line === undefined || !/^\d+$/.test(line)) return undefined;
+  return Number(line);
+}
+
+function parseSwapUsed(line: string | undefined): number | undefined {
+  const match = /\bused = (\d+(?:\.\d+)?)([KMG])\b/.exec(line ?? "");
+  if (!match) return undefined;
+  return Number(match[1]) * (SWAP_UNITS[match[2] ?? ""] ?? 0);
+}
+
+async function readDisk(
+  filesystem: Pick<Filesystem, "diskSpace">,
+  path: string,
+): Promise<DiskCounters | undefined> {
+  try {
+    const { freeBytes, totalBytes } = await filesystem.diskSpace(path);
+    return { freeBytes, totalBytes };
+  } catch {
+    return undefined;
   }
 }
 
@@ -69,8 +154,73 @@ export class LinuxHostLoadProbe implements HostLoadProbe {
   constructor(private readonly options: LinuxHostLoadProbeOptions) {}
 
   async read(): Promise<HostLoadCounters> {
-    void this.options;
-    return {};
+    const [cpu, memory, disk] = await Promise.all([
+      this.#cpu(),
+      this.#memory(),
+      readDisk(this.options.filesystem, this.options.dataDirectory),
+    ]);
+    return { ...(cpu && { cpu }), ...(memory && { memory }), ...(disk && { disk }) };
+  }
+
+  async #cpu(): Promise<CpuCounters | undefined> {
+    try {
+      const text = await this.options.filesystem.readFile("/proc/stat");
+      const line = text.split("\n").find((candidate) => /^cpu\s/.test(candidate));
+      if (line === undefined) return undefined;
+      const fields = line.trim().split(/\s+/).slice(1, 9).map(Number);
+      if (fields.length < 8 || !fields.every((value) => Number.isFinite(value) && value >= 0)) {
+        return undefined;
+      }
+      const [
+        user = 0,
+        nice = 0,
+        system = 0,
+        idle = 0,
+        iowait = 0,
+        irq = 0,
+        softirq = 0,
+        steal = 0,
+      ] = fields;
+      const busyTime = user + nice + system + irq + softirq + steal;
+      return {
+        busyTime,
+        cores: this.options.cores(),
+        limited: false,
+        totalTime: busyTime + idle + iowait,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #memory(): Promise<MemoryCounters | undefined> {
+    try {
+      const text = await this.options.filesystem.readFile("/proc/meminfo");
+      const kib = (name: string): number | undefined => {
+        const match = new RegExp(`^${name}:\\s+(\\d+)\\s*kB`, "m").exec(text);
+        return match ? Number(match[1]) * 1024 : undefined;
+      };
+      const totalBytes = kib("MemTotal");
+      const availableBytes = kib("MemAvailable");
+      const swapTotal = kib("SwapTotal");
+      const swapFree = kib("SwapFree");
+      if (
+        totalBytes === undefined ||
+        availableBytes === undefined ||
+        swapTotal === undefined ||
+        swapFree === undefined
+      ) {
+        return undefined;
+      }
+      return {
+        availableBytes,
+        limited: false,
+        swapUsedBytes: Math.max(0, swapTotal - swapFree),
+        totalBytes,
+      };
+    } catch {
+      return undefined;
+    }
   }
 }
 

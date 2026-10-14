@@ -220,12 +220,15 @@ export class NodeFilesystem implements Filesystem {
   }
 
   async diskFree(path: string): Promise<number> {
-    const details = await statfs(path);
-    return details.bavail * details.bsize;
+    return (await this.diskSpace(path)).freeBytes;
   }
 
-  async diskSpace(_path: string): Promise<{ freeBytes: number; totalBytes: number }> {
-    return { freeBytes: 0, totalBytes: 0 };
+  async diskSpace(path: string): Promise<{ freeBytes: number; totalBytes: number }> {
+    const details = await statfs(path);
+    return {
+      freeBytes: details.bavail * details.bsize,
+      totalBytes: details.blocks * details.bsize,
+    };
   }
 
   async directorySize(path: string): Promise<number> {
