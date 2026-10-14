@@ -31,7 +31,7 @@ export interface HostLink {
   readonly leaseRequires?: readonly string[];
   status(leaseId?: string, identity?: TokenIdentity): Promise<LinkStatus>;
   forward(request: Request, identity: TokenIdentity, leaseId?: string): Promise<Response>;
-  // why: only a link that serves many hosts can see leases made before the front's map was empty; a worker's map is never empty of its own leases.
+  // why: only a link that serves many hosts adopts leases made before the front's map was empty; a worker's map is in memory and has no entry for a lease it made before a restart, but that lease is ended, not adopted.
   adoptable?(identity: TokenIdentity): readonly AdoptableLease[];
   // why: a lease the front asked for in this process is its allocate's to keep or release, never to adopt.
   asked?(leaseId: string): void;

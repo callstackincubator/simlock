@@ -1934,12 +1934,15 @@ describe(
     });
 
     it("a lease known only from the link's memory (after `simlock release --all`) whose worker then disconnects answers `workerUnreachable()`", async () => {
-      const rig = await setUp();
+      // why: a worker clock of its own, so moving the gateway's clock past the start window does not make the worker redial.
+      const rig = await setUp({ workers: [{ clockSkewMs: 0, label: "w1" }] });
       const member = first(rig);
       await granted(rig, 1);
       await rig.gateway.dispatch("lease.release-all", {}, adminSession);
       await expect.poll(async () => (await fleetLeases(rig)).length).toBe(0);
       await dropUplink(rig, member);
+      // why: past the 60 s start window an unplaced lease is not unreachable, so only the link's memory can place this one.
+      rig.clock.advance(70_000);
 
       expectUnreachable(await envelopeOf(await heartbeat(rig, 1)));
     });
@@ -1982,6 +1985,7 @@ describe(
       await dropUplink(rig, holder);
 
       await granted(rig, 2);
+      expect((await fleetLeases(rig)).map((lease) => lease.id)).toContain(hex(1));
       await untilConnected(rig, holder);
 
       const beat = await envelopeOf(await heartbeat(rig, 1));
