@@ -1197,7 +1197,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
   });
 
-  it("release, and release after `close` (which the daemon answers `released: false`), go to the agent-device daemon first, then release the simlock lease, and the device is reclaimed and free", async () => {
+  it("release goes to the agent-device daemon first, then frees the simlock lease and the device; a release after `close`, which already freed the simlock lease, reaches the daemon with no lease held and is answered `released: false`", async () => {
     const rig = await setUp();
     let heldAtDaemonRelease: readonly string[] = [];
     rig.fake.onRelease = async () => {
@@ -1261,6 +1261,24 @@ describe("the agent-device front, through the whole worker daemon", () => {
       expectLeaseGone(await envelopeOf(await heartbeat(rig, 1)), "LEASE_NOT_FOUND");
     },
   );
+
+  it("a streamed command reply whose last frame names `endedLeases` releases the simlock lease though the CLI sends no release, and the CLI gets the body unchanged", async () => {
+    const rig = await setUp();
+    await granted(rig, 1);
+    const chunks = [
+      '{"progress":1}\n',
+      `${JSON.stringify({ result: { data: { endedLeases: ended } } })}\n`,
+    ];
+    rig.fake.streamNextCommand(chunks);
+
+    const streamed = await command(rig, "close", 1);
+
+    expect(await streamed.text()).toBe(chunks.join(""));
+    await expect.poll(async () => listed(rig)).toEqual([]);
+    await expect
+      .poll(async () => (await devices(rig)).map((device) => device.state))
+      .toEqual(["ready"]);
+  });
 
   it("a release the agent-device daemon fails keeps the simlock lease and answers the daemon's error", async () => {
     const rig = await setUp();

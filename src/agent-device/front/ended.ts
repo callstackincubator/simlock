@@ -15,20 +15,28 @@ function idsIn(holder: unknown): string[] {
   return ids;
 }
 
-// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure, which the JSON-RPC error carries as `error.data.details`.
-function endedLeaseIds(text: string): string[] {
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return [];
-  }
+// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure, which the JSON-RPC error carries as `error.data.details`; a streamed reply is one JSON frame per line, and any frame may carry it.
+function idsInFrame(body: unknown): string[] {
   const root = asRecord(body);
   const error = asRecord(root?.["error"]);
   return [
     ...idsIn(asRecord(asRecord(root?.["result"])?.["data"])),
     ...idsIn(asRecord(asRecord(error?.["data"])?.["details"])),
   ];
+}
+
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function endedLeaseIds(text: string): string[] {
+  const whole = parsed(text);
+  if (whole !== undefined) return idsInFrame(whole);
+  return text.split("\n").flatMap((line) => idsInFrame(parsed(line)));
 }
 
 // why: the daemon no longer sends a release after it ends a lease, so the front ends the simlock lease from the command's reply; a copy is read so the CLI's reply goes out untouched.
