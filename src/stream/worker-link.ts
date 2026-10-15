@@ -28,6 +28,7 @@ export interface ScreenOpener {
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
     settings: ScreenSettings,
+    signal: AbortSignal,
   ): Promise<ScreenFeed>;
 }
 
@@ -59,6 +60,7 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
             device.spec.platform,
             toDriverDevice(device),
             options.settings,
+            AbortSignal.any([signal, slot.ended]),
           ),
         );
         slot.attach(feed.close);

@@ -70,6 +70,7 @@ export function createAndroidScreenCapture(options: AndroidScreenCaptureOptions)
     open: async (
       device: VirtualDriverDevice | PhysicalDriverDevice,
       settings: ScreenSettings,
+      signal: AbortSignal,
     ): Promise<ScreenFeed> => {
       if (isPhysicalDriverDevice(device)) {
         throw new ScreenNotSupportedError(
@@ -85,7 +86,7 @@ export function createAndroidScreenCapture(options: AndroidScreenCaptureOptions)
         );
       }
       const scid = options.scid?.() ?? randomInt(0, SCID_LIMIT);
-      return await new ScrcpySession(options, serial, scid, settings).start();
+      return await new ScrcpySession(options, serial, scid, settings).start(signal);
     },
     unavailable,
   };
@@ -123,10 +124,17 @@ class ScrcpySession {
     this.#settings = settings;
   }
 
-  async start(): Promise<ScreenFeed> {
+  async start(stopped: AbortSignal): Promise<ScreenFeed> {
     let timer: ReturnType<Clock["setTimer"]> | undefined;
+    const stop = () => this.#abort.abort();
+    stopped.addEventListener("abort", stop, { once: true });
     try {
+      if (stopped.aborted) throw this.#startFailure("was stopped before it started");
       await this.#push();
+      // why: the push is the one step that cannot be interrupted; a stop that arrived during it
+      // starts no server on a device that is being handed back.
+      if (this.#abort.signal.aborted)
+        throw this.#startFailure("was stopped while it was being copied");
       this.#spawnServer();
       const deadlineAt = this.#options.clock.now() + START_DEADLINE_MS;
       timer = this.#options.clock.setTimer(START_DEADLINE_MS, () => {
@@ -153,6 +161,7 @@ class ScrcpySession {
         ? error
         : new ScreenUnavailableError(this.#withTail(errorMessage(error)));
     } finally {
+      stopped.removeEventListener("abort", stop);
       if (timer !== undefined) this.#options.clock.cancel(timer);
     }
   }
@@ -320,7 +329,8 @@ class ScrcpySession {
     // why: a read the quiet timer outran is still owed its chunk; the next pull awaits that read
     // rather than starting a second one, which would deliver the stream's bytes out of order.
     let inflight: Promise<Uint8Array | undefined> | undefined;
-    // why: the meta frame must come first, so nothing is said to be alive before it has gone out.
+    // why: alive means "the picture you have is still the picture", so nothing is said to be alive
+    // before a first picture exists; an encoder that never paints one meets the silence bound.
     let started = false;
     return new ReadableStream<Uint8Array>(
       {
@@ -353,7 +363,7 @@ class ScrcpySession {
             }
             const frame = pending.shift();
             if (frame !== undefined) {
-              started = true;
+              if (frame[4] === SCREEN_FRAME_TAG.keyframe) started = true;
               controller.enqueue(frame);
             }
           } catch (error) {

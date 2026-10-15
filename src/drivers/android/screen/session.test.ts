@@ -224,7 +224,7 @@ function frameTag(frame: Uint8Array | undefined): number | undefined {
 
 async function opened(setupResult: Awaited<ReturnType<typeof setup>>) {
   const { capture, clock, server } = setupResult;
-  const opening = capture.open(DEVICE, SETTINGS);
+  const opening = capture.open(DEVICE, SETTINGS, new AbortController().signal);
   const feed = await drive(clock, waitThenStart(server, opening));
   return feed;
 }
@@ -300,7 +300,7 @@ describe("Android screen capture: open", () => {
     const world = await setup({
       server: new AdbServer(["connection-refused", "refuse", "refuse"]),
     });
-    const opening = world.capture.open(DEVICE, SETTINGS);
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const started = world.clock.now();
     const watcher = (async () => {
       while (world.server.peers.length < 3) await new Promise((resolve) => setImmediate(resolve));
@@ -315,7 +315,7 @@ describe("Android screen capture: open", () => {
 
   it("retries a connection that ends before the server's first byte", async () => {
     const world = await setup({ server: new AdbServer(["silent"]) });
-    const opening = world.capture.open(DEVICE, SETTINGS);
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
       while (world.server.peers.length < 1) await new Promise((resolve) => setImmediate(resolve));
       world.server.peers[0]!.send("OKAY", "OKAY");
@@ -334,7 +334,7 @@ describe("Android screen capture: open", () => {
       server: new AdbServer([], "refuse"),
     });
     const started = world.clock.now();
-    const opening = world.capture.open(DEVICE, SETTINGS);
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const error = await drive(world.clock, opening).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ScreenUnavailableError);
     expect((error as Error).message).toMatch(/within 15 s/);
@@ -365,9 +365,10 @@ describe("Android screen capture: open", () => {
       server: new AdbServer([], "refuse"),
     });
     const started = world.clock.now();
-    const error = await drive(world.clock, world.capture.open(DEVICE, SETTINGS)).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await drive(
+      world.clock,
+      world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
+    ).catch((caught: unknown) => caught);
     expect((error as Error).message).toMatch(/exited before it streamed/);
     expect((error as Error).message).toMatch(/Aborted/);
     expect(world.clock.now() - started).toBeLessThan(START_DEADLINE_MS);
@@ -375,9 +376,10 @@ describe("Android screen capture: open", () => {
 
   it("refuses at once when adb has no transport for the serial", async () => {
     const world = await setup({ server: new AdbServer(["no-transport"]) });
-    const error = await drive(world.clock, world.capture.open(DEVICE, SETTINGS)).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await drive(
+      world.clock,
+      world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
+    ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ScreenUnavailableError);
     expect((error as Error).message).toMatch(/not found/);
     expect(world.server.peers).toHaveLength(1);
@@ -385,7 +387,7 @@ describe("Android screen capture: open", () => {
 
   it("refuses with the server's reason when it cannot configure its encoder", async () => {
     const world = await setup();
-    const opening = world.capture.open(DEVICE, SETTINGS);
+    const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
       while (world.server.peers.length < 1) await new Promise((resolve) => setImmediate(resolve));
       world.server.last.send(codecId(1));
@@ -400,9 +402,10 @@ describe("Android screen capture: open", () => {
     const world = await setup({
       expectations: [push({ code: 1, stderr: "device offline" }), remove()],
     });
-    const error = await drive(world.clock, world.capture.open(DEVICE, SETTINGS)).catch(
-      (caught: unknown) => caught,
-    );
+    const error = await drive(
+      world.clock,
+      world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
+    ).catch((caught: unknown) => caught);
     expect((error as Error).message).toMatch(/device offline/);
     expect(world.runner.calls.map((call) => call.args[2])).toEqual(["push", "shell"]);
     expect(world.runner.calls[1]!.args.slice(3)).toEqual(["rm", "-f", DEVICE_JAR]);
@@ -414,8 +417,32 @@ describe("Android screen capture: open", () => {
       world.capture.open(
         { ...DEVICE, enrolledApps: [], physical: true } as PhysicalDriverDevice,
         SETTINGS,
+        new AbortController().signal,
       ),
     ).rejects.toBeInstanceOf(ScreenNotSupportedError);
+    expect(world.runner.calls).toEqual([]);
+  });
+
+  it("starts no server when it is stopped while the jar is being copied, and removes the jar", async () => {
+    const stop = new AbortController();
+    const world = await setup({
+      expectations: [{ ...push(), onSpawn: () => stop.abort() }, remove()],
+    });
+    const opening = world.capture.open(DEVICE, SETTINGS, stop.signal);
+    await expect(drive(world.clock, opening)).rejects.toBeInstanceOf(ScreenUnavailableError);
+    expect(world.runner.calls.map((call) => call.args.join(" "))).not.toContainEqual(
+      expect.stringContaining("app_process"),
+    );
+    expect(world.runner.calls.at(-1)?.args.join(" ")).toContain("rm -f");
+  });
+
+  it("refuses an open that was stopped before it began, running nothing", async () => {
+    const world = await setup({ expectations: [] });
+    const stop = new AbortController();
+    stop.abort();
+    await expect(world.capture.open(DEVICE, SETTINGS, stop.signal)).rejects.toBeInstanceOf(
+      ScreenUnavailableError,
+    );
     expect(world.runner.calls).toEqual([]);
   });
 
@@ -425,9 +452,9 @@ describe("Android screen capture: open", () => {
     expect(await world.capture.unavailable()).toMatch(
       /scrcpy-server v5\.0\.1.*\/simlock\/scrcpy-server-v5\.0\.1/,
     );
-    await expect(world.capture.open(DEVICE, SETTINGS)).rejects.toBeInstanceOf(
-      ScreenUnavailableError,
-    );
+    await expect(
+      world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenUnavailableError);
     expect(world.runner.calls).toEqual([]);
   });
 
@@ -436,8 +463,8 @@ describe("Android screen capture: open", () => {
       expectations: [push(), push(), shell(), shell()],
       scid: null,
     });
-    const first = world.capture.open(DEVICE, SETTINGS);
-    const second = world.capture.open(DEVICE, SETTINGS);
+    const first = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
+    const second = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
       while (world.server.peers.length < 2) await new Promise((resolve) => setImmediate(resolve));
       for (const peer of world.server.peers) peer.send(streamStart());
@@ -509,6 +536,24 @@ describe("Android screen capture: the body", () => {
     const next = reader.read();
     peer.send(mediaPacket({ pts: 1 }, SAMPLE.p1));
     expect(frameTag((await next).value)).toBe(SCREEN_FRAME_TAG.delta);
+  });
+
+  it("says nothing is alive while the encoder has not painted a first picture", async () => {
+    const world = await setup();
+    const feed = await opened(world);
+    const peer = world.server.last;
+    peer.send(mediaPacket({ config: true }, SAMPLE.config));
+    const reader = feed.body.getReader();
+    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    const quiet = reader.read();
+    let settled = false;
+    void quiet.then(() => (settled = true));
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    world.clock.advance(ALIVE_AFTER_MS * 3);
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
   });
 
   it("errors with the server's reason when the device side ends, and cleans up", async () => {

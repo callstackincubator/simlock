@@ -3027,7 +3027,9 @@ describe("AndroidDriver screen capture", () => {
       scrcpyServerPath: serverPath,
       tcpStreamConnector: new FakeTcpStreamConnector(),
     });
-    await expect(driver.screenCapture?.open(running, settings)).rejects.toThrow(/error: closed/);
+    await expect(
+      driver.screenCapture?.open(running, settings, new AbortController().signal),
+    ).rejects.toThrow(/error: closed/);
     expect(runner.calls[0]?.options.env).toEqual(scopedEnv);
     expect(runner.calls[1]?.options.env).toEqual(scopedEnv);
   });
@@ -3042,7 +3044,9 @@ describe("AndroidDriver screen capture", () => {
       tcpStreamConnector: new FakeTcpStreamConnector(),
     });
     const stopped = { ...running, driverData: { ...running.driverData, port: 0, serial: "" } };
-    await expect(driver.screenCapture?.open(stopped, settings)).rejects.toThrow(/not running/);
+    await expect(
+      driver.screenCapture?.open(stopped, settings, new AbortController().signal),
+    ).rejects.toThrow(/not running/);
     expect(runner.calls).toEqual([]);
   });
 });

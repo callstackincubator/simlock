@@ -1,4 +1,4 @@
-import type { Platform, ScreenAvailability, ScreenSettings } from "../core/index.js";
+import type { ScreenAvailability, ScreenSettings } from "../core/index.js";
 import type { LeaseEndParticipant } from "../leasing/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
@@ -86,18 +86,12 @@ function describeAvailability(platforms: readonly ScreenAvailability[]): {
   readonly state: "available" | "unavailable";
   readonly reason?: string;
 } {
-  const available: Platform[] = platforms
-    .filter((entry) => entry.reason === undefined)
-    .map((entry) => entry.platform);
-  const missing = platforms.filter((entry) => entry.reason !== undefined);
-  const why = missing.map((entry) => `${entry.platform}: ${entry.reason ?? ""}`).join("; ");
-  if (available.length === 0) {
-    return {
-      reason: why === "" ? "No driver on this host can capture a screen" : why,
-      state: "unavailable",
-    };
-  }
-  return why === ""
-    ? { state: "available" }
-    : { reason: `Available on ${available.join(", ")}; ${why}`, state: "available" };
+  // why: an `available` capability carries no reason on the wire, so a platform that cannot capture
+  // on a host where another can says why when a stream on it is asked for, as a 503 with its reason.
+  if (platforms.some((entry) => entry.reason === undefined)) return { state: "available" };
+  const why = platforms.map((entry) => `${entry.platform}: ${entry.reason ?? ""}`).join("; ");
+  return {
+    reason: why === "" ? "No driver on this host can capture a screen" : why,
+    state: "unavailable",
+  };
 }

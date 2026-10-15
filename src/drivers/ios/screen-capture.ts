@@ -36,7 +36,7 @@ export function createIosScreenCapture(options: IosScreenCaptureOptions): Screen
       : undefined;
 
   return {
-    open: async (device, settings) => {
+    open: async (device, settings, signal) => {
       if (isPhysicalDriverDevice(device)) {
         throw new ScreenNotSupportedError(
           "A physical iPhone's screen cannot be streamed; only a simulator's can",
@@ -44,6 +44,8 @@ export function createIosScreenCapture(options: IosScreenCaptureOptions): Screen
       }
       const reason = await missing();
       if (reason !== undefined) throw new ScreenUnavailableError(reason);
+      if (signal.aborted)
+        throw new ScreenUnavailableError("The capture was stopped before it started");
       return startCapture(options, device.deviceId, settings);
     },
     unavailable: missing,

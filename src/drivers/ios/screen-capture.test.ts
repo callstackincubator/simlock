@@ -39,7 +39,7 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<number[]> {
 describe("iOS screen capture", () => {
   it("runs the capture program on the device's UDID, inside Simlock's device set, with the stream's settings", async () => {
     const { capture, launcher } = await setup();
-    await capture.open(simulator, settings);
+    await capture.open(simulator, settings, new AbortController().signal);
     expect(launcher.starts).toEqual([
       {
         args: [
@@ -62,7 +62,11 @@ describe("iOS screen capture", () => {
   it("refuses a physical iPhone as not supported, without starting anything", async () => {
     const { capture, launcher } = await setup();
     await expect(
-      capture.open({ ...simulator, enrolledApps: [], physical: true }, settings),
+      capture.open(
+        { ...simulator, enrolledApps: [], physical: true },
+        settings,
+        new AbortController().signal,
+      ),
     ).rejects.toBeInstanceOf(ScreenNotSupportedError);
     expect(launcher.starts).toEqual([]);
   });
@@ -71,13 +75,15 @@ describe("iOS screen capture", () => {
     const { capture, filesystem, launcher } = await setup();
     await filesystem.rm(COMMAND);
     expect(await capture.unavailable()).toBe(`No screen capture program at ${COMMAND}`);
-    await expect(capture.open(simulator, settings)).rejects.toBeInstanceOf(ScreenUnavailableError);
+    await expect(
+      capture.open(simulator, settings, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenUnavailableError);
     expect(launcher.starts).toEqual([]);
   });
 
   it("hands out the program's stdout byte for byte and ends cleanly when it exits 0", async () => {
     const { capture, launcher } = await setup();
-    const feed = await capture.open(simulator, settings);
+    const feed = await capture.open(simulator, settings, new AbortController().signal);
     launcher.last.write(new Uint8Array([1, 2, 3]));
     launcher.last.exit({ code: 0, signal: null });
     expect(await readAll(feed.body)).toEqual([1, 2, 3]);
@@ -85,7 +91,7 @@ describe("iOS screen capture", () => {
 
   it("fails the body with the program's last log line when it dies mid-picture", async () => {
     const { capture, launcher } = await setup();
-    const feed = await capture.open(simulator, settings);
+    const feed = await capture.open(simulator, settings, new AbortController().signal);
     launcher.last.stderr("Device UDID-1 shut down");
     launcher.last.exit({ code: 3, signal: null });
     await expect(readAll(feed.body)).rejects.toThrow(
@@ -95,7 +101,7 @@ describe("iOS screen capture", () => {
 
   it("close stops the program through stdin and resolves once it has exited", async () => {
     const { capture, launcher } = await setup();
-    const feed = await capture.open(simulator, settings);
+    const feed = await capture.open(simulator, settings, new AbortController().signal);
     await feed.close();
     expect(launcher.last.stdinClosed).toBe(true);
     expect(launcher.last.kills).toEqual([]);
@@ -103,7 +109,7 @@ describe("iOS screen capture", () => {
 
   it("close kills a program that ignores its closed stdin once the grace runs out", async () => {
     const { capture, clock, launcher } = await setup();
-    const feed = await capture.open(simulator, settings);
+    const feed = await capture.open(simulator, settings, new AbortController().signal);
     launcher.last.exitOnStdinClose = false;
     const closed = feed.close();
     await Promise.resolve();
@@ -114,7 +120,7 @@ describe("iOS screen capture", () => {
 
   it("cancelling the body stops the program, and a second close does not stop it again", async () => {
     const { capture, launcher } = await setup();
-    const feed = await capture.open(simulator, settings);
+    const feed = await capture.open(simulator, settings, new AbortController().signal);
     await feed.body.cancel();
     await feed.close();
     expect(launcher.last.stdinClosed).toBe(true);

@@ -192,6 +192,57 @@ describe("the worker's stream link", () => {
     expect(captures.leases()).toEqual([]);
   });
 
+  it("gives two viewers of one lease two captures: one leaving keeps the other, and the lease ending stops both", async () => {
+    const harness = setup();
+    const first = await opening(harness);
+    first.feed.meta();
+    const one = await first.served;
+    const second = await opening(harness);
+    second.feed.meta();
+    const two = await second.served;
+    expect(harness.opened).toHaveLength(2);
+    await one.close();
+    expect([first.feed.closes, second.feed.closes]).toEqual([1, 0]);
+    await harness.captures.stop("lse_mine");
+    expect([first.feed.closes, second.feed.closes]).toEqual([1, 1]);
+    await two.close();
+    expect(second.feed.closes).toBe(1);
+  });
+
+  it("tells the driver to stop opening when the lease ends, and the lease end waits for the open to settle", async () => {
+    let finishOpening!: () => void;
+    let openSignal: AbortSignal | undefined;
+    const registry = new TestRegistry(
+      [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
+      [{ id: "dev_1", platform: "android" }],
+    );
+    const captures = createCaptureRegistry();
+    const link = createWorkerStreamLink({
+      bounds: { clock: new FakeClock(), silenceMs: 1_000, startMs: 5_000 },
+      captures,
+      registry,
+      screens: {
+        openScreen: (_platform, _device, _settings, signal) => {
+          openSignal = signal;
+          return new Promise((_resolve, reject) => {
+            finishOpening = () => reject(new Error("stopped"));
+          });
+        },
+      },
+      settings: SETTINGS,
+    });
+    const served = link.serve("lse_mine", AGENT, new AbortController().signal);
+    await flush();
+    let ended = false;
+    const stopping = captures.stop("lse_mine").then(() => (ended = true));
+    await flush();
+    expect(openSignal?.aborted).toBe(true);
+    expect(ended).toBe(false);
+    finishOpening();
+    await stopping;
+    expect((await refusalOf(served)).code).toBe("UNKNOWN_LEASE");
+  });
+
   it("registers a running capture under its lease, and a lease that ends under a viewer ends its picture", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness);

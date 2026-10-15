@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ const ANDROID_HOME =
 const hasAndroidSdk =
   existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
 
-const TAG = { description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
+const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
 
 interface Frame {
   readonly tag: number;
@@ -54,7 +55,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, and leaves no server or jar on the device once the viewer goes",
+      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open past the silence bound, and ends when its lease is released under a viewer",
       { timeout: 480_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
@@ -147,8 +148,48 @@ describe.skipIf(!hasAndroidSdk)(
             },
           );
 
+          // why: an untouched emulator's encoder sends nothing once its picture is still, so a stream
+          // held well past the 30 s silence bound proves the still screen is kept alive on a real
+          // device, and the lease released under that viewer proves the stop on a device too.
+          const watching = await fetch(
+            `${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+            { headers: { authorization } },
+          );
+          expect(watching.status).toBe(200);
+          if (watching.body === null) throw new Error("the stream answered without a body");
+          const watched = watching.body.getReader();
+          const tags: number[] = [];
+          let buffered = new Uint8Array(0);
+          let ended = false;
+          const reading = (async () => {
+            for (;;) {
+              const step = await watched.read().catch(() => ({ done: true, value: undefined }));
+              if (step.done || step.value === undefined) break;
+              const joined = new Uint8Array(buffered.length + step.value.length);
+              joined.set(buffered);
+              joined.set(step.value, buffered.length);
+              buffered = joined;
+              while (buffered.length >= 5) {
+                const length = new DataView(buffered.buffer, buffered.byteOffset).getUint32(0);
+                if (buffered.length < 4 + length) break;
+                tags.push(buffered[4]!);
+                buffered = buffered.slice(4 + length);
+              }
+            }
+            ended = true;
+          })();
+          await new Promise((resolve) => setTimeout(resolve, 40_000));
+          expect(ended, "a still screen's stream ended inside the silence bound").toBe(false);
+          expect(tags).toContain(TAG.keyframe);
+
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);
+          await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+          expect(ended, "the stream outlived its lease").toBe(true);
+          const hostShells = await new Promise<string>((resolve) => {
+            execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
+          });
+          expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
         } finally {
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })

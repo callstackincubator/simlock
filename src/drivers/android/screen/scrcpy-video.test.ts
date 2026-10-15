@@ -60,8 +60,20 @@ describe("ScrcpyVideoParser", () => {
   });
 
   it("reads the same events however the bytes are split in two, at every offset", () => {
-    for (let cut = 1; cut < stream.length; cut += 1) {
-      expect(summary(parseInChunks(stream, [cut])), `cut at ${String(cut)}`).toEqual(whole);
+    // why: small payloads keep every packet kind and every header boundary while making each of the
+    // cuts cheap to compare, so the test proves the framing and not the machine's speed.
+    const small = concatBytes(
+      codecId(),
+      sessionPacket(96, 64),
+      mediaPacket({ config: true }, new Uint8Array([0, 0, 0, 1, 0x67, 1])),
+      mediaPacket({ key: true, pts: 0 }, new Uint8Array([0, 0, 0, 1, 0x65, 2])),
+      mediaPacket({ pts: 100_000 }, new Uint8Array([0, 0, 0, 1, 0x41, 3])),
+      sessionPacket(64, 96),
+    );
+    const expected = summary(parseInChunks(small, []));
+    expect(expected).toHaveLength(5);
+    for (let cut = 1; cut < small.length; cut += 1) {
+      expect(summary(parseInChunks(small, [cut])), `cut at ${String(cut)}`).toEqual(expected);
     }
   });
 

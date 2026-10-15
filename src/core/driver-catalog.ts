@@ -97,12 +97,13 @@ export class DriverCatalog {
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
     settings: ScreenSettings,
+    signal: AbortSignal,
   ): Promise<ScreenFeed> {
     const capture = this.#drivers.get(platform)?.screenCapture;
     if (capture === undefined) {
       throw new ScreenNotSupportedError(`A ${platform} device's screen cannot be streamed`);
     }
-    return await capture.open(device, settings);
+    return await capture.open(device, settings, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

@@ -30,15 +30,23 @@ function worker(availability: readonly ScreenAvailability[] = []) {
 }
 
 describe("createWorkerStream", () => {
-  it("reports the stream available, naming the platforms that cannot capture and why", async () => {
+  it("reports the stream available, with no reason, when any platform can capture", async () => {
     const { stream } = worker([
       { platform: "android" },
       { platform: "ios", reason: "No capture program at /x" },
     ]);
     expect(stream.capabilitySource.name).toBe("stream");
+    expect(await stream.capabilitySource.read()).toEqual({ state: "available" });
+  });
+
+  it("reports the stream unavailable with each platform's reason when none can capture", async () => {
+    const { stream } = worker([
+      { platform: "android", reason: "no jar" },
+      { platform: "ios", reason: "No capture program at /x" },
+    ]);
     expect(await stream.capabilitySource.read()).toEqual({
-      reason: "Available on android; ios: No capture program at /x",
-      state: "available",
+      reason: "android: no jar; ios: No capture program at /x",
+      state: "unavailable",
     });
   });
 

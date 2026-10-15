@@ -44,9 +44,12 @@ export interface ScreenCapture {
   // why: a reason when this driver cannot capture right now (its program is missing), so a
   // status read can say why without opening a stream to find out.
   unavailable(): Promise<string | undefined>;
+  // why: `signal` aborts an open still in progress -- the viewer left or the lease ended -- so a
+  // driver stops pushing files to and starting processes on a device that is being handed back.
   open(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     settings: ScreenSettings,
+    signal: AbortSignal,
   ): Promise<ScreenFeed>;
 }
 

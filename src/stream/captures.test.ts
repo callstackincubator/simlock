@@ -7,16 +7,19 @@ function ended(leaseId: string) {
 }
 
 describe("the capture registry", () => {
-  it("a lease that ends while its capture is starting aborts the slot and closes the capture once it attaches", async () => {
+  it("a lease that ends while its capture is starting aborts the slot, waits for it to attach, and closes it", async () => {
     const captures = createCaptureRegistry();
     const slot = captures.begin("lse_1");
-    await captures.stop("lse_1");
+    let stopped = false;
+    const stopping = captures.stop("lse_1").then(() => (stopped = true));
     expect(slot.ended.aborted).toBe(true);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
     let closes = 0;
     slot.attach(async () => {
       closes += 1;
     });
-    await Promise.resolve();
+    await stopping;
     expect(closes).toBe(1);
   });
 

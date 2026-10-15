@@ -951,7 +951,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       enabled: booleanValue,
       fps: integerInRange(1, 60),
       maxDimension: integerInRange(96, 4096),
-      bitrateKbps: integerInRange(64, 40_000),
+      bitrateKbps: integerInRange(100, 40_000),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),

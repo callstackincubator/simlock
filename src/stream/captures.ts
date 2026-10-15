@@ -20,6 +20,10 @@ export interface CaptureRegistry {
 
 interface Slot {
   readonly controller: AbortController;
+  // why: resolves once the open in progress has either attached a capture or given up, so a lease
+  // that ends mid-open waits for the device to be left alone before its reclaim starts.
+  readonly settled: Promise<void>;
+  settle: () => void;
   close: (() => Promise<void>) | undefined;
   closing: Promise<void> | undefined;
   released: boolean;
@@ -28,12 +32,14 @@ interface Slot {
 export function createCaptureRegistry(): CaptureRegistry {
   const running = new Map<string, Set<Slot>>();
 
-  const closeSlot = (slot: Slot): Promise<void> => {
-    // why: a slot stopped before its capture attached has nothing to close yet; `attach` closes it
-    // then, so the latch is set only once there is a close to run.
-    if (slot.close === undefined) return Promise.resolve();
+  const closeSlot = async (slot: Slot): Promise<void> => {
+    await slot.settled;
+    // why: an open that gave up attached nothing and cleaned up after itself; one that attaches
+    // after this slot was let go closes from `attach`, so the latch is set only once there is a
+    // close to run.
+    if (slot.close === undefined) return;
     slot.closing ??= slot.close();
-    return slot.closing;
+    await slot.closing;
   };
 
   const forget = (leaseId: string, slot: Slot) => {
@@ -47,11 +53,15 @@ export function createCaptureRegistry(): CaptureRegistry {
     // between must find something to stop, or the capture would come up filming a device that is
     // already on its way to the next holder.
     begin: (leaseId) => {
+      let settle = () => undefined as void;
+      const settled = new Promise<void>((resolve) => (settle = resolve));
       const slot: Slot = {
         close: undefined,
         closing: undefined,
         controller: new AbortController(),
         released: false,
+        settle,
+        settled,
       };
       const forLease = running.get(leaseId) ?? new Set<Slot>();
       forLease.add(slot);
@@ -61,11 +71,13 @@ export function createCaptureRegistry(): CaptureRegistry {
         // the moment it attaches, or it would run with nobody to stop it.
         attach: (close) => {
           slot.close = close;
+          slot.settle();
           if (slot.released || slot.controller.signal.aborted) void closeSlot(slot);
         },
         ended: slot.controller.signal,
         release: async () => {
           slot.released = true;
+          slot.settle();
           forget(leaseId, slot);
           await closeSlot(slot);
         },

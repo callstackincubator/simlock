@@ -46,7 +46,7 @@ describe("DriverCatalog screens", () => {
       new FakeDriver({ clock: new FakeClock(), platform: "ios", screenCapture: capture }),
       new FakeDriver({ clock: new FakeClock(), platform: "android" }),
     ]);
-    await catalog.openScreen("ios", device, settings);
+    await catalog.openScreen("ios", device, settings, new AbortController().signal);
     expect(opened).toEqual(["d"]);
   });
 
@@ -54,9 +54,9 @@ describe("DriverCatalog screens", () => {
     const catalog = new DriverCatalog([
       new FakeDriver({ clock: new FakeClock(), platform: "android" }),
     ]);
-    await expect(catalog.openScreen("android", device, settings)).rejects.toBeInstanceOf(
-      ScreenNotSupportedError,
-    );
+    await expect(
+      catalog.openScreen("android", device, settings, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenNotSupportedError);
   });
 
   it("reports availability only for drivers that offer a screen, with the reason one cannot", async () => {
