@@ -228,6 +228,10 @@ describe("a gateway's optional modules", () => {
     const gateway = await startGateway(definitionsOf(mine), ["mine"]);
     await joinWorker(gateway, definitionsOf(mine), ["mine"], "serves");
     await joinWorker(gateway, definitionsOf(mine), [], "off");
+    const unavailable = fakeModule({ name: "mine", state: "unavailable" });
+    await joinWorker(gateway, definitionsOf(unavailable), ["mine"], "unavailable");
+    const other = fakeModule({ name: "other" });
+    await joinWorker(gateway, definitionsOf(other), ["other"], "other");
     const gone = await joinWorker(gateway, definitionsOf(mine), ["mine"], "gone");
     await joinWorker(gateway, definitionsOf(mine), ["mine"], "drained");
     const { workers } = await gateway.daemon.dispatch("worker.list", {}, admin);
@@ -308,6 +312,7 @@ describe("a gateway's optional modules", () => {
     expect(gateway.sink.records).toContainEqual(
       expect.objectContaining({
         fields: expect.objectContaining({ hook: "beforeDrain", module: "mine" }),
+        level: "warn",
         message: "Optional module hook ran out of time",
       }),
     );

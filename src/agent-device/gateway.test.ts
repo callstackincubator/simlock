@@ -64,7 +64,7 @@ describe("agent-device's gateway side", () => {
     ]);
   });
 
-  it("agent-device's definition has a gateway side whose mount answers under /v1/agent-device", async () => {
+  it("agent-device's definition has a gateway side that creates a mount and a beforeDrain hook", async () => {
     const { ctx } = await fakeGatewayContext("agent-device", agentDeviceModule.config.defaults);
     const loaded = await agentDeviceModule.loadGateway?.();
 
