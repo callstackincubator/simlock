@@ -42,7 +42,8 @@ prove the behaviour, each at the cheapest level that can prove it
    it is a candidate for deletion. In the strict areas
    [toolchain.md](toolchain.md) names, which guard safety rules or state
    that runs under concurrency, production code that can be deleted with a
-   green suite is untested, whether anyone can see the difference or not.
+   green suite is untested, whether anyone can see the difference or not;
+   only a log line is left to rule 8.
    When nothing goes red, whatever you believed covered the path stops short
    of the part that matters — usually because the test exercises an
    internal callback rather than the observable output the path exists to
