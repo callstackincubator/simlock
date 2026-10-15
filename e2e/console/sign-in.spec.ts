@@ -1,4 +1,4 @@
-import { expect, NAV_LABELS, signIn, test } from "./fixtures.js";
+import { expect, NAV_LABELS, openFromNav, signIn, test } from "./fixtures.js";
 
 const OPERATOR_NEEDED = "That token is real, but the console needs an operator token.";
 
@@ -10,8 +10,8 @@ test.describe("sign-in", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Console" });
     await expect(nav.getByRole("link")).toHaveText([...NAV_LABELS]);
-    await expect(page).toHaveURL(/\/workers$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
     await expect(page.locator(".connection")).toHaveText("Connected");
     await expect(page.getByLabel("Operator token")).toHaveCount(0);
   });
@@ -24,8 +24,8 @@ test.describe("sign-in", () => {
     await signIn(page, daemon.tokens.operator);
     const nav = page.getByRole("navigation", { name: "Console" });
 
-    await expect(nav.locator("[aria-current='page']")).toHaveText("Workers");
-    await expect(page).toHaveTitle("Workers · Simlock");
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Overview");
+    await expect(page).toHaveTitle("Overview · Simlock");
     await nav.getByRole("link", { name: "Events" }).click();
 
     await expect(nav.locator("[aria-current='page']")).toHaveText("Events");
@@ -33,8 +33,8 @@ test.describe("sign-in", () => {
 
     // The browser's back and forward move between the console's pages too.
     await page.goBack();
-    await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
-    await expect(nav.locator("[aria-current='page']")).toHaveText("Workers");
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+    await expect(nav.locator("[aria-current='page']")).toHaveText("Overview");
     await page.goForward();
     await expect(page.getByRole("heading", { level: 1, name: "Events" })).toBeVisible();
   });
@@ -107,7 +107,7 @@ test.describe("sign-in", () => {
   test("a reload keeps the operator signed in", async ({ daemon, page }) => {
     await page.goto("/");
     await signIn(page, daemon.tokens.operator);
-    await page.getByRole("link", { name: "Leases" }).click();
+    await openFromNav(page, "Leases");
     await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
 
     await page.reload();
@@ -158,7 +158,7 @@ test.describe("sign-in", () => {
     await expect(page.getByRole("alert")).toBeVisible();
     await signIn(page, daemon.tokens.operator);
     for (const label of NAV_LABELS) {
-      await page.getByRole("link", { name: label }).click();
+      await openFromNav(page, label);
       await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
     }
     await page.reload();
