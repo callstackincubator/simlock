@@ -14,6 +14,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                         |
 | `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`      |
 | `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done       |
+| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator        |
 
 ## How it works
 
@@ -77,6 +78,12 @@ Passthrough —
   before `--`. Adds `--device <udid>` unless the caller names one.
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
+
+Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture <udid>
+--codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>`; stdout is
+the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. Physical → `ScreenNotSupportedError`;
+program missing → `ScreenUnavailableError`. Default program: dist/bin, built by `pnpm build`;
+`drivers.ios.screenCaptureCommand` names another.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).

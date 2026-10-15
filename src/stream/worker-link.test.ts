@@ -1,117 +1,191 @@
 import { describe, expect, it } from "vitest";
 
-import { createWorkerStreamLink, type StreamDevice, type StreamRegistry } from "./worker-link.js";
-import { StreamRefusalError } from "./refusal.js";
+import {
+  type Platform,
+  ScreenNotSupportedError,
+  type ScreenSettings,
+  ScreenUnavailableError,
+} from "../core/index.js";
+import { FakeClock } from "../ports/index.js";
 import type { StreamCaller } from "./caller.js";
+import { createCaptureRegistry } from "./captures.js";
+import type { CapturedStream } from "./feed.js";
+import { StreamRefusalError } from "./refusal.js";
+import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
+import { createWorkerStreamLink } from "./worker-link.js";
 
 const AGENT: StreamCaller = { principal: "tok_agent", requesterId: "agent-1", role: "agent" };
+const OTHER_AGENT: StreamCaller = { principal: "tok_agent", requesterId: "agent-2", role: "agent" };
 const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
+const SETTINGS: ScreenSettings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 
-function registry(
-  leases: Readonly<Record<string, { ownerId: string; requesterId: string }>>,
-  devices: Readonly<Record<string, StreamDevice>> = {},
-): StreamRegistry {
-  return {
-    deviceOfLease: (leaseId) => devices[leaseId],
-    leaseOwner: (leaseId) => leases[leaseId],
-  };
+interface Opened {
+  readonly platform: Platform;
+  readonly deviceId: string;
+  readonly settings: ScreenSettings;
+  readonly feed: ScriptedFeed;
 }
 
-const HELD = { lse_mine: { ownerId: "tok_agent", requesterId: "agent-1" } };
-const SIMULATOR = { lse_mine: { address: "UDID", physical: false, platform: "ios" } };
+function setup(options: { refuseWith?: Error } = {}) {
+  const registry = new TestRegistry(
+    [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
+    [{ id: "dev_1", platform: "android" }],
+  );
+  const clock = new FakeClock();
+  const captures = createCaptureRegistry();
+  const opened: Opened[] = [];
+  const link = createWorkerStreamLink({
+    bounds: { clock, silenceMs: 1_000, startMs: 5_000 },
+    captures,
+    registry,
+    screens: {
+      openScreen: async (platform, device, settings) => {
+        if (options.refuseWith !== undefined) throw options.refuseWith;
+        const feed = new ScriptedFeed();
+        opened.push({ deviceId: device.deviceId, feed, platform, settings });
+        return feed;
+      },
+    },
+    settings: SETTINGS,
+  });
+  return { captures, clock, link, opened, registry };
+}
 
-async function refusalOf(
-  link: { serve(id: string, caller: StreamCaller, signal: AbortSignal): Promise<unknown> },
-  leaseId: string,
-  caller: StreamCaller,
-): Promise<StreamRefusalError> {
-  const served = await link.serve(leaseId, caller, new AbortController().signal).then(
+async function refusalOf(served: Promise<unknown>): Promise<StreamRefusalError> {
+  const outcome = await served.then(
     () => undefined,
     (error: unknown) => error,
   );
-  expect(served, "the stream was expected to be refused").toBeInstanceOf(StreamRefusalError);
-  return served as StreamRefusalError;
+  expect(outcome, "the stream was expected to be refused").toBeInstanceOf(StreamRefusalError);
+  return outcome as StreamRefusalError;
 }
 
-function linkFor(registryValue: StreamRegistry, options: { available?: boolean } = {}) {
-  return createWorkerStreamLink({
-    ...(options.available === undefined
-      ? {}
-      : { available: async () => options.available === true }),
-    args: [],
-    command: "/does/not/matter",
-    leaseEnvironment: {},
-    registry: registryValue,
-  });
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+}
+
+async function opening(
+  setupValue: ReturnType<typeof setup>,
+  caller: StreamCaller = AGENT,
+  signal = new AbortController().signal,
+): Promise<{ served: Promise<CapturedStream>; feed: ScriptedFeed }> {
+  const served = setupValue.link.serve("lse_mine", caller, signal);
+  await flush();
+  const feed = setupValue.opened.at(-1)?.feed;
+  if (feed === undefined) throw new Error("no screen was opened");
+  return { feed, served };
 }
 
 describe("the worker's stream link", () => {
   it("refuses a lease it does not hold with the answer every other route gives", async () => {
-    const refusal = await refusalOf(
-      linkFor(registry(HELD, SIMULATOR)),
-      "lse_nope",
-      OPERATOR,
-    );
+    const { link, opened } = setup();
+    const refusal = await refusalOf(link.serve("lse_nope", OPERATOR, new AbortController().signal));
     expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
+    expect(opened).toEqual([]);
   });
 
-  it("answers an agent reaching for another requester's lease exactly as if it did not exist", async () => {
-    const link = linkFor(
-      registry(
-        { lse_theirs: { ownerId: "tok_other", requesterId: "agent-2" } },
-        { lse_theirs: SIMULATOR["lse_mine"] },
-      ),
-    );
-    const refusal = await refusalOf(link, "lse_theirs", AGENT);
-    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
-    // why: the message must not say "not yours" either -- an agent that can tell a lease it cannot have
-    // from a lease that does not exist can enumerate the fleet's leases by asking for their pictures.
-    expect(refusal.message).toBe("Unknown lease: lse_theirs");
-  });
-
-  it("refuses a device that can never produce a picture, naming that as its own reason", async () => {
-    for (const [name, device] of [
-      ["a physical device", { address: "UDID", physical: true, platform: "ios" }],
-      ["an emulator", { address: "emulator-5554", physical: false, platform: "android" }],
-    ] as const) {
-      const link = linkFor(registry(HELD, { lse_mine: device }));
-      const refusal = await refusalOf(link, "lse_mine", OPERATOR);
-      expect([refusal.status, refusal.code], name).toEqual([415, "STREAM_NOT_SUPPORTED"]);
-    }
-  });
-
-  it("says a capture program that is not there is unavailable rather than a bad request", async () => {
-    // why: 503 and not 400 -- the lease and the ask are both fine, so the viewer that asks again after
-    // its operator installs the tool is right to ask the same thing.
+  it("answers an agent reaching for another requester's lease exactly as if it did not exist, opening nothing", async () => {
+    const { link, opened } = setup();
     const refusal = await refusalOf(
-      linkFor(registry(HELD, SIMULATOR), { available: false }),
-      "lse_mine",
-      OPERATOR,
+      link.serve("lse_mine", OTHER_AGENT, new AbortController().signal),
     );
+    expect([refusal.status, refusal.code, refusal.message]).toEqual([
+      404,
+      "UNKNOWN_LEASE",
+      "Unknown lease: lse_mine",
+    ]);
+    expect(opened).toEqual([]);
+  });
+
+  it("opens the leased device's screen through its platform's driver, with the configured settings", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness, OPERATOR);
+    feed.meta();
+    const stream = await served;
+    expect(stream.meta).toEqual({ codec: "h264", fps: 30, height: 720, width: 330 });
+    expect(
+      harness.opened.map(({ deviceId, platform, settings }) => ({ deviceId, platform, settings })),
+    ).toEqual([{ deviceId: "drv-dev_1", platform: "android", settings: SETTINGS }]);
+  });
+
+  it("refuses a device whose driver cannot stream it as not supported", async () => {
+    const { link } = setup({ refuseWith: new ScreenNotSupportedError("A physical phone cannot") });
+    const refusal = await refusalOf(link.serve("lse_mine", AGENT, new AbortController().signal));
+    expect([refusal.status, refusal.code, refusal.message]).toEqual([
+      415,
+      "STREAM_NOT_SUPPORTED",
+      "A physical phone cannot",
+    ]);
+  });
+
+  it("refuses a capture that cannot run right now as unavailable", async () => {
+    const { link } = setup({ refuseWith: new ScreenUnavailableError("No capture program") });
+    const refusal = await refusalOf(link.serve("lse_mine", AGENT, new AbortController().signal));
     expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
-    expect(refusal.message).toContain("/does/not/matter");
   });
 
-  it("refuses on ownership before it looks for a capture program", async () => {
-    // why: the order is what keeps an agent's reach the only question asked of an agent. A link that
-    // checked its tooling first would answer an agent with a different refusal for a lease that exists
-    // on this worker than for one that does not.
-    const link = createWorkerStreamLink({
-      available: async () => false,
-      args: [],
-      command: "/does/not/matter",
-      leaseEnvironment: {},
-      registry: registry(HELD, SIMULATOR),
-    });
-    const refusal = await refusalOf(link, "lse_nope", AGENT);
+  it("refuses, and closes the capture, when nothing is painted within the start bound", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness);
+    harness.clock.advance(5_000);
+    const refusal = await refusalOf(served);
+    expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
+    expect(feed.closes).toBe(1);
+  });
+
+  it("refuses with an unknown lease, and closes the capture, when the lease ends while the capture is starting", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness);
+    await harness.captures.stop("lse_mine");
+    harness.registry.leases = [];
+    feed.meta();
+    const refusal = await refusalOf(served);
     expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
+    expect(feed.closes).toBeGreaterThan(0);
+    expect(harness.captures.leases()).toEqual([]);
   });
 
-  it("an operator reaches a lease without naming a requester", async () => {
-    // why: an operator owns the whole machine, so the refusal this link must NOT raise is the point --
-    // a link that demanded a requester id it never gets from an operator's token would answer an
-    // operator's own console with 404s. Reaching the spawn is as far as this goes without a real tool.
-    const refusal = await refusalOf(linkFor(registry(HELD, SIMULATOR)), "lse_mine", OPERATOR);
-    expect(refusal.code).toBe("STREAM_UNAVAILABLE");
+  it("refuses a picture whose lease is gone by its first frame even if nothing stopped the capture", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness);
+    harness.registry.leases = [];
+    feed.meta();
+    const refusal = await refusalOf(served);
+    expect(refusal.code).toBe("UNKNOWN_LEASE");
+    expect(feed.closes).toBe(1);
+  });
+
+  it("closes a capture whose request was aborted before its first frame", async () => {
+    const harness = setup();
+    const abort = new AbortController();
+    const { feed, served } = await opening(harness, AGENT, abort.signal);
+    abort.abort();
+    await refusalOf(served);
+    expect(feed.closes).toBe(1);
+    expect(harness.captures.leases()).toEqual([]);
+  });
+
+  it("registers a running capture under its lease, and a lease that ends under a viewer ends its picture", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness);
+    feed.meta();
+    const stream = await served;
+    expect(harness.captures.leases()).toEqual(["lse_mine"]);
+    await harness.captures.stop("lse_mine");
+    expect(feed.closes).toBe(1);
+    const reader = stream.body.getReader();
+    await reader.read();
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  it("closing the stream releases its lease's registration and closes the capture once", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness);
+    feed.meta();
+    const stream = await served;
+    await stream.close();
+    await stream.close();
+    expect(feed.closes).toBe(1);
+    expect(harness.captures.leases()).toEqual([]);
   });
 });

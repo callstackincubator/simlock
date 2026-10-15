@@ -43,8 +43,10 @@ import {
   type DeviceMode,
   type DeviceSpec,
   type VirtualSpec,
+  type ScreenCapture,
 } from "../../core/index.js";
 import type {
+  BytePipeLauncher,
   Clock,
   Filesystem,
   IdGenerator,
@@ -54,6 +56,7 @@ import type {
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { IosPhysicalHandler } from "./physical.js";
+import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -206,6 +209,14 @@ export interface IosSimctlDriverOptions {
     readonly bootTimeoutMs: number;
   };
   readonly slimByDefault?: boolean;
+  // why: absent when this host has no way to run the capture program; the driver then offers no
+  // screen at all rather than one that fails on every open.
+  readonly screenCapture?: {
+    readonly command: string;
+    readonly launcher: BytePipeLauncher;
+    readonly baseEnvironment: NodeJS.ProcessEnv;
+    readonly onLog?: (line: string) => void;
+  };
 }
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
@@ -306,7 +317,23 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
+    this.screenCapture =
+      options.screenCapture === undefined
+        ? undefined
+        : createIosScreenCapture({
+            baseEnvironment: options.screenCapture.baseEnvironment,
+            clock: options.clock,
+            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
+            deviceSet: deviceRoot,
+            filesystem: options.filesystem,
+            launcher: options.screenCapture.launcher,
+            ...(options.screenCapture.onLog === undefined
+              ? {}
+              : { onLog: options.screenCapture.onLog }),
+          });
   }
+
+  readonly screenCapture: ScreenCapture | undefined;
 
   /**
    * why: Establishes the device set this driver owns before it can be asked to do anything,
@@ -1631,6 +1658,11 @@ class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
       `iOS ${requested} is not currently offered for download by Apple (likely superseded by a ` +
       `newer point release); request a different --os, or omit --os for the newest available runtime`;
   }
+}
+
+function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
+  const configured = options.driverConfig["screenCaptureCommand"];
+  return typeof configured === "string" && configured !== "" ? configured : undefined;
 }
 
 function configuredDeviceRoot(options: IosSimctlDriverOptions): string {

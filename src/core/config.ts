@@ -256,12 +256,10 @@ export interface Config {
     readonly leaseTtlCapMs?: number;
   };
   readonly stream: {
-    // why: off by default, because a stream is a capture process pinned to a leased simulator and
-    // nothing should start one for a machine nobody is looking at. A gateway reads `enabled` alone:
-    // it answers a stream by relaying it, so the program and its picture settings belong to the
-    // worker that runs the capture.
+    // why: off by default, because a stream is a capture pinned to a leased device and nothing
+    // should start one for a machine nobody is looking at. A gateway reads `enabled` alone: it
+    // answers a stream by relaying it, so the picture settings belong to the worker that captures.
     readonly enabled: boolean;
-    readonly command: string;
     readonly fps: number;
     readonly maxDimension: number;
     readonly bitrateKbps: number;
@@ -505,14 +503,9 @@ const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
 // why: `command` names the program a worker runs, and a gateway runs none.
 const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
 
-// why: the capture program and its picture settings are what a worker runs and encodes with; a
-// gateway relays a stream and never reads a video byte, so it has nothing to do with them.
-const WORKER_ONLY_STREAM_KEYS: readonly string[] = [
-  "bitrateKbps",
-  "command",
-  "fps",
-  "maxDimension",
-];
+// why: the picture settings are what a worker encodes with; a gateway relays a stream and never
+// reads a video byte, so it has nothing to do with them.
+const WORKER_ONLY_STREAM_KEYS: readonly string[] = ["bitrateKbps", "fps", "maxDimension"];
 
 /**
  * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -793,7 +786,6 @@ function defaultConfig(
     agentDevice: { enabled: false, command: "agent-device" },
     stream: {
       enabled: false,
-      command: "simlock-screen-capture",
       fps: 30,
       maxDimension: 720,
       bitrateKbps: 1_500,
@@ -957,7 +949,6 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     }),
     stream: objectValidator({
       enabled: booleanValue,
-      command: nonEmptyString,
       fps: integerInRange(1, 60),
       maxDimension: integerInRange(96, 4096),
       bitrateKbps: integerInRange(64, 40_000),

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   agentDeviceCapabilitySource,
@@ -46,18 +46,8 @@ import {
   Nuke,
   SerializedDecision,
 } from "../core/index.js";
-import { createLeasing, type LeaseEndParticipant } from "../leasing/index.js";
-import {
-  createCaptureRegistry,
-  createGatewayStreamLink,
-  createStreamLeaseEnd,
-  createStreamMount,
-  createStreamRelayTarget,
-  createWorkerStreamLink,
-  STREAM_TARGET,
-  type StreamLink,
-  type StreamRegistry,
-} from "../stream/index.js";
+import { createLeasing } from "../leasing/index.js";
+import { createGatewayStream, createWorkerStream } from "../stream/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
@@ -74,7 +64,6 @@ import {
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
-import type { HttpMount } from "../http/app.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
@@ -101,6 +90,7 @@ import {
   NodeProcessRunner,
   NodeProcessSupervisor,
   NodeSystemStats,
+  NodeBytePipeLauncher,
   NodeTcpProbe,
   resolveDaemonSocketPath,
   readPackageVersion,
@@ -372,17 +362,16 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       )
     : undefined;
   const stream = config.stream.enabled
-    ? createStreamParts({
-        args: streamCaptureArgs(config),
-        command: config.stream.command,
-        drivers,
-        filesystem,
-        leaseEnvironment: Object.assign(
-          {},
-          ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
-        ),
+    ? createWorkerStream({
+        clock,
         logger: logger.child("stream"),
         registry,
+        screens: new DriverCatalog(drivers),
+        settings: {
+          bitrateKbps: config.stream.bitrateKbps,
+          fps: config.stream.fps,
+          maxDimension: config.stream.maxDimension,
+        },
       })
     : undefined;
   // Builds leasing on top of core (ADR 0018 §2).
@@ -553,7 +542,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       ...(agentDeviceParts === undefined
         ? {}
         : { "agent-device": agentDeviceRelayTarget(agentDeviceParts) }),
-      ...(stream === undefined ? {} : { [STREAM_TARGET]: stream.relayTarget }),
+      ...(stream === undefined ? {} : { [stream.relayTargetName]: stream.relayTarget }),
       ...options.relayTargets,
     },
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
@@ -871,10 +860,23 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       )
     : undefined;
   const stream = config.stream.enabled
-    ? createGatewayStreamParts({
-        leaseIndex,
+    ? createGatewayStream({
+        fleet: {
+          holder: (leaseId) => {
+            const entry = leaseIndex.resolve(leaseId);
+            return entry === undefined
+              ? undefined
+              : {
+                  ownerId: entry.ownerId,
+                  requesterId: entry.requesterId,
+                  workerId: entry.workerId,
+                  workerLeaseId: entry.workerLeaseId,
+                };
+          },
+          relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+          requesterPrefix: leaseIndex.requesterPrefix,
+        },
         logger: logger.child("stream"),
-        relay: gatewayRelay,
       })
     : undefined;
 
@@ -1059,188 +1061,16 @@ interface FleetPortParts {
 
 const AGENT_DEVICE = "agent-device";
 
-const SCREEN_STREAM_CAPABILITY = "screen-stream";
+// why: `pnpm build` puts the capture program beside the compiled daemon (scripts/build-capture.mjs),
+// so a checkout that built finds it without configuration; `drivers.ios.screenCaptureCommand`
+// names another one.
+const PACKAGED_SCREEN_CAPTURE = fileURLToPath(
+  new URL("../bin/simlock-screen-capture", import.meta.url),
+);
 
 type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
 
-// why: all four sit on one link, so a stream answered over a worker's own HTTP surface and a stream
-// answered for a gateway go through the same lease check and the same capture -- one place enforces a
-// rule -- and the lease that ends has one registry to stop, whichever door the picture came in by.
-interface StreamParts {
-  readonly capabilitySource: {
-    readonly name: string;
-    readonly read: () => Promise<{
-      readonly reason?: string;
-      readonly state: "available" | "off" | "unavailable";
-    }>;
-  };
-  readonly leaseEnd: LeaseEndParticipant;
-  readonly link: StreamLink;
-  readonly mount: HttpMount;
-  readonly relayTarget: (
-    request: Request,
-    tenant: string,
-    leaseId: string | undefined,
-  ) => Promise<Response>;
-}
-
-function createStreamParts(options: {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly drivers: readonly Driver[];
-  readonly filesystem: Filesystem;
-  readonly leaseEnvironment: Readonly<Record<string, string>>;
-  readonly logger: Logger;
-  readonly registry: {
-    readonly snapshot: {
-      readonly devices: readonly {
-        readonly address?: string;
-        readonly id: string;
-        readonly physical: boolean;
-        readonly spec: { readonly platform: string };
-      }[];
-      readonly leases: readonly {
-        readonly deviceId: string;
-        readonly id: string;
-        readonly ownerId: string;
-        readonly requesterId: string;
-      }[];
-    };
-  };
-}): StreamParts {
-  // why: only a command that spells a path can be checked; a bare program name is resolved by the
-  // OS at spawn, and a failure there is reported with the spawn's own words rather than guessed at.
-  const namesAPath = options.command.includes("/");
-  const available = namesAPath ? () => options.filesystem.exists(options.command) : undefined;
-  const captures = createCaptureRegistry();
-  const link = createWorkerStreamLink({
-    ...(available === undefined ? {} : { available }),
-    args: options.args,
-    captures,
-    command: options.command,
-    leaseEnvironment: options.leaseEnvironment,
-    onLog: (line) => options.logger.info("Capture", { line }),
-    registry: createStreamRegistry(options.registry),
-  });
-  const service = {
-    link,
-    logger: {
-      info: (message: string, fields?: Record<string, unknown>) =>
-        options.logger.info(message, fields),
-      warn: (message: string, fields?: Record<string, unknown>) =>
-        options.logger.warn(message, fields),
-    },
-  };
-  return {
-    capabilitySource: {
-      name: SCREEN_STREAM_CAPABILITY,
-      read: async () =>
-        available === undefined || (await available())
-          ? { state: "available" }
-          : { reason: `No screen capture program at ${options.command}`, state: "unavailable" },
-    },
-    link,
-    leaseEnd: createStreamLeaseEnd(captures),
-    mount: createStreamMount(service),
-    relayTarget: createStreamRelayTarget(service),
-  };
-}
-
-// why: the snapshot is read at the moment of the read rather than held, because a stream is aimed at
-// the device a lease holds right now -- a lease that ended a moment ago is not a stream, and a stale
-// read would aim a capture at a simulator this worker has already begun to reclaim.
-function createStreamRegistry(registry: {
-  readonly snapshot: {
-    readonly devices: readonly {
-      readonly address?: string;
-      readonly id: string;
-      readonly physical: boolean;
-      readonly spec: { readonly platform: string };
-    }[];
-    readonly leases: readonly {
-      readonly deviceId: string;
-      readonly id: string;
-      readonly ownerId: string;
-      readonly requesterId: string;
-    }[];
-  };
-}): StreamRegistry {
-  return {
-    deviceOfLease: (leaseId) => {
-      const snapshot = registry.snapshot;
-      const lease = snapshot.leases.find((candidate) => candidate.id === leaseId);
-      if (lease === undefined) return undefined;
-      const device = snapshot.devices.find((candidate) => candidate.id === lease.deviceId);
-      if (device === undefined || device.address === undefined) return undefined;
-      return {
-        address: device.address,
-        physical: device.physical,
-        platform: device.spec.platform,
-      };
-    },
-    leaseOwner: (leaseId) => {
-      const lease = registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
-      return lease === undefined
-        ? undefined
-        : { ownerId: lease.ownerId, requesterId: lease.requesterId };
-    },
-  };
-}
-
-function streamCaptureArgs(config: Config): string[] {
-  return [
-    "--codec",
-    "avcc",
-    "--fps",
-    String(config.stream.fps),
-    "--bitrate",
-    String(config.stream.bitrateKbps * 1_000),
-    "--max-dimension",
-    String(config.stream.maxDimension),
-  ];
-}
-
-function createGatewayStreamParts(options: {
-  readonly leaseIndex: FleetLeaseIndex;
-  readonly logger: Logger;
-  readonly relay: GatewayRelay;
-}): { readonly mount: HttpMount } {
-  const link = createGatewayStreamLink({
-    fleet: {
-      holder: (leaseId) => {
-        const entry = options.leaseIndex.resolve(leaseId);
-        return entry === undefined
-          ? undefined
-          : {
-              ownerId: entry.ownerId,
-              requesterId: entry.requesterId,
-              workerLeaseId: entry.workerLeaseId,
-              workerId: entry.workerId,
-            };
-      },
-      requesterPrefix: options.leaseIndex.requesterPrefix,
-      relay: (workerId, request, tenant, leaseId) =>
-        options.relay.relay(workerId, {
-          request,
-          target: STREAM_TARGET,
-          tenant,
-          ...(leaseId === undefined ? {} : { leaseId }),
-        }),
-    },
-  });
-  return {
-    mount: createStreamMount({
-      link,
-      logger: {
-        info: (message: string, fields?: Record<string, unknown>) =>
-          options.logger.info(message, fields),
-        warn: (message: string, fields?: Record<string, unknown>) =>
-          options.logger.warn(message, fields),
-      },
-    }),
-  };
-}
-
+// why: the agent-device edge imports nothing from the gateway, so this is the one place the gateway's parts become its port.
 function agentDeviceFleetPort({
   instanceId,
   leaseIndex,
@@ -1509,6 +1339,12 @@ async function discoverIosDriver(
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       onSlimmed: emitSlimDiagnostic(options.eventBus),
+      screenCapture: {
+        baseEnvironment: process.env,
+        command: PACKAGED_SCREEN_CAPTURE,
+        launcher: new NodeBytePipeLauncher(),
+        onLog: (line) => logger.debug("Screen capture", { line }),
+      },
       onSlimSkipped: (fact) => {
         logger.warn("Skipped iOS device slim", {
           deviceId: fact.deviceId,

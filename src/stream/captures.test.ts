@@ -1,107 +1,81 @@
 import { describe, expect, it } from "vitest";
 
-import { createCaptureRegistry, createStreamLeaseEnd, type RunningCapture } from "./captures.js";
-
-// why: a capture that remembers being stopped, so a test can say that this capture stopped and not
-// another -- a registry that only cleared its map would pass a test that counted the map.
-function spy(): RunningCapture & { stops(): number } {
-  let stopped = 0;
-  return {
-    close: () => {
-      stopped += 1;
-    },
-    stops: () => stopped,
-  };
-}
-
-describe("createCaptureRegistry", () => {
-  it("stops the captures of one lease and none of another", () => {
-    const registry = createCaptureRegistry();
-    const first = spy();
-    const second = spy();
-    registry.track("lse_a", first);
-    registry.track("lse_b", second);
-
-    expect(registry.stop("lse_a")).toBe(1);
-    expect(first.stops()).toBe(1);
-    expect(second.stops()).toBe(0);
-    expect(registry.leases()).toEqual(["lse_b"]);
-  });
-
-  it("stops every capture of a lease, because one device can be watched from more than one page", () => {
-    const registry = createCaptureRegistry();
-    const viewers = [spy(), spy(), spy()];
-    for (const viewer of viewers) registry.track("lse_a", viewer);
-
-    expect(registry.stop("lse_a")).toBe(3);
-    expect(viewers.map((viewer) => viewer.stops())).toEqual([1, 1, 1]);
-    expect(registry.leases()).toEqual([]);
-  });
-
-  it("forgets a capture closed through its own handle, so a stop does not close it twice", () => {
-    const registry = createCaptureRegistry();
-    const capture = spy();
-    const handle = registry.track("lse_a", capture);
-
-    handle.close();
-    expect(registry.leases()).toEqual([]);
-    expect(registry.stop("lse_a")).toBe(0);
-    // why: one stop is the tool seeing its stdin close once; a second close here is the registry still
-    // naming a capture it should have let go of, aimed at a process that may be somebody else's by now.
-    expect(capture.stops()).toBe(1);
-  });
-
-  it("keeps the lease's other captures when one viewer goes away", () => {
-    const registry = createCaptureRegistry();
-    const staying = spy();
-    const leaving = spy();
-    const handle = registry.track("lse_a", leaving);
-    registry.track("lse_a", staying);
-
-    handle.close();
-    expect(leaving.stops()).toBe(1);
-    expect(staying.stops()).toBe(0);
-    expect(registry.leases()).toEqual(["lse_a"]);
-  });
-
-  it("stops nothing for a lease it never heard of", () => {
-    const registry = createCaptureRegistry();
-    registry.track("lse_a", spy());
-    expect(registry.stop("lse_nope")).toBe(0);
-    expect(registry.leases()).toEqual(["lse_a"]);
-  });
-});
-
-describe("createStreamLeaseEnd", () => {
-  it("ends a picture the moment the lease ends, with the viewer still connected", () => {
-    const registry = createCaptureRegistry();
-    const capture = spy();
-    registry.track("lse_a", capture);
-    const leaseEnd = createStreamLeaseEnd(registry);
-
-    // why: this is the case an aborted request cannot cover -- a lease ended somewhere else (released by
-    // a CLI, expired, its device lost) while a browser still holds the stream open. Without this the
-    // viewer keeps watching a simulator this worker has already handed back to the pool, and the next
-    // lease of that device is someone else's screen.
-    void leaseEnd.leaseEnded(ended("lse_a"), new AbortController().signal);
-    expect(capture.stops()).toBe(1);
-    expect(registry.leases()).toEqual([]);
-  });
-
-  it("is idle for a lease that never streamed anything", async () => {
-    const registry = createCaptureRegistry();
-    await expect(
-      createStreamLeaseEnd(registry).leaseEnded(ended("lse_a"), new AbortController().signal),
-    ).resolves.toBeUndefined();
-  });
-});
+import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 
 function ended(leaseId: string) {
-  return {
-    deviceId: "dev_1",
-    leaseId,
-    ownerId: "agent-1",
-    platform: "ios" as const,
-    reason: "explicit" as const,
-  };
+  return { leaseId } as Parameters<ReturnType<typeof createStreamLeaseEnd>["leaseEnded"]>[0];
 }
+
+describe("the capture registry", () => {
+  it("a lease that ends while its capture is starting aborts the slot and closes the capture once it attaches", async () => {
+    const captures = createCaptureRegistry();
+    const slot = captures.begin("lse_1");
+    await captures.stop("lse_1");
+    expect(slot.ended.aborted).toBe(true);
+    let closes = 0;
+    slot.attach(async () => {
+      closes += 1;
+    });
+    await Promise.resolve();
+    expect(closes).toBe(1);
+  });
+
+  it("stops every capture of the lease that ended and leaves another lease's running", async () => {
+    const captures = createCaptureRegistry();
+    const closed: string[] = [];
+    captures.begin("lse_1").attach(async () => void closed.push("a"));
+    captures.begin("lse_1").attach(async () => void closed.push("b"));
+    captures.begin("lse_2").attach(async () => void closed.push("c"));
+    expect(await captures.stop("lse_1")).toBe(2);
+    expect(closed).toEqual(["a", "b"]);
+    expect(captures.leases()).toEqual(["lse_2"]);
+  });
+
+  it("closes a capture once however many doors close it", async () => {
+    const captures = createCaptureRegistry();
+    let closes = 0;
+    const slot = captures.begin("lse_1");
+    slot.attach(async () => {
+      closes += 1;
+    });
+    await slot.release();
+    await slot.release();
+    await captures.stop("lse_1");
+    expect(closes).toBe(1);
+  });
+
+  it("a released capture no longer counts as its lease's", async () => {
+    const captures = createCaptureRegistry();
+    await captures.begin("lse_1").release();
+    expect(captures.leases()).toEqual([]);
+    expect(await captures.stop("lse_1")).toBe(0);
+  });
+});
+
+describe("the stream's lease-end participant", () => {
+  it("returns only once the ended lease's captures have closed", async () => {
+    const captures = createCaptureRegistry();
+    let finish!: () => void;
+    captures.begin("lse_1").attach(() => new Promise<void>((resolve) => (finish = resolve)));
+    let returned = false;
+    const done = createStreamLeaseEnd(captures)
+      .leaseEnded(ended("lse_1"), new AbortController().signal)
+      .then(() => {
+        returned = true;
+      });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    finish();
+    await done;
+    expect(returned).toBe(true);
+  });
+
+  it("stops waiting when leasing gives up on it", async () => {
+    const captures = createCaptureRegistry();
+    captures.begin("lse_1").attach(() => new Promise<void>(() => undefined));
+    const abort = new AbortController();
+    const done = createStreamLeaseEnd(captures).leaseEnded(ended("lse_1"), abort.signal);
+    abort.abort();
+    await expect(done).resolves.toBeUndefined();
+  });
+});

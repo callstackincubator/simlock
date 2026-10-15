@@ -31,8 +31,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 | **Startup, health, drivers**                           |                                                                                       |
 | `startup-read.ts`, `startup-converger.ts`              | `readStartup`; `StartupConverger`, the device half of startup                         |
 | `doctor.ts`, `host-facts.ts`                           | `Doctor` findings and fixes; `HostFactsReader` for status                             |
-| `driver.ts`, `driver-catalog.ts`                       | `Driver` interface, errors, `DiskSpaceGuard`; `DriverCatalog`                         |
-| `screen.ts`                                            | `ScreenCapture` (a driver's optional screen), its frame tags and encoder              |
+| `driver.ts`, `driver-catalog.ts`, `screen.ts`          | `Driver`, errors, `DiskSpaceGuard`; `DriverCatalog`; `ScreenCapture`, frame tags      |
 | `catalog-match.ts`                                     | Model name, class and paired runtimes against a catalog entry                         |
 | `component-installer.ts`                               | `ComponentInstaller`: install, list, remove                                           |
 | `physical-enrollment.ts`, `physical-presence.ts`       | `device add`/`remove`; every presence read, `latestPresence`                          |

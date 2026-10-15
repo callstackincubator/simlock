@@ -36,30 +36,35 @@ export function streamUnavailable(message: string): StreamRefusalError {
   return new StreamRefusalError(503, "STREAM_UNAVAILABLE", message);
 }
 
+// why: a worker's refusal is a claim, and it reaches a viewer's screen and this gateway's log; a code
+// that is not one of ours in shape, or a message past this length, is not forwarded as the worker's.
+const RELAYED_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+const MAX_RELAYED_MESSAGE = 1_000;
+
 export function relayedRefusal(
   workerId: string,
   leaseId: string,
   status: number,
   body: string,
 ): StreamRefusalError {
-  const error = asRecord(parse(body))?.["error"];
-  const fields = asRecord(error);
+  const fields = asRecord(asRecord(parse(body))?.["error"]);
+  const code = fields?.["code"];
   const message = fields?.["message"];
-  if (typeof message === "string" && message !== "") {
-    const code = fields?.["code"];
-    return new StreamRefusalError(
-      status,
-      typeof code === "string" ? code : "STREAM_UNAVAILABLE",
-      message,
-    );
+  // why: a worker that answered 2xx with no picture has broken the one promise a stream makes, which
+  // is this gateway's failure to deliver, not the worker refusing; any other status is the worker's.
+  const relayedStatus = status >= 400 && status <= 599 ? status : 502;
+  if (
+    typeof code === "string" &&
+    RELAYED_CODE.test(code) &&
+    typeof message === "string" &&
+    message !== ""
+  ) {
+    return new StreamRefusalError(relayedStatus, code, message.slice(0, MAX_RELAYED_MESSAGE));
   }
-  // why: a body that will not parse is still a refusal, and its status is the part that is certain --
-  // but a worker that answered 200 with no picture has broken the one promise a stream makes, which is
-  // this gateway's own failure to deliver, not the worker refusing.
   return new StreamRefusalError(
-    status >= 200 && status < 300 ? 502 : status,
+    relayedStatus,
     "STREAM_UNAVAILABLE",
-    `Worker ${workerId} refused the stream for lease ${leaseId}${body === "" ? "" : `: ${body}`}`,
+    `Worker ${workerId} refused the stream for lease ${leaseId} with status ${String(status)}`,
   );
 }
 

@@ -35,7 +35,7 @@ Uses: nothing from other components. Imported by: every component that touches t
 ## Rules
 
 - Application code never imports `fs` or `child_process`, or calls `Date.now()` or
-  `setTimeout`: it takes a port. Lint fails core, leasing, agent-device and host-load on an
+  `setTimeout`: it takes a port. Lint fails core, leasing, agent-device, host-load and stream on an
   `fs` or `child_process` import (`no-fs-or-process` in `.dependency-cruiser.mjs`).
 - The real adapters are built once, in the composition root (`src/daemon/main.ts`, or the
   CLI and MCP environment builders), and injected.

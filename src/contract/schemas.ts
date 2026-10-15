@@ -909,7 +909,6 @@ export const configSchema = z.object({
   stream: z
     .object({
       enabled: z.boolean(),
-      command: z.string(),
       fps: z.number(),
       maxDimension: z.number(),
       bitrateKbps: z.number(),

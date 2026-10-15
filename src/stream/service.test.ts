@@ -1,18 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { CapturedStream } from "./capture.js";
+import type { CapturedStream } from "./feed.js";
 import { StreamRefusalError } from "./refusal.js";
-import {
-  handleStreamRequest,
-  leaseIdOf,
-  streamResponse,
-  type StreamLink,
-} from "./service.js";
+import { handleStreamRequest, leaseIdOf, streamResponse, type StreamLink } from "./service.js";
 
 function stream(codec: "h264" | "mjpeg" = "h264"): CapturedStream {
   return {
     body: new ReadableStream<Uint8Array>(),
-    close: () => undefined,
+    close: async () => undefined,
     meta: { codec, fps: 30, height: 720, width: 330 },
   };
 }
@@ -72,7 +67,7 @@ describe("handleStreamRequest", () => {
       "lse_1",
     );
     expect(response.status).toBe(405);
-    expect(((await response.json() as { error: { code: string } }).error.code)).toBe("BAD_REQUEST");
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
   });
 
   it("carries a link's refusal out as its own status and code", async () => {
@@ -100,7 +95,7 @@ describe("handleStreamRequest", () => {
       "lse_1",
     );
     expect(response.status).toBe(500);
-    expect(((await response.json() as { error: { code: string } }).error.code)).toBe("INTERNAL");
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("INTERNAL");
   });
 
   it("answers a stream with its picture described in the headers", async () => {
@@ -123,7 +118,6 @@ describe("handleStreamRequest", () => {
       ].sort(),
     );
   });
-
 });
 
 describe("streamResponse", () => {

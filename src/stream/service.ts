@@ -1,4 +1,4 @@
-import type { CapturedStream } from "./capture.js";
+import type { CapturedStream } from "./feed.js";
 import type { StreamCaller } from "./caller.js";
 import { noSuchStream, StreamRefusalError } from "./refusal.js";
 
@@ -49,7 +49,11 @@ export async function handleStreamRequest(
     const refusal =
       error instanceof StreamRefusalError
         ? error
-        : new StreamRefusalError(500, "INTERNAL", error instanceof Error ? error.message : String(error));
+        : new StreamRefusalError(
+            500,
+            "INTERNAL",
+            error instanceof Error ? error.message : String(error),
+          );
     options.logger?.warn("Screen stream refused", {
       code: refusal.code,
       leaseId,

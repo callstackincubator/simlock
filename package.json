@@ -38,9 +38,10 @@
     }
   },
   "scripts": {
-    "build": "pnpm run build:daemon && pnpm run build:ui",
+    "build": "pnpm run build:daemon && pnpm run build:ui && pnpm run build:capture",
     "build:daemon": "tsc -p tsconfig.build.json",
     "build:ui": "vite build ui",
+    "build:capture": "node scripts/build-capture.mjs",
     "build:e2e": "tsc -p e2e/fake-driver/tsconfig.json",
     "dev:ui": "vite ui",
     "test": "pnpm run test:unit && pnpm run test:timing && pnpm run test:e2e",

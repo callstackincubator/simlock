@@ -1,6 +1,11 @@
-import { handleStreamRequest, leaseIdOf, STREAM_PREFIX, type StreamServiceOptions } from "./service.js";
+import {
+  handleStreamRequest,
+  leaseIdOf,
+  STREAM_PREFIX,
+  type StreamServiceOptions,
+} from "./service.js";
 
-export const STREAM_TARGET = "stream";
+export { STREAM_TARGET } from "./target.js";
 
 // why: the shape the HTTP layer mounts, declared here rather than imported from `src/http`, because a
 // stream is the same exchange whether a console on this host asks for it or a gateway relays one, and a

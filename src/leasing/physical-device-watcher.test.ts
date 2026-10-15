@@ -49,7 +49,6 @@ function config(options: HarnessOptions): Config {
     agentDevice: { command: "agent-device", enabled: false },
     stream: {
       bitrateKbps: 1500,
-      command: "simlock-screen-capture",
       enabled: false,
       fps: 30,
       maxDimension: 720,

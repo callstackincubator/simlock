@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { CAPTURE_TAG, MAX_FRAME_BYTES, MetaFrameScanner } from "./framing.js";
+import { SCREEN_FRAME_TAG as CAPTURE_TAG } from "../core/index.js";
+import { checkedMeta, MAX_FRAME_BYTES, MetaFrameScanner } from "./framing.js";
 
 const META = { codec: "h264", deviceSet: "/set", fps: 30, height: 720, udid: "UDID", width: 330 };
 
@@ -67,9 +68,28 @@ describe("MetaFrameScanner", () => {
     );
   });
 
-  it("reads an mjpeg meta as mjpeg and defaults a size it was not told to zero", () => {
+  it("reads an mjpeg meta as mjpeg", () => {
     const scanner = new MetaFrameScanner();
-    const found = scanner.push(metaFrame({ codec: "mjpeg" }));
-    expect(found?.meta).toEqual({ codec: "mjpeg", fps: 0, height: 0, width: 0 });
+    const found = scanner.push(metaFrame({ codec: "mjpeg", fps: 5, height: 720, width: 330 }));
+    expect(found?.meta).toEqual({ codec: "mjpeg", fps: 5, height: 720, width: 330 });
+  });
+
+  it("refuses a meta frame that leaves out the size rather than reporting a stream with no size", () => {
+    expect(() => new MetaFrameScanner().push(metaFrame({ codec: "h264", fps: 30 }))).toThrow(
+      /is not a size a screen has/u,
+    );
+  });
+});
+
+describe("checkedMeta", () => {
+  it("refuses a codec the stream cannot carry instead of calling it h264", () => {
+    expect(() => checkedMeta("vp9", 330, 720, 30)).toThrow(/codec this stream cannot carry: vp9/u);
+  });
+
+  it("refuses a size no screen has", () => {
+    expect(() => checkedMeta("h264", 330, 1_000_000, 30)).toThrow(/height/u);
+    expect(() => checkedMeta("h264", 0, 720, 30)).toThrow(/width/u);
+    expect(() => checkedMeta("h264", 330.5, 720, 30)).toThrow(/width/u);
+    expect(() => checkedMeta("h264", 330, 720, -1)).toThrow(/fps/u);
   });
 });

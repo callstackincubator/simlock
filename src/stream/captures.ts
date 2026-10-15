@@ -1,61 +1,96 @@
 // why: a capture belongs to a lease, not to a connection -- the lease is the thing that says this
-// machine still owns that simulator, and the types cannot say so. A viewer going away already stops a
-// capture through its own request, which covers the ordinary case; this covers the case it cannot, a
-// lease that ends somewhere else (released elsewhere, expired, the device lost) while somebody is
-// still watching. Without it a stream pins a simulator's framebuffer on a device this worker has
-// already handed back.
+// machine still owns that device. A viewer going away stops a capture through its own request; this
+// covers what that cannot, a lease that ends somewhere else (released elsewhere, expired, the device
+// lost) while somebody is still watching, or while a capture is still starting.
 import type { LeaseEndParticipant } from "../leasing/index.js";
 
-export interface RunningCapture {
-  close(): void;
+export interface CaptureSlot {
+  // why: aborted when the lease ends, so a capture still being opened learns it has no lease to
+  // film before it hands a picture out.
+  readonly ended: AbortSignal;
+  attach(close: () => Promise<void>): void;
+  release(): Promise<void>;
 }
 
 export interface CaptureRegistry {
-  track(leaseId: string, capture: RunningCapture): RunningCapture;
-  stop(leaseId: string): number;
+  begin(leaseId: string): CaptureSlot;
+  stop(leaseId: string): Promise<number>;
   leases(): string[];
 }
 
+interface Slot {
+  readonly controller: AbortController;
+  close: (() => Promise<void>) | undefined;
+  closing: Promise<void> | undefined;
+}
+
 export function createCaptureRegistry(): CaptureRegistry {
-  const running = new Map<string, Set<RunningCapture>>();
+  const running = new Map<string, Set<Slot>>();
+
+  const closeSlot = (slot: Slot): Promise<void> => {
+    // why: a slot stopped before its capture attached has nothing to close yet; `attach` closes it
+    // then, so the latch is set only once there is a close to run.
+    if (slot.close === undefined) return Promise.resolve();
+    slot.closing ??= slot.close();
+    return slot.closing;
+  };
+
+  const forget = (leaseId: string, slot: Slot) => {
+    const forLease = running.get(leaseId);
+    forLease?.delete(slot);
+    if (forLease?.size === 0) running.delete(leaseId);
+  };
 
   return {
-    leases: () => [...running.keys()],
-    stop: (leaseId) => {
-      const captures = running.get(leaseId);
-      if (captures === undefined) return 0;
-      running.delete(leaseId);
-      for (const capture of captures) capture.close();
-      return captures.size;
-    },
-    track: (leaseId, capture) => {
-      const forLease = running.get(leaseId) ?? new Set<RunningCapture>();
-      forLease.add(capture);
-      running.set(leaseId, forLease);
-      // why: `released` is the handle's own latch, not the capture's -- one capture can be closed
-      // through three doors (a stop, an aborted viewer, this registry) and the map must be corrected
-      // once, or a second close would remove another lease's capture that had reused the same set.
-      let released = false;
-      const close = () => {
-        if (!released) {
-          released = true;
-          forLease.delete(capture);
-          if (forLease.size === 0) running.delete(leaseId);
-        }
-        capture.close();
+    // why: registered before the capture starts, not after its first frame -- a lease that ends in
+    // between must find something to stop, or the capture would come up filming a device that is
+    // already on its way to the next holder.
+    begin: (leaseId) => {
+      const slot: Slot = {
+        close: undefined,
+        closing: undefined,
+        controller: new AbortController(),
       };
-      return { close };
+      const forLease = running.get(leaseId) ?? new Set<Slot>();
+      forLease.add(slot);
+      running.set(leaseId, forLease);
+      return {
+        attach: (close) => {
+          slot.close = close;
+          if (slot.controller.signal.aborted) void closeSlot(slot);
+        },
+        ended: slot.controller.signal,
+        release: async () => {
+          forget(leaseId, slot);
+          await closeSlot(slot);
+        },
+      };
+    },
+    leases: () => [...running.keys()],
+    stop: async (leaseId) => {
+      const forLease = running.get(leaseId);
+      if (forLease === undefined) return 0;
+      running.delete(leaseId);
+      for (const slot of forLease) slot.controller.abort();
+      await Promise.allSettled([...forLease].map(closeSlot));
+      return forLease.size;
     },
   };
 }
 
 export function createStreamLeaseEnd(captures: CaptureRegistry): LeaseEndParticipant {
   return {
-    // why: resolves without waiting for the capture process to be reaped. The stop is a closed pipe,
-    // not an operation whose outcome leasing needs, and a lease's reclaim must not queue behind a
-    // video tool's exit; the viewer learns the picture ended when the tool's stdout reaches its end.
-    leaseEnded: async (ended) => {
-      captures.stop(ended.leaseId);
+    // why: waits for each capture's close, which a driver bounds, so a reclaim does not wipe or
+    // reboot a device while its capture is still being torn down on it; leasing's own signal ends
+    // the wait if leasing gives up first.
+    leaseEnded: async (ended, signal) => {
+      await Promise.race([
+        captures.stop(ended.leaseId),
+        new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+      ]);
     },
   };
 }
