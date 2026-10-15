@@ -15,6 +15,7 @@ import {
   FakeClock,
   FakeProcessSupervisor,
   FakeTcpProbe,
+  FakeTcpStreamConnector,
   type Filesystem,
   MemoryFilesystem,
   NodeFilesystem,
@@ -2973,6 +2974,79 @@ describe("AndroidDriver", () => {
   });
 });
 
+describe("AndroidDriver screen capture", () => {
+  const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
+  const running = {
+    address: "emulator-5586",
+    deviceId: "simlock_one",
+    driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
+    physical: false,
+  } as const;
+  const settings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
+
+  it("is offered only when both the server path and a TCP stream connector are given", async () => {
+    const both = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    expect(both.screenCapture).toBeDefined();
+    const noPath = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    expect(noPath.screenCapture).toBeUndefined();
+    const noConnector = await createDriver(
+      await androidFilesystem(),
+      new ScriptedProcessRunner([]),
+      {
+        scrcpyServerPath: serverPath,
+      },
+    );
+    expect(noConnector.screenCapture).toBeUndefined();
+  });
+
+  it("pushes the server with this driver's adb, its scoped environment and the device's serial", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp("/simlock/vendor");
+    await filesystem.writeFileAtomic(serverPath, "jar");
+    const runner = new ScriptedProcessRunner([
+      {
+        match: {
+          args: ["-s", "emulator-5586", "push", serverPath, /simlock-scrcpy-/],
+          command: binaries.adb,
+        },
+        result: { code: 1, stderr: "error: closed", stdout: "" },
+      },
+      {
+        match: {
+          args: ["-s", "emulator-5586", "shell", "rm", "-f", /simlock-scrcpy-/],
+          command: binaries.adb,
+        },
+      },
+    ]);
+    const driver = await createDriver(filesystem, runner, {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    await expect(driver.screenCapture?.open(running, settings)).rejects.toThrow(/error: closed/);
+    expect(runner.calls[0]?.options.env).toEqual(scopedEnv);
+    expect(runner.calls[1]?.options.env).toEqual(scopedEnv);
+  });
+
+  it("refuses an emulator that is not running, before running anything", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp("/simlock/vendor");
+    await filesystem.writeFileAtomic(serverPath, "jar");
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(filesystem, runner, {
+      scrcpyServerPath: serverPath,
+      tcpStreamConnector: new FakeTcpStreamConnector(),
+    });
+    const stopped = { ...running, driverData: { ...running.driverData, port: 0, serial: "" } };
+    await expect(driver.screenCapture?.open(stopped, settings)).rejects.toThrow(/not running/);
+    expect(runner.calls).toEqual([]);
+  });
+});
+
 describe("AndroidDriver.create", () => {
   it("creates and marks its own AVD home under SIMLOCK_HOME when none exists yet", async () => {
     const filesystem = await androidFilesystem({ withDeviceRoot: false });
@@ -5176,7 +5250,9 @@ async function createDriver(
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
+    readonly scrcpyServerPath?: string;
     readonly tcpProbe?: FakeTcpProbe;
+    readonly tcpStreamConnector?: FakeTcpStreamConnector;
   } = {},
 ) {
   let nextId = 0;
@@ -5219,8 +5295,16 @@ function onlyProvided(options: {
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
+  readonly scrcpyServerPath?: string;
+  readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
+    ...(options.scrcpyServerPath === undefined
+      ? {}
+      : { scrcpyServerPath: options.scrcpyServerPath }),
+    ...(options.tcpStreamConnector === undefined
+      ? {}
+      : { tcpStreamConnector: options.tcpStreamConnector }),
     ...(options.acceptAndroidLicenses === undefined
       ? {}
       : { acceptAndroidLicenses: options.acceptAndroidLicenses }),

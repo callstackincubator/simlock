@@ -39,6 +39,7 @@ import {
   type PassthroughContext,
   type ReclaimResult,
   removeListedComponent,
+  type ScreenCapture,
   RuntimeMissingError,
   sameReceipt,
 } from "../../core/index.js";
@@ -53,6 +54,7 @@ import {
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
+  type TcpStreamConnector,
   type TimerHandle,
 } from "../../ports/index.js";
 import { AdbRegistrar } from "./adb-registrar.js";
@@ -72,6 +74,7 @@ import {
 } from "./device-profile-source.js";
 import { fits, isPlayStoreImage, misfitReason } from "./image-fit.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
+import { createAndroidScreenCapture } from "./screen/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
@@ -197,6 +200,10 @@ export interface AndroidDriverOptions {
   /** `SIMLOCK_HOME`: the default device root and the adb server record are derived here, not in the core. */
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
+  // why: both are optional so a host that leaves either out gets a driver without screen streams
+  // rather than one that fails each stream it is asked for.
+  readonly scrcpyServerPath?: string | undefined;
+  readonly tcpStreamConnector?: TcpStreamConnector | undefined;
   /** `process.getuid?.()`; `undefined` skips the root's ownership check. */
   readonly uid?: number;
   /**
@@ -486,6 +493,7 @@ export class AndroidDriver implements Driver {
   readonly #sdk: AndroidSdkPaths;
   readonly #tcpProbe: TcpProbe;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
+  readonly screenCapture: ScreenCapture | undefined;
 
   private constructor(
     options: AndroidDriverOptions,
@@ -523,6 +531,20 @@ export class AndroidDriver implements Driver {
     this.#tcpProbe = options.tcpProbe;
     // System images land under the SDK root, so that is the volume an install is reserved on.
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
+    this.screenCapture =
+      options.scrcpyServerPath === undefined || options.tcpStreamConnector === undefined
+        ? undefined
+        : createAndroidScreenCapture({
+            adb: sdk.adb,
+            adbServerPort,
+            clock: options.clock,
+            env: () => this.#env(),
+            filesystem: options.filesystem,
+            processRunner: options.processRunner,
+            serialOf: (device) => this.#dataFor(device).serial,
+            serverPath: options.scrcpyServerPath,
+            tcp: options.tcpStreamConnector,
+          });
     // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here

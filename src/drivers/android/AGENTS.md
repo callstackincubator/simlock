@@ -2,6 +2,7 @@
 
 Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
 Entry: `index.ts` → `AndroidDriver.create(options)`; also `androidPrerequisites`, `hostAbiFor`, `ANDROID_PASSTHROUGH_TOOLS`.
+`AndroidDriver.screenCapture` exists only when `create` got both `scrcpyServerPath` and `tcpStreamConnector`.
 Uses: core, ports, `../installer-process.ts`. Never imports: bus, leasing, daemon.
 Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
 
@@ -12,6 +13,13 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `index.ts`                 | `AndroidDriver`: every `Driver` verb, console-port allocator, passthrough rules |
 | `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                  |
 | `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)               |
+| `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers   |
+| `screen/index.ts`          | `createAndroidScreenCapture`: the driver's `ScreenCapture`, entered only here   |
+| `screen/session.ts`        | One stream: push, server, socket, body, close                                   |
+| `screen/adb-socket.ts`     | `openDeviceSocket`: `host:transport` + `localabstract` on Simlock's adb server  |
+| `screen/scrcpy-video.ts`   | `ScrcpyVideoParser`: scrcpy's video socket (codec id, session, media packets)   |
+| `screen/h264.ts`           | Annex-B split, AVCC, the `avcC` record                                          |
+| `screen/envelope.ts`       | `EnvelopeMapper`: scrcpy events → core's screen frames                          |
 | `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                    |
 | `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones      |
 | `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                    |
@@ -106,6 +114,33 @@ Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical
 
 No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's.
 
+Screen capture — `screenCapture.open(device, settings)`, scrcpy server v5.0.1 (`vendor/scrcpy`):
+
+1. Physical → `ScreenNotSupportedError`. Jar missing at `scrcpyServerPath` → `ScreenUnavailableError`
+   (`unavailable()` gives the same reason). No serial (not running) → `ScreenUnavailableError`.
+2. `scid`: random 31-bit, written `%08x`. `adb -s <serial> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar`.
+3. `adb -s <serial> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>
+log_level=info tunnel_forward=true video=true audio=false control=false video_codec=h264
+send_device_meta=false send_dummy_byte=true send_stream_meta=true send_frame_meta=true cleanup=true
+max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No option that changes a
+   device setting (`show_touches`, `stay_awake`, `screen_off_timeout`, `power_off_on_close`); with
+   `control=false` the server never powers the screen on.
+4. No `adb forward`: a TCP connection to Simlock's adb server sends `host:transport:<serial>`, then
+   `localabstract:scrcpy_<scid>`. `FAIL` on the second (nothing listening yet), a refused connect, or a
+   socket that closes before the server's zero byte → retry every 100 ms. `FAIL` on the first → refuse.
+5. Then the codec id (must be `h264`) and the first session packet (width, height) → `open` resolves.
+   One 15 s budget from the push's return to here. Past it, or when the shell exits first →
+   `ScreenUnavailableError` with the server's last 20 output lines.
+6. Body: meta (session size, configured fps) on every session packet; the `avcC` description before
+   the first picture after config packets; key/delta frames as 4-byte-length AVCC. Pull-based
+   (`highWaterMark: 0`): the socket is read only when the body's reader pulls; nothing is dropped.
+   A body whose socket ends errors with the server's last output and closes the feed.
+7. `close` (idempotent, ≤ 5 s): close the socket, wait 1 s for the shell, then SIGKILL it,
+   `adb shell rm -f <jar>`. The body's end, error or cancel calls it.
+
+A rotation starts a new scrcpy session: a new meta frame, then a new description before the next
+picture; the browser decoder re-reads both mid-stream.
+
 Plain facts: `avdmanager list device` runs on every `listCatalog`, every resolve of a model
 the library lacks, and every library provision (seed); nothing is cached. The sdkmanager
 catalog is never read. Existing devices are not re-checked against the fit rule.
@@ -121,6 +156,7 @@ catalog is never read. Existing devices are not re-checked against the fit rule.
 | adb server start / stop        | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
 | `adb devices` in `listManaged` | 30 s                                    | none                                                            |
 | Physical read / uninstall      | 30 s / 60 s                             | none                                                            |
+| Screen: push / start / close   | 30 s / 15 s, retry 100 ms / 5 s         | none                                                            |
 
 Writes: `<root>/<avd>.avd/` (`config.ini`, `boot.prop`, snapshots,
 `simlock-clean-baseline.json`), `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
@@ -132,6 +168,8 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 - The 5037 server is never started, stopped or adopted on purpose; physical commands pass the gate first.
 - A recovery boot never wipes and never captures a baseline.
 - A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`.
+- A screen stream touches only its own `scid`: its jar path and socket name; never another stream's.
+- A screen stream changes no device setting and drops no frame.
 
 ## Known gaps
 
@@ -143,5 +181,13 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 - **Port checks are partial.** After a restart `shutdown` sends `emu kill` to the stored serial
   unchecked; reclaim's `snapshot load` goes to the serial before readiness checks it. A port
   handed out but not yet booted reads free to another instance.
+- **Screen streams are not proven on a device.** `e2e/slow-android-stream.test.ts` is written, not run.
+  Unverified: that SIGKILL on the host `adb shell` (adbd then sends SIGHUP to the device shell)
+  reaches `app_process`; until then the server exits at its next failed write.
+- **A still screen sends nothing.** scrcpy encodes only on change (and repeats once after 100 ms), so
+  a stream's silence bound can end a stream of an idle screen.
+- **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
+- **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
+- **Physical Android devices have no screen stream**, and the jar's digest is not checked at push.
 - **Android diagnostics are dropped.** `onDiagnostic` (`snapshot-cold-boot`, unreadable
   devices.xml) is not wired in `daemon/main.ts`.
