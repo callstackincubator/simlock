@@ -77,7 +77,11 @@ describe("the pane before anything is asked for", () => {
 
   it("shows the state as a word, and every figure it cannot yet fill as missing", () => {
     const words = [...html.matchAll(/<dt>([^<]*)<\/dt><dd[^>]*>(.*?)<\/dd>/g)].map(
-      ([, label = "", value = ""]) => `${label}=${value.replace(/<[^>]+>/g, "").trim()}`,
+      ([, label = "", value = ""]) =>
+        `${label}=${value
+          .split(/<[^>]*>/)
+          .join("")
+          .trim()}`,
     );
 
     expect(words).toEqual([
