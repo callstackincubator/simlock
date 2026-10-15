@@ -1317,8 +1317,20 @@ async function discoverIosDriver(
   }
 }
 
-/** Placeholder until green: wires nothing yet. */
-export function logAndroidDiagnostic(_logger: Logger, _diagnostic: AndroidDriverDiagnostic): void {}
+/** Surfaces what the Android driver reports through `onDiagnostic` as a warning. */
+export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
+  if (diagnostic.kind === "snapshot-cold-boot") {
+    logger.warn("Android snapshot boot fell back to a cold boot", {
+      avdName: diagnostic.avdName,
+      readyAfterMs: diagnostic.readyAfterMs,
+    });
+    return;
+  }
+  logger.warn("Android device profile source could not be read", {
+    path: diagnostic.path,
+    reason: diagnostic.reason,
+  });
+}
 
 /**
  * Android refuses for one more reason than iOS does -- it needs a private adb server as
@@ -1342,6 +1354,7 @@ async function discoverAndroidDriver(
       hostAbi: hostAbiFor(options.hostArch),
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
+      onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
       simlockHome: options.simlockHome,
