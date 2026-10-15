@@ -637,7 +637,7 @@ test.describe("the workers views", () => {
         const want = tones[TONES.indexOf(tone)];
         await expect
           .poll(() => memoryFill(), {
-            timeout: 10_000,
+            timeout: 5_000,
             message: `the ${level ?? "absent"} pressure to paint the ${tone} gauge in ${colorScheme}`,
           })
           .toEqual({ tone, colour: want });
