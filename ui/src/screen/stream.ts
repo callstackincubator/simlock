@@ -82,9 +82,12 @@ export async function readStream(
   body: ReadableStream<Uint8Array>,
   sink: StreamSink,
   signal: AbortSignal,
+  now: () => number = () => performance.now(),
 ): Promise<void> {
   const reader = body.getReader();
-  const clock = new Stopwatch();
+  const clock = new Stopwatch(now);
+  const paintedRecently = new RecentRate(now);
+  const bytesRecently = new RecentRate(now);
   const counters = {
     decoded: 0,
     dropped: 0,
@@ -100,13 +103,13 @@ export async function readStream(
   let awaitingKeyframe = false;
 
   const report = () => {
-    const seconds = Math.max(clock.elapsed(), 0.001);
+    const seconds = Math.min(Math.max(clock.elapsed(), 0.001), RATE_WINDOW_MS / 1000);
     sink.onStats({
       dropped: counters.dropped,
       error: counters.error,
       fed: counters.fed,
-      framesPerSecond: counters.decoded / seconds,
-      kilobitsPerSecond: (counters.bytes * 8) / 1000 / seconds,
+      framesPerSecond: paintedRecently.total() / seconds,
+      kilobitsPerSecond: (bytesRecently.total() * 8) / 1000 / seconds,
       painted: counters.decoded,
     });
   };
@@ -142,6 +145,7 @@ export async function readStream(
       decoder = new VideoDecoder({
         output: (frame) => {
           counters.decoded += 1;
+          paintedRecently.add(1);
           sink.onFrame(frame);
           report();
         },
@@ -205,6 +209,7 @@ export async function readStream(
     if (image === undefined) return;
     sink.onImage(image);
     counters.decoded += 1;
+    paintedRecently.add(1);
     report();
   };
 
@@ -214,12 +219,18 @@ export async function readStream(
     once: true,
   });
 
+  // why: a still screen sends nothing to report on, and the rate it shows must fall to zero while it
+  // is still rather than keep the figure of the last swipe until the next frame arrives.
+  const ticker = setInterval(() => {
+    if (!ended) report();
+  }, 1_000);
   let buffer: Uint8Array = new Uint8Array(0);
   try {
     for (;;) {
       const step = await reader.read();
       if (step.done) break;
       counters.bytes += step.value.length;
+      bytesRecently.add(step.value.length);
       buffer = concat(buffer, step.value);
       for (;;) {
         // why: once a frame has failed, the frames that arrived beside it belong to a stream nobody is
@@ -265,6 +276,7 @@ export async function readStream(
     if (signal.aborted) end();
     else fail(message(error));
   } finally {
+    clearInterval(ticker);
     try {
       decoder?.close();
     } catch {
@@ -345,14 +357,45 @@ function message(error: unknown): string {
 class Stopwatch {
   #started = 0;
   #running = false;
+  readonly #now: () => number;
+
+  constructor(now: () => number) {
+    this.#now = now;
+  }
 
   startIfNeeded(): void {
     if (this.#running) return;
     this.#running = true;
-    this.#started = performance.now();
+    this.#started = this.#now();
   }
 
   elapsed(): number {
-    return this.#running ? (performance.now() - this.#started) / 1000 : 0;
+    return this.#running ? (this.#now() - this.#started) / 1000 : 0;
+  }
+}
+
+/**
+ * why: a rate over the last few seconds, not the stream's whole life. A capture that sends only when
+ * the screen changes spends most of its life quiet, and a lifetime average shows a swipe running at
+ * twenty frames a second as two; this is the rate a viewer is looking at now.
+ */
+const RATE_WINDOW_MS = 2_000;
+
+class RecentRate {
+  readonly #samples: { readonly at: number; readonly amount: number }[] = [];
+  readonly #now: () => number;
+
+  constructor(now: () => number) {
+    this.#now = now;
+  }
+
+  add(amount: number): void {
+    this.#samples.push({ amount, at: this.#now() });
+  }
+
+  total(): number {
+    const since = this.#now() - RATE_WINDOW_MS;
+    while (this.#samples.length > 0 && (this.#samples[0]?.at ?? 0) <= since) this.#samples.shift();
+    return this.#samples.reduce((sum, sample) => sum + sample.amount, 0);
   }
 }

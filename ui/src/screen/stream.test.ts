@@ -459,7 +459,38 @@ describe("reading the envelope", () => {
     expect(recorded.last.error).toBeUndefined();
   });
 
-  it("reports the bytes read and the frames painted as rates over the whole stream", async () => {
+  it("reports the rate of the last two seconds, so a quiet minute does not hide a fast swipe", async () => {
+    let at = 0;
+    const chunks: Uint8Array[] = [meta({ codec: "mjpeg", fps: 30, height: 4, width: 4 })];
+    const times: number[] = [0];
+    // why: one still, then a minute of nothing, then thirty stills a second apart by 1/30 s -- the
+    // lifetime average of that is under one frame a second, the rate a viewer sees now is thirty.
+    chunks.push(frame(TAG.delta, [0xff, 0xd8, 1]));
+    times.push(0);
+    for (let index = 0; index < 30; index += 1) {
+      chunks.push(frame(TAG.delta, [0xff, 0xd8, index]));
+      times.push(60_000 + (index * 1000) / 30);
+    }
+    let next = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        const chunk = chunks[next];
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        at = times[next] ?? at;
+        next += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const recorded = new Recorded();
+    await readStream(body, recorded.sink(), new AbortController().signal, () => at);
+    expect(recorded.last.painted).toBe(31);
+    expect(recorded.last.framesPerSecond).toBeGreaterThan(14);
+  });
+
+  it("reports the bytes read and the frames painted as rates", async () => {
     const whole = concatAll([
       meta(),
       frame(TAG.description, avcC()),
