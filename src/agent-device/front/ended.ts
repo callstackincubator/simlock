@@ -15,7 +15,7 @@ function idsIn(holder: unknown): string[] {
   return ids;
 }
 
-// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure; a JSON-RPC error may nest `details` under `data`.
+// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure, which the JSON-RPC error carries as `error.data.details`.
 function endedLeaseIds(text: string): string[] {
   let body: unknown;
   try {
@@ -27,7 +27,6 @@ function endedLeaseIds(text: string): string[] {
   const error = asRecord(root?.["error"]);
   return [
     ...idsIn(asRecord(asRecord(root?.["result"])?.["data"])),
-    ...idsIn(asRecord(error?.["details"])),
     ...idsIn(asRecord(asRecord(error?.["data"])?.["details"])),
   ];
 }
