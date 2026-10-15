@@ -72,6 +72,10 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
       // start and the lease it was asked for can end and the device be granted to someone else in
       // that time; a slot that was stopped says so even if a new lease reused the id.
       const still = options.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+      if (signal.aborted) {
+        await slot.release();
+        throw streamUnavailable("The viewer went away before the picture started");
+      }
       if (slot.ended.aborted || still?.deviceId !== lease.deviceId) {
         await slot.release();
         throw unknownLease(leaseId);

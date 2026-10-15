@@ -22,6 +22,7 @@ interface Slot {
   readonly controller: AbortController;
   close: (() => Promise<void>) | undefined;
   closing: Promise<void> | undefined;
+  released: boolean;
 }
 
 export function createCaptureRegistry(): CaptureRegistry {
@@ -50,17 +51,21 @@ export function createCaptureRegistry(): CaptureRegistry {
         close: undefined,
         closing: undefined,
         controller: new AbortController(),
+        released: false,
       };
       const forLease = running.get(leaseId) ?? new Set<Slot>();
       forLease.add(slot);
       running.set(leaseId, forLease);
       return {
+        // why: a capture can finish opening after its viewer left or its lease ended; it is closed
+        // the moment it attaches, or it would run with nobody to stop it.
         attach: (close) => {
           slot.close = close;
-          if (slot.controller.signal.aborted) void closeSlot(slot);
+          if (slot.released || slot.controller.signal.aborted) void closeSlot(slot);
         },
         ended: slot.controller.signal,
         release: async () => {
+          slot.released = true;
           forget(leaseId, slot);
           await closeSlot(slot);
         },

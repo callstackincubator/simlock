@@ -79,7 +79,7 @@ describe.skipIf(!hasAndroidSdk)(
             ],
             { timeout: DEVICE_READY_MS },
           );
-          expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
+          expect(lease.code, `lease failed: ${lease.stdout} ${lease.stderr}`).toBe(0);
           const leaseId = (lease.json as { lease: { id: string } }).lease.id;
           const created = await env.cli(["token", "create", "--role", "operator"]);
           expect(created.code, created.stderr).toBe(0);
