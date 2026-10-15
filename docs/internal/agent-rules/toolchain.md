@@ -57,6 +57,7 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
 | Test hardening     | `harden-tests`      | weekly |
+| Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 
