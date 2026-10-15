@@ -1,6 +1,6 @@
 # 0030. Optional modules share one contract and load only when turned on
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-15
 - **Issue:** [#591](https://github.com/callstackincubator/simlock/issues/591)
 - **Supersedes:** nothing. Narrows [ADR
