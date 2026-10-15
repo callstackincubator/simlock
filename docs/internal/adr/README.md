@@ -68,4 +68,4 @@ the status is stale.
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
-| [0031](0031-a-screen-stream-is-an-optional-module-and-a-driver-films-the-device.md) | A screen stream is an optional module, and a driver films the device | Proposed |
+| [0031](0031-a-screen-stream-is-an-optional-module-and-a-driver-films-the-device.md) | A screen stream is an optional module, and a driver films the device | Accepted — not yet implemented |
