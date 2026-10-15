@@ -1740,10 +1740,12 @@ emitters. See [EVENTS.md](EVENTS.md) and
 Drivers must never depend on the event bus (architecture rule 5 — a driver is
 not an observer of its own facts). Where a driver needs to report something
 the daemon should turn into a bus event, it reports it through its own
-callback option instead — the iOS driver's `onSlimmed` for `device.slimmed`,
-the Android driver's `onDiagnostic` for `snapshot-cold-boot` and unreadable
-device-profile sources. `src/daemon/main.ts` wires these at construction time
-(`discoverDrivers`).
+callback option instead — the iOS driver's `onSlimmed` for `device.slimmed`.
+`src/daemon/main.ts` wires it at construction time (`discoverDrivers`). The
+Android driver's `onDiagnostic` (`snapshot-cold-boot` and unreadable
+device-profile sources) reports operator diagnostics, not facts about state
+Simlock owns, so `main.ts` passes it to the logger as warnings
+(`logAndroidDiagnostic`), not to the bus.
 
 ### Components: one installer in the core (ADR 0010)
 
