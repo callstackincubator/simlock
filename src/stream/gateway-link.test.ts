@@ -15,6 +15,15 @@ interface Relayed {
   readonly leaseId: string;
 }
 
+class CodedError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function fleet(answer: () => Response): { port: FleetPort; relayed: Relayed[] } {
   const relayed: Relayed[] = [];
   return {
@@ -150,5 +159,30 @@ describe("the gateway's stream link", () => {
       );
       expect(refusal.code).toBe("STREAM_UNAVAILABLE");
     }
+  });
+
+  it("answers a worker the relay cannot reach with 503 and the relay's own code", async () => {
+    const { port } = fleet(() => {
+      throw new CodedError("WORKER_UNREACHABLE", "worker w1 is not connected");
+    });
+    const refusal = await refusalOf(
+      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+    );
+    expect([refusal.status, refusal.code, refusal.message]).toEqual([
+      503,
+      "WORKER_UNREACHABLE",
+      "worker w1 is not connected",
+    ]);
+  });
+
+  it("answers a worker that serves no stream with 503 STREAM_UNAVAILABLE naming the worker", async () => {
+    const { port } = fleet(() => {
+      throw new CodedError("RELAY_TARGET_MISSING", "No module on this worker serves stream");
+    });
+    const refusal = await refusalOf(
+      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+    );
+    expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
+    expect(refusal.message).toContain("Worker w1");
   });
 });

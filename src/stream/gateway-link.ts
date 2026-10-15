@@ -1,7 +1,7 @@
 import type { ScreenMeta } from "../core/index.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
-import { relayedRefusal, streamUnavailable, unknownLease } from "./refusal.js";
+import { relayedRefusal, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
 import { STREAM_TARGET } from "./target.js";
 import type { StreamLink } from "./service.js";
 
@@ -48,21 +48,51 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
       // a caller cannot reach a screen by naming someone else, and the worker proves ownership
       // against its own registry instead of trusting this relay.
       const namespacedRequesterId = `${options.fleet.requesterPrefix}${held.requesterId}`;
-      const response = await options.fleet.relay(held.workerId, {
-        leaseId: held.workerLeaseId,
-        request: new Request(
-          // why: the worker's own name for the lease, not the fleet id. A fleet id is this gateway's
-          // naming and a worker knows nothing of it, so a request that reached the wrong lease would
-          // be answered with the wrong screen rather than refused.
-          `http://simlock-worker${WORKER_STREAM_PATH}${encodeURIComponent(held.workerLeaseId)}`,
-          { method: "GET", signal },
-        ),
-        target: STREAM_TARGET,
-        tenant: namespacedRequesterId,
-      });
+      const response = await relayed(held.workerId, leaseId, () =>
+        options.fleet.relay(held.workerId, {
+          leaseId: held.workerLeaseId,
+          request: new Request(
+            // why: the worker's own name for the lease, not the fleet id. A fleet id is this gateway's
+            // naming and a worker knows nothing of it, so a request that reached the wrong lease would
+            // be answered with the wrong screen rather than refused.
+            `http://simlock-worker${WORKER_STREAM_PATH}${encodeURIComponent(held.workerLeaseId)}`,
+            { method: "GET", signal },
+          ),
+          target: STREAM_TARGET,
+          tenant: namespacedRequesterId,
+        }),
+      );
       return fromResponse(held.workerId, leaseId, response);
     },
   };
+}
+
+// why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker
+// that serves no stream (`RELAY_TARGET_MISSING`) -- and a viewer must get the picture's 503 with
+// that reason rather than a 500 that says nothing; anything without a code is a real fault.
+async function relayed(
+  workerId: string,
+  leaseId: string,
+  relay: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await relay();
+  } catch (error) {
+    const code = (error as { readonly code?: unknown }).code;
+    if (code === "RELAY_TARGET_MISSING") {
+      throw streamUnavailable(
+        `Worker ${workerId} does not serve screen streams for lease ${leaseId}; turn on stream.enabled there`,
+      );
+    }
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
+      throw new StreamRefusalError(
+        503,
+        code,
+        error instanceof Error ? error.message : `Worker ${workerId} could not be reached`,
+      );
+    }
+    throw error;
+  }
 }
 
 // why: a refusal body is read only far enough to find its code and message; a worker that answered
