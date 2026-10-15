@@ -3,6 +3,7 @@ import "./foundation.css";
 export { Button, ButtonLink, type ButtonVariant } from "./button";
 export { MinuteChart, type MinuteCount, MinuteTable } from "./chart";
 export { type Choice, ChoiceChips, type Tab, Tabs } from "./choice";
+export { Feed } from "./feed";
 export { type Fact, Facts } from "./facts";
 export { Icon, type IconName } from "./icon";
 export { Link, type LinkProps, NavigationProvider } from "./link";
