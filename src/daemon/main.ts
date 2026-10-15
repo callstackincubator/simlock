@@ -42,6 +42,7 @@ import {
   ANDROID_PASSTHROUGH_TOOLS,
   hostAbiFor,
   SdkMissingError,
+  type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidPrerequisites,
 } from "../drivers/android/index.js";
