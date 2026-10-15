@@ -118,6 +118,15 @@ the tool's docs alone.
 
 ## Project checks
 
+- **Strict test areas** (testing rule 3): `src/leasing/`; in `src/core/`,
+  the registry and its lock (`registry.ts`, `serialized-decision.ts`,
+  `device-operation-claims.ts`), reclaim, quarantine and destruction
+  (`reclaim-coordinator.ts`, `quarantine-coordinator.ts`, `reaper.ts`,
+  `cleanup/`, `cleanup-executor.ts`, `nuke.ts`, `nuke-service.ts`,
+  `managed-device-lifecycle.ts`), ownership (`device-root.ts`,
+  `physical-enrollment.ts`) and startup (`startup-converger.ts`); and the
+  validators of wire input in `src/contract/` (safety rule 10).
+
 - **Published surfaces.** A change to a schema, a contract type or a
   validator reruns the tests of every surface that publishes it: MCP
   `tools/list`, HTTP error bodies, CLI help. A refinement can empty a

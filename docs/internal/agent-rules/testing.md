@@ -5,12 +5,20 @@ outlives the person who wrote it, so these are binding in the same way the
 other files here are: a change whose tests violate them is rejected even
 though the suite is green — being green is exactly the failure mode.
 
+A test is also a cost. Every later change to the code it covers runs it,
+reads it, and may have to edit it. So the suite holds the fewest tests that
+prove the behaviour, each at the cheapest level that can prove it
+(rules 6 to 9).
+
 1. **A test's title is a claim, and the body must prove that claim.** A title
    that promises more than the body asserts is a defect, not a wording
    problem: it tells every later reader the case is covered when it is not,
    and that reader stops looking. If the body cannot prove the title, narrow
    the title to what it does prove. The claim goes in the title, never in a
-   comment above the test (architecture rule 17).
+   comment above the test (architecture rule 17). A title may claim one
+   behaviour with several cases ("maps the installer's progress to the
+   percentage the requester sees"): the body then checks every case, as one
+   table when the cases differ only in data.
 
 2. **Every test must be able to fail, for the right reason.** Before you
    trust a test, break the code it covers, run it, and watch it fail on a
@@ -27,14 +35,20 @@ though the suite is green — being green is exactly the failure mode.
    thing: otherwise it stays green when the input is refused for another
    reason.
 
-3. **Production code that can be deleted with a green suite is untested.**
-   For a new code path, try deleting it and run the suite. If nothing goes
-   red, whatever you believed covered it stops short of the part that
-   matters — usually because the test exercises an internal callback rather
-   than the observable output the path exists to produce. Write the test that
-   goes red, then restore the code. Mutation testing does this mechanically,
-   weekly, for the newest changes on `main` ([toolchain.md](toolchain.md) says
-   where it runs).
+3. **What a caller can see is tested; in a strict area, every path is.**
+   Every behaviour a caller, a user, a stored record or an event can see
+   has a test that goes red when its code is deleted, error paths and
+   fallbacks included. A branch whose deletion nobody can see needs no test:
+   it is a candidate for deletion. In the strict areas
+   [toolchain.md](toolchain.md) names, which guard safety rules or state
+   that runs under concurrency, production code that can be deleted with a
+   green suite is untested, whether anyone can see the difference or not.
+   When nothing goes red, whatever you believed covered the path stops short
+   of the part that matters — usually because the test exercises an
+   internal callback rather than the observable output the path exists to
+   produce. Write the test that goes red, then restore the code. Mutation
+   testing does this mechanically, weekly, for the newest changes on `main`
+   ([toolchain.md](toolchain.md) says where it runs).
 
 4. **A test that enforces a rule must see everything the rule covers.** A
    boundary or invariant test enforces its rule only where it happens to
@@ -55,3 +69,36 @@ though the suite is green — being green is exactly the failure mode.
    the base-commit run; link the issue in the PR instead. One that
    reproduced on base and has no issue gets a `bug:new` issue with that
    label. Closing the issue ends the exemption.
+
+6. **Test a module through its surface.** A test drives a module through
+   what its entry point exports, or through a host surface above it (a
+   command, an HTTP route, a tool call). A test of an internal file earns
+   its place only for pure logic with many cases (a planner, a parser) or
+   for an ordering the surface cannot force. A change that keeps behaviour
+   and only moves code edits no test; one that has to shows the tests pin
+   structure, not behaviour.
+
+7. **Prove each claim once, at the cheapest level that can prove it.**
+   Before you add a test, search for one that already proves the claim or
+   the behaviour next to it, and extend that one (a case, an assertion);
+   write a new test only when none does. A claim proved at one level is not
+   proved again at another:
+
+   | Claim                                                      | Level                                               |
+   | ---------------------------------------------------------- | --------------------------------------------------- |
+   | Modules are wired together; a wire format; what a command prints | end to end, with the platform faked           |
+   | Branches, errors, ordering, safety rules                   | the module's surface (rule 6)                       |
+   | What an external tool prints, and how it is read           | that tool's real output, recorded as a fixture      |
+   | It works on a real device                                  | the slow lane, only where nothing cheaper proves it |
+
+8. **A property every instance shares is one test.** When every instance
+   of something must have the same property (every event matches its
+   documented payload, every error body carries a code, every command has
+   help text), one test checks every instance (rule 4), not one test per
+   instance. A log line is tested only when the user docs describe it.
+
+9. **A regression test is for a bug that reached `main`.** A bug found on
+   `main` keeps its reproduction as its regression test. A defect a review
+   finds in a pull request is fixed and proven as rule 7 says: by extending
+   the test that proves the behaviour next to it, and by a new test only
+   when none does.

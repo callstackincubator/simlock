@@ -23,10 +23,14 @@ spec says otherwise in its own words, the spec wins.
 3. **Both event catalogs.** A new or changed event updates `docs/EVENTS.md`
    and `docs/internal/EVENTS.md` in the same change (events rule 8,
    documentation rule 4).
-4. **A test for every new path.** Every new code path has a test that goes
-   red when the path is deleted, fallbacks and error paths included (testing
-   rule 3), and the test fails on a named assertion for the right reason
-   (testing rule 2).
+4. **A test for every new behaviour.** Every new behaviour a caller, a
+   user, a stored record or an event can see has a test that goes red when
+   its code is deleted, fallbacks and error paths included; in a strict
+   area [toolchain.md](toolchain.md) names, every new path does (testing
+   rule 3). The test fails on a named assertion for the right reason
+   (testing rule 2), drives the module through its surface (testing rule
+   6), and extends an existing test where one proves the claim next to it
+   (testing rule 7).
 5. **Tests that see their whole rule.** A test that enforces a boundary or
    invariant looks everywhere the rule covers, not only where the change
    happened to touch (testing rule 4).

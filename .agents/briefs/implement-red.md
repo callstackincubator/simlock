@@ -1,7 +1,8 @@
 # Mode `red`: the spec's tests first
 
-Write one test per line under Tests (a bug's triage test already exists).
-Each title is the spec's claim, word for word where it fits. Run them: each
+Write one test per line under Tests (a bug's triage test already exists),
+or extend the existing test the line names (testing rule 7). Each title is
+the spec's claim, word for word where it fits. Run them: each
 fails on a named assertion, for the reason the spec gives, not on a typo or
 a timeout (testing rule 2). Then:
 

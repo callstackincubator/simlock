@@ -10,7 +10,9 @@ rule it breaks), and ends in `src` (the fix changes production source) or
    components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
-   - behaviour: write the failing test first, then the fix;
+   - behaviour: make a test fail first, then fix. Extend the test that
+     proves the behaviour next to it; write a new one only when none does
+     (testing rule 9);
    - a broken rule (`[architecture N]`, `[safety N]`, ...): change the code
      so it keeps the rule, never the doc that states the rule;
    - stale doc: fix it. Stale comment: delete it, or fix it if the comment
