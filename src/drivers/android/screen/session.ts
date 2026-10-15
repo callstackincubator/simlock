@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 
 import {
+  encodeScreenFrame,
   isPhysicalDriverDevice,
   type PhysicalDriverDevice,
   type ScreenCapture,
@@ -8,6 +9,7 @@ import {
   ScreenNotSupportedError,
   type ScreenSettings,
   ScreenUnavailableError,
+  SCREEN_FRAME_TAG,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
 import type {
@@ -37,6 +39,12 @@ export const CONNECT_RETRY_MS = 100;
 const SHELL_EXIT_GRACE_MS = 1_000;
 const REMOVE_TIMEOUT_MS = 3_000;
 export const CLOSE_DEADLINE_MS = 5_000;
+// why: scrcpy's encoder repeats a still picture once and then sends nothing until the screen changes,
+// so a still screen would look exactly like a dead capture to every silence bound downstream. While
+// the socket is open the session says so with an empty `alive` frame, well inside those bounds.
+export const ALIVE_AFTER_MS = 5_000;
+const ALIVE_FRAME = encodeScreenFrame(SCREEN_FRAME_TAG.alive, new Uint8Array(0));
+const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
 const SCID_LIMIT = 2 ** 31;
 
@@ -307,6 +315,11 @@ class ScrcpySession {
     mapper: EnvelopeMapper,
     pending: Uint8Array[],
   ): ReadableStream<Uint8Array> {
+    // why: a read the quiet timer outran is still owed its chunk; the next pull awaits that read
+    // rather than starting a second one, which would deliver the stream's bytes out of order.
+    let inflight: Promise<Uint8Array | undefined> | undefined;
+    // why: the meta frame must come first, so nothing is said to be alive before it has gone out.
+    let started = false;
     return new ReadableStream<Uint8Array>(
       {
         // why: the socket is read only when the body's reader asks for a frame, so a viewer that
@@ -315,7 +328,13 @@ class ScrcpySession {
         pull: async (controller) => {
           try {
             while (pending.length === 0) {
-              const chunk = await reader.read();
+              inflight ??= reader.read();
+              const chunk = started ? await this.#readOrQuiet(inflight) : await inflight;
+              if (chunk === QUIET) {
+                controller.enqueue(ALIVE_FRAME);
+                return;
+              }
+              inflight = undefined;
               if (chunk === undefined) {
                 if (this.#closing !== undefined) controller.close();
                 else
@@ -330,7 +349,10 @@ class ScrcpySession {
               for (const event of parser.push(chunk)) pending.push(...mapper.map(event));
             }
             const frame = pending.shift();
-            if (frame !== undefined) controller.enqueue(frame);
+            if (frame !== undefined) {
+              started = true;
+              controller.enqueue(frame);
+            }
           } catch (error) {
             controller.error(error);
             void this.close();
@@ -340,6 +362,24 @@ class ScrcpySession {
       },
       { highWaterMark: 0 },
     );
+  }
+
+  #readOrQuiet(
+    read: Promise<Uint8Array | undefined>,
+  ): Promise<Uint8Array | undefined | typeof QUIET> {
+    return new Promise((resolve, reject) => {
+      const timer = this.#options.clock.setTimer(ALIVE_AFTER_MS, () => resolve(QUIET));
+      read.then(
+        (chunk) => {
+          this.#options.clock.cancel(timer);
+          resolve(chunk);
+        },
+        (error: unknown) => {
+          this.#options.clock.cancel(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
   }
 
   async #close(): Promise<void> {

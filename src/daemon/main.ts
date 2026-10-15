@@ -92,6 +92,7 @@ import {
   NodeSystemStats,
   NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpStreamConnector,
   resolveDaemonSocketPath,
   readPackageVersion,
   resolveSimlockHome,
@@ -1061,11 +1062,14 @@ interface FleetPortParts {
 
 const AGENT_DEVICE = "agent-device";
 
-// why: `pnpm build` puts the capture program beside the compiled daemon (scripts/build-capture.mjs),
-// so a checkout that built finds it without configuration; `drivers.ios.screenCaptureCommand`
-// names another one.
+// why: `pnpm build` puts both capture artifacts beside the compiled daemon (scripts/build-capture.mjs),
+// so a checkout that built finds them without configuration; `drivers.ios.screenCaptureCommand`
+// names another iOS program.
 const PACKAGED_SCREEN_CAPTURE = fileURLToPath(
   new URL("../bin/simlock-screen-capture", import.meta.url),
+);
+const PACKAGED_SCRCPY_SERVER = fileURLToPath(
+  new URL("../vendor/scrcpy/scrcpy-server-v5.0.1", import.meta.url),
 );
 
 type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
@@ -1400,8 +1404,10 @@ async function discoverAndroidDriver(
       instanceId: options.instanceId,
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
+      scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
       tcpProbe: options.tcpProbe,
+      tcpStreamConnector: new NodeTcpStreamConnector(),
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),

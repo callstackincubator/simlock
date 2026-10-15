@@ -2,7 +2,8 @@
 
 Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
 Entry: `index.ts` → `AndroidDriver.create(options)`; also `androidPrerequisites`, `hostAbiFor`, `ANDROID_PASSTHROUGH_TOOLS`.
-`AndroidDriver.screenCapture` exists only when `create` got both `scrcpyServerPath` and `tcpStreamConnector`.
+`AndroidDriver.screenCapture` exists only when `create` got both `scrcpyServerPath` and `tcpStreamConnector`
+(`daemon/main.ts` passes the jar `pnpm build` copies to dist/vendor/scrcpy).
 Uses: core, ports, `../installer-process.ts`. Never imports: bus, leasing, daemon.
 Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
 
@@ -134,7 +135,8 @@ max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No op
 6. Body: meta (session size, configured fps) on every session packet; the `avcC` description before
    the first picture after config packets; key/delta frames as 4-byte-length AVCC. Pull-based
    (`highWaterMark: 0`): the socket is read only when the body's reader pulls; nothing is dropped.
-   A body whose socket ends errors with the server's last output and closes the feed.
+   A body whose socket ends errors with the server's last output and closes the feed. scrcpy sends
+   nothing for a still screen, so after 5 s of quiet the body sends an empty `alive` frame.
 7. `close` (idempotent, ≤ 5 s): close the socket, wait 1 s for the shell, then SIGKILL it,
    `adb shell rm -f <jar>`. The body's end, error or cancel calls it.
 
@@ -184,8 +186,6 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 - **Screen streams are not proven on a device.** `e2e/slow-android-stream.test.ts` is written, not run.
   Unverified: that SIGKILL on the host `adb shell` (adbd then sends SIGHUP to the device shell)
   reaches `app_process`; until then the server exits at its next failed write.
-- **A still screen sends nothing.** scrcpy encodes only on change (and repeats once after 100 ms), so
-  a stream's silence bound can end a stream of an idle screen.
 - **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **Physical Android devices have no screen stream**, and the jar's digest is not checked at push.

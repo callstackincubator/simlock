@@ -16,6 +16,7 @@ export const TAG = {
   delta: 0x03,
   seed: 0x04,
   meta: 0x05,
+  alive: 0x06,
 } as const;
 
 // why: the capture tool refuses a frame longer than 8 MiB, so a header claiming more than that is not a
@@ -209,11 +210,9 @@ export async function readStream(
 
   // why: closing the reader is what closes the request, and closing the request is the only
   // off-command this surface has.
-  signal.addEventListener(
-    "abort",
-    () => void reader.cancel().catch(() => undefined),
-    { once: true },
-  );
+  signal.addEventListener("abort", () => void reader.cancel().catch(() => undefined), {
+    once: true,
+  });
 
   let buffer: Uint8Array = new Uint8Array(0);
   try {

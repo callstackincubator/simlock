@@ -9,6 +9,9 @@ export const SCREEN_FRAME_TAG = {
   delta: 0x03,
   seed: 0x04,
   meta: 0x05,
+  // why: an empty frame a capture sends when it is alive with nothing new to paint, so a reader's
+  // silence bound tells a still screen from a dead capture; a reader that has no use for it skips it.
+  alive: 0x06,
 } as const;
 
 export const SCREEN_FRAME_HEADER_BYTES = 5;

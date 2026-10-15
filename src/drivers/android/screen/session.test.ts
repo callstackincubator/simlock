@@ -16,6 +16,7 @@ import {
   type TcpStreamConnector,
 } from "../../../ports/index.js";
 import {
+  ALIVE_AFTER_MS,
   CLOSE_DEADLINE_MS,
   CONNECT_RETRY_MS,
   createAndroidScreenCapture,
@@ -489,6 +490,25 @@ describe("Android screen capture: the body", () => {
       tags.push(frameTag((await reader.read()).value));
     }
     expect(tags.filter((tag) => tag === SCREEN_FRAME_TAG.delta)).toHaveLength(50);
+  });
+
+  it("says a still screen is alive every few seconds, and keeps the frames that follow in order", async () => {
+    const world = await setup();
+    const feed = await opened(world);
+    const peer = world.server.last;
+    peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
+    const reader = feed.body.getReader();
+    for (let index = 0; index < 3; index += 1) await reader.read();
+    const quiet = reader.read();
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    world.clock.advance(ALIVE_AFTER_MS);
+    const alive = (await quiet).value;
+    expect(frameTag(alive)).toBe(SCREEN_FRAME_TAG.alive);
+    expect(alive?.length).toBe(5);
+    const next = reader.read();
+    peer.send(mediaPacket({ pts: 1 }, SAMPLE.p1));
+    expect(frameTag((await next).value)).toBe(SCREEN_FRAME_TAG.delta);
   });
 
   it("errors with the server's reason when the device side ends, and cleans up", async () => {
