@@ -213,23 +213,48 @@ export async function readStream(
     report();
   };
 
-  const handleFrame = async (tag: number | undefined, payload: Uint8Array): Promise<void> => {
-    if (tag === TAG.meta) {
-      const parsed = parseMeta(payload);
-      if (parsed.meta === undefined) {
-        fail(parsed.error);
-        return;
+  let buffer: Uint8Array = new Uint8Array(0);
+
+  const applyMeta = (payload: Uint8Array) => {
+    const parsed = parseMeta(payload);
+    if (parsed.meta === undefined) {
+      fail(parsed.error);
+      return;
+    }
+    meta = parsed.meta;
+    sink.onMeta(meta);
+  };
+
+  // why: a tag this reader does not know -- `alive`, or one a newer capture adds -- is skipped, so a
+  // capture can say more than this console understands without breaking the picture.
+  const handlers: Readonly<Record<number, (payload: Uint8Array) => void | Promise<void>>> = {
+    [TAG.meta]: applyMeta,
+    [TAG.description]: (payload) => applyDescription(copy(payload)),
+    [TAG.keyframe]: (payload) => decode(copy(payload), "key"),
+    [TAG.delta]: (payload) =>
+      meta?.codec === "mjpeg" ? paintJpeg(copy(payload)) : decode(copy(payload), "delta"),
+    [TAG.seed]: (payload) => paintJpeg(copy(payload)),
+  };
+
+  // why: frames are taken off the front of everything read so far, one at a time, because one read
+  // can end mid-frame and the next one finishes it.
+  const consume = async (chunk: Uint8Array): Promise<boolean> => {
+    counters.bytes += chunk.length;
+    bytesRecently.add(chunk.length);
+    buffer = concat(buffer, chunk);
+    for (;;) {
+      // why: once a frame has failed, the frames that arrived beside it belong to a stream nobody is
+      // reading, and feeding a closed decoder would fail again for a reason a viewer never hears.
+      if (ended) return false;
+      const next = splitFrame(buffer);
+      if (next === "incomplete") return true;
+      if (next === "invalid") {
+        fail("The stream is not a frame envelope");
+        return false;
       }
-      meta = parsed.meta;
-      sink.onMeta(meta);
-    } else if (tag === TAG.description) {
-      applyDescription(copy(payload));
-    } else if (tag === TAG.keyframe) {
-      decode(copy(payload), "key");
-    } else if (tag === TAG.delta && meta?.codec !== "mjpeg") {
-      decode(copy(payload), "delta");
-    } else if (tag === TAG.delta || tag === TAG.seed) {
-      await paintJpeg(copy(payload));
+      buffer = next.rest;
+      clock.startIfNeeded();
+      await handlers[next.tag ?? -1]?.(next.payload);
     }
   };
 
@@ -244,28 +269,11 @@ export async function readStream(
   const ticker = setInterval(() => {
     if (!ended) report();
   }, 1_000);
-  let buffer: Uint8Array = new Uint8Array(0);
   try {
     for (;;) {
       const step = await reader.read();
       if (step.done) break;
-      counters.bytes += step.value.length;
-      bytesRecently.add(step.value.length);
-      buffer = concat(buffer, step.value);
-      for (;;) {
-        // why: once a frame has failed, the frames that arrived beside it belong to a stream nobody is
-        // reading, and feeding a closed decoder would fail again for a reason a viewer never hears.
-        if (ended) return;
-        const next = splitFrame(buffer);
-        if (next === "incomplete") break;
-        if (next === "invalid") {
-          fail("The stream is not a frame envelope");
-          return;
-        }
-        buffer = next.rest;
-        clock.startIfNeeded();
-        await handleFrame(next.tag, next.payload);
-      }
+      if (!(await consume(step.value))) return;
       report();
     }
     end();

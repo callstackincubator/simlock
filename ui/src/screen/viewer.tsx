@@ -6,7 +6,7 @@
  * outlive the pane that asked for it. That is also why nothing here polls, retries, or holds a stream
  * open across a navigation.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api";
 import { useApi } from "../console-context";
@@ -25,9 +25,8 @@ const EMPTY: StreamStats = {
   painted: 0,
 };
 
-export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
+function useScreenStream(leaseId: string, canvas: RefObject<HTMLCanvasElement | null>) {
   const api = useApi();
-  const canvas = useRef<HTMLCanvasElement | null>(null);
   const controller = useRef<AbortController | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>("idle");
   const [meta, setMeta] = useState<StreamMeta | undefined>(undefined);
@@ -87,6 +86,12 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
     })();
   }, [api, leaseId]);
 
+  return { meta, note, phase, start, stats, stop };
+}
+
+export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
+  const canvas = useRef<HTMLCanvasElement | null>(null);
+  const { meta, note, phase, start, stats, stop } = useScreenStream(leaseId, canvas);
   const live = phase === "live" || phase === "starting";
   const failure = stats.error ?? (phase === "stopped" ? note : undefined);
   // why: the canvas is mounted as soon as a picture has been asked for rather than when the first frame
@@ -111,6 +116,32 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
         </button>
       }
     >
+      <ScreenPicture canvas={canvas} meta={meta} phase={phase} shown={shown} waiting={waiting} />
+      <ScreenFacts failed={failure !== undefined} meta={meta} phase={phase} stats={stats} />
+      {note === undefined ? null : (
+        <p className="refusal" role="alert">
+          {note}
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+function ScreenPicture({
+  canvas,
+  meta,
+  phase,
+  shown,
+  waiting,
+}: {
+  readonly canvas: RefObject<HTMLCanvasElement | null>;
+  readonly meta: StreamMeta | undefined;
+  readonly phase: Phase;
+  readonly shown: boolean;
+  readonly waiting: boolean;
+}) {
+  return (
+    <>
       {shown ? (
         <canvas
           aria-label="The leased device's screen"
@@ -129,13 +160,7 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
             : "Waiting for the first frame."}
         </p>
       ) : null}
-      <ScreenFacts failed={failure !== undefined} meta={meta} phase={phase} stats={stats} />
-      {note === undefined ? null : (
-        <p className="refusal" role="alert">
-          {note}
-        </p>
-      )}
-    </Panel>
+    </>
   );
 }
 
