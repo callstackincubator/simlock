@@ -1,26 +1,29 @@
 # Stream
 
 Does: serves a leased device's live screen at `GET /v1/stream/leases/{leaseId}`, on a worker and through a gateway.
-Entry: `index.ts` → `createWorkerStream` (worker), `createGatewayStream` (gateway).
-Uses: core (`ScreenFeed`, frame tags, registry records), leasing (`LeaseEndParticipant` type), ports.
-Never imports: http, gateway, drivers, daemon, `fs`, `child_process`. Imported by: `daemon/main.ts` only.
-Off unless `stream.enabled` (false). Off: nothing mounted, no relay target, no capability row.
+Entry: `index.ts` → `streamModule`, an optional module (ADR 0030): `worker.ts` `createWorker`,
+`gateway.ts` `createGateway`, loaded by the module host only when turned on.
+Uses: core (`ScreenFeed`, frame tags, registry records), modules (the context and hook types), ports.
+Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
+Off unless `capabilities.stream.enabled` (false). Off: nothing loaded, and the `stream` capability reads `off`.
 
 ## Files
 
-| File                     | Role                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| `create.ts`              | The two factories; the `stream` capability read from each driver's availability |
-| `worker-link.ts`         | Worker: lease check, open through the driver, register, re-check after frame 1  |
-| `gateway-link.ts`        | Gateway: fleet ownership, relay to the holding worker, refusal and header check |
-| `feed.ts`                | `readScreenFeed`: meta frame first, start and silence bounds, close on any end  |
-| `framing.ts`             | `MetaFrameScanner`, `checkedMeta`: codec and size a picture may claim           |
-| `captures.ts`            | Captures per lease; the lease-end participant that stops them                   |
-| `service.ts`             | One request either door: method, refusal body, response headers, log line       |
-| `mounts.ts`              | The HTTP mount and the relay target                                             |
-| `refusal.ts`             | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked |
-| `caller.ts`, `target.ts` | Who asks; `STREAM_TARGET` (`stream`)                                            |
-| `test-fixtures.ts`       | `TestRegistry`, `ScriptedFeed` for tests                                        |
+| File                      | Role                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `definition.ts`           | `streamModule`: name `stream`, config section, the two loaders                  |
+| `worker.ts`, `gateway.ts` | The module's two sides, built from the host's context                           |
+| `create.ts`               | The two factories; the `stream` capability read from each driver's availability |
+| `worker-link.ts`          | Worker: lease check, open through the driver, register, re-check after frame 1  |
+| `gateway-link.ts`         | Gateway: fleet ownership, relay to the holding worker, refusal and header check |
+| `feed.ts`                 | `readScreenFeed`: meta frame first, start and silence bounds, close on any end  |
+| `framing.ts`              | `MetaFrameScanner`, `checkedMeta`: codec and size a picture may claim           |
+| `captures.ts`             | Captures per lease; the lease-end participant that stops them                   |
+| `service.ts`              | One request either door: method, refusal body, response headers, log line       |
+| `mounts.ts`               | The HTTP mount and the relay target                                             |
+| `refusal.ts`              | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked |
+| `caller.ts`               | Who asks                                                                        |
+| `test-fixtures.ts`        | `TestRegistry`, `ScriptedFeed` for tests                                        |
 
 ## How it works
 
@@ -29,14 +32,14 @@ Worker — `worker-link.ts` `createWorkerStreamLink`:
 1. Lease from the registry snapshot. Agent: its requester (relayed) or principal must hold it.
    Unknown and not yours both answer 404 `UNKNOWN_LEASE`; nothing is opened first.
 2. `captures.begin(leaseId)` — registered before the capture starts.
-3. `DriverCatalog.openScreen(platform, device, settings)` → the driver's `ScreenFeed`.
+3. `ctx.screens.openScreen(platform, device, settings)` (the daemon passes its `DriverCatalog`) → the driver's `ScreenFeed`.
    `ScreenNotSupportedError` → 415 `STREAM_NOT_SUPPORTED`; anything else → 503 `STREAM_UNAVAILABLE`.
 4. `readScreenFeed`: the meta frame within the start bound, or 503 and close.
 5. Lease re-read: gone, re-granted, or its slot stopped → close, 404.
 6. 200; headers `simlock-stream-{codec,fps,width,height}`; body = the frames, meta first.
 
 Ends — each closes the capture once (`closedOnce`): the viewer cancels or aborts; the capture
-ends or errors; no byte within the silence bound; the lease ends (`createStreamLeaseEnd` →
+ends or errors; no byte within the silence bound; the lease ends (the `beforeDeviceReclaim` hook, `createStreamLeaseEnd` →
 `captures.stop`, which waits for every close, bounded by the driver and by leasing's signal).
 
 Gateway — `gateway-link.ts`: the fleet lease index names owner, worker and the worker's lease
@@ -54,12 +57,12 @@ cannot says why in its 503); `unavailable` when none can, with each platform's r
 
 Memory only: running captures per lease (`captures.ts`).
 
-| What                         | Default              | Key                                                       |
-| ---------------------------- | -------------------- | --------------------------------------------------------- |
-| First frame                  | 30 s                 | `DEFAULT_START_MS`                                        |
-| Silence between frames       | 30 s                 | `DEFAULT_SILENCE_MS`                                      |
-| Frame ceiling (envelope)     | 8 MiB                | `MAX_FRAME_BYTES`                                         |
-| fps / longest side / bitrate | 30 / 720 / 1500 kbps | `stream.fps`, `stream.maxDimension`, `stream.bitrateKbps` |
+| What                         | Default              | Key                                                                                              |
+| ---------------------------- | -------------------- | ------------------------------------------------------------------------------------------------ |
+| First frame                  | 30 s                 | `DEFAULT_START_MS`                                                                               |
+| Silence between frames       | 30 s                 | `DEFAULT_SILENCE_MS`                                                                             |
+| Frame ceiling (envelope)     | 8 MiB                | `MAX_FRAME_BYTES`                                                                                |
+| fps / longest side / bitrate | 30 / 720 / 1500 kbps | `capabilities.stream.fps`, `capabilities.stream.maxDimension`, `capabilities.stream.bitrateKbps` |
 
 ## Rules
 

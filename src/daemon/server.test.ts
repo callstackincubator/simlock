@@ -205,9 +205,11 @@ describe("DaemonServer", () => {
     [33, "cannot send relay.request's channel, or read a relayed body from its byte channel"],
     [34, "cannot read status.get's load block"],
     [35, "cannot read a worker view's load"],
-    [36, "cannot read a worker's stream config"],
+    [36, "cannot read the module-unavailable finding in doctor.run"],
+    [37, "cannot read config.get's capabilities"],
+    [38, "cannot read agent-device's section under config.get's capabilities"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 37, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 39, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -217,7 +219,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 37, max: 37 } },
+          details: { client: { min: version, max: version }, daemon: { min: 39, max: 39 } },
         },
         ok: false,
       });
@@ -3570,14 +3572,8 @@ function testConfig(
   iosMaxDevices = 1,
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
-    stream: {
-      bitrateKbps: 1500,
-      enabled: false,
-      fps: 30,
-      maxDimension: 720,
-    },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {

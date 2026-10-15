@@ -6,14 +6,8 @@ import { idleDestroyRule } from "./idle-destroy.js";
 const gibibyte = 1024 ** 3;
 
 const config: Config = {
+  capabilities: {},
   mode: "worker",
-  agentDevice: { command: "agent-device", enabled: false },
-  stream: {
-    bitrateKbps: 1500,
-    enabled: false,
-    fps: 30,
-    maxDimension: 720,
-  },
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
   gateway: {

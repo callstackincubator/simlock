@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http, host-load, agent-device; gateway from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http, host-load, modules, module-registry; gateway from `main.ts` only.
 Never imports: gateway outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -53,7 +53,7 @@ An HTTP bind failure after a good start stops the daemon (`http-start-failed`).
    Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid.
    Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 37, max: 37 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 39, max: 39 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -82,7 +82,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 ## Readiness
 
 `DaemonServer.start`: claim → host load start → `admin.token` write → converge
-starts → `onSocketClaimed` (HTTP, agent-device, uplink) → await converge → arm.
+starts → `onSocketClaimed` (module `afterSocketClaimed`, agent-device, uplink, HTTP) → await converge → arm.
 Health: `starting` → `running`, or `failed`.
 
 - `hello` and `status.get` answer at once; `status.get` while `starting` carries

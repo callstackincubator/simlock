@@ -2,7 +2,6 @@ import type { ScreenMeta } from "../core/index.js";
 import type { CapturedStream } from "./feed.js";
 import { checkedMeta } from "./framing.js";
 import { relayedRefusal, StreamRefusalError, streamUnavailable, unknownLease } from "./refusal.js";
-import { STREAM_TARGET } from "./target.js";
 import type { StreamLink } from "./service.js";
 
 export interface StreamLeasePlacement {
@@ -21,7 +20,6 @@ export interface FleetPort {
     workerId: string,
     call: {
       readonly request: Request;
-      readonly target: string;
       readonly tenant: string;
       readonly leaseId: string;
     },
@@ -58,7 +56,6 @@ export function createGatewayStreamLink(options: GatewayStreamLinkOptions): Stre
             `http://simlock-worker${WORKER_STREAM_PATH}${encodeURIComponent(held.workerLeaseId)}`,
             { method: "GET", signal },
           ),
-          target: STREAM_TARGET,
           tenant: namespacedRequesterId,
         }),
       );
@@ -81,7 +78,7 @@ async function relayed(
     const code = (error as { readonly code?: unknown }).code;
     if (code === "RELAY_TARGET_MISSING") {
       throw streamUnavailable(
-        `Worker ${workerId} does not serve screen streams for lease ${leaseId}; turn on stream.enabled there`,
+        `Worker ${workerId} does not serve screen streams for lease ${leaseId}; turn on capabilities.stream.enabled there`,
       );
     }
     if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {

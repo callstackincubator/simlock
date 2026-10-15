@@ -10,7 +10,6 @@ const STRANGER: StreamCaller = { principal: "tok_other", role: "agent" };
 interface Relayed {
   readonly workerId: string;
   readonly url: string;
-  readonly target: string;
   readonly tenant: string;
   readonly leaseId: string;
 }
@@ -35,7 +34,6 @@ function fleet(answer: () => Response): { port: FleetPort; relayed: Relayed[] } 
       relay: async (workerId, call) => {
         relayed.push({
           leaseId: call.leaseId,
-          target: call.target,
           tenant: call.tenant,
           url: call.request.url,
           workerId,
@@ -80,7 +78,6 @@ describe("the gateway's stream link", () => {
     expect(relayed).toEqual([
       {
         leaseId: "lse_9",
-        target: "stream",
         tenant: "gw:inst:agent-1",
         url: "http://simlock-worker/stream/leases/lse_9",
         workerId: "w1",

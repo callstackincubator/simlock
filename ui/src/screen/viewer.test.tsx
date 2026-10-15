@@ -28,7 +28,7 @@ describe("what a refused stream says", () => {
     const refused = new ApiError(404, undefined, "Unknown lease: lse_1");
 
     expect(refusalOf(refused)).toBe(
-      "Unknown lease: lse_1 A stream is only offered where stream.enabled is on, and only for a lease that is still held.",
+      "Unknown lease: lse_1 A stream is only offered where capabilities.stream.enabled is on, and only for a lease that is still held.",
     );
   });
 

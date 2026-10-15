@@ -1,23 +1,5 @@
 # vendor
 
-`agent-device-proxy-0.21.28-dev-253dca0.tgz` is `@agent-device/proxy`, packed
-from the `simlock-integration` branch of agent-device at commit
-`253dca023edf13410f7928c76e9e604e5e5871a0`:
-
-```bash
-pnpm --filter @agent-device/proxy pack --pack-destination <dir>
-```
-
-Its `prepack` runs the package's own build, which bundles agent-device's
-internal packages into `dist`, so the tarball has no `workspace:` dependency.
-It is swapped for the npm release later.
-
-The commit above is the one the slow lane checks a local agent-device checkout
-against, so it stays the first 40-character commit hash in this file:
-`scripts/slow-e2e.sh` reads the first one it finds.
-
-## What else lives here
-
 | Directory         | Upstream                                                                                                                                                                | License                                                                     | Notice                                                 |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `screen-capture/` | `EvanBacon/serve-sim` — a capture and encode pipeline we patched, four files rewritten                                                                                  | Apache-2.0 (our own three files MIT)                                        | [`screen-capture/NOTICE.md`](screen-capture/NOTICE.md) |
@@ -31,8 +13,7 @@ against upstream, and — per file, because a directory here can hold our code
 beside theirs — which files are ours. `src/source-hygiene.test.ts` enforces
 the three-part shape, and the rules are
 [`docs/internal/agent-rules/vendor-and-third-party-code.md`](../docs/internal/agent-rules/vendor-and-third-party-code.md);
-the whole inventory, including this tarball, is
-[`docs/internal/VENDORED-CODE.md`](../docs/internal/VENDORED-CODE.md).
+the whole inventory is [`docs/internal/VENDORED-CODE.md`](../docs/internal/VENDORED-CODE.md).
 
-Nothing under the directories above is downloaded at install, at build or at run
-time — they are in the tree because somebody fetched and checked them once.
+Nothing here is downloaded at install, at build or at run time — it is in the
+tree because somebody fetched and checked it once.

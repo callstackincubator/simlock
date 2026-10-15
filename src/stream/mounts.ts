@@ -1,17 +1,9 @@
-import {
-  handleStreamRequest,
-  leaseIdOf,
-  STREAM_PREFIX,
-  type StreamServiceOptions,
-} from "./service.js";
-
-export { STREAM_TARGET } from "./target.js";
+import { handleStreamRequest, leaseIdOf, type StreamServiceOptions } from "./service.js";
 
 // why: the shape the HTTP layer mounts, declared here rather than imported from `src/http`, because a
 // stream is the same exchange whether a console on this host asks for it or a gateway relays one, and a
 // component that imports the front end it is mounted into cannot be mounted into a relay as well.
 export interface StreamMount {
-  readonly prefix: string;
   handle(
     request: Request,
     identity: { readonly requesterId: string; readonly role: string },
@@ -34,7 +26,6 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
         },
         leaseIdOf(new URL(request.url).pathname),
       ),
-    prefix: STREAM_PREFIX,
   };
 }
 

@@ -22,7 +22,7 @@ export function unknownLease(leaseId: string): StreamRefusalError {
 }
 
 export function noSuchStream(): StreamRefusalError {
-  // why: the same status and code as an unknown lease on purpose -- a daemon with `stream.enabled` off
+  // why: the same status and code as an unknown lease on purpose -- a daemon with `capabilities.stream.enabled` off
   // never mounts this route at all and answers any path it has not heard of as a 404, so a client that
   // could tell these apart would be able to learn which daemons can stream by asking one.
   return new StreamRefusalError(404, "UNKNOWN_LEASE", "This path names no stream lease");

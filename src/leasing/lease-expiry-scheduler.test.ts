@@ -27,7 +27,12 @@ describe("LeaseExpiryScheduler", () => {
     scheduler.replace(lease("one", 120));
     scheduler.arm(lease("two", 115));
     scheduler.cancel("two");
-    clock.advance(20);
+    clock.advance(15);
+    await Promise.resolve();
+
+    expect(expired).toEqual([]);
+
+    clock.advance(5);
     await Promise.resolve();
 
     expect(expired).toEqual(["one"]);

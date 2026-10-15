@@ -2,7 +2,7 @@
 // machine still owns that device. A viewer going away stops a capture through its own request; this
 // covers what that cannot, a lease that ends somewhere else (released elsewhere, expired, the device
 // lost) while somebody is still watching, or while a capture is still starting.
-import type { LeaseEndParticipant } from "../leasing/index.js";
+import type { ModuleLeaseEndParticipant } from "../modules/index.js";
 
 export interface CaptureSlot {
   // why: aborted when the lease ends, so a capture still being opened learns it has no lease to
@@ -99,7 +99,7 @@ export function createCaptureRegistry(): CaptureRegistry {
   };
 }
 
-export function createStreamLeaseEnd(captures: CaptureRegistry): LeaseEndParticipant {
+export function createStreamLeaseEnd(captures: CaptureRegistry): ModuleLeaseEndParticipant {
   return {
     // why: waits for each capture's close, which a driver bounds, so a reclaim does not wipe or
     // reboot a device while its capture is still being torn down on it; leasing's own signal ends

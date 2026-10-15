@@ -7,6 +7,7 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";
@@ -37,6 +38,7 @@ export {
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
+export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,

@@ -6,6 +6,7 @@ import type { z } from "zod";
 
 import { EVENT_FILE_NAME, type EventEnvelope, eventKey, readEventFile } from "../bus/index.js";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
+import { optionalModules } from "../module-registry/index.js";
 import {
   IpcError,
   MemoryFilesystem,
@@ -270,6 +271,8 @@ export interface CliEnvironmentPorts {
   readonly parentPid?: number;
 }
 
+const moduleConfigEntries = optionalModules.map(({ config, name }) => ({ name, ...config }));
+
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -282,7 +285,7 @@ export function buildCliEnvironment(
   // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
   // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
   const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher, async () => {
-    await loadConfig({ configPath, filesystem, systemStats });
+    await loadConfig({ configPath, filesystem, modules: moduleConfigEntries, systemStats });
   });
 
   const connect = async (
@@ -338,6 +341,7 @@ export function buildCliEnvironment(
       await loadConfig({
         configPath: "/config-set-validation.json",
         filesystem: new MemoryFilesystem(),
+        modules: moduleConfigEntries,
         overrides: merged as ConfigOverrides,
         systemStats,
         warn: (message) => {
@@ -1090,7 +1094,7 @@ async function runDoctor(
     writeDriverAdvisoryWarnings(environment, response);
     writeMissingPrerequisites(environment, response);
     writeUnreachableWarmTargets(environment, response);
-    writeAgentDeviceUnavailable(environment, response);
+    writeModuleUnavailable(environment, response);
     writeResult(environment, response);
     return 0;
   } finally {
@@ -1123,12 +1127,12 @@ function writeUnreachableWarmTargets(environment: CliEnvironment, report: Doctor
   }
 }
 
-function writeAgentDeviceUnavailable(environment: CliEnvironment, report: DoctorReport): void {
+function writeModuleUnavailable(environment: CliEnvironment, report: DoctorReport): void {
   const oneLine = (text: string): string => text.replace(/\s+/g, " ").slice(0, 500);
   for (const finding of report.findings) {
-    if (finding.kind !== "agent-device-unavailable") continue;
+    if (finding.kind !== "module-unavailable") continue;
     environment.stderr.write(
-      `agent-device  fail  ${oneLine(finding.message)}; ${oneLine(finding.remedy)}\n`,
+      `${finding.module}  fail  ${oneLine(finding.message)}; ${oneLine(finding.remedy)}\n`,
     );
   }
 }

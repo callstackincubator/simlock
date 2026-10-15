@@ -27,7 +27,11 @@ You start fresh on purpose: judge the diff, not how it was built.
 edited after the red commit:
 
 - Its title, assertions and fixture state make the same claim. A title with
-  two claims has an assertion for each.
+  two claims has an assertion for each. Walk testing rule 10's list against
+  it.
+- It proves a claim no other test proves, through the module's surface
+  (testing rules 6 and 7). One that repeats another test's claim is folded
+  into that test.
 - Break the code it covers once (flip the condition, drop the filter, return
   early) and run its file: it fails on the assertion its title names.
   Restore the code. A test that stays green is vacuous: fix it. Every

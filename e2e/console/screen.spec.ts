@@ -29,7 +29,7 @@ async function streamingHost(): Promise<StreamingHost> {
   try {
     host = await startDaemon("worker", {
       config: {
-        stream: { enabled: true, fps: 5 },
+        capabilities: { stream: { enabled: true, fps: 5 } },
       },
       driverScript: { ios: { ...IOS, screenCaptureCommand: command } },
     });
@@ -207,8 +207,8 @@ test.describe("the Screen pane", () => {
       const lease = (granted.json as { lease: { id: string } }).lease.id;
       await openLeasePage(page, host, lease);
       await showButton(page).click();
-      await expect(page.getByRole("alert")).toContainText("stream.enabled is on");
-      expect(await streamCapability(host)).toBeUndefined();
+      await expect(page.getByRole("alert")).toContainText("capabilities.stream.enabled is on");
+      expect(await streamCapability(host)).toBe("off");
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLog(dir)).toBe("");
     } finally {

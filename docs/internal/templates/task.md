@@ -83,7 +83,9 @@ or at once, and which one wins. "None" only after the search. -->
 point that can see the behaviour; one if possible) and an existing test
 file to model them on. Then one line per test title: a claim the body must
 prove. Every behaviour the body states, including what stays "as today",
-has a line here. -->
+has a line here: one line per behaviour, its cases listed in the line, not
+one line per case. A claim an existing test already proves names that test
+to extend instead (testing rule 7). -->
 
 - ...
 

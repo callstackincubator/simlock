@@ -57,7 +57,7 @@ export type AgentDeviceAvailability =
 export interface AgentDeviceSupervisorOptions {
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly clock: Clock;
-  readonly config: { readonly enabled: boolean; readonly command: string };
+  readonly config: { readonly command: string };
   readonly driverEnvironment: Readonly<Record<string, string>>;
   readonly filesystem: Filesystem;
   readonly healthProbe: AgentDeviceHealthProbe;
@@ -160,7 +160,7 @@ export class AgentDeviceSupervisor {
     this.#o = options;
     this.#stateDir = `${options.home}/agent-device`;
     this.#recordPath = `${options.home}/agent-device-daemon.json`;
-    this.#availability = options.config.enabled ? { state: "starting" } : { state: "off" };
+    this.#availability = { state: "starting" };
   }
 
   availability(): AgentDeviceAvailability {
@@ -225,9 +225,9 @@ export class AgentDeviceSupervisor {
   #remedy(kind: RemedyKind): string {
     switch (kind) {
       case "not-found":
-        return `install agent-device ${MIN_AGENT_DEVICE_VERSION} or later, or set agentDevice.command to its path, ${RESTART}`;
+        return `install agent-device ${MIN_AGENT_DEVICE_VERSION} or later, or set capabilities.agent-device.command to its path, ${RESTART}`;
       case "not-agent-device":
-        return `point agentDevice.command at an agent-device install, ${RESTART}`;
+        return `point capabilities.agent-device.command at an agent-device install, ${RESTART}`;
       case "wrong-version":
         return `install agent-device ${MIN_AGENT_DEVICE_VERSION} or later, ${RESTART}`;
       case "node":
@@ -257,7 +257,7 @@ export class AgentDeviceSupervisor {
     const realHome = await o.filesystem.realpath(o.home);
     this.#stateDir = `${realHome}/agent-device`;
     this.#recordPath = `${realHome}/agent-device-daemon.json`;
-    if (o.config.enabled) this.#availability = { state: "starting" };
+    this.#availability = { state: "starting" };
     if (!(await this.#reapStep(realHome))) return;
     const found = await this.#checkInstall();
     if (found === undefined || this.#stopped) return;
@@ -269,20 +269,13 @@ export class AgentDeviceSupervisor {
   }
 
   async #reapStep(realHome: string): Promise<boolean> {
-    const o = this.#o;
     const reaped = await this.#reap(realHome);
     if (this.#stopped) return false;
     if (!reaped.ok) {
-      if (o.config.enabled) {
-        this.#fail("start-failed", reaped.message);
-      } else {
-        o.logger.warn(reaped.message);
-        this.#availability = { state: "off" };
-      }
+      this.#fail("start-failed", reaped.message);
       return false;
     }
-    if (!o.config.enabled) this.#availability = { state: "off" };
-    return o.config.enabled;
+    return true;
   }
 
   async #checkInstall(): Promise<{ readonly entry: string; readonly version: string } | undefined> {

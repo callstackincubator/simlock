@@ -59,7 +59,9 @@ describe.skipIf(process.platform !== "darwin")(
         const { env, port } = await withHttpDaemon((httpPort) => ({
           configOverrides: {
             http: { enabled: true, host: "127.0.0.1", port: httpPort },
-            stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
+            capabilities: {
+              stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
+            },
           },
           driver: "real",
         }));

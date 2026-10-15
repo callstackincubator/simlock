@@ -410,7 +410,8 @@ describe("LeaseReleaseCoordinator", () => {
       // ReclaimCoordinator already wakes the queue itself, so this notice is a safety
       // net: it runs after the claim is gone, so matching sees the device even if an
       // earlier wake-up raced the release.
-      expect(claimedAtNotice).toContain(false);
+      expect(claimedAtNotice.length).toBeGreaterThanOrEqual(1);
+      expect(claimedAtNotice).not.toContain(true);
     });
 
     it("claims the device for the background reclaim's duration, then releases the claim", async () => {
@@ -545,7 +546,7 @@ describe("LeaseReleaseCoordinator", () => {
       ["device-lost", "lease.released"],
       ["expired", "lease.expired"],
     ] as const)(
-      "ends the lease as %s and marks the device deleted in one write, announcing the lease first, with no reclaim",
+      "ends the lease as %s and marks the device deleted, announcing the lease first, with no reclaim",
       async (reason, event) => {
         const harness = await createHarness();
         const granted = await grant(harness);
@@ -699,14 +700,6 @@ describe("LeaseReleaseCoordinator", () => {
       );
 
       expect(calledInSection).toBe(false);
-    });
-
-    it("endForAbsentDevice answers false when no lease exists at all", async () => {
-      const harness = await createHarness();
-
-      await expect(
-        harness.coordinator.endForAbsentDevice("lease_gone", "not-present"),
-      ).resolves.toBe(false);
     });
 
     it("reclaimReturned answers false and tracks nothing when the reclaim did not start", async () => {

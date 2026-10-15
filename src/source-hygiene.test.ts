@@ -54,15 +54,12 @@ function sha256Sums(name: string): [string, string][] {
 
 /**
  * why: a committed binary is never searched as text -- built fixtures the e2e lane installs, and
- * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (an npm tarball, a packed
- * server APK). Both kinds hold raw NUL bytes by nature, which is what makes them unsearchable: that
+ * the vendored third-party artifacts a `SHA256SUMS.txt` pins bytes for (a packed server APK). Both kinds hold raw NUL bytes by nature, which is what makes them unsearchable: that
  * is a claim about their contents, so for `vendor/` the test that compares this list against the
  * files in `vendor/` that actually carry a NUL is what makes the skip mean something.
  */
 const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") ||
-  (name.startsWith("vendor/") && name.endsWith(".tgz")) ||
-  pinnedVendoredArtifacts.has(name);
+  name.startsWith("e2e/fixtures/") || pinnedVendoredArtifacts.has(name);
 
 /**
  * why: a raw NUL byte in a text file makes `grep` and `ripgrep` classify the whole file as
@@ -98,9 +95,6 @@ describe("tracked files", () => {
 
   it("hold no committed binary and still hold e2e/appduct-fixtures.test.ts", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
-    expect(trackedFiles.some((name) => name.startsWith("vendor/") && name.endsWith(".tgz"))).toBe(
-      false,
-    );
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 
@@ -263,7 +257,6 @@ describe("a vendored artifact pinned by a SHA256SUMS.txt", () => {
           return false;
         }
       })
-      .filter((name) => !name.endsWith(".tgz"))
       .filter((name) => readFileSync(join(REPO_ROOT, name)).includes(NUL))
       .toSorted();
     expect(withNul).toEqual(["vendor/scrcpy/scrcpy-server-v5.0.1"]);
@@ -272,32 +265,12 @@ describe("a vendored artifact pinned by a SHA256SUMS.txt", () => {
 });
 
 /**
- * why: a loose file at `vendor/`'s root would sit outside the per-directory rule
- * entirely, so it has to be accounted for. The one case is an npm `file:`
- * dependency's tarball: it cannot be a directory, and it carries its license
- * inside itself -- which is why the three-part shape above is checked per vendored
- * directory and not over `vendor/` as a whole.
+ * why: a loose file at `vendor/`'s root would sit outside the per-directory rule entirely, so the
+ * index is the only one allowed there.
  */
 describe("a file at vendor/'s root", () => {
-  const rootFiles = vendoredFiles
-    .filter((name) => !name.slice("vendor/".length).includes("/"))
-    .toSorted();
-
-  it("are the index and a packed archive, never third-party code outside a directory", () => {
-    expect(rootFiles).toEqual([
-      "vendor/README.md",
-      "vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz",
-    ]);
+  it("is only the index, never third-party code outside a directory", () => {
+    const rootFiles = vendoredFiles.filter((name) => !name.slice("vendor/".length).includes("/"));
+    expect(rootFiles).toEqual(["vendor/README.md"]);
   });
-
-  it.each(rootFiles.filter((name) => name.endsWith(".tgz")))(
-    "carries a license inside itself: %s",
-    (archive) => {
-      const members = execFileSync("tar", ["-tzf", archive], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-      }).split("\n");
-      expect(members.some((member) => /(^|\/)LICENSE(\.|$)/i.test(member))).toBe(true);
-    },
-  );
 });

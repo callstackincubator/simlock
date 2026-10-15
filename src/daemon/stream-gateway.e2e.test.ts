@@ -88,7 +88,7 @@ describe("a screen stream through a gateway", () => {
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port },
         mode: "gateway",
-        stream: { enabled: true },
+        capabilities: { stream: { enabled: true } },
       },
       dataDirectory: gatewayDirectory,
       filesystem: new MemoryFilesystem(),
@@ -108,7 +108,7 @@ describe("a screen stream through a gateway", () => {
     const worker = await startDaemon({
       configOverrides: {
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
-        stream: { enabled: workerStreams },
+        capabilities: { stream: { enabled: workerStreams } },
       },
       dataDirectory: workerDirectory,
       drivers: [

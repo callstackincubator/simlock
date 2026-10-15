@@ -15,6 +15,7 @@ function worker(availability: readonly ScreenAvailability[] = [], sendsMeta = tr
   const stream = createWorkerStream({
     clock,
     logger: new NoopLogger(),
+    name: "stream",
     registry,
     screens: {
       openScreen: async () => {

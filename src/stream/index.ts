@@ -1,1 +1,1 @@
-export { createGatewayStream, createWorkerStream } from "./create.js";
+export { streamModule } from "./definition.js";

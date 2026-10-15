@@ -238,9 +238,9 @@ export function refusalOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
   // why: an unknown route and an unknown lease are the same answer, because a daemon with
-  // `stream.enabled` off does not mount the route at all and answers like any path it has not heard of.
+  // `capabilities.stream.enabled` off does not mount the route at all and answers like any path it has not heard of.
   if (error.status === 404) {
-    return `${error.message} A stream is only offered where stream.enabled is on, and only for a lease that is still held.`;
+    return `${error.message} A stream is only offered where capabilities.stream.enabled is on, and only for a lease that is still held.`;
   }
   if (error.status === 415) {
     return "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.";

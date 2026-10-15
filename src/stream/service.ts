@@ -14,8 +14,6 @@ export interface StreamServiceOptions {
   };
 }
 
-export const STREAM_PREFIX = "stream";
-
 export function leaseIdOf(pathname: string): string | undefined {
   const match = /^\/v1\/stream\/leases\/([^/]+)$/.exec(pathname);
   const encoded = match?.[1];

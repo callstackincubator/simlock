@@ -16,6 +16,13 @@ const restarted: LeaseRequestRecord = {
   settledAt: 2,
 };
 
+const restartedToo: LeaseRequestRecord = {
+  ...restarted,
+  id: "req_2",
+  requesterId: "agent-2",
+  request: { model: "Pixel 9", osVersion: "35", platform: "android" },
+};
+
 function harness(
   settled: readonly LeaseRequestRecord[],
   leases: { readonly ids: string[]; readonly notRunning: ReadonlySet<string> } = {
@@ -70,7 +77,7 @@ function harness(
 
 describe("LeaseStartup", () => {
   it("settles every request the restart left open with daemon-restarted", async () => {
-    const h = harness([restarted]);
+    const h = harness([restarted, restartedToo]);
 
     await h.startup.settleRequests();
 
@@ -81,7 +88,7 @@ describe("LeaseStartup", () => {
           "The daemon restarted before this lease request settled; send it again with a new key",
       },
     ]);
-    expect(h.order).toEqual(["settle", "event:lease.rejected"]);
+    expect(h.order).toEqual(["settle", "event:lease.rejected", "event:lease.rejected"]);
     expect(h.events).toEqual([
       {
         event: "lease.rejected",
@@ -90,6 +97,16 @@ describe("LeaseStartup", () => {
           requestId: "req_1",
           requestSpec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
           requester: "agent",
+        },
+        module: "lease-startup",
+      },
+      {
+        event: "lease.rejected",
+        payload: {
+          reason: "daemon-restarted",
+          requestId: "req_2",
+          requestSpec: { model: "Pixel 9", osVersion: "35", platform: "android" },
+          requester: "agent-2",
         },
         module: "lease-startup",
       },

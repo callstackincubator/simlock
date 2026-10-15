@@ -22,7 +22,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
    it silently; any other error fails the start. iOS only on macOS. The Android
    driver starts its adb server and reattaches running emulators here.
 9. Host facts read in the background; host load sampler built.
-10. `ComponentInstaller`, `createCore`, agent-device supervisor, `createLeasing`,
+10. `ComponentInstaller`, `createCore`, the optional-module host (`createModuleHost`; it loads each enabled module's worker half, agent-device's supervisor among them), `createLeasing`,
     `core.connect(leasing.corePorts)`, `CleanupReaper`, `Nuke`, `TokenStore`,
     `AdminSecretManager` (secret minted, hash in memory), `GatewayUplink` when
     `gateway.url` and `gateway.token` are set, `DaemonServer`.

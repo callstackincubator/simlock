@@ -1,5 +1,5 @@
 import type { ScreenAvailability, ScreenSettings } from "../core/index.js";
-import type { LeaseEndParticipant } from "../leasing/index.js";
+import type { ModuleLeaseEndParticipant } from "../modules/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 import { DEFAULT_SILENCE_MS, DEFAULT_START_MS } from "./feed.js";
@@ -7,7 +7,6 @@ import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import {
   createStreamMount,
   createStreamRelayTarget,
-  STREAM_TARGET,
   type StreamMount,
   type StreamRelayTarget,
 } from "./mounts.js";
@@ -15,6 +14,7 @@ import type { StreamServiceOptions } from "./service.js";
 import { createWorkerStreamLink, type ScreenOpener, type StreamRegistry } from "./worker-link.js";
 
 export interface WorkerStreamOptions {
+  readonly name: string;
   readonly registry: StreamRegistry;
   readonly screens: ScreenOpener & {
     screenAvailability(): Promise<readonly ScreenAvailability[]>;
@@ -32,8 +32,7 @@ export interface StreamCapabilitySource {
 export interface WorkerStream {
   readonly mount: StreamMount;
   readonly relayTarget: StreamRelayTarget;
-  readonly relayTargetName: string;
-  readonly leaseEnd: LeaseEndParticipant;
+  readonly leaseEnd: ModuleLeaseEndParticipant;
   readonly capabilitySource: StreamCapabilitySource;
 }
 
@@ -54,13 +53,12 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
   };
   return {
     capabilitySource: {
-      name: STREAM_TARGET,
+      name: options.name,
       read: async () => describeAvailability(await options.screens.screenAvailability()),
     },
     leaseEnd: createStreamLeaseEnd(captures),
     mount: createStreamMount(service),
     relayTarget: createStreamRelayTarget(service),
-    relayTargetName: STREAM_TARGET,
   };
 }
 
@@ -71,14 +69,12 @@ export interface GatewayStreamOptions {
 
 export function createGatewayStream(options: GatewayStreamOptions): {
   readonly mount: StreamMount;
-  readonly relayTargetName: string;
 } {
   return {
     mount: createStreamMount({
       link: createGatewayStreamLink({ fleet: options.fleet }),
       logger: options.logger,
     }),
-    relayTargetName: STREAM_TARGET,
   };
 }
 

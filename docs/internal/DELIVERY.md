@@ -164,7 +164,11 @@ in CI. Mutation testing is not part of delivery: it ran on every push and
 held each push for minutes, and the tests it added in its last weeks were
 mostly details no caller depends on. The weekly `harden-tests` routine runs
 it on what `main` changed most recently, and kills only the survivors a
-caller or user could see. Each push cancels the CI
+caller or user could see. The weekly `audit-tests` routine reads the
+tests `main` changed for duplicates, log-only tests, data-only cases and
+assertions that cannot fail (testing rules 7 to 10): a cheap model scans,
+a stronger one verifies each finding, and only the confirmed ones are
+applied. Each push cancels the CI
 run before it, so before every review round and fix run the orchestrator
 reads the newest finished run with `.agents/scripts/ci-failures.mjs`, and
 its failed tests go into the next fix run.
@@ -427,13 +431,14 @@ To move it: copy the agents, skills, briefs, scripts, workflow, labels,
   `.claude/skills/check-spec`, `.claude/skills/implement`,
   `.claude/skills/review`, `.claude/skills/verify-hardware`, and the
   weekly routines `.claude/skills/harden-tests`,
-  `.claude/skills/garden-comments` and `.claude/skills/calibrate-reviews`
+  `.claude/skills/audit-tests`, `.claude/skills/garden-comments` and
+  `.claude/skills/calibrate-reviews`
 - Agents: `.claude/agents/` — `implementer`, `reviewer`,
   `hardware-verifier`, `spec-checker`, `bug-triager` (the stage
   instructions), and `spec-reviewer`, `code-reviewer`, `claims-reviewer`
 - Briefs: `.agents/briefs/` — `implement-<mode>.md`, `review-spec.md`,
   `review-code.md`, `review-claims.md`, `review-later-round.md`,
-  `calibration.md`
+  `audit-tests-<stage>.md`, `calibration.md`
 - Scripts: `.agents/scripts/worktree.sh` (also Claude Code's worktree hook in
   `.claude/settings.json`), `.agents/scripts/ensure-pnpm.sh` and
   `.agents/scripts/session-env.sh` (the session-start hooks: the pinned

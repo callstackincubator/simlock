@@ -53,8 +53,10 @@ file. Start them in one message, each an Agent call with
 the worktree, its mutant lines, the test files it owns, and this brief:
 
 ```markdown
-For each mutant: write or tighten one test in the files you own whose
-title states the behaviour the mutant breaks (testing rules 1 and 2). Apply
+For each mutant: tighten the test in the files you own that already
+proves the behaviour next to it (a case, an assertion), or write one only
+when none does; its title states the behaviour the mutant breaks (testing
+rules 1, 2 and 7). Apply
 the mutant by hand, run the test file with
 `pnpm exec vitest run --project unit <file>`, see it fail on the assertion
 the title names, then restore the source. Edit no source file. Answer one

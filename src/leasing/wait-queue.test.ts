@@ -321,6 +321,7 @@ describe("WaitQueue", () => {
     expect(queue.reject(rejected, new Error("first rejection"))).toBe(true);
     expect(queue.reject(rejected, new Error("late rejection"))).toBe(false);
     expect(queue.resolve(rejected, grant())).toBe(false);
+    expect(clock.pendingTimerCount).toBe(0);
     clock.advance(10);
 
     await expect(waiter.promise).resolves.toEqual(grant());

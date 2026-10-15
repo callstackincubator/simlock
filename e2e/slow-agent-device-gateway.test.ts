@@ -157,7 +157,7 @@ function defineSuite(target: Target): void {
       configOverrides: {
         mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
-        agentDevice: { enabled: true },
+        capabilities: { "agent-device": { enabled: true } },
       },
     });
     sharedEnvs.add(gateway);
@@ -170,7 +170,7 @@ function defineSuite(target: Target): void {
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         gateway: { label: "worker", token: secret, url: `ws://127.0.0.1:${gatewayPort}` },
-        agentDevice: { enabled: true, command: pinned },
+        capabilities: { "agent-device": { enabled: true, command: pinned } },
         capacity: {
           config: { limits: { [platform]: { maxDevices: 1, maxRunning: 1 } } },
         },
@@ -253,7 +253,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with agentDevice.enabled unset on the gateway, its /v1/agent-device/health answers 404 where it answered something else while enabled",
+    "with capabilities.agent-device.enabled unset on the gateway, its /v1/agent-device/health answers 404 where it answered something else while enabled",
     { timeout: 600_000 },
     async () => {
       const probe = await newAgentToken(gateway);
@@ -261,7 +261,7 @@ function defineSuite(target: Target): void {
       const headers = { authorization: `Bearer ${probe.secret}` };
       expect((await fetch(healthUrl, { headers })).status, "health while enabled").not.toBe(404);
       await changeConfig(gateway, (config) => {
-        delete config.agentDevice;
+        delete config["capabilities"]?.["agent-device"];
       });
       await waitForWorker(
         "the gateway's worker list shows the worker connected again",
@@ -273,11 +273,11 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with the worker's agentDevice.enabled unset (the gateway's simlock worker list shows agent-device off), open through the gateway fails within 5 s with a message containing `no worker connected to this gateway can serve agent-device`, and no lease is made",
+    "with the worker's capabilities.agent-device.enabled unset (the gateway's simlock worker list shows agent-device off), open through the gateway fails within 5 s with a message containing `no worker connected to this gateway can serve agent-device`, and no lease is made",
     { timeout: 600_000 },
     async () => {
       await changeConfig(worker, (config) => {
-        delete config.agentDevice;
+        delete config["capabilities"]?.["agent-device"];
       });
       await waitForWorker(
         "the gateway's worker list shows the worker connected with agent-device off",
