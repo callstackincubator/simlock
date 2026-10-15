@@ -594,28 +594,45 @@ describe("main.ts loads optional modules lazily", () => {
       .map((v) => v.rule.name);
   }
 
-  it("dependency-cruiser fails a value import of src/agent-device from main.ts, and passes a dynamic, a type-only and a type-import one", () => {
-    expect(
-      mainViolations('import { value } from "../agent-device/index.js";\nexport { value };\n'),
-    ).toContain("main-loads-modules-lazily");
-    expect(
-      mainViolations('export const load = () => import("../agent-device/index.js");\n'),
-    ).not.toContain("main-loads-modules-lazily");
-    expect(mainViolations('export { value } from "../agent-device/index.js";\n')).toContain(
-      "main-loads-modules-lazily",
-    );
-    expect(mainViolations('import "../agent-device/index.js";\nexport {};\n')).toContain(
-      "main-loads-modules-lazily",
-    );
-    expect(
-      mainViolations(
-        'import type { Shape } from "../agent-device/index.js";\nexport type S = Shape;\n',
-      ),
-    ).not.toContain("main-loads-modules-lazily");
-    expect(
-      mainViolations('export type S = import("../agent-device/index.js").Shape;\n'),
-    ).not.toContain("main-loads-modules-lazily");
-  });
+  it.each([
+    {
+      kind: "a value import",
+      source: 'import { value } from "../agent-device/index.js";\nexport { value };\n',
+      verdict: "fails",
+    },
+    {
+      kind: "a re-export",
+      source: 'export { value } from "../agent-device/index.js";\n',
+      verdict: "fails",
+    },
+    {
+      kind: "a bare import",
+      source: 'import "../agent-device/index.js";\nexport {};\n',
+      verdict: "fails",
+    },
+    {
+      kind: "a dynamic import",
+      source: 'export const load = () => import("../agent-device/index.js");\n',
+      verdict: "passes",
+    },
+    {
+      kind: "a type-only import",
+      source: 'import type { Shape } from "../agent-device/index.js";\nexport type S = Shape;\n',
+      verdict: "passes",
+    },
+    {
+      kind: "a type import",
+      source: 'export type S = import("../agent-device/index.js").Shape;\n',
+      verdict: "passes",
+    },
+  ])(
+    "dependency-cruiser $verdict $kind of src/agent-device from main.ts",
+    ({ source, verdict }) => {
+      expect(mainViolations(source).includes("main-loads-modules-lazily")).toBe(
+        verdict === "fails",
+      );
+    },
+  );
 });
 
 describe("the cycle check between components", () => {
