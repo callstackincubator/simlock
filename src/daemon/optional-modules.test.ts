@@ -525,11 +525,13 @@ describe("optional modules: a start that cannot go on", () => {
 describe("optional modules: the context a module receives", () => {
   it("has a logger named after the module, and events.subscribe delivers a bus event", async () => {
     const delivered: string[] = [];
+    const seen: { config?: unknown } = {};
     const { daemon, sink } = await start({
       modules: definitions(
         fakeModule({
           name: "alpha",
           onCreate: (ctx) => {
+            seen.config = ctx.config;
             ctx.logger.info("alpha says hello");
             ctx.events.subscribe("lease.released", (envelope) => {
               delivered.push(envelope.payload.leaseId);
@@ -546,6 +548,7 @@ describe("optional modules: the context a module receives", () => {
       "daemon.alpha",
     ]);
     expect(delivered).toEqual([leaseId]);
+    expect(seen.config).toEqual({ greeting: "hello" });
   });
 });
 
