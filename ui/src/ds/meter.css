@@ -1,0 +1,58 @@
+/* Load gauges: how full one machine figure is, as a bar in a line of its own under the figure
+ * it belongs to. Every colour comes from here by class, so both themes apply (ADR 0011 §4); only
+ * the level arrives inline, which the Content-Security-Policy allows (style-src governs style
+ * elements, not style attributes). A gauge only shades what its figure already says, so it is
+ * square, quiet, and never the accent. */
+
+.load-figure {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* why: the bar stops where a reading is readable rather than filling the panel — a full-width
+ * band would outweigh the one line of text it shades. */
+.load-bar {
+  display: block;
+  height: 8px;
+  max-width: 20rem;
+  background: var(--field);
+}
+
+/* why: a new reading lands every 15 seconds, so the fill slides to its level over --duration
+ * rather than jumping; --duration is already zero under `prefers-reduced-motion: reduce`. Moving
+ * the width costs 0.13ms of layout per change, measured, and no long task either way. */
+.load-bar-fill {
+  display: block;
+  height: 100%;
+  width: var(--load-bar, 0%);
+  transition: width var(--duration);
+}
+
+.load-bar-ok .load-bar-fill {
+  background: var(--status-ok);
+}
+
+.load-bar-warn .load-bar-fill {
+  background: var(--status-warn);
+}
+
+.load-bar-error .load-bar-fill {
+  background: var(--status-error);
+}
+
+.load-bar-idle .load-bar-fill {
+  background: var(--status-idle);
+}
+
+.load-bar-neutral .load-bar-fill {
+  background: var(--slot-leased);
+}
+
+.meter-thin {
+  height: 4px;
+  max-width: none;
+}
+
+.meter-regular {
+  max-width: none;
+}

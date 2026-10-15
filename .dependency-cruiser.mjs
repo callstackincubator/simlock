@@ -14,6 +14,8 @@ function findComponents(dir) {
 const escape = (path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const testFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?)$";
 const linkTestFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?|/testing\\.ts)$";
+// why: the console layers below the screens are plain TypeScript, so a test drives them without a browser.
+const uiLibrary = "(^|node_modules/)(react|react-dom|recharts|@tanstack/[^/]+)(/|$)";
 const fsOrProcess = "^(node:)?(fs|fs/promises|child_process)$";
 
 // why: e2e imports the compiled package from dist/, which mirrors src/, so each component's rule covers its compiled copy too.
@@ -194,6 +196,42 @@ export default {
       "core, leasing, the drivers, the gateway and the contract import nothing from the optional-module host or its registry",
       "^src/(core|leasing|drivers|gateway|contract)/",
       { path: "^src/(modules|module-registry)/" },
+    ),
+    direction(
+      "ui-ds-stands-alone",
+      "the console's design system imports nothing else of the console",
+      "^ui/src/ds/",
+      { path: "^ui/src/(app|screens|state|data|model)/" },
+    ),
+    direction(
+      "ui-model-is-pure",
+      "the console's business rules import no other layer and no UI library",
+      "^ui/src/model/",
+      { path: `^ui/src/(app|screens|state|data|ds)/|${uiLibrary}` },
+    ),
+    direction(
+      "ui-data-is-below-the-ui",
+      "the console's network and storage layer imports no state, screen, design system or UI library",
+      "^ui/src/data/",
+      { path: `^ui/src/(app|screens|state|ds)/|${uiLibrary}` },
+    ),
+    direction(
+      "ui-state-feeds-screens",
+      "the console's state layer imports no screen, and from the design system only the types it fills",
+      "^ui/src/state/",
+      { path: "^ui/src/(app|screens)/" },
+    ),
+    direction(
+      "ui-state-ds-types-only",
+      "the console's state layer imports no screen, and from the design system only the types it fills",
+      "^ui/src/state/",
+      { path: "^ui/src/ds/", dependencyTypesNot: ["type-only"] },
+    ),
+    direction(
+      "ui-screens-present-only",
+      "a console screen reaches data only through the state layer: no network, storage or business rule of its own",
+      "^ui/src/screens/",
+      { path: "^ui/src/(app|data|model)/" },
     ),
     direction(
       "contract-imports-nothing",

@@ -652,6 +652,73 @@ describe("the cycle check between components", () => {
   });
 });
 
+describe("the console's layers", () => {
+  function layerViolations(world: Readonly<Record<string, string>>): string[] {
+    const dir = join(scratch, `ui-layers-${counter++}`);
+    for (const [path, contents] of Object.entries(world)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["ui"])
+      .filter((v) => v.rule.name.startsWith("ui-"))
+      .map((v) => `${v.rule.name} ${v.from} -> ${v.to}`)
+      .sort();
+  }
+
+  const layers = {
+    // why: the config looks for components under src/ when it loads, so the fixture needs one.
+    "src/x.ts": "export {};\n",
+    "ui/src/app/app.ts":
+      'import "../screens/s.js";\nimport "../state/s.js";\nimport "../data/d.js";\nexport {};\n',
+    "ui/src/data/d.ts": 'import "../model/m.js";\nexport const d = 1;\n',
+    "ui/src/ds/b.ts": "export type Props = number;\nexport const b = 1;\n",
+    "ui/src/model/m.ts": "export const m = 1;\n",
+    "ui/src/screens/s.ts": 'import "../ds/b.js";\nimport "../state/s.js";\nexport {};\n',
+    "ui/src/state/s.ts":
+      'import type { Props } from "../ds/b.js";\nimport "../data/d.js";\nimport "../model/m.js";\nexport type P = Props;\n',
+  };
+
+  it("passes each layer importing only the layers below it, and the state layer taking design-system types", () => {
+    expect(layerViolations(layers)).toEqual([]);
+  });
+
+  it("fails every import that crosses a layer the wrong way", () => {
+    const found = layerViolations({
+      ...layers,
+      "ui/src/data/d.ts": 'import "../state/s.js";\nimport "react";\nexport const d = 1;\n',
+      "ui/src/ds/b.ts":
+        'import "../model/m.js";\nexport type Props = number;\nexport const b = 1;\n',
+      "ui/src/model/m.ts": 'import "../data/d.js";\nimport "recharts";\nexport const m = 1;\n',
+      "ui/src/screens/s.ts": 'import "../model/m.js";\nimport "../data/d.js";\nexport {};\n',
+      "ui/src/state/s.ts":
+        'import { b } from "../ds/b.js";\nimport "../screens/s.js";\nexport const s = b;\n',
+    });
+
+    expect(found).toEqual([
+      "ui-data-is-below-the-ui ui/src/data/d.ts -> react",
+      "ui-data-is-below-the-ui ui/src/data/d.ts -> ui/src/state/s.ts",
+      "ui-ds-stands-alone ui/src/ds/b.ts -> ui/src/model/m.ts",
+      "ui-model-is-pure ui/src/model/m.ts -> recharts",
+      "ui-model-is-pure ui/src/model/m.ts -> ui/src/data/d.ts",
+      "ui-screens-present-only ui/src/screens/s.ts -> ui/src/data/d.ts",
+      "ui-screens-present-only ui/src/screens/s.ts -> ui/src/model/m.ts",
+      "ui-state-ds-types-only ui/src/state/s.ts -> ui/src/ds/b.ts",
+      "ui-state-feeds-screens ui/src/state/s.ts -> ui/src/screens/s.ts",
+    ]);
+  });
+
+  it("lets a test reach across layers, as a test drives its subject through what it needs", () => {
+    expect(
+      layerViolations({
+        ...layers,
+        "ui/src/model/m.test.ts": 'import "../data/d.js";\nexport {};\n',
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe("the repo's known violations", () => {
   const read = (file: string): Violation[] =>
     JSON.parse(readFileSync(join(repoRoot, file), "utf8")) as Violation[];

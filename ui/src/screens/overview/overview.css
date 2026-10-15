@@ -1,0 +1,142 @@
+.capacity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.platform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.platform-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.overview-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.worker-table td {
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+
+.worker-table th:nth-child(2) {
+  width: 30%;
+}
+
+.worker-table th:nth-child(3),
+.worker-table th:nth-child(4) {
+  width: 18%;
+}
+
+.worker-table th.num {
+  width: 5.5rem;
+}
+
+.worker-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.worker-name a {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-name a:hover {
+  color: var(--accent-text);
+}
+
+.gauge {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.5rem;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.gauge .mono {
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.overview-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.overview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition: background-color var(--duration);
+}
+
+.overview-list li:last-child .overview-row {
+  border-bottom: 0;
+}
+
+.overview-row:hover {
+  background: var(--field);
+  color: var(--text);
+}
+
+.overview-row-aside {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 3rem 9rem minmax(0, 1fr);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.activity-row .mono {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-error {
+  color: var(--status-error);
+}
+
+.event-warn {
+  color: var(--status-warn);
+}

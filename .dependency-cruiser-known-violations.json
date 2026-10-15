@@ -232,7 +232,7 @@
   },
   {
     "type": "dependency",
-    "from": "ui/src/views/leases-model.ts",
+    "from": "ui/src/model/leases.ts",
     "to": "src/contract/schemas.ts",
     "unresolvedTo": "../../../src/contract/schemas",
     "dependencyTypes": ["local", "type-only", "import"],
@@ -243,7 +243,7 @@
   },
   {
     "type": "dependency",
-    "from": "ui/src/views/waiting-model.ts",
+    "from": "ui/src/model/waiting.ts",
     "to": "src/contract/schemas.ts",
     "unresolvedTo": "../../../src/contract/schemas",
     "dependencyTypes": ["local", "type-only", "import"],
@@ -254,7 +254,7 @@
   },
   {
     "type": "dependency",
-    "from": "ui/src/views/workers-model.ts",
+    "from": "ui/src/model/workers.ts",
     "to": "src/contract/schemas.ts",
     "unresolvedTo": "../../../src/contract/schemas",
     "dependencyTypes": ["local", "type-only", "import"],

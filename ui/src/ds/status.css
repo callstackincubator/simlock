@@ -1,0 +1,35 @@
+/* A status: the daemon's word, with a square of its colour before it. Never the accent. */
+
+.status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.status-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  align-self: center;
+}
+
+.status-ok .status-dot,
+.status-dot-ok {
+  background: var(--status-ok);
+}
+
+.status-warn .status-dot,
+.status-dot-warn {
+  background: var(--status-warn);
+}
+
+.status-error .status-dot,
+.status-dot-error {
+  background: var(--status-error);
+}
+
+.status-idle .status-dot,
+.status-dot-idle {
+  background: var(--status-idle);
+}
