@@ -26,5 +26,5 @@ export function isVersionAtLeast(version: string, minimum: string): boolean {
     const difference = (found.numbers[index] ?? 0) - (needed.numbers[index] ?? 0);
     if (difference !== 0) return difference > 0;
   }
-  return !found.prerelease || needed.prerelease;
+  return !found.prerelease;
 }
