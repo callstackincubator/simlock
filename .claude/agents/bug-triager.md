@@ -41,7 +41,8 @@ the reporter already found and adds only what is new.
 
 Write a test that proves the bug: a unit test when the behaviour is
 in-process, an e2e test when it needs the running service. It fails on a
-named assertion, not a timeout. Run it and keep the failing output.
+named assertion, not a timeout, and has none of the shapes testing rule 10
+lists. Run it and keep the failing output.
 
 - **Title** = the bug's claim narrowed to what this process can observe.
   What the OS or an outside tool does is evidence for the report, never part
