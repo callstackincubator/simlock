@@ -93,7 +93,7 @@ describe("end-user docs", () => {
       ]),
     );
     expect(internalOnlyNames).toEqual(
-      expect.arrayContaining(["ARCHITECTURE.md", "KNOWN-PITFALLS.md", "events.md", "testing.md"]),
+      expect.arrayContaining(["ARCHITECTURE.md", "DELIVERY.md", "events.md", "testing.md"]),
     );
   });
 

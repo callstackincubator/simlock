@@ -712,7 +712,7 @@ async function runLease(
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
   const ttlMs = typeof values.ttl === "string" ? parseDuration(values.ttl) : undefined;
-  // why: A reparented holder keeps renewing, so a TTL cannot bound it; watching the parent does (KNOWN-PITFALLS).
+  // why: A reparented holder keeps renewing, so a TTL cannot bound it; watching the parent does.
   const bindPid = parseBindPid(values["bind-pid"]);
   const watchedPid = bindPid ?? environment.parentPid;
   const termination = detached

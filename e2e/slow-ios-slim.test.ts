@@ -186,8 +186,8 @@ describe.skipIf(process.platform !== "darwin")(
         };
         expect(new Set(slimmedFact.categories)).toEqual(ALL_CATEGORY_NAMES);
         expect(slimmedFact.labelCount).toBe(ALL_LABELS.size);
-        // Reported, not asserted empty: Apple can rename or drop a daemon between runtimes
-        // (docs/internal/KNOWN-PITFALLS.md), and that is evidence for the report, not a failure.
+        // why: reported, not asserted empty: Apple can rename or drop a daemon between runtimes,
+        // and that is evidence for the report, not a failure.
         console.log(
           `[slim e2e] unknownLabels (${slimmedFact.unknownLabels.length}): ` +
             JSON.stringify(slimmedFact.unknownLabels),

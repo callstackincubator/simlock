@@ -751,9 +751,8 @@ function requireOwnRequest(identity: TokenIdentity, ownerId: string): void {
  * `lease.list`'s own filter (own leases; admin sees all): an unauthorized id simply isn't in
  * the list, and `unknownLease` covers both "doesn't exist" and "not yours" the same way
  * `lease.list` itself does not distinguish them, at 404. This is a deliberate, narrower
- * divergence than the one S6 fixed for the mutating routes below -- see
- * `docs/internal/KNOWN-PITFALLS.md` ("HTTP single-lease reads answer 404, not 403, for an unowned
- * lease"). */
+ * divergence than the one S6 fixed for the mutating routes below -- see the known gaps in
+ * https://github.com/callstackincubator/simlock/blob/main/src/http/README.md. */
 async function findOwnedLease(
   deps: HttpGatewayDeps,
   session: ReturnType<typeof buildHttpSession>,

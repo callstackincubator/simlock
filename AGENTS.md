@@ -81,8 +81,6 @@ Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
 - [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — the map: topology, every module
   and its manual, the enforced boundaries, the flows
-- [COMPONENTS.md](docs/internal/COMPONENTS.md) — the inventory: every component,
-  what it owns, what it leaves to others
 - [DESIGN.md](docs/internal/DESIGN.md) — the design guide for the web console
   (and the landing page): type, colour, status colours, spacing, voice
 - [DELIVERY.md](docs/internal/DELIVERY.md) — how work flows through GitHub
@@ -93,7 +91,4 @@ Maintainer/agent docs live under [docs/internal/](docs/internal/):
   spec session writes, and the module manual template
 - [EVENTS.md](docs/internal/EVENTS.md) — the same catalog with rationale and ADR references
 - [IDEAS.md](docs/internal/IDEAS.md) — post-v1 ideas; don't implement these unless asked
-- [KNOWN-PITFALLS.md](docs/internal/KNOWN-PITFALLS.md) — accepted gaps and their planned fixes
-- [LOOP.md](docs/internal/LOOP.md) — the old stage-implementation loop, kept as
-  history; DELIVERY.md replaces it
 - [adr/](docs/internal/adr/) — architecture decision records and their status

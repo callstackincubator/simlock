@@ -41,7 +41,7 @@ const DEFAULT_WORKER_REFRESH_INTERVAL_MS = WORKER_VIEW_REFRESH_INTERVAL_MS;
  * enough of them evicts every other fact an operator comes to `simlock events` for. One second
  * is short enough that a legitimate operator watching `simlock events --follow` still sees a
  * refusal essentially the moment it happens, and long enough to collapse a tight retry loop
- * (a worker's backoff floor, per `docs/internal/KNOWN-PITFALLS.md`, is measured in seconds) to about one
+ * (a worker's redial backoff starts at 1 s, https://github.com/callstackincubator/simlock/blob/main/src/gateway/README.md) to about one
  * event per second regardless of how fast the dials themselves arrive.
  */
 export const REJECTION_COALESCE_WINDOW_MS = 1_000;

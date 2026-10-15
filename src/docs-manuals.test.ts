@@ -24,6 +24,14 @@ const manuals = trackedFiles.filter((name) => /^src\/(?:.+\/)?README\.md$/.test(
 const flows = trackedFiles.filter((name) => /^docs\/internal\/flows\/[^/]+\.md$/.test(name));
 const MAP = "docs/internal/ARCHITECTURE.md";
 
+const modules = [
+  ...new Set(
+    trackedFiles
+      .filter((name) => /^src\/[^/]+\/.+\.ts$/.test(name))
+      .map((name) => name.split("/").slice(0, 2).join("/")),
+  ),
+];
+
 const PATH_TOKEN = /^[\w@.-]+(?:\/[\w@.-]+)*(?:\.(?:ts|tsx|mjs|js|md)|\/)$/;
 
 function lines(doc: string): string[] {
@@ -57,6 +65,11 @@ describe("module manuals, flow docs and the architecture map", () => {
   it("are found, the leasing manual and the startup flow among them", () => {
     expect(manuals).toContain("src/leasing/README.md");
     expect(flows).toContain("docs/internal/flows/startup.md");
+  });
+
+  it("cover every module under src/", () => {
+    expect(modules).toEqual(expect.arrayContaining(["src/core", "src/leasing", "src/gateway"]));
+    expect(modules.filter((module) => !manuals.includes(`${module}/README.md`))).toEqual([]);
   });
 
   it("each manual sits beside a CLAUDE.md that only imports it", () => {

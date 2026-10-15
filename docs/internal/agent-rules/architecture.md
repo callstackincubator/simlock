@@ -115,9 +115,8 @@ grounds for rejecting a change even if it works.
     `.dependency-cruiser-known-cycles.json`; those lists only shrink. A single-file
     component's surface is what the file exports, and a component whose
     surface has grown past one file becomes a directory with an index, not
-    a second file others reach into. The inventory in
-    [../COMPONENTS.md](../COMPONENTS.md) names each component and its
-    surface.
+    a second file others reach into. Each module's manual,
+    `src/<module>/README.md`, names its files and its surface.
 15. **Dependencies point from the optional to the required, never back.**
     The lease transaction (request book, queue, acquisition, planner,
     provisioner, lifecycle, release, reclaim, registry, capacity) is the
