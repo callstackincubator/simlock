@@ -182,14 +182,17 @@ scale; never a value between.
 - **Load gauges.** On a worker's page, each of the Load panel's CPU, memory and
   disk figures carries a bar in a line of its own under it: 8px high, `--field`
   track, `max-width: 20rem`, square, and never the accent. Its fill takes a
-  status colour by class; its level arrives inline, which the
-  Content-Security-Policy allows for a style attribute. A gauge is never the only
-  place its number is, so it carries no accessible name and takes no focus — the
-  figure above it is the text. Colour is a second signal here too: a gauge shades
-  a level the console has a word for and nothing else, so CPU and disk stay
-  `--status-idle` until the worker sends a threshold they can be judged against.
-  A gauge belongs to this panel alone: the worker's card prints the same load as
-  one line of text, and charts are drawn by their own rule below.
+  status colour by class; its level arrives inline, which survives
+  `style-src 'self'` only because React writes styles through the CSSOM — the
+  same level written into markup is refused by the policy (ADR 0011), so a gauge
+  is drawn by the console's own code and never by server-rendered output. A gauge
+  is never the only place its number is, so it carries no accessible name and
+  takes no focus — the figure above it is the text. Colour is a second signal
+  here too: a gauge shades a level the console has a word for and nothing else,
+  so CPU and disk stay `--status-idle` until the worker sends a threshold they
+  can be judged against. A gauge belongs to this panel alone: the worker's card
+  prints the same load as one line of text, and charts are drawn by their own
+  rule above.
 
 ## Layout
 

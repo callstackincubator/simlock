@@ -416,8 +416,10 @@ function FigureRow<Part extends object>(props: {
 
 // why: a gauge is never the only place its number is -- the figure above it is the text, so it
 // carries no accessible name of its own (`aria-hidden`) and takes no focus. Its colour comes from
-// the stylesheet by class, so both themes apply; only its level arrives inline, which the
-// Content-Security-Policy allows (`style-src` governs style elements, not style attributes).
+// the stylesheet by class, so both themes apply. Only its level arrives inline, and that survives
+// the daemon's `style-src 'self'` because React writes styles through the CSSOM, which the policy
+// does not govern -- the same level in markup is refused and the bar comes out empty, as ADR 0011
+// notes. So a gauge is drawn by this component and never by server-rendered markup.
 function LoadGauge(props: { readonly percent: number; readonly tone: Tone }) {
   const { percent, tone } = props;
   return (
