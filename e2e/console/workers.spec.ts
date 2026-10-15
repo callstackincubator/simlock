@@ -39,10 +39,45 @@ interface WorkerView {
   };
 }
 
-// why: the test rewrites one field of this route's own answer, so it names the one path it touches
-// rather than the whole view; everything else passes through as the daemon sent it.
 interface WorkerPayload {
-  load?: { memory?: { pressure?: string } } | undefined;
+  load?:
+    | {
+        memory?: { availableBytes?: number; pressure?: string; totalBytes?: number } | undefined;
+      }
+    | undefined;
+}
+
+// why: the two fields a colour case has to state; everything else in the reading stays the
+// daemon's.
+interface MemoryClaim {
+  readonly pressure?: string;
+  readonly usedPercent: number;
+}
+
+/**
+ * why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be is
+ * nobody's to predict — so the colour test states the memory reading it wants and this writes just
+ * those fields into the daemon's own answer, leaving every other field, its headers and its `Date`
+ * real. The route is asked again per request, so the reading stays as fresh as the daemon's own.
+ */
+async function answerMemory(page: Page, claim: () => MemoryClaim): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/v1/workers",
+    async (route: Route) => {
+      const response = await route.fetch();
+      const listed = (await response.json()) as { workers: WorkerPayload[] };
+      for (const worker of listed.workers) {
+        const memory = worker.load?.memory;
+        const total = memory?.totalBytes;
+        if (memory === undefined || typeof total !== "number" || total <= 0) continue;
+        const wanted = claim();
+        memory.availableBytes = Math.round((total * (100 - wanted.usedPercent)) / 100);
+        if (wanted.pressure === undefined) delete memory.pressure;
+        else memory.pressure = wanted.pressure;
+      }
+      await route.fulfill({ json: listed, response });
+    },
+  );
 }
 
 interface Status {
@@ -174,6 +209,24 @@ function fillsMatch(painted: readonly PaintedGauge[], percents: readonly number[
       return Math.abs(bar.fill - (bar.track * percent) / 100) <= 1;
     })
   );
+}
+
+interface PaintedTone {
+  readonly colour: string;
+  readonly tone: string;
+}
+
+// why: what the memory poll cannot see, because it watches one gauge: that every other gauge on
+// the panel carries a tone class at all, and wears none of them in the accent. Which token a tone
+// class resolves to is the poll's claim, proven for all four in both themes.
+function gaugeToneFaults(painted: readonly PaintedTone[], accent: string): string[] {
+  const faults: string[] = [];
+  for (const fill of painted) {
+    if (fill.tone === "") faults.push("a gauge carries no tone class");
+    else if (fill.colour === accent)
+      faults.push(`the ${fill.tone} gauge is painted with the accent`);
+  }
+  return faults;
 }
 
 /** A device's row in a worker's device table. */
@@ -578,26 +631,13 @@ test.describe("the workers views", () => {
     await openConsole(page, daemon);
     const shown = card(page, host?.id ?? "");
     await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
-    // why: only macOS reports a memory pressure, so a Linux lane can never see a warn or critical
-    // gauge from a live reading. This answers the page's own read of the worker list with one field
-    // of the reading changed and every other field left as the daemon sent it, so what is painted
-    // is the real component's doing. The list is read again per request, so the reading stays as
-    // fresh as the daemon's own.
-    let pressure: string | undefined;
-    await page.route(
-      (url) => url.pathname === "/v1/workers",
-      async (route: Route) => {
-        const response = await route.fetch();
-        const listed = (await response.json()) as { workers: WorkerPayload[] };
-        for (const worker of listed.workers) {
-          const memory = worker.load?.memory;
-          if (memory === undefined) continue;
-          if (pressure === undefined) delete memory.pressure;
-          else memory.pressure = pressure;
-        }
-        await route.fulfill({ json: listed, response });
-      },
-    );
+    // why: only macOS reports a memory pressure, and how full a CI machine's memory happens to be
+    // is nobody's to predict. This answers the page's own read of the worker list with the memory
+    // reading's own fields set to the level the case asks for and every other field left as the
+    // daemon sent it, so what is painted is the real component's doing and the same colour is
+    // expected on any machine.
+    let claim: MemoryClaim = { usedPercent: 50 };
+    await answerMemory(page, () => claim);
     await shown.getByRole("link", { name: host?.id ?? "" }).click();
 
     const panel = page.getByRole("region", { name: "Load", exact: true });
@@ -621,40 +661,38 @@ test.describe("the workers views", () => {
         };
       });
 
-    // why: the four levels are the four tone rules, so each one is seen in each theme by the real
-    // component; a rule deleted, swapped or given the accent fails a named assertion here.
+    // why: these six are the whole colour rule for a memory gauge — the worker's three words, that
+    // the word outranks the console's threshold, and the threshold on its own at either end. Each is
+    // seen in each theme by the real component, so a tone rule deleted, swapped, or given the accent
+    // fails a named assertion here.
     for (const colorScheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme });
       const { accent, tones } = await readStatuses(page);
 
-      for (const [level, tone] of [
-        ["normal", "ok"],
-        ["warn", "warn"],
-        ["critical", "error"],
-        [undefined, "idle"],
+      for (const [level, usedPercent, tone] of [
+        ["normal", 50, "ok"],
+        ["warn", 50, "warn"],
+        ["critical", 50, "error"],
+        ["normal", 97, "ok"],
+        [undefined, 97, "error"],
+        [undefined, 50, "idle"],
       ] as const) {
-        pressure = level;
+        claim = { usedPercent, ...(level === undefined ? {} : { pressure: level }) };
         const want = tones[TONES.indexOf(tone)];
+        const at = `${usedPercent}%${level === undefined ? " with no word" : ` and ${level}`}`;
         await expect
           .poll(() => memoryFill(), {
             timeout: 5_000,
-            message: `the ${level ?? "absent"} pressure to paint the ${tone} gauge in ${colorScheme}`,
+            message: `${at} to paint the ${tone} gauge in ${colorScheme}`,
           })
           .toEqual({ tone, colour: want });
         expect(want, `the ${tone} gauge in ${colorScheme}`).not.toBe(accent);
 
-        // why: every gauge on the panel, not only the one driven above: each must show the colour of
-        // the tone class it carries, so none is painted by a stray inline colour or by the accent.
+        // why: every gauge on the panel, not only the one driven above, so a rule that coloured a
+        // gauge by something other than its own tone class fails here too.
         const fills = await paintedFills();
         expect(fills.length).toBeGreaterThan(1);
-        for (const fill of fills) {
-          const context = `${fill.tone} gauge in ${colorScheme}`;
-          expect(fill.tone, context).not.toBe("");
-          expect(fill.colour, context).toBe(
-            tones[TONES.indexOf(fill.tone as (typeof TONES)[number])],
-          );
-          expect(fill.colour, context).not.toBe(accent);
-        }
+        expect(gaugeToneFaults(fills, accent)).toEqual([]);
       }
     }
   });

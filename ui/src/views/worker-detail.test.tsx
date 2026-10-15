@@ -616,21 +616,44 @@ describe("the Load gauges", () => {
     expect(memoryBar(LOAD.memory)).toContain(bar("ok", 69));
     expect(memoryBar({ ...LOAD.memory, pressure: "warn" })).toContain(bar("warn", 69));
     expect(memoryBar({ ...LOAD.memory, pressure: "critical" })).toContain(bar("error", 69));
+    // why: the pressure is the worker's own word and outranks the console's threshold — it colours
+    // this bar at 69% full, where the threshold would have left it neutral.
     expect(memoryBar(noPressure)).toContain(bar("idle", 69));
   });
 
-  it("a worker's detail keeps the CPU and disk gauges idle at any level, a full disk included", () => {
-    const panel = panelOf({
-      ...RUNNING,
-      load: {
-        ...LOAD,
-        cpu: { busyPercent: 99, cores: 10, limited: false },
-        disk: { freeBytes: 0, totalBytes: 494.4 * GIB },
-      },
-    });
+  it("a worker's detail falls back to the console's threshold for memory the worker gives no word for", () => {
+    const { pressure: _pressure, ...noPressure } = LOAD.memory;
+    const almostGone = { ...noPressure, availableBytes: 1.5 * GIB };
+    const plenty = { ...noPressure, availableBytes: 30 * GIB };
 
-    expect(row(panel, "CPU")).toContain(bar("idle", 99));
-    expect(row(panel, "Disk")).toContain(bar("idle", 100));
+    expect(row(panelOf({ ...RUNNING, load: { ...LOAD, memory: almostGone } }), "Memory")).toContain(
+      bar("error", 95),
+    );
+    expect(row(panelOf({ ...RUNNING, load: { ...LOAD, memory: plenty } }), "Memory")).toContain(
+      bar("idle", 6),
+    );
+  });
+
+  it("a worker's detail colours the CPU and disk gauges by the console's own thresholds", () => {
+    type Cpu = NonNullable<NonNullable<WorkerView["load"]>["cpu"]>;
+    type Disk = NonNullable<NonNullable<WorkerView["load"]>["disk"]>;
+    const rowFor = (label: string, cpu: Partial<Cpu>, disk: Partial<Disk>) =>
+      row(
+        panelOf({
+          ...RUNNING,
+          load: { ...LOAD, cpu: { ...LOAD.cpu, ...cpu }, disk: { ...LOAD.disk, ...disk } },
+        }),
+        label,
+      );
+
+    // why: the worker sends no threshold for either figure, so the console's own decides. The disk
+    // here is 494.4 GiB: no free byte is 100% used, 100 GiB free is 80%.
+    expect(rowFor("CPU", { busyPercent: 84 }, { freeBytes: 0 })).toContain(bar("idle", 84));
+    expect(rowFor("CPU", { busyPercent: 85 }, { freeBytes: 0 })).toContain(bar("warn", 85));
+    expect(rowFor("CPU", { busyPercent: 95 }, { freeBytes: 0 })).toContain(bar("error", 95));
+    expect(rowFor("Disk", { busyPercent: 0 }, { freeBytes: 100 * GIB })).toContain(bar("idle", 80));
+    expect(rowFor("Disk", { busyPercent: 0 }, { freeBytes: 50 * GIB })).toContain(bar("warn", 90));
+    expect(rowFor("Disk", { busyPercent: 0 }, { freeBytes: 0 })).toContain(bar("error", 100));
   });
 
   it("a worker's detail says each figure's number once, the gauge carrying none of its own", () => {

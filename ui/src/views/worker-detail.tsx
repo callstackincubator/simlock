@@ -5,6 +5,7 @@ import { Link } from "../router";
 import { deviceStateStatus, installStatus, pressureStatus, Status, type Tone } from "../status";
 import { type Column, DataTable } from "../table";
 import { WorkerLeases } from "./leases";
+import { levelOf } from "../load-thresholds";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load-model";
 import { WorkerFacts } from "./worker-facts";
 import {
@@ -332,16 +333,22 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
   const { cpu, disk, memory } = load;
   const age = formatDuration(Math.ceil((now - load.readAt) / 1000) * 1000);
   const gauges = loadGauges(load);
-  // why: a gauge only shades the figure beside it. The console takes thresholds from the daemon
-  // and invents none, so CPU and disk have no level to be wrong at and stay in the neutral tone;
-  // memory has one the worker sends — its pressure — and takes that tone.
-  const memoryTone = memory?.pressure === undefined ? "idle" : pressureStatus(memory.pressure).tone;
+  // why: a gauge only shades the figure beside it. Memory has a level the worker sends — its
+  // pressure — and takes that tone; where the worker sends none, which is every Linux worker, it
+  // falls back to the console's own threshold like the other two. Those two have nothing to ask the
+  // worker for, so `load-thresholds.ts` decides, and a figure stays in the neutral tone until one
+  // is crossed.
+  const memoryTone =
+    memory?.pressure === undefined ? levelOf(gauges.memory) : pressureStatus(memory.pressure).tone;
+  const cpuTone = levelOf(gauges.cpu);
+  const diskTone = levelOf(gauges.disk);
   return (
     <dl className="facts">
       <FigureRow
         label="CPU"
         part={cpu}
         gauge={gauges.cpu}
+        tone={cpuTone}
         figure={(part) => (
           <>
             {formatBusyPercent(part.busyPercent)} busy, {formatCores(part.cores)}
@@ -379,6 +386,7 @@ function LoadFacts({ now, worker }: { readonly worker: WorkerView; readonly now:
         label="Disk"
         part={disk}
         gauge={gauges.disk}
+        tone={diskTone}
         figure={(part) => `${formatBytes(part.freeBytes)} of ${formatBytes(part.totalBytes)} free`}
       />
       <div>
