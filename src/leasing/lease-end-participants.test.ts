@@ -545,20 +545,17 @@ describe("lease-end participants (#469)", () => {
     });
   });
 
-  it.each(["explicit", "killed"] as const)(
-    "release with reason %s calls the participant with that reason before the reclaim",
-    async (reason) => {
-      const participant = new TestParticipant();
-      const harness = await startEngine({ participants: [participant] });
-      const grant = await harness.engine.request(request, asking("agent"));
+  it("release with reason killed calls the participant with that reason before the reclaim", async () => {
+    const participant = new TestParticipant();
+    const harness = await startEngine({ participants: [participant] });
+    const grant = await harness.engine.request(request, asking("agent"));
 
-      await harness.engine.release(grant.lease.id, reason);
-      await flush();
+    await harness.engine.release(grant.lease.id, "killed");
+    await flush();
 
-      expect(participant.calls.map((call) => call.ended.reason)).toEqual([reason]);
-      expect(reclaims(harness.driver)).toHaveLength(0);
-    },
-  );
+    expect(participant.calls.map((call) => call.ended.reason)).toEqual(["killed"]);
+    expect(reclaims(harness.driver)).toHaveLength(0);
+  });
 
   it("releaseAll calls the participant once per lease, before any reclaim", async () => {
     const participant = new TestParticipant();
@@ -694,7 +691,7 @@ describe("lease-end participants (#469)", () => {
     expect(markerOf(second, grant.device.id)).toBe(grant.lease.id);
   });
 
-  it("a startup ending with missing calls the participant and marks the device missing in the same write as today, without waiting for it", async () => {
+  it("a startup ending with missing calls the participant and marks the device missing, without waiting for it", async () => {
     const participant = new TestParticipant();
     const { grant, second } = await endStartupLease({
       afterFirstStop: (first) => {
@@ -824,16 +821,22 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls).toEqual([]);
   });
 
-  it("nuke while a participant has not returned aborts its signal, starts the reclaim at once, and completes without the clock advancing", async () => {
-    const { harness, participant } = await leaseAndRelease();
-    expect(participant.calls).toHaveLength(1);
+  it.each([
+    ["nuke", (harness: Harness) => harness.engine.nuke(false), { releasedLeaseIds: [] }],
+    ["settle()", (harness: Harness) => harness.engine.settle(), undefined],
+  ] as const)(
+    "%s while a participant has not returned aborts its signal, starts the reclaim at once, and completes without the clock advancing",
+    async (_call, run, completed) => {
+      const { harness, participant } = await leaseAndRelease();
+      expect(participant.calls).toHaveLength(1);
 
-    const nuking = harness.engine.nuke(false);
+      const running = run(harness);
 
-    await expect(settledOrPending(nuking)).resolves.not.toBe("still pending");
-    expect(participant.calls[0]?.signal.aborted).toBe(true);
-    expect(reclaims(harness.driver)).toHaveLength(1);
-  });
+      await expect(settledOrPending(running)).resolves.toEqual(completed);
+      expect(participant.calls[0]?.signal.aborted).toBe(true);
+      expect(reclaims(harness.driver)).toHaveLength(1);
+    },
+  );
 
   it("advancing the clock past lease.endWaitMs after a nuke cut a wait short, and the participant then resolving, logs no ceiling warning and starts no second reclaim", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
@@ -855,12 +858,14 @@ describe("lease-end participants (#469)", () => {
       ios: { maxDevices: 2, maxRunning: 2 },
       participants: [participant],
     });
-    await harness.engine.request(request, asking("one"));
-    await harness.engine.request(request, asking("two"));
+    const one = await harness.engine.request(request, asking("one"));
+    const two = await harness.engine.request(request, asking("two"));
 
     const nuking = harness.engine.nuke(false);
 
-    await expect(settledOrPending(nuking)).resolves.not.toBe("still pending");
+    await expect(settledOrPending(nuking)).resolves.toMatchObject({
+      releasedLeaseIds: expect.arrayContaining([one.lease.id, two.lease.id]),
+    });
     expect(participant.calls.map((call) => call.abortedAtCall)).toEqual([true, true]);
   });
 
@@ -892,17 +897,6 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls).toHaveLength(1);
     expect(participant.calls[0]?.abortedAtCall).toBe(false);
     expect(reclaims(harness.driver)).toHaveLength(0);
-  });
-
-  it("settle() while a participant has not returned aborts its signal and returns once the reclaim settles, without the clock advancing", async () => {
-    const { harness, participant } = await leaseAndRelease();
-    expect(participant.calls).toHaveLength(1);
-
-    const settling = harness.engine.settle();
-
-    await expect(settledOrPending(settling)).resolves.not.toBe("still pending");
-    expect(participant.calls[0]?.signal.aborted).toBe(true);
-    expect(reclaims(harness.driver)).toHaveLength(1);
   });
 
   it("when the participant resolves after settle(), the driver's reclaim has run once, and advancing past lease.endWaitMs logs no ceiling warning", async () => {

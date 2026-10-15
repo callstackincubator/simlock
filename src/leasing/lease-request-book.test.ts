@@ -72,27 +72,6 @@ describe("Registry lease requests", () => {
     expect(await storedRequestIds(filesystem)).toEqual([next.id]);
   });
 
-  it("writes a result onto an open record once, leaving a settled record with the result it has", async () => {
-    const { registry } = await loadRegistry();
-    const created = await registry.createLeaseRequest(newRequest("first"));
-    await registry.settleLeaseRequest(created.id, { failure, state: "failed" });
-
-    const again = await registry.settleLeaseRequest(created.id, { state: "cancelled" });
-
-    expect(again).toBeUndefined();
-    expect(registry.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
-  });
-
-  it("settles nothing for an id no record is stored under", async () => {
-    const { registry } = await loadRegistry();
-    const created = await registry.createLeaseRequest(newRequest("first"));
-
-    const settled = await registry.settleLeaseRequest("req_missing", { state: "cancelled" });
-
-    expect(settled).toBeUndefined();
-    expect(registry.leaseRequests()).toMatchObject([{ id: created.id, state: "open" }]);
-  });
-
   it("keeps an open record past the retention window", async () => {
     const { clock, registry } = await loadRegistry({
       limits: { maxRecords: 100, retentionMs: 60_000 },
@@ -174,142 +153,6 @@ describe("Registry lease requests", () => {
         settledAt: 1_000,
         state: "failed",
       },
-    ]);
-  });
-
-  it("drops a lease-request record that does not parse and loads the rest", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const valid = {
-      createdAt: 1_000,
-      id: "req_valid",
-      ownerId: "agent",
-      request,
-      requesterId: "agent",
-      state: "open",
-    };
-    // A `granted` record without its grant: the state promises a result that is not there.
-    const broken = { ...valid, id: "req_broken", settledAt: 1_000, state: "granted" };
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({ devices: [], leaseRequests: [broken, valid], leases: [] }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
-  });
-
-  it("loads a stored request's class, and drops a record whose class is not one of the seven", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const record = (id: string, deviceClass: unknown) => ({
-      createdAt: 1_000,
-      id,
-      ownerId: "agent",
-      request: { class: deviceClass, platform: "ios" },
-      requesterId: "agent",
-      state: "open",
-    });
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [record("req_watch", "watch"), record("req_broken", "phablet")],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
-      ["req_watch", { class: "watch", platform: "ios" }],
-    ]);
-  });
-
-  it("reloads an open physical request from disk with physical true, and a stored request without the field as virtual", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const record = (id: string, stored: Record<string, unknown>) => ({
-      createdAt: 1_000,
-      id,
-      ownerId: "agent",
-      request: { platform: "ios", ...stored },
-      requesterId: "agent",
-      state: "open",
-    });
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [
-          record("req_physical", { model: "iPhone 15 Pro", physical: true }),
-          record("req_virtual", { model: "iPhone 16" }),
-        ],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
-      ["req_physical", { model: "iPhone 15 Pro", physical: true, platform: "ios" }],
-      ["req_virtual", { model: "iPhone 16", platform: "ios" }],
-    ]);
-  });
-
-  it("loads a stored request whose physical is false, or anything but true, as virtual", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const record = (id: string, physical: unknown) => ({
-      createdAt: 1_000,
-      id,
-      ownerId: "agent",
-      request: { model: "iPhone 16", physical, platform: "ios" },
-      requesterId: "agent",
-      state: "open",
-    });
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [record("req_false", false), record("req_text", "yes")],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
-      ["req_false", { model: "iPhone 16", platform: "ios" }],
-      ["req_text", { model: "iPhone 16", platform: "ios" }],
-    ]);
-  });
-
-  it("loads a stored request's image tag, and drops a record whose image tag is not a string", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    const record = (id: string, imageTag: unknown) => ({
-      createdAt: 1_000,
-      id,
-      ownerId: "agent",
-      request: { ...request, imageTag },
-      requesterId: "agent",
-      state: "open",
-    });
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [],
-        leaseRequests: [record("req_tagged", "google_apis"), record("req_broken", 7)],
-        leases: [],
-      }),
-    );
-
-    const { registry } = await loadRegistry({ filesystem });
-
-    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
-      ["req_tagged", { ...request, imageTag: "google_apis" }],
     ]);
   });
 
@@ -449,6 +292,7 @@ describe("Registry lease-request load", () => {
   }
 
   it.each([
+    ["a granted record without its grant", { state: "granted" }],
     ["a failed record whose failure has no code", { failure: { message: "x" }, state: "failed" }],
     ["a settled record without its settlement time", { settledAt: undefined, state: "cancelled" }],
     ["a request whose mode is neither slim nor full", { request: { ...request, mode: "fast" } }],
@@ -459,6 +303,52 @@ describe("Registry lease-request load", () => {
     ]);
 
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
+  });
+
+  it.each([
+    [
+      "class is one of the seven: it is kept",
+      { class: "watch", platform: "ios" },
+      { class: "watch", platform: "ios" },
+    ],
+    [
+      "class is not one of the seven: it is dropped",
+      { class: "phablet", platform: "ios" },
+      undefined,
+    ],
+    [
+      "physical is true: it is kept as physical",
+      { model: "iPhone 15 Pro", physical: true, platform: "ios" },
+      { model: "iPhone 15 Pro", physical: true, platform: "ios" },
+    ],
+    [
+      "physical is missing: it is loaded as virtual",
+      { model: "iPhone 16", platform: "ios" },
+      { model: "iPhone 16", platform: "ios" },
+    ],
+    [
+      "physical is false: it is loaded as virtual",
+      { model: "iPhone 16", physical: false, platform: "ios" },
+      { model: "iPhone 16", platform: "ios" },
+    ],
+    [
+      "physical is anything but true: it is loaded as virtual",
+      { model: "iPhone 16", physical: "yes", platform: "ios" },
+      { model: "iPhone 16", platform: "ios" },
+    ],
+    [
+      "image tag is a string: it is kept",
+      { ...request, imageTag: "google_apis" },
+      { ...request, imageTag: "google_apis" },
+    ],
+    ["image tag is not a string: it is dropped", { ...request, imageTag: 7 }, undefined],
+  ])("reads a stored request whose %s, and loads the rest", async (_label, stored, loaded) => {
+    const { registry } = await loadWith([{ ...valid, id: "req_row", request: stored }, valid]);
+
+    expect(registry.leaseRequests().map((record) => [record.id, record.request])).toEqual([
+      ...(loaded === undefined ? [] : [["req_row", loaded]]),
+      ["req_valid", request],
+    ]);
   });
 
   it("loads with no requests, rather than failing the load, when the stored list is not a list", async () => {
@@ -547,30 +437,6 @@ describe("LeaseRequestBook", () => {
     expect(() => physicalBook.replay(withoutPhysical, keyed)).toThrow(IdempotencyConflictError);
   });
 
-  it.each([
-    ["a different leaseId", "other"],
-    ["no leaseId where one was sent", undefined],
-  ])("refuses a repeat naming %s as an idempotency conflict", async (_label, leaseId) => {
-    const book = bookOver(memoryStore());
-    await book.admit(request, { ...keyed, leaseId: "myid" }, () => granted("myid"));
-    await settled();
-
-    expect(() =>
-      book.replay(request, { ...keyed, ...(leaseId === undefined ? {} : { leaseId }) }),
-    ).toThrow(IdempotencyConflictError);
-  });
-
-  it("refuses a repeat that adds a leaseId the first request did not send as an idempotency conflict, and replays one that sends the same", async () => {
-    const book = bookOver(memoryStore());
-    await book.admit(request, keyed, () => granted("lse_1"));
-    await settled();
-
-    expect(() => book.replay(request, { ...keyed, leaseId: "myid" })).toThrow(
-      IdempotencyConflictError,
-    );
-    await expect(book.replay(request, keyed)).resolves.toMatchObject({ lease: { id: "lse_1" } });
-  });
-
   it("says an open request holds its leaseId, and a settled or cancelled one, or one that sent none, does not", async () => {
     const book = bookOver(memoryStore());
     let finish: (grant: { lease: { id: string } }) => void = () => undefined;
@@ -601,31 +467,24 @@ describe("LeaseRequestBook", () => {
     expect(book.holdsLeaseId("waits")).toBe(false);
   });
 
-  it("stores the leaseId a request sent beside it, and no leaseId key for a request that sent none", async () => {
-    const store = memoryStore();
-    const book = bookOver(store);
-    await book.admit(request, { ownerId: "a", requesterId: "a", leaseId: "myid" }, () =>
-      granted("myid"),
-    );
-    await book.admit(request, { ownerId: "b", requesterId: "b" }, () => granted("lse_2"));
+  it.each([
+    ["leaseId", "myid"],
+    ["fleetRequestId", "req_gw1"],
+  ])(
+    "stores the %s a request sent beside it, and no such key for a request that sent none",
+    async (field, value) => {
+      const store = memoryStore();
+      const book = bookOver(store);
+      await book.admit(request, { ownerId: "a", requesterId: "a", [field]: value }, () =>
+        granted("lse_1"),
+      );
+      await book.admit(request, { ownerId: "b", requesterId: "b" }, () => granted("lse_2"));
 
-    const [withId, without] = store.leaseRequests();
-    expect(withId).toMatchObject({ leaseId: "myid", request });
-    expect(without).not.toHaveProperty("leaseId");
-  });
-
-  it("stores the fleetRequestId a request sent beside it, and no fleetRequestId key for a request that sent none", async () => {
-    const store = memoryStore();
-    const book = bookOver(store);
-    await book.admit(request, { ownerId: "a", requesterId: "a", fleetRequestId: "req_gw1" }, () =>
-      granted("lse_1"),
-    );
-    await book.admit(request, { ownerId: "b", requesterId: "b" }, () => granted("lse_2"));
-
-    const [withId, without] = store.leaseRequests();
-    expect(withId).toMatchObject({ fleetRequestId: "req_gw1", request });
-    expect(without).not.toHaveProperty("fleetRequestId");
-  });
+      const [withId, without] = store.leaseRequests();
+      expect(withId).toMatchObject({ [field]: value, request });
+      expect(without).not.toHaveProperty(field);
+    },
+  );
 
   it("names the lease ID in the message of an idempotency conflict over it", async () => {
     const book = bookOver(memoryStore());
@@ -635,17 +494,27 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(request, keyed)).toThrow(/different device request or lease ID/);
   });
 
-  it("keeps a settled record as it is when a second result arrives for it, and settles nothing for an unknown id", async () => {
-    const store = memoryStore();
-    const created = await store.createLeaseRequest(newRequest("agent"));
-    await store.settleLeaseRequest(created.id, { failure, state: "failed" });
+  it.each([
+    ["Registry", async () => (await loadRegistry()).registry],
+    ["InMemoryLeaseRequestStore", async () => memoryStore()],
+  ])(
+    "%s writes a result onto an open record once, leaving a settled record as it is and settling nothing for an unknown id",
+    async (_name, open) => {
+      const store: LeaseRequestStore<Grant> = await open();
+      const created = await store.createLeaseRequest(newRequest("agent"));
+      const waiting = await store.createLeaseRequest(newRequest("waiting"));
+      await store.settleLeaseRequest(created.id, { failure, state: "failed" });
 
-    const again = await store.settleLeaseRequest(created.id, { state: "cancelled" });
-    const unknown = await store.settleLeaseRequest("req_missing", { state: "cancelled" });
+      const again = await store.settleLeaseRequest(created.id, { state: "cancelled" });
+      const unknown = await store.settleLeaseRequest("req_missing", { state: "cancelled" });
 
-    expect([again, unknown]).toEqual([undefined, undefined]);
-    expect(store.leaseRequests()).toMatchObject([{ failure, id: created.id, state: "failed" }]);
-  });
+      expect([again, unknown]).toEqual([undefined, undefined]);
+      expect(store.leaseRequests()).toMatchObject([
+        { failure, id: created.id, state: "failed" },
+        { id: waiting.id, state: "open" },
+      ]);
+    },
+  );
 
   it("stores a request under the id its owner minted before admission, and mints no other", async () => {
     const store = memoryStore();

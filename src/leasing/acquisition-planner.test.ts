@@ -157,11 +157,15 @@ describe("AcquisitionPlanner", () => {
   it("reserves capacity and claims a matching shutdown device for boot", () => {
     const { claims, planner: acquisitionPlanner } = planner();
     const shutdown = device("shutdown", "shutdown");
+    const other = device("other", "shutdown");
 
-    const result = plan(acquisitionPlanner, [shutdown]);
+    const result = plan(acquisitionPlanner, [shutdown, other]);
 
     expect(result).toMatchObject({ device: shutdown, kind: "boot-shutdown" });
     expect(claims.operationFor(shutdown.id)).toBe("boot");
+    expect(plan(acquisitionPlanner, [shutdown, other], { noWait: true })).toEqual({
+      kind: "no-capacity",
+    });
     if (result.kind === "boot-shutdown") {
       result.capacityReservation.release();
       result.claim.release();
@@ -404,13 +408,19 @@ describe("AcquisitionPlanner", () => {
       },
     };
 
-    it("waits for a serving shut-down device under a boot claim no request owns", () => {
-      const { claims, planner: acquisitionPlanner } = planner(roomy);
-      const booting = device("booting", "shutdown");
-      claims.tryClaim(booting.id, "boot");
+    it.each([
+      { name: "shut-down", state: "shutdown" },
+      { name: "provisioning", state: "provisioning" },
+    ] as const)(
+      "waits for a serving $name device under a boot claim no request owns",
+      ({ state }) => {
+        const { claims, planner: acquisitionPlanner } = planner(roomy);
+        const onItsWay = device("on-its-way", state);
+        claims.tryClaim(onItsWay.id, "boot");
 
-      expect(plan(acquisitionPlanner, [booting])).toEqual({ kind: "wait" });
-    });
+        expect(plan(acquisitionPlanner, [onItsWay])).toEqual({ kind: "wait" });
+      },
+    );
 
     it("plans as if the device were absent under noWait", () => {
       const { claims, planner: acquisitionPlanner } = planner(roomy);
@@ -427,64 +437,50 @@ describe("AcquisitionPlanner", () => {
       if (absent.kind === "provision") absent.reservation.release();
     });
 
-    it("waits for a serving provisioning device under a boot claim no request owns", () => {
+    it.each([
+      {
+        name: "a provisioning device under a boot claim another waiter owns",
+        state: "provisioning",
+        claim: { kind: "boot", owner: "waiter-2" },
+      },
+      { name: "a provisioning device with no claim at all", state: "provisioning" },
+      {
+        name: "a ready device under a boot claim no request owns, which is a boot already done",
+        state: "ready",
+        claim: { kind: "boot" },
+      },
+      {
+        name: "a serving device under an eviction claim",
+        state: "shutdown",
+        claim: { kind: "eviction" },
+      },
+      {
+        name: "a serving device under a cleanup claim",
+        state: "shutdown",
+        claim: { kind: "cleanup" },
+      },
+      {
+        name: "a device on its way in another pool mode",
+        state: "shutdown",
+        claim: { kind: "boot" },
+        mode: "slim",
+      },
+    ] as const)("ignores $name and provisions", (row) => {
       const { claims, planner: acquisitionPlanner } = planner(roomy);
-      const creating = device("creating", "provisioning");
-      claims.tryClaim(creating.id, "boot");
-
-      expect(plan(acquisitionPlanner, [creating])).toEqual({ kind: "wait" });
-    });
-
-    it("ignores a provisioning device under a boot claim another waiter owns and provisions", () => {
-      const { claims, planner: acquisitionPlanner } = planner(roomy);
-      const creating = device("creating", "provisioning");
-      claims.tryClaim(creating.id, "boot", "waiter-2");
-
-      const result = plan(acquisitionPlanner, [creating]);
-
-      expect(result.kind).toBe("provision");
-      if (result.kind === "provision") result.reservation.release();
-    });
-
-    it("ignores a provisioning device with no claim at all and provisions", () => {
-      const { planner: acquisitionPlanner } = planner(roomy);
-
-      const result = plan(acquisitionPlanner, [device("left-behind", "provisioning")]);
-
-      expect(result.kind).toBe("provision");
-      if (result.kind === "provision") result.reservation.release();
-    });
-
-    it("ignores a ready device under a boot claim no request owns, which is a boot already done, and provisions", () => {
-      const { claims, planner: acquisitionPlanner } = planner(roomy);
-      const done = device("done", "ready");
-      claims.tryClaim(done.id, "boot");
-
-      const result = plan(acquisitionPlanner, [done]);
-
-      expect(result.kind).toBe("provision");
-      if (result.kind === "provision") result.reservation.release();
-    });
-
-    it("ignores a serving device under an eviction or a cleanup claim and provisions", () => {
-      for (const operation of ["eviction", "cleanup"] as const) {
-        const { claims, planner: acquisitionPlanner } = planner(roomy);
-        const busy = device(`busy-${operation}`, "shutdown");
-        claims.tryClaim(busy.id, operation);
-
-        const result = plan(acquisitionPlanner, [busy]);
-
-        expect(result.kind).toBe("provision");
-        if (result.kind === "provision") result.reservation.release();
+      const candidate = device(
+        "candidate",
+        row.state,
+        "mode" in row ? { ...spec, mode: row.mode } : spec,
+      );
+      if ("claim" in row) {
+        claims.tryClaim(
+          candidate.id,
+          row.claim.kind,
+          "owner" in row.claim ? row.claim.owner : undefined,
+        );
       }
-    });
 
-    it("does not wait for a device on its way in another pool mode", () => {
-      const { claims, planner: acquisitionPlanner } = planner(roomy);
-      const slim = device("slim", "shutdown", { ...spec, mode: "slim" });
-      claims.tryClaim(slim.id, "boot");
-
-      const result = plan(acquisitionPlanner, [slim]);
+      const result = plan(acquisitionPlanner, [candidate]);
 
       expect(result.kind).toBe("provision");
       if (result.kind === "provision") result.reservation.release();

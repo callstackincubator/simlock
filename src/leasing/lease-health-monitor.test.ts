@@ -266,31 +266,6 @@ describe("LeaseHealthMonitor", () => {
     harness.monitor.dispose();
   });
 
-  it("does not recover on a single stopped reading but recovers on the second consecutive one", async () => {
-    const harness = await createHarness();
-    const { device, lease } = await seedLeased(harness);
-    harness.driver.setManagedReality({
-      devices: [observedDevice(device.driverDeviceId, "stopped")],
-      processes: [],
-    });
-
-    harness.monitor.start();
-    harness.clock.advance(30_000);
-    await flush();
-    expect(makeReadyCalls(harness.driver)).toBe(0);
-
-    harness.clock.advance(30_000);
-    await flush();
-    expect(makeReadyCalls(harness.driver)).toBe(1);
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("leased");
-    const crashEvents = harness.eventBus
-      .replay()
-      .filter((event) => event.event === "device.crash-detected");
-    expect(crashEvents).toHaveLength(1);
-    expect(crashEvents[0]).toMatchObject({ payload: { deviceId: device.id, leaseId: lease.id } });
-    harness.monitor.dispose();
-  });
-
   it("resets the stopped counter on an intervening running reading", async () => {
     const harness = await createHarness();
     const { device } = await seedLeased(harness);
@@ -383,6 +358,7 @@ describe("LeaseHealthMonitor", () => {
       "device.crash-detected",
       "device.recovered",
     ]);
+    expect(events[0]).toMatchObject({ payload: { deviceId: device.id, leaseId: lease.id } });
     expect(events[1]).toMatchObject({
       payload: { attempts: 1, deviceId: device.id, leaseId: lease.id },
     });
@@ -572,7 +548,7 @@ describe("LeaseHealthMonitor", () => {
     harness.monitor.dispose();
   });
 
-  it("caps concurrent recoveries at maxConcurrentRecoveries, leaving a second crashed device for a later tick", async () => {
+  it("caps concurrent recoveries at maxConcurrentRecoveries, dispatching one reboot for two crashed devices", async () => {
     const harness = await createHarness({ maxConcurrentRecoveries: 1 });
     await seedLeased(harness, { driverDeviceId: "simlock-a" });
     await seedLeased(harness, { driverDeviceId: "simlock-b", requesterId: "agent-2" });

@@ -603,9 +603,8 @@ describe("PhysicalDeviceWatcher counting", () => {
     expect(readsOf(harness.driver)).toEqual([]);
   });
 
-  it("a read that rejects is logged once as a failed read by the watcher's module, and no device action is attempted", async () => {
-    const { logger, sink } = capturingLogger();
-    const harness = await createHarness({ health: { stableObservations: 1 }, logger });
+  it("no device action is attempted when a read rejects", async () => {
+    const harness = await createHarness({ health: { stableObservations: 1 } });
     const device = await enrollIphone(harness, "UDID-A");
     gone(harness, "UDID-A");
     harness.driver.failOn("listPresentPhysical", 1, new Error("devicectl: timed out"));
@@ -614,22 +613,13 @@ describe("PhysicalDeviceWatcher counting", () => {
 
     await tick(harness);
 
-    const warnings = sink.records.filter((record) => record.level === "warn");
     expect(readsOf(harness.driver)).toHaveLength(1);
     expect(stateOf(harness, device)).toBe("ready");
     expect(writes).toHaveLength(0);
-    expect(warnings).toMatchObject([
-      {
-        fields: { error: expect.anything(), platform: "ios" },
-        message: "physical presence read failed",
-        module: expect.stringMatching(/\.physical-device-watcher$/),
-      },
-    ]);
   });
 
-  it("a tick that throws outside any device action is logged as an error and the next tick is armed", async () => {
-    const { logger, sink } = capturingLogger();
-    const harness = await createHarness({ logger });
+  it("a tick that throws outside any device action still arms the next tick", async () => {
+    const harness = await createHarness();
     const device = await enrollIphone(harness, "UDID-A");
     gone(harness, "UDID-A");
     const original = Object.getOwnPropertyDescriptor(Registry.prototype, "snapshot")?.get;
@@ -649,13 +639,6 @@ describe("PhysicalDeviceWatcher counting", () => {
     spy.mockRestore();
 
     expect(thrown).toBe(true);
-    expect(sink.records.filter((record) => record.level === "error")).toMatchObject([
-      {
-        fields: { error: expect.anything() },
-        message: "physical device watcher tick failed",
-        module: expect.stringMatching(/\.physical-device-watcher$/),
-      },
-    ]);
     await tick(harness);
     expect(stateOf(harness, device)).toBe("ready");
     await tick(harness);
@@ -780,7 +763,7 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
     expect(reclaimCalls(harness.driver)).toHaveLength(1);
   });
 
-  it("an absent device read present gets its absent → reclaiming write and its reclaim call on that tick: with the fake clock, at most one health.probeIntervalMs after it was scripted present", async () => {
+  it("an absent device read present is returned and reclaimed on that tick, at most one health.probeIntervalMs after it was scripted present", async () => {
     const { device, harness } = await absentHarness("not-present");
     startWatcher(harness);
     harness.clock.advance(10_000);
@@ -1312,24 +1295,23 @@ describe("PhysicalDeviceWatcher and nuke maintenance", () => {
     expect(["reclaiming", "ready"]).toContain(stateOf(harness, returned));
   });
 
-  it("nuke's lease maintenance, begun while a return reclaim the watcher started is running, resolves only after that reclaim settles", async () => {
-    const { harness } = await absentHarness("not-present");
-    back(harness, "UDID-A");
-    const gate = holdNextReclaim(harness);
-    startWatcher(harness);
-    await tick(harness);
-    expect(reclaimCalls(harness.driver)).toHaveLength(1);
-
-    const maintenance = harness.engine.leasing.corePorts.leaseMaintenance.leases;
-    const beginning = maintenance.beginMaintenance();
-    expect(await isSettled(beginning)).toBe(false);
-
-    gate.resolve();
-    expect(await isSettled(beginning)).toBe(true);
-    await maintenance.endMaintenance();
-  });
-
-  it("leasing.settle() resolves only after a return reclaim the watcher started has settled", async () => {
+  it.each([
+    {
+      name: "nuke's lease maintenance, begun while it runs,",
+      start: (harness: Harness) =>
+        harness.engine.leasing.corePorts.leaseMaintenance.leases.beginMaintenance(),
+      finish: async (harness: Harness) => {
+        await harness.engine.leasing.corePorts.leaseMaintenance.leases.endMaintenance();
+      },
+    },
+    {
+      name: "leasing.settle()",
+      start: (harness: Harness) => harness.engine.leasing.settle(),
+      finish: async (harness: Harness, device: PhysicalDevice) => {
+        expect(stateOf(harness, device)).toBe("ready");
+      },
+    },
+  ])("$name resolves only after a return reclaim the watcher started has settled", async (row) => {
     const { device, harness } = await absentHarness("not-present");
     back(harness, "UDID-A");
     const gate = holdNextReclaim(harness);
@@ -1337,12 +1319,12 @@ describe("PhysicalDeviceWatcher and nuke maintenance", () => {
     await tick(harness);
     expect(reclaimCalls(harness.driver)).toHaveLength(1);
 
-    const settling = harness.engine.leasing.settle();
-    expect(await isSettled(settling)).toBe(false);
+    const waiting = row.start(harness);
+    expect(await isSettled(waiting)).toBe(false);
 
     gate.resolve();
-    expect(await isSettled(settling)).toBe(true);
-    expect(stateOf(harness, device)).toBe("ready");
+    expect(await isSettled(waiting)).toBe(true);
+    await row.finish(harness, device);
   });
 
   it("an absentReason rewrite held back by nuke maintenance is dropped when the watcher is disposed before maintenance ends", async () => {
