@@ -30,7 +30,7 @@
   display: inline-flex;
   align-items: center;
   height: 28px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
   color: var(--text-muted);
   font-family: var(--font-mono);

@@ -219,11 +219,20 @@ export interface DeviceRow {
   readonly imageTag?: string;
 }
 
+// why: a worker names a lease by its own id, but a gateway lists it, and opens its page, as
+// `<worker id>.<lease id>`; the worker's own id stands where the daemon lists it bare, as a single
+// host does.
+function leaseIdOnPage(worker: WorkerView, id: string, listed: ReadonlySet<string>): string {
+  const qualified = `${worker.id}.${id}`;
+  return listed.has(qualified) ? qualified : id;
+}
+
 function deviceRow(
   device: WorkerDevice,
   worker: WorkerView,
   now: number,
   tokens: readonly TokenRecord[],
+  leaseIds: ReadonlySet<string>,
 ): DeviceRow {
   const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
   const entered = stateEnteredAt(device, worker);
@@ -243,7 +252,11 @@ function deviceRow(
       ? {}
       : {
           expires: formatDuration(lease.ttlDeadline - now),
-          holder: { id: holder.id, name: holder.label ?? holder.id, to: leasePath(lease.id) },
+          holder: {
+            id: holder.id,
+            name: holder.label ?? holder.id,
+            to: leasePath(leaseIdOnPage(worker, lease.id, leaseIds)),
+          },
           renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
         }),
     ...(entered === undefined ? {} : { since: formatDuration(now - entered) }),
@@ -465,8 +478,10 @@ export function workerInspectorOf(input: {
   readonly worker: WorkerView;
   readonly now: number;
   readonly tokens: readonly TokenRecord[];
+  readonly leaseIds?: readonly string[];
 }): WorkerInspector {
   const { now, tokens, worker } = input;
+  const leaseIds = new Set(input.leaseIds ?? []);
   const starting = worker.health === "starting";
   const incompatible = worker.connection === "incompatible";
   const { host } = worker;
@@ -486,7 +501,9 @@ export function workerInspectorOf(input: {
         : { leases: { count: leases.length, running: worker.capacity?.global.running } }),
       ...(starting
         ? {}
-        : { devices: (worker.devices ?? []).map((d) => deviceRow(d, worker, now, tokens)) }),
+        : {
+            devices: (worker.devices ?? []).map((d) => deviceRow(d, worker, now, tokens, leaseIds)),
+          }),
     },
     tabs: [
       { label: "Overview", value: "overview" },

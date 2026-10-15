@@ -156,7 +156,7 @@ function toneClass(tone: EventRow["tone"], base: string): string | undefined {
 
 function Chosen({ page }: { readonly page: EventsPage }) {
   const { chosen } = page;
-  if (chosen.kind === "none") return <InspectorEmpty>No events yet.</InspectorEmpty>;
+  if (chosen.kind === "none") return <InspectorEmpty>Nothing to show.</InspectorEmpty>;
   if (chosen.kind === "missing") {
     return (
       <InspectorEmpty>

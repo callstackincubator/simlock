@@ -67,7 +67,7 @@
 .row {
   display: grid;
   gap: var(--space-3);
-  align-items: start;
+  align-items: stretch;
 }
 
 @media (min-width: 1024px) {

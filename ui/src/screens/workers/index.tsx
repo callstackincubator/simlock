@@ -122,7 +122,7 @@ function WorkerListRow({ row, selected }: { readonly row: WorkerRow; readonly se
 }
 
 function MissingWorker({ id }: { readonly id: string | undefined }) {
-  if (id === undefined) return <InspectorEmpty>No worker to show.</InspectorEmpty>;
+  if (id === undefined) return <InspectorEmpty>Nothing to show.</InspectorEmpty>;
   return (
     <InspectorEmpty>
       Worker not found. <Link to="/workers">All workers</Link>

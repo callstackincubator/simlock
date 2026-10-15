@@ -9,7 +9,7 @@
 
 .facts > div {
   display: grid;
-  grid-template-columns: 9rem minmax(0, 1fr);
+  grid-template-columns: 12rem minmax(0, 1fr);
   gap: var(--space-4);
   align-items: baseline;
 }
@@ -38,4 +38,11 @@
 
 .facts-raw dd {
   font-family: var(--font-mono);
+}
+
+@media (max-width: 480px) {
+  .facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
 }

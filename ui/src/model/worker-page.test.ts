@@ -368,6 +368,17 @@ describe("a worker's device rows", () => {
     });
   });
 
+  it("links a holder to the lease's page under the id the daemon lists it by, a gateway's worker-qualified one included", () => {
+    const view = worker({ devices: [device({ state: "leased" })], leases: [LEASE] });
+    const holderOn = (leaseIds: readonly string[]) =>
+      workerInspectorOf({ leaseIds, now: NOW, tokens: [], worker: view }).overview.devices?.[0]
+        ?.holder?.to;
+
+    expect(holderOn([`${view.id}.l_1`])).toBe(`/leases/${encodeURIComponent(`${view.id}.l_1`)}/`);
+    expect(holderOn(["l_1"])).toBe("/leases/l_1/");
+    expect(holderOn([])).toBe("/leases/l_1/");
+  });
+
   it("names a holder by its id where no token has it", () => {
     const view = worker({ devices: [device({ state: "leased" })], leases: [LEASE] });
 

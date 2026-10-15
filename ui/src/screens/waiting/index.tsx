@@ -72,7 +72,11 @@ function detailOf(chosen: WaitingRow | undefined, gone: boolean) {
       </InspectorEmpty>
     );
   }
-  return chosen === undefined ? null : <WaitingInspector key={chosen.key} row={chosen} />;
+  return chosen === undefined ? (
+    <InspectorEmpty>Nothing to show.</InspectorEmpty>
+  ) : (
+    <WaitingInspector key={chosen.key} row={chosen} />
+  );
 }
 
 function WaitingListRow({

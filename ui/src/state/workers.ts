@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
-import type { TokenList } from "../model/leases";
+import type { LeaseList, TokenList } from "../model/leases";
 import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import {
@@ -65,6 +65,9 @@ export function useWorkers(): LoadView<WorkersPage> {
   // why: the holders' labels come from the token records; while they have not arrived or were
   // refused, a holder shows its id alone and the devices still show.
   const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const leaseIds = (useLiveResource<LeaseList>("/v1/leases").data?.leases ?? []).map(
+    (lease) => lease.id,
+  );
   const now = useNow();
   const search = useSearch();
   const named = itemIdFrom("/workers", usePath());
@@ -100,7 +103,7 @@ export function useWorkers(): LoadView<WorkersPage> {
         chosen === undefined
           ? undefined
           : {
-              ...workerInspectorOf({ now: now.server, tokens, worker: chosen }),
+              ...workerInspectorOf({ leaseIds, now: now.server, tokens, worker: chosen }),
               devicesPaging,
               warmPaging,
             },
