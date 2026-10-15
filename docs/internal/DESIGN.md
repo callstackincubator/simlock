@@ -182,10 +182,12 @@ scale; never a value between.
 - **Load gauges.** On a worker's page, each of the Load panel's CPU, memory and
   disk figures carries a bar in a line of its own under it: 8px high, `--field`
   track, `max-width: 20rem`, square, and never the accent. Its fill takes a
-  status colour by class; its level arrives inline, which survives
-  `style-src 'self'` only because React writes styles through the CSSOM — the
-  same level written into markup is refused by the policy (ADR 0011), so a gauge
-  is drawn by the console's own code and never by server-rendered output. A gauge
+  status colour by class; its level arrives inline: `style-src 'self'` refuses a
+  style attribute in markup, and the level arrives anyway because React writes
+  styles through the CSSOM, where the policy does not reach. ADR 0011 allows the
+  `style` prop because it creates no `<style>` element — it says nothing about
+  the attribute. So a
+  gauge is drawn by the console's own code and never by server-rendered output. A gauge
   is never the only place its number is, so it carries no accessible name and
   takes no focus — the figure above it is the text. Colour is a second signal
   here too: a gauge shades a level the console has a word for and nothing else,
