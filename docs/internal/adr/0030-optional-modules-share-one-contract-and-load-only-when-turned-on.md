@@ -105,8 +105,10 @@ capability as `off` itself.
 When it is `true`, the host awaits `loadWorker()` on a worker, or
 `loadGateway()` on a gateway, and calls `createWorker` or `createGateway`.
 Creating a module starts nothing; a module starts in its
-`afterSocketClaimed` hook. A start that fails after some modules were
-created leaves them created and not started, with nothing to stop.
+`afterSocketClaimed` hook. A start that fails before the socket is claimed
+leaves the modules created and not started, with nothing to stop. One that
+fails after it (convergence, the HTTP gateway) stops the daemon through the
+normal stop, which runs every module's stop hooks.
 
 A module turned off runs nothing, so it cannot clean up after a crash. If
 simlock crashes while agent-device is on and starts again with it off, the
