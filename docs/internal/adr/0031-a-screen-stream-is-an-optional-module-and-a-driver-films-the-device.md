@@ -10,7 +10,10 @@
   and for the response head, and after the head a 330 s idle timer bounds
   the body (§7). Adds a second relay target beside agent-device's ([ADR
   0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) §2)
-  and a second optional capability to the driver interface.
+  and a second optional capability to the driver interface. Extends [ADR
+  0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md)
+  §4: a worker module's context gains a read of the registry and the
+  drivers' screens (§1).
 - **Depends on:** [ADR
   0024](0024-leasing-calls-lease-end-participants-before-reclaim.md) (the
   lease-end port), ADR 0026 and 0028 (the relay and its byte channels),
@@ -18,8 +21,8 @@
   set and adb server), [ADR
   0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md)
   (physical devices), architecture rules 1–3, 9, 11, 12, 15, 18–21, safety
-  rules 4, 9 and 10. Related: ADR 0030 (the optional-module contract, PR
-  #592, not merged); §1 says how this module meets it.
+  rules 4, 9 and 10, and ADR 0030 (the optional-module contract), whose
+  second module this is.
 
 ## Context
 
@@ -52,9 +55,9 @@ with no end, and whether a stream is a business event.
 
 ```mermaid
 flowchart LR
-  MAIN["daemon/main.ts"] --> ST["stream/ (new)"]
-  ST -->|"lease-end participant"| L["leasing (ADR 0024)"]
-  ST -->|"openScreen"| CAT["DriverCatalog"]
+  REG["module-registry"] --> ST["stream/ (new)"]
+  HOST["modules host (ADR 0030)"] -->|"beforeDeviceReclaim"| ST
+  ST -->|"ctx.screens.openScreen"| CAT["DriverCatalog"]
   CAT --> DRV["Driver.screenCapture (new, optional)"]
   IOS["drivers/ios"] -.implements.-> DRV
   AND["drivers/android"] -.implements.-> DRV
@@ -65,29 +68,32 @@ flowchart LR
 
 ### 1. One optional module, `src/stream`
 
-Streams live in `src/stream/`, turned on by `stream.enabled`. Its one name
-is `stream`: the capability a worker reports, the relay target a gateway
-sends to, and the config key.
+Streams live in `src/stream/`, an optional module on ADR 0030's contract,
+turned on by `capabilities.stream.enabled`. Its one name is `stream`: the
+module, the capability a worker reports, the relay target a gateway sends
+to, the route segment and the config section.
 
-The module hands out parts, and the composition root wires them, as it
-does agent-device's edge. A worker gets four: an HTTP mount, a relay
-target, a lease-end participant (§3) and a capability source. A gateway
-gets one: the HTTP mount. With the module off, `daemon/main.ts` builds
-nothing: no route, no relay target, no capability row.
+Its worker side gives the module host an HTTP mount, a relay target, a
+`beforeDeviceReclaim` hook (§3) and a capability source. Its gateway side
+gives an HTTP mount, and relays through the gateway context, which sends to
+the target named after the module. With the module off, nothing of it is
+loaded and its capability reads `off`.
+
+It needs two things ADR 0030 §4's context did not carry, so the worker
+context gains them: `registry`, a read of the registry's devices and
+leases, so a stream checks a lease against the worker's own record; and
+`screens`, the drivers' `openScreen` and `screenAvailability` routed by
+platform, so the module films a device without being handed the drivers.
 
 The capability is `available`, with no reason, when at least one driver
 can film a device now; the wire carries no reason for `available`. It is
 `unavailable` with each platform's reason otherwise. A platform that
 cannot film on a host where another can says why in its stream's `503`.
 
-ADR 0030's module host is not merged. This module does not wait for it.
-If ADR 0030 is accepted, `stream` moves onto its contract with the same
-parts.
-
 The module names no platform. It imports from the core only the screen
-types (§4) and registry records, and from leasing only the lease-end
-type. Only `daemon/main.ts` imports it. dependency-cruiser (ADR 0027)
-checks both directions.
+types (§4) and registry records, and the module contract's types; never
+leasing, a driver, the gateway or a front end. Only the module registry
+imports it. dependency-cruiser (ADR 0027) checks both directions.
 
 ### 2. One `GET` is the only start, and closing it the only stop
 
@@ -432,14 +438,14 @@ separate feature with its own retention, as it is for `device.exec`.
 
 ### 10. Configuration
 
-`stream.enabled` (both sides, default `false`), and on the worker
-`stream.fps` (1–60, default 30), `stream.maxDimension` (96–4096, default
-720) and `stream.bitrateKbps` (100–40000, default 1500; the iOS encoder
-takes nothing lower). A gateway reads only `stream.enabled` and warns
-about the rest. There is no `stream.command`: the capture program is the
+Under `capabilities.stream` (ADR 0030 §5): `enabled` (both sides, default
+`false`), and on the worker `fps` (1–60, default 30), `maxDimension`
+(96–4096, default 720) and `bitrateKbps` (100–40000, default 1500; the iOS
+encoder takes nothing lower). A gateway reads only `enabled` and warns
+about the rest. There is no `command`: the capture program is the
 driver's. The iOS driver's `drivers.ios.screenCaptureCommand` overrides
-its program (§5). The config shape `config.get` returns gains `stream`,
-a contract change, so the daemon protocol goes up by one.
+its program (§5). The config section rides ADR 0030's `capabilities`
+shape, so the daemon protocol does not change for it.
 
 ## Consequences
 
@@ -471,8 +477,8 @@ a contract change, so the daemon protocol goes up by one.
 - No event marks a stream, so `simlock events` cannot say who watched.
 - After a reboot under its lease, an iOS viewer can see a stale picture
   until Stop and Show screen.
-- If ADR 0030 is accepted, the module's wiring moves out of
-  `daemon/main.ts` onto its contract.
+- Every worker module now gets the registry read and the screens in its
+  context, agent-device's included, which uses neither.
 
 ## Alternatives considered
 
@@ -490,9 +496,9 @@ a contract change, so the daemon protocol goes up by one.
 - **Ship the iOS tool prebuilt, from a release workflow.** Rejected:
   Simlock is installed from a checkout, so the host builds it. That also
   removes the signing, notarization and universal-binary questions.
-- **Wait for ADR 0030's module host.** Rejected: it is not merged, and the
-  module's parts are the ones that contract asks for, so moving later is
-  wiring only.
+- **Hand the module the drivers or the whole registry.** Rejected: it
+  needs one verb of the drivers and one read of the registry, and a module
+  that can provision or write records is a second place those happen.
 - **The scrcpy client program instead of our own client.** Rejected: it
   decodes and displays or records, rather than passing H.264 through, and
   needs an install Simlock does not ship. Third-party scrcpy front ends
