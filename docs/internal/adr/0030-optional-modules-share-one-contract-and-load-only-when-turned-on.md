@@ -167,7 +167,10 @@ them without binding `this`.
 
 A module's HTTP routes sit under its name. `mount` returns only a handler;
 the host serves it at `/v1/<name>` and `/v1/<name>/*`. A module cannot pick
-a route that clashes with another module's or with a core route.
+a route that clashes with another module's or with a core route: the
+contract lists the first segments of the core routes, a test keeps that
+list true to the HTTP app, and the host refuses a module named after one
+at start, whether or not HTTP is on.
 
 A module's `findings()` returns `{ message, remedy }`. The host adds the
 finding's kind and the module's name (§7), so the name in a finding cannot
@@ -272,14 +275,16 @@ already checked each section with its module's validator.
 ### 6. Shared types live in `src/modules`
 
 `src/modules` declares the handler shape a module's routes have. The host
-turns each handler into the mount the HTTP app already takes, so a module
-never imports `src/http`, and `src/http` does not change.
+turns each handler into the mount the HTTP app already takes, so being
+mounted needs nothing from `src/http`, and `src/http` does not change. A
+module may still use `src/http`'s helpers to build its own front, as
+agent-device does.
 
-`src/modules` imports only `src/ports`, `src/contract` and `src/core`. A
-dependency-cruiser rule enforces it. Types it needs from elsewhere (the
-capability source, the relay target, the lease-end participant, the bus's
-`subscribe`, the daemon's dispatch, the gateway's views and lease index)
-are declared by shape, and a test checks each copy against the original.
+`src/modules` imports only `src/ports`, `src/contract`, `src/core`, and
+types from `src/bus`. A dependency-cruiser rule enforces it. Types it needs
+from elsewhere (the capability source, the relay target, the lease-end
+participant, the daemon's dispatch, the gateway's lease index) are declared
+by shape, and a test checks each copy against the original.
 The core, leasing, the drivers, the gateway and the contract import
 nothing from `src/modules` or from any module.
 
