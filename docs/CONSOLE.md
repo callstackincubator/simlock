@@ -227,8 +227,8 @@ live on the page. What you are looking at is either moving or gone.
 
 The panel is there wherever the worker it runs on has screen streaming turned on
 (see [`stream.enabled`](CONFIGURATION.md)). Where it is off, or where the lease is
-on a device a screen cannot be captured from — an Android emulator or a physical
-iPhone — the panel says so, in the worker's own words, and starts nothing.
+on a device a screen cannot be captured from — a physical iPhone or Android
+phone — the panel says so, in the worker's own words, and starts nothing.
 
 ### Who holds a lease
 

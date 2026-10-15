@@ -60,28 +60,23 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 
-## The screen capture program
+## The screen capture programs
 
-`stream.command` names a program this repo does not ship. The one it is written
-against lives in `vendor/screen-capture/` — a Swift package, so nothing in
-`pnpm build` or `pnpm test` builds or runs it:
+`pnpm build` runs `scripts/build-capture.mjs`: it copies the vendored scrcpy
+server into `dist/vendor/scrcpy/` after checking its pinned SHA-256, and on a
+Mac with Xcode selected it builds `vendor/screen-capture/` (Swift) into
+`dist/bin/simlock-screen-capture`. Elsewhere the Swift build is skipped and iOS
+streams report unavailable.
 
-```sh
-cd vendor/screen-capture && swift build -c release --scratch-path .build/out
-# the binary: .build/out/Products/Release/simlock-screen-capture
-```
-
-Point `stream.command` at that path (an absolute path is checked for existence
-per request, so installing it needs no daemon restart).
-
-It cannot run in the unit, e2e or console lanes: it reads a booted simulator's
-framebuffer, which means real devices and the slow lane. What the lanes do cover
-is everything this repo writes — the envelope reader, the refusal paths, the
-lifecycle — against a program that writes the same envelope from stills
-(`e2e/console/screen-capture.ts`). A change to the Swift program is checked the
-way the slow lane checks anything else: by hand, on a machine with a simulator,
-where `node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` says
-whether the bytes it wrote decode.
+Neither runs in the unit, e2e or console lanes: both read a booted device's
+screen, which means real devices and the slow lane. The lanes cover what this
+repo writes -- the stream module, the drivers' capture code against fakes, the
+envelope -- and the console lane runs a stand-in program that writes the same
+envelope from stills (`e2e/console/screen-capture.ts`), named by the fake
+driver's `screenCaptureCommand`. A change to the Swift program is checked by
+hand on a machine with a simulator, where
+`node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` says whether
+the bytes it wrote decode.
 
 ## Slow lane
 

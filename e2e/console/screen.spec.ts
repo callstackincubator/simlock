@@ -29,9 +29,9 @@ async function streamingHost(): Promise<StreamingHost> {
   try {
     host = await startDaemon("worker", {
       config: {
-        stream: { command, enabled: true, fps: 5 },
+        stream: { enabled: true, fps: 5 },
       },
-      driverScript: { ios: IOS },
+      driverScript: { ios: { ...IOS, screenCaptureCommand: command } },
     });
     const granted = await host.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
     expect(granted.code, granted.stderr).toBe(0);
@@ -136,9 +136,7 @@ test.describe("the Screen pane", () => {
       // why: these numbers are the capture program's own, so the pane sizing itself from them proves it
       // read the meta frame rather than guessing a size from whatever arrived first.
       await expect.poll(() => fact(page, "Picture"), { timeout: 10_000 }).toBe("120 × 240 mjpeg");
-      await expect
-        .poll(async () => (await frames(page)) > 0, { timeout: 10_000 })
-        .toBe(true);
+      await expect.poll(async () => (await frames(page)) > 0, { timeout: 10_000 }).toBe(true);
       await expect.poll(() => fact(page, "State"), { timeout: 10_000 }).toBe("live");
 
       // why: three different colours arrive in turn, so readings that keep differing prove frames are
@@ -164,9 +162,7 @@ test.describe("the Screen pane", () => {
       await openLeasePage(page, started.host, started.lease);
       await showButton(page).click();
       await logReached(started.dir, "opened", 1);
-      await expect
-        .poll(async () => (await frames(page)) > 0, { timeout: 10_000 })
-        .toBe(true);
+      await expect.poll(async () => (await frames(page)) > 0, { timeout: 10_000 }).toBe(true);
 
       await showButton(page).click();
       await logReached(started.dir, "closed", 1);
@@ -215,9 +211,7 @@ test.describe("the Screen pane", () => {
       await openLeasePage(page, started.host, started.lease);
       await showButton(page).click();
       await logReached(started.dir, "opened", 1);
-      await expect
-        .poll(async () => (await frames(page)) > 0, { timeout: 10_000 })
-        .toBe(true);
+      await expect.poll(async () => (await frames(page)) > 0, { timeout: 10_000 }).toBe(true);
 
       const released = await started.host.cli(["release", started.lease]);
       expect(released.code, released.stderr).toBe(0);

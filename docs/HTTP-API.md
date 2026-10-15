@@ -941,9 +941,10 @@ worth asking for twice rather than holding open in advance.
 Authorization is the same as every other lease route: a token sees its own
 leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTED`
 (415) means the device behind the lease can never produce a picture here — a
-physical iOS device or an Android emulator. `STREAM_UNAVAILABLE` (503) means it
-could but cannot now, usually a capture program that is not installed; asking
-again after its operator installs it is the right move. `WORKER_UNREACHABLE` on
+physical phone. `STREAM_UNAVAILABLE` (503) means it could but cannot now: a
+capture program that is not installed, or a device that painted nothing within
+30 seconds; asking again is the right move. A stream that stops receiving frames
+for 30 seconds ends with an error rather than freezing on its last picture. `WORKER_UNREACHABLE` on
 a gateway means the worker that holds the lease is gone.
 
 The body is the same bytes on a gateway as on the worker: a gateway relays a

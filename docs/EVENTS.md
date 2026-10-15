@@ -136,6 +136,9 @@ authorizes it already emitted `lease.granted`, the device's own state is
 untouched, and a fleet where every `adb shell` command produced a bus event
 would push everything else out of the ring buffer within minutes.
 
+**A screen stream emits no event either.** Watching a device's screen changes
+no lease and no device; the daemon log records each stream opened and refused.
+
 **Every worker's own business events are republished on the gateway's bus**
 with `workerId` added to the payload, under their original names — the fact
 happened in that worker's lease handling or reaper, and rewriting either would

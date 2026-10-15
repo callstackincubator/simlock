@@ -1,7 +1,7 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// why: the browser lane needs a capture program to point a daemon's `stream.command` at, and the real
+// why: the browser lane needs a capture program for the fake driver's screen to run, and the real
 // one is Swift, needs a booted simulator, and cannot run on a CI runner. This writes the same envelope
 // that tool writes -- a meta frame naming `mjpeg`, then one JPEG per delta frame -- from a process that
 // owes its life to nothing but the daemon that started it. Stills rather than H.264 so the lane decodes

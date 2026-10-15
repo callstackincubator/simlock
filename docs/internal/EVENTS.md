@@ -218,6 +218,11 @@ else out of a 1000-entry ring buffer within minutes. An audit trail of what
 agents ran on their devices is a different feature with different retention
 needs, not a line in this catalogue.
 
+**A screen stream emits no event either** (ADR 0031). Watching a device's
+screen changes no lease and no device, the same as `device.exec`, and a viewer
+toggling the console's Screen pane would fill the ring buffer with nothing
+behind it. The daemon log records each stream opened and each one refused.
+
 **Every worker's own business events are republished on the gateway's bus**
 with `workerId` added to the payload, under their original names and with
 their original emitting module — the fact happened in that worker's lease
