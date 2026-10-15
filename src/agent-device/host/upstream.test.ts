@@ -103,7 +103,7 @@ async function started(harness: Awaited<ReturnType<typeof arrange>>): Promise<vo
 
 describe("the agent-device upstream adapter over the supervisor", () => {
   it("reports running with the supervisor's base URL, token, generation and the ceiling", async () => {
-    const harness = await arrange("0.21.25-dev");
+    const harness = await arrange("0.21.28");
     await started(harness);
     const availability = harness.supervisor.availability();
     if (availability.state !== "running") throw new Error(`got ${availability.state}`);
@@ -123,13 +123,13 @@ describe("the agent-device upstream adapter over the supervisor", () => {
     await started(harness);
 
     expect(harness.upstream.current()).toEqual({
-      reason: "found 0.20.3, need 0.21.25 or later",
+      reason: "found 0.20.3, need 0.21.28 or later",
       state: "unavailable",
     });
   });
 
   it("reports unavailable with starting while the supervisor starts", async () => {
-    const harness = await arrange("0.21.25-dev");
+    const harness = await arrange("0.21.28");
     const starting = harness.supervisor.start();
     starting.catch(() => undefined);
 

@@ -1868,7 +1868,7 @@ describe("GatewayService", () => {
 describe("GatewayService: a worker's capabilities in its view", () => {
   const unavailable = {
     name: "agent-device",
-    reason: "found 0.20.1, need 0.21.25 or later",
+    reason: "found 0.20.1, need 0.21.28 or later",
     state: "unavailable" as const,
   };
   const available = { name: "agent-device", state: "available" as const };

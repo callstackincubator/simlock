@@ -42,7 +42,7 @@ describe("agentDeviceFindings", () => {
       platforms: ["ios"],
       state: "running",
       token: "t",
-      version: "0.21.25",
+      version: "0.21.28",
     },
   ] as const satisfies readonly AgentDeviceAvailability[])(
     "returns no finding for the $state state",

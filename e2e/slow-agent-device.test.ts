@@ -503,7 +503,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with agentDevice.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.25 or later; simlock doctor reports agent-device-unavailable with found 0.9.2, need 0.21.25 or later",
+    "with agentDevice.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports agent-device-unavailable with found 0.9.2, need 0.21.28 or later",
     { timeout: 900_000 },
     async () => {
       const root = await mkdtemp(join(tmpdir(), "simlock-ad-old-"));
@@ -515,7 +515,7 @@ function defineSuite(target: Target): void {
       await writeFile(join(root, "dist/src/daemon.js"), "");
       await writeFile(entry, '#!/usr/bin/env node\nconsole.log("0.9.2");\n');
       await chmod(entry, 0o755);
-      const message = "found 0.9.2, need 0.21.25 or later";
+      const message = "found 0.9.2, need 0.21.28 or later";
 
       await env.withConfig({ agentDevice: { command: entry } }, async () => {
         const a = await agent("a");

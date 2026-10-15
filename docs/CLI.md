@@ -2204,7 +2204,7 @@ is needed, and what to do, and is printed to stderr as one line, cut to 500
 characters for each of the two texts:
 
 ```text
-agent-device  fail  found 0.20.3, need 0.21.25 or later; install agent-device 0.21.25 or later, then restart the daemon (`simlock daemon stop`, then `simlock daemon start`)
+agent-device  fail  found 0.20.3, need 0.21.28 or later; install agent-device 0.21.28 or later, then restart the daemon (`simlock daemon stop`, then `simlock daemon start`)
 ```
 
 While agent-device is still starting, or running, or switched off, there is

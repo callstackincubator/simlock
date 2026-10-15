@@ -2651,8 +2651,8 @@ describe("Doctor with a platform it cannot observe", () => {
 describe("Doctor: optional module findings", () => {
   const unavailable: OptionalModuleFinding = {
     kind: "agent-device-unavailable",
-    message: "found 0.20.3, need 0.21.25 or later",
-    remedy: "install agent-device 0.21.25 or later, then restart the daemon",
+    message: "found 0.20.3, need 0.21.28 or later",
+    remedy: "install agent-device 0.21.28 or later, then restart the daemon",
   };
 
   async function setup(

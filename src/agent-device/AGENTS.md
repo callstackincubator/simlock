@@ -36,7 +36,7 @@ Supervisor start (`AgentDeviceSupervisor.start`, at daemon start):
    Signal only if `ps` args end in `--simlock-home=<data dir>`; SIGTERM, check again, SIGKILL.
 2. Find — `agentDevice.command` (`agent-device`) on `PATH` or as a path; `package.json`
    names `agent-device`; a daemon entry under `dist/src`. Never downloads.
-3. Check — `--version` ≥ 0.21.25; Node ≥ 22.12.0 (`shared/compatibility.ts`).
+3. Check — `--version` ≥ 0.21.28 (a prerelease of it is older); Node ≥ 22.12.0 (`shared/compatibility.ts`).
 4. Prepare — state dir `<data dir>/agent-device` (0700, ours), policy file denying
    `boot`, `shutdown`, `device-shutdown`; env from `agentDeviceDaemonEnvironment` plus
    every driver's lease env (iOS device set mapped; no-iOS and no-Android sentinels).
@@ -57,7 +57,8 @@ Front (`createFront`, prefix `agent-device`):
    rebuilt into the map first.
 2. Non-RPC: a fixed route list (`shared/routes.ts`), else 404. `/health` answers 200 even
    when unavailable.
-3. `/rpc`: body ≤ 1 MiB, one JSON-RPC request; `classifyCall` → allocate, heartbeat,
+3. `/rpc`: body ≤ 1 MiB, one JSON-RPC request; only `command` and `lease.*` methods, as
+   agent-device's proxy takes no other from a tenant; `classifyCall` → allocate, heartbeat,
    release, command, or refused `wrapped-lease`.
 4. `checkRequest`: iOS/Android only; no device selector but the leased one; no device
    set or allowlist; `install` only from an upload; `devices` alone, not streamed.

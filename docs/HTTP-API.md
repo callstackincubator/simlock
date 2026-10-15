@@ -269,7 +269,7 @@ sends it, empty when nothing waits; an older daemon leaves it out.
 state, in the order it sends them (at most 16, no name twice):
 
 ```json
-[{ "name": "agent-device", "state": "unavailable", "reason": "found 0.20.1, need 0.21.25 or later" }]
+[{ "name": "agent-device", "state": "unavailable", "reason": "found 0.20.1, need 0.21.28 or later" }]
 ```
 
 `name` is lower-case letters, digits and `-`, starting with a letter, up to 32

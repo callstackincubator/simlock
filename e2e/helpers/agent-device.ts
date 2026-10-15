@@ -47,7 +47,7 @@ function agentDeviceEntry(): string {
   return entry;
 }
 
-// why: the slow lane must run the integration build the repo pins, never an agent-device installed on the machine; the pinned version is in the vendored tarball's name.
+// why: the slow lane must run the agent-device release whose proxy simlock bundles, so the version package.json pins for @agent-device/proxy is the one it accepts.
 export async function assertPinnedAgentDevice(
   platform: "ios" | "android" = "ios",
 ): Promise<string> {
@@ -60,21 +60,20 @@ export async function assertPinnedAgentDevice(
   const manifest = JSON.parse(await readFile(join(REPO_ROOT, "package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
   };
-  const pinned = /agent-device-proxy-(.+)-[0-9a-f]{7,}\.tgz$/.exec(
-    manifest.dependencies?.["@agent-device/proxy"] ?? "",
-  )?.[1];
-  if (pinned === undefined) throw new Error("package.json does not pin @agent-device/proxy");
+  const pinned = manifest.dependencies?.["@agent-device/proxy"];
+  if (pinned === undefined || !/^\d+\.\d+\.\d+$/.test(pinned))
+    throw new Error("package.json does not pin @agent-device/proxy");
   const actual = execFileSync(process.execPath, [entry, "--version"], {
     encoding: "utf8",
     timeout: 60_000,
   }).trim();
   if (actual !== pinned) {
     throw new Error(
-      `SIMLOCK_E2E_AGENT_DEVICE ${entry} is version ${actual}, the pinned build is ${pinned}`,
+      `SIMLOCK_E2E_AGENT_DEVICE ${entry} is version ${actual}, package.json pins ${pinned}`,
     );
   }
   if (platform === "android") {
-    // why: an Android snapshot needs the helper APK `pnpm build:android` packages into the checkout; without it every snapshot fails mid-test.
+    // why: an Android snapshot needs the helper APK the npm package ships and a checkout builds with `pnpm build:android`; without it every snapshot fails mid-test.
     const manifest = join(
       dirname(entry),
       "..",
@@ -85,7 +84,7 @@ export async function assertPinnedAgentDevice(
     );
     if (!existsSync(manifest)) {
       throw new Error(
-        `the Android snapshot helper is not built (${manifest} is missing); run \`pnpm build:android\` with ANDROID_HOME set in the agent-device checkout`,
+        `the Android snapshot helper is missing (${manifest}); install agent-device ${actual} from npm, or run \`pnpm build:android\` with ANDROID_HOME set in the agent-device checkout`,
       );
     }
   }

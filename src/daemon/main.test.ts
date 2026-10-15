@@ -2407,7 +2407,7 @@ describe("startDaemon with the agent-device edge", () => {
     return new ScriptedProcessRunner([
       {
         match: { args: [realCli, "--version"], command: process.execPath },
-        result: { code: 0, stderr: "", stdout: "0.21.25-dev\n" },
+        result: { code: 0, stderr: "", stdout: "0.21.28\n" },
       },
       {
         hangs: true,
@@ -2618,7 +2618,7 @@ describe("startDaemon with the agent-device edge", () => {
         )
         .toMatchObject({
           kind: "agent-device-unavailable",
-          message: expect.stringContaining("found 0.20.3, need 0.21.25 or later"),
+          message: expect.stringContaining("found 0.20.3, need 0.21.28 or later"),
           remedy: expect.any(String),
         });
       await expect(daemon.dispatch("lease.request", lease, agent)).resolves.toMatchObject({

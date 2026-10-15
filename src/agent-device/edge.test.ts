@@ -561,7 +561,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("with agentDevice.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
     const rig = await setUp();
-    const reason = "found 0.20.3, need 0.21.25 or later";
+    const reason = "found 0.20.3, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await send(rig, "/health");
@@ -2888,7 +2888,7 @@ describe("the agent-device front's request rules", () => {
       expect((await send(rig, "/admin/leases")).status).toBe(404);
       const missing = await send(rig, "/admin/leases", { token: null });
       expect(missing.status).toBe(401);
-      rig.fake.setUnavailable("found 0.20.3, need 0.21.25 or later");
+      rig.fake.setUnavailable("found 0.20.3, need 0.21.28 or later");
 
       const unavailable = await send(rig, "/admin/leases");
 
@@ -2906,6 +2906,25 @@ describe("the agent-device front's request rules", () => {
         rig,
         () => rpc(rig, "agent_device.admin", { command: "snapshot" }),
         "refused: unknown method agent_device.admin",
+      );
+    });
+
+    it("`install_from_source` and `release_materialized_paths`, which agent-device's proxy refuses for a tenant, are refused `refused: unknown method <method>` and never forwarded", async () => {
+      const rig = await setUp();
+
+      await refused(
+        rig,
+        () =>
+          rpc(rig, "agent_device.install_from_source", {
+            platform: "ios",
+            source: { kind: "url", url: "https://example.com/App.zip" },
+          }),
+        "refused: unknown method agent_device.install_from_source",
+      );
+      await refused(
+        rig,
+        () => rpc(rig, "agent_device.release_materialized_paths", { materializationId: "m-1" }),
+        "refused: unknown method agent_device.release_materialized_paths",
       );
     });
   });
@@ -2969,21 +2988,6 @@ describe("the agent-device front's request rules", () => {
         onlyIosAndAndroid,
       );
       expect(commandsReceived(rig)).toHaveLength(1);
-    });
-
-    it("`install_from_source` with a URL source and platform `ios` is forwarded, as today; with platform `web` it is refused", async () => {
-      const rig = await setUp();
-      const params = (platform: string) => ({
-        platform,
-        source: { kind: "url", url: "https://example.com/App.zip" },
-      });
-      await forwarded(rig, () => rpc(rig, "agent_device.install_from_source", params("ios")));
-
-      await refused(
-        rig,
-        () => rpc(rig, "agent_device.install_from_source", params("web")),
-        onlyIosAndAndroid,
-      );
     });
   });
 
@@ -3664,7 +3668,7 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
 
   it("a worker whose agent-device is unavailable answers state unavailable with the same reason its front's notAvailable reply names", async () => {
     const rig = await setUp();
-    const reason = "found 0.20.1, need 0.21.25 or later";
+    const reason = "found 0.20.1, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await (await send(rig, "/health")).text();

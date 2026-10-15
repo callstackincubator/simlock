@@ -659,8 +659,8 @@ describe("the status device entry's absent state (ADR 0022 §7)", () => {
 describe("doctorReportSchema's agent-device-unavailable finding", () => {
   const finding = {
     kind: "agent-device-unavailable",
-    message: "found 0.20.3, need 0.21.25 or later",
-    remedy: "install agent-device 0.21.25 or later",
+    message: "found 0.20.3, need 0.21.28 or later",
+    remedy: "install agent-device 0.21.28 or later",
   };
 
   it("parses a report with the finding, and refuses one without message or without remedy", () => {
@@ -685,7 +685,7 @@ describe("a worker status's capabilities list", () => {
   const entry = (overrides: Record<string, unknown> = {}) => ({
     name: "agent-device",
     state: "unavailable",
-    reason: "found 0.20.1, need 0.21.25 or later",
+    reason: "found 0.20.1, need 0.21.28 or later",
     ...overrides,
   });
 

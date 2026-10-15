@@ -1702,9 +1702,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
       .toEqual([["devices"], ["devices"]]);
   });
 
-  it("through the gateway, `release_materialized_paths` is refused `refused: this agent-device is too old to use through a gateway; update it`, and an `install_from_source` naming the token's lease reaches its worker", async () => {
+  it("through the gateway, `release_materialized_paths` and an `install_from_source` naming the token's lease are refused `refused: unknown method <method>`, and no worker sees either", async () => {
     const rig = await twoLeasesOnTwoWorkers();
-    const target = holderOf(rig, 2);
     const before = rig.members.map((member) => member.fake.requests.length);
 
     const released = await envelopeOf(
@@ -1712,18 +1711,21 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
         materializationId: "m-1",
       }),
     );
+    const installed = await envelopeOf(
+      await rpc(rig, "agent_device.install_from_source", {
+        meta: { leaseId: hex(2) },
+        platform: "ios",
+        source: { kind: "url", url: "https://example.com/App.zip" },
+      }),
+    );
 
-    expect(released.error?.message).toBe(tooOld);
+    expect(released.error?.message).toBe(
+      "refused: unknown method agent_device.release_materialized_paths",
+    );
+    expect(installed.error?.message).toBe(
+      "refused: unknown method agent_device.install_from_source",
+    );
     expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
-
-    await rpc(rig, "agent_device.install_from_source", {
-      meta: { leaseId: hex(2) },
-      platform: "ios",
-      source: { kind: "url", url: "https://example.com/App.zip" },
-    });
-
-    expect(target.fake.rpcRequests("agent_device.install_from_source")).toHaveLength(1);
-    expect(holderOf(rig, 1).fake.rpcRequests("agent_device.install_from_source")).toHaveLength(0);
   });
 });
 

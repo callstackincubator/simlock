@@ -139,7 +139,7 @@ async function arrange(options: Options = {}) {
           httpPort,
           pid: mode === "ready" ? pid : pid + 1_000,
           token,
-          version: "0.21.25-dev",
+          version: "0.21.28",
         }),
       );
     }
@@ -232,7 +232,7 @@ async function installAgentDevice(
   await options.layout?.(filesystem);
 }
 
-function versionRun(output = "0.21.25-dev\n", extra: Partial<ScriptedProcessExpectation> = {}) {
+function versionRun(output = "0.21.28\n", extra: Partial<ScriptedProcessExpectation> = {}) {
   return {
     match: { args: [realCli, "--version"], command: nodePath },
     result: { code: 0, stderr: "", stdout: output },
@@ -419,7 +419,7 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
       reason: "not-found",
     });
     expect(unavailable(harness).remedy).toContain("agentDevice.command");
-    expect(unavailable(harness).remedy).toContain("0.21.25 or later");
+    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(harness.runner.calls).toEqual([]);
   });
@@ -510,21 +510,24 @@ describe("AgentDeviceSupervisor checking the install", () => {
     const harness = await run({ expectations: [versionRun("0.20.3\n")] });
 
     expect(unavailable(harness)).toMatchObject({
-      message: "found 0.20.3, need 0.21.25 or later",
+      message: "found 0.20.3, need 0.21.28 or later",
       reason: "wrong-version",
     });
-    expect(unavailable(harness).remedy).toContain("0.21.25 or later");
+    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
   });
 
-  it.each(["abc", "0.21", "0.9.100"])("reports %s as wrong-version", async (printed) => {
-    const harness = await run({ expectations: [versionRun(`${printed}\n`)] });
+  it.each(["abc", "0.21", "0.9.100", "0.21.27", "0.21.28-nightly.20261013.49"])(
+    "reports %s as wrong-version",
+    async (printed) => {
+      const harness = await run({ expectations: [versionRun(`${printed}\n`)] });
 
-    expect(unavailable(harness).reason).toBe("wrong-version");
-    expect(daemonSpawns(harness)).toEqual([]);
-  });
+      expect(unavailable(harness).reason).toBe("wrong-version");
+      expect(daemonSpawns(harness)).toEqual([]);
+    },
+  );
 
-  it.each(["0.21.25-dev", "0.21.25", "0.22.0", "0.100.0", "1.0.0+build.7"])(
+  it.each(["0.21.28", "0.21.28+build.7", "0.21.29-dev", "0.22.0", "0.100.0", "1.0.0+build.7"])(
     "starts a daemon for the version %s",
     async (printed) => {
       const harness = await run({ expectations: [versionRun(`${printed}\n`), daemonSpawn()] });
@@ -797,7 +800,7 @@ describe("AgentDeviceSupervisor readiness", () => {
       platforms: ["ios", "android"],
       state: "running",
       token,
-      version: "0.21.25-dev",
+      version: "0.21.28",
     });
     expect(harness.health.reads).toContain(`http://127.0.0.1:${httpPort}`);
   });
@@ -811,7 +814,7 @@ describe("AgentDeviceSupervisor readiness", () => {
     const pid = harness.children[0]?.pid;
     await harness.filesystem.writeFileAtomic(
       daemonJsonPath,
-      JSON.stringify({ httpPort, pid, token, version: "0.21.25-dev" }),
+      JSON.stringify({ httpPort, pid, token, version: "0.21.28" }),
     );
     harness.probe.startListening(httpPort);
     await advanceUntil(harness, () => stateOf(harness) === "running", 10_000);
@@ -851,7 +854,7 @@ describe("AgentDeviceSupervisor readiness", () => {
     await advancing(harness, harness.begin());
 
     expect(unavailable(harness)).toMatchObject({
-      message: "agent-device 0.21.25-dev speaks RPC protocol 3, need 2",
+      message: "agent-device 0.21.28 speaks RPC protocol 3, need 2",
       reason: "wrong-version",
     });
     expect(unavailable(harness).remedy).toContain("RPC protocol 2");
