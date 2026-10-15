@@ -139,4 +139,5 @@ export function createWorkerWith(
   };
 }
 
+// fallow-ignore-next-line unused-export -- reached through the namespace of definition.ts's dynamic import.
 export const createWorker = createWorkerWith({});

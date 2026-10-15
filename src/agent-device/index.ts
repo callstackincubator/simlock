@@ -15,6 +15,7 @@ export interface AgentDeviceFrontParts {
   readonly renewals: Renewals;
 }
 
+// fallow-ignore-next-line unused-export -- reached through the namespace of main.ts's dynamic import.
 export function createGatewayAgentDeviceFrontParts(
   fleet: FleetPort,
   clock: Clock,
