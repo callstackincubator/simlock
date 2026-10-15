@@ -290,7 +290,7 @@ test.describe("long lists page", () => {
     const row = leaseRows(page).getByRole("listitem").nth(2);
     const link = row.getByRole("link");
     const expires = row.locator(".list-aside");
-    await expect(link).toHaveAttribute("href", "/leases/lse_0028/");
+    await expect(link).toHaveAttribute("href", "/leases/lse_0028/?page=2");
     await link.focus();
     await expect(link).toBeFocused();
     // The element itself is marked: a link drawn again in its place would not carry the mark.
@@ -312,7 +312,11 @@ test.describe("long lists page", () => {
     );
     expect(await rowIds(leaseRows(page), "/leases")).toEqual(ids(26, 50));
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/leases\/lse_0028\/$/);
+    await expect(page).toHaveURL(/\/leases\/lse_0028\/\?page=2$/);
+    await expect(leaseRows(page).locator('a[href^="/leases/lse_0028/"]')).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   test("the pager is hidden when every row fits on one page", async ({ daemon, page }) => {
@@ -691,9 +695,9 @@ test.describe("a single host with 300 leases and 5,000 events", () => {
     const link = leaseRows(page).getByRole("link").last();
     await expect(link).toBeFocused();
     const href = await link.getAttribute("href");
-    expect(href).toMatch(/^\/leases\/lse_[^/]+\/$/);
+    expect(href).toMatch(/^\/leases\/lse_[^/]+\/\?page=6&size=50$/);
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(new RegExp(`${href}$`));
+    await expect(page).toHaveURL((url) => `${url.pathname}${url.search}` === href);
   });
 
   test("the events feed scrolls through 5,000 events smoothly and the newest stays first", async ({
