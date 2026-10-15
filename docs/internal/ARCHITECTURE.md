@@ -72,6 +72,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
 | `gateway-not-edges`, `gateway-only-dispatch` | Gateway imports no driver or frontend, and from daemon only `src/daemon/dispatch.ts` |
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |
+| `link-is-portable`, `link-imports-port-types-only` | The link uses no Node module or package, and only the types of ports |
 | `contract-imports-nothing` | The contract imports nothing outside itself |
 
 A directory under `src/` with an index file is a component. Two components
