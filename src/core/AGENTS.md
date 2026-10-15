@@ -9,34 +9,34 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 
 ## Files
 
-| File                                                   | Role                                                                                  |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| **Wiring and state**                                   |                                                                                       |
-| `create-core.ts`, `core-ports.ts`                      | `createCore`, `Core`, `CorePorts`; read ports (`CapacityReader`, `WarmPoolReader`, …) |
-| `registry.ts`                                          | `Registry`: the one writer of `state.json`                                            |
-| `domain.ts`                                            | Records, specs, `transition`, `fits`, `mayBeGranted`, `sameSpec`                      |
-| `serialized-decision.ts`, `device-operation-claims.ts` | The lock; one in-memory claim per device                                              |
-| `config.ts`, `validation.ts`                           | `loadConfig`, defaults, validators, `redactConfig`, `effectiveAllowDownload`          |
-| `lease-request-store.ts`                               | Pure lease-request record helpers, shared with leasing                                |
-| **Device verbs**                                       |                                                                                       |
-| `managed-device-lifecycle.ts`                          | `ManagedDeviceLifecycle`: every driver verb on a registered device                    |
-| `device-provisioner.ts`                                | `DeviceProvisioner`: the one place a device record is created                         |
-| `reclaim-coordinator.ts`                               | `ReclaimCoordinator`: wipe after a lease, spent delete, interrupted reclaim           |
-| `quarantine-coordinator.ts`                            | `QuarantineCoordinator`: entry, retry on backoff, give up                             |
-| `nuke-service.ts`, `nuke.ts`                           | `NukeService` (operator reset); `Nuke` (command facade)                               |
-| `idle-order.ts`                                        | LRU order and eviction victim choice                                                  |
-| **Background**                                         |                                                                                       |
-| `warm-pool/`, `capacity/`                              | What stays warm; limits, RAM budget, reservations (own manuals)                       |
-| `reaper.ts`, `cleanup/`, `cleanup-executor.ts`         | `CleanupReaper`, pure rules, `CleanupExecutor`                                        |
-| **Startup, health, drivers**                           |                                                                                       |
-| `startup-read.ts`, `startup-converger.ts`              | `readStartup`; `StartupConverger`, the device half of startup                         |
-| `doctor.ts`, `host-facts.ts`                           | `Doctor` findings and fixes; `HostFactsReader` for status                             |
-| `driver.ts`, `driver-catalog.ts`                       | `Driver` interface, errors, `DiskSpaceGuard`; `DriverCatalog`                         |
-| `catalog-match.ts`                                     | Model name, class and paired runtimes against a catalog entry                         |
-| `component-installer.ts`                               | `ComponentInstaller`: install, list, remove                                           |
-| `physical-enrollment.ts`, `physical-presence.ts`       | `device add`/`remove`; every presence read, `latestPresence`                          |
-| `device-root.ts`, `instance-identity.ts`               | `ensureOwnedRoot`; `loadInstanceId`                                                   |
-| `stable-error.ts`, `testing.ts`, `fake-driver.ts`      | `stableError`; test-only wiring and `FakeDriver`                                      |
+| File                                                   | Role                                                                                                                                                                                     |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Wiring and state**                                   |                                                                                                                                                                                          |
+| `create-core.ts`, `core-ports.ts`                      | `createCore`, `Core`, `CorePorts`; read ports (`CapacityReader`, `WarmPoolReader`, …)                                                                                                    |
+| `registry.ts`                                          | `Registry`: the one writer of `state.json`                                                                                                                                               |
+| `domain.ts`                                            | Records, specs, `transition`, `fits`, `mayBeGranted`, `sameSpec`                                                                                                                         |
+| `serialized-decision.ts`, `device-operation-claims.ts` | The lock; one in-memory claim per device                                                                                                                                                 |
+| `config.ts`, `validation.ts`                           | `loadConfig` (with the optional modules' `ModuleConfigEntry` list: `capabilities.<name>` sections, `enabled` owned here), defaults, validators, `redactConfig`, `effectiveAllowDownload` |
+| `lease-request-store.ts`                               | Pure lease-request record helpers, shared with leasing                                                                                                                                   |
+| **Device verbs**                                       |                                                                                                                                                                                          |
+| `managed-device-lifecycle.ts`                          | `ManagedDeviceLifecycle`: every driver verb on a registered device                                                                                                                       |
+| `device-provisioner.ts`                                | `DeviceProvisioner`: the one place a device record is created                                                                                                                            |
+| `reclaim-coordinator.ts`                               | `ReclaimCoordinator`: wipe after a lease, spent delete, interrupted reclaim                                                                                                              |
+| `quarantine-coordinator.ts`                            | `QuarantineCoordinator`: entry, retry on backoff, give up                                                                                                                                |
+| `nuke-service.ts`, `nuke.ts`                           | `NukeService` (operator reset); `Nuke` (command facade)                                                                                                                                  |
+| `idle-order.ts`                                        | LRU order and eviction victim choice                                                                                                                                                     |
+| **Background**                                         |                                                                                                                                                                                          |
+| `warm-pool/`, `capacity/`                              | What stays warm; limits, RAM budget, reservations (own manuals)                                                                                                                          |
+| `reaper.ts`, `cleanup/`, `cleanup-executor.ts`         | `CleanupReaper`, pure rules, `CleanupExecutor`                                                                                                                                           |
+| **Startup, health, drivers**                           |                                                                                                                                                                                          |
+| `startup-read.ts`, `startup-converger.ts`              | `readStartup`; `StartupConverger`, the device half of startup                                                                                                                            |
+| `doctor.ts`, `host-facts.ts`                           | `Doctor` findings and fixes; `HostFactsReader` for status                                                                                                                                |
+| `driver.ts`, `driver-catalog.ts`                       | `Driver` interface, errors, `DiskSpaceGuard`; `DriverCatalog`                                                                                                                            |
+| `catalog-match.ts`                                     | Model name, class and paired runtimes against a catalog entry                                                                                                                            |
+| `component-installer.ts`                               | `ComponentInstaller`: install, list, remove                                                                                                                                              |
+| `physical-enrollment.ts`, `physical-presence.ts`       | `device add`/`remove`; every presence read, `latestPresence`                                                                                                                             |
+| `device-root.ts`, `instance-identity.ts`               | `ensureOwnedRoot`; `loadInstanceId`                                                                                                                                                      |
+| `stable-error.ts`, `testing.ts`, `fake-driver.ts`      | `stableError`; test-only wiring and `FakeDriver`                                                                                                                                         |
 
 ## Wiring
 

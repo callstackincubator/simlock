@@ -1141,6 +1141,7 @@ describe("operation input/output round trips", () => {
     const warmPool = { targets, maxConcurrentBoots: 3 };
     const output = OPERATIONS["config.get"].output;
     const base = {
+      capabilities: {},
       mode: "worker",
       gateway: {
         disconnectedRetentionMs: 1,

@@ -1512,6 +1512,14 @@ from that worker's local agents, each with the **`workerId`** whose queue it
 is in. A request the gateway has sent to a worker is listed once, as the
 gateway's own. A worker's `createdAt` comes from that worker's clock.
 
+### `/v1/<module>/*`
+
+An optional module turned on with `capabilities.<module>.enabled` and
+`http.enabled` serves its own routes at `/v1/<module>` and `/v1/<module>/*`,
+behind the same agent token as every other route. A module cannot take the
+name of a route above (`status`, `leases`, `workers` and the rest). This build
+has no optional module of its own, so no such route exists yet.
+
 ### `/v1/agent-device/*`
 
 A **worker** with `agentDevice.enabled` and `http.enabled` both `true` serves
