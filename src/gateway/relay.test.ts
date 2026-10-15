@@ -108,7 +108,13 @@ class FakeLink extends ScriptedConnection implements LinkConnection {
   }
 }
 
-async function setup(options: { readonly deadlineMs?: number; readonly holdOpen?: boolean } = {}) {
+async function setup(
+  options: {
+    readonly deadlineMs?: number;
+    readonly holdOpen?: boolean;
+    readonly idleMs?: number;
+  } = {},
+) {
   const connection = new FakeLink();
   connection.holdOpen = options.holdOpen ?? false;
   const connecting = connectSimlockClient({ connection, credential: "secret" }, true);
@@ -126,6 +132,7 @@ async function setup(options: { readonly deadlineMs?: number; readonly holdOpen?
     relay: new GatewayRelay({
       directory,
       ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
+      ...(options.idleMs === undefined ? {} : { idleMs: options.idleMs }),
     }),
   };
 }
@@ -167,6 +174,26 @@ function relayIdOf(frame: SentFrame): unknown {
 
 async function readFailure(response: Response) {
   return outcome(response.body?.getReader().read() ?? Promise.reject(new Error("no body")));
+}
+
+async function readAll(response: Response) {
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new Error("no body");
+  let bytes = 0;
+  try {
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) return { bytes, state: "ended" as const };
+      bytes += step.value.length;
+    }
+  } catch (error: unknown) {
+    return {
+      bytes,
+      code: (error as { code?: unknown } | null)?.code,
+      message: error instanceof Error ? error.message : String(error),
+      state: "failed" as const,
+    };
+  }
 }
 
 async function openedChannel(connection: FakeLink): Promise<FakeChannel> {
@@ -240,9 +267,11 @@ describe("GatewayRelay on a byte channel", () => {
     expect(last?.done).toBe(true);
   });
 
-  it("cancels the caller's request body and clears its deadline timer when the channel ends", async () => {
+  it("cancels the caller's request body, clears its deadline timer at the head and its idle timer when the channel ends", async () => {
     const deadlineMs = 123_456;
+    const idleMs = 234_567;
     const handles: unknown[] = [];
+    const idleHandles: unknown[] = [];
     const realSetTimeout = globalThis.setTimeout;
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
       handler: () => void,
@@ -250,6 +279,7 @@ describe("GatewayRelay on a byte channel", () => {
     ) => {
       const handle = realSetTimeout(handler, delay);
       if (delay === deadlineMs) handles.push(handle);
+      if (delay === idleMs) idleHandles.push(handle);
       return handle;
     }) as unknown as typeof setTimeout);
     const clearSpy = vi.spyOn(globalThis, "clearTimeout");
@@ -261,12 +291,16 @@ describe("GatewayRelay on a byte channel", () => {
       pull: () => new Promise<void>(() => undefined),
     });
     try {
-      const { connection, relay } = await setup({ deadlineMs });
+      const { connection, relay } = await setup({ deadlineMs, idleMs });
       const pending = relay.relay(WORKER_ID, call(body));
       const request = await sentFrame(connection, "relay.request");
       const channel = await openedChannel(connection);
       connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
       const response = await pending;
+      const deadlineClearedAtHead = clearSpy.mock.calls.some(([handle]) => handle === handles[0]);
+      const idleClearedAtHead = clearSpy.mock.calls.some(
+        ([handle]) => handle === idleHandles.at(-1),
+      );
       const reader = response.body?.getReader();
 
       channel.end();
@@ -275,7 +309,10 @@ describe("GatewayRelay on a byte channel", () => {
       expect(last?.done).toBe(true);
       await vi.waitFor(() => expect(cancelled).toBe(true));
       expect(handles).toHaveLength(1);
-      expect(clearSpy).toHaveBeenCalledWith(handles[0]);
+      expect(deadlineClearedAtHead).toBe(true);
+      expect(idleHandles.length).toBeGreaterThan(0);
+      expect(idleClearedAtHead).toBe(false);
+      expect(clearSpy).toHaveBeenCalledWith(idleHandles.at(-1));
     } finally {
       setTimeoutSpy.mockRestore();
       clearSpy.mockRestore();
@@ -302,8 +339,8 @@ describe("GatewayRelay on a byte channel", () => {
     });
   });
 
-  it("errors the caller's body with the deadline message when the worker answers {} and never ends the channel", async () => {
-    const { connection, relay } = await setup({ deadlineMs: 100 });
+  it("errors the caller's body with the idle message when the worker answers {} and never ends the channel", async () => {
+    const { connection, relay } = await setup({ deadlineMs: 2_000, idleMs: 100 });
     const pending = relay.relay(WORKER_ID, call());
     const request = await sentFrame(connection, "relay.request");
     await openedChannel(connection);
@@ -314,7 +351,7 @@ describe("GatewayRelay on a byte channel", () => {
     const read = await readFailure(response);
 
     expect(read).toMatchObject({
-      message: `worker ${WORKER_ID} did not finish the relayed request within 100 ms`,
+      message: `worker ${WORKER_ID} sent nothing on the relayed response for 100 ms`,
       state: "rejected",
     });
   });
@@ -424,6 +461,75 @@ describe("GatewayRelay on a byte channel", () => {
 
     expect(failure).toMatchObject({ message: "caller left while waiting", state: "rejected" });
     expect(connection.sent.filter((frame) => frame.type === "relay.request")).toEqual([]);
+  });
+});
+
+describe("GatewayRelay bounding the head and the body", () => {
+  it.each([
+    { bound: "the deadline", deadlineMs: 100, idleMs: 10_000 },
+    { bound: "the idle bound", deadlineMs: 10_000, idleMs: 100 },
+  ])(
+    "keeps relaying a body whose bytes keep coming past $bound, and ends it at the channel's end",
+    async ({ deadlineMs, idleMs }) => {
+      const { connection, relay } = await setup({ deadlineMs, idleMs });
+      const pending = relay.relay(WORKER_ID, call());
+      const request = await sentFrame(connection, "relay.request");
+      const channel = await openedChannel(connection);
+      connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+      const response = await pending;
+      connection.reply(request.id, {});
+
+      const reading = readAll(response);
+      for (let piece = 0; piece < 12 && !channel.aborted; piece += 1) {
+        await sleep(30);
+        if (!channel.aborted) channel.feed(new Uint8Array(KIB));
+      }
+      if (!channel.aborted) channel.end();
+
+      expect(await reading).toEqual({ bytes: 12 * KIB, state: "ended" });
+    },
+  );
+
+  it("ends a body that sends nothing for the idle bound with WORKER_UNREACHABLE, sends relay.cancel and aborts its channel", async () => {
+    const { connection, relay } = await setup({ deadlineMs: 10_000, idleMs: 100 });
+    const pending = relay.relay(WORKER_ID, call());
+    const request = await sentFrame(connection, "relay.request");
+    const channel = await openedChannel(connection);
+    connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+    const response = await pending;
+    connection.reply(request.id, {});
+
+    channel.feed(new Uint8Array(KIB));
+    const result = await Promise.race([
+      readAll(response),
+      sleep(2_000).then(() => ({ state: "still open" as const })),
+    ]);
+
+    expect(result).toEqual({
+      bytes: KIB,
+      code: "WORKER_UNREACHABLE",
+      message: `worker ${WORKER_ID} sent nothing on the relayed response for 100 ms`,
+      state: "failed",
+    });
+    const cancel = await sentFrame(connection, "relay.cancel");
+    expect(relayIdOf(cancel)).toBe(relayIdOf(request));
+    expect(channel.aborted).toBe(true);
+  });
+
+  it("fails a relay whose head never arrives at the deadline, not at the shorter idle bound", async () => {
+    const { connection, relay } = await setup({ deadlineMs: 150, idleMs: 50 });
+    const pending = outcome(relay.relay(WORKER_ID, call()));
+    await sentFrame(connection, "relay.request");
+    const channel = await openedChannel(connection);
+
+    const failure = await pending;
+
+    expect(failure).toEqual({
+      code: "WORKER_UNREACHABLE",
+      message: `worker ${WORKER_ID} did not finish the relayed request within 150 ms`,
+      state: "rejected",
+    });
+    expect(channel.aborted).toBe(true);
   });
 });
 

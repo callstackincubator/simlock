@@ -83,4 +83,5 @@ None of these is configurable.
 ## Known gaps
 
 - **The link bounds only its own waits.** A wait for bytes the peer has not
-  sent yet is the user's to bound; the gateway relay does it with its 330 s deadline.
+  sent yet is the user's to bound; the gateway relay does it with its 330 s deadline for the
+  head and its 330 s idle bound for the body.

@@ -128,7 +128,9 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     await cleanUp(daemons, directories);
   });
 
-  async function startPair(options: { readonly deadlineMs?: number } = {}) {
+  async function startPair(
+    options: { readonly deadlineMs?: number; readonly idleMs?: number } = {},
+  ) {
     const fixture: WorkerFixture = await startWorker(directories, daemons, {
       "agent-device": target,
       echo: target,
@@ -147,10 +149,13 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
           ? { client: () => client, reachable: true, refresh: async () => undefined, workerId }
           : undefined,
     };
-    const makeRelay = (relayOptions: { readonly deadlineMs?: number } = {}) =>
+    const makeRelay = (
+      relayOptions: { readonly deadlineMs?: number; readonly idleMs?: number } = {},
+    ) =>
       new GatewayRelay({
         directory,
         ...(relayOptions.deadlineMs === undefined ? {} : { deadlineMs: relayOptions.deadlineMs }),
+        ...(relayOptions.idleMs === undefined ? {} : { idleMs: relayOptions.idleMs }),
       });
     const relay = makeRelay(options);
     const opened = () => pair.gatewayTap.binaries(TYPE.OPEN).length;
@@ -548,7 +553,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     await poll(() => signal?.aborted).toBe(true);
   }, 30_000);
 
-  it("a target that never answers is cancelled after a 200 ms deadline, and the caller gets WORKER_UNREACHABLE with message `worker <id> did not finish the relayed request within 200 ms`; one that stalls after its head gets its body stream errored with that message", async () => {
+  it("a target that never answers is cancelled after a 200 ms deadline, and the caller gets WORKER_UNREACHABLE with message `worker <id> did not finish the relayed request within 200 ms`; one that stalls after its head, under a 10 s deadline and a 200 ms idle bound, gets its body stream errored with WORKER_UNREACHABLE `worker <id> sent nothing on the relayed response for 200 ms`", async () => {
     let signal: AbortSignal | undefined;
     behavior = async (request) => {
       signal = request.signal;
@@ -569,7 +574,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
           }),
         ),
       );
-    const stalling = await startPair({ deadlineMs: 200 });
+    const stalling = await startPair({ deadlineMs: 10_000, idleMs: 200 });
     const response = await stalling.relay.relay(WORKER_ID, buildCall({}));
     const reader = response.body?.getReader();
     await reader?.read();
@@ -577,7 +582,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     const message = `worker ${WORKER_ID} did not finish the relayed request within 200 ms`;
     expect(noHead).toMatchObject({ code: "WORKER_UNREACHABLE", message, state: "rejected" });
-    expect(stalled).toMatchObject({ message, state: "rejected" });
+    expect(stalled).toMatchObject({
+      code: "WORKER_UNREACHABLE",
+      message: `worker ${WORKER_ID} sent nothing on the relayed response for 200 ms`,
+      state: "rejected",
+    });
   }, 30_000);
 
   it("closing the uplink mid-relay fails the caller with WORKER_UNREACHABLE, or errors its body stream after the head, and aborts the target's request signal", async () => {

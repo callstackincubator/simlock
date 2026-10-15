@@ -1,5 +1,6 @@
 // why: every wait of a relayed exchange is bounded (architecture rule on cross-process waits): one deadline covers the
-// channel wait, the exchange and the response body; the link bounds the channels open to a worker (ADR 0028).
+// channel wait and the wait for the head, and an idle bound covers the response body, which may be a live stream that
+// runs as long as someone reads it; the link bounds the channels open to a worker (ADR 0028).
 
 import { isSimlockError, relayHeaderPairs, type AnySimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -10,6 +11,7 @@ import type { GatewayWorkerClient } from "./worker-client.js";
 export interface GatewayRelayOptions {
   readonly directory: WorkerDirectory;
   readonly deadlineMs?: number;
+  readonly idleMs?: number;
 }
 
 export interface GatewayRelayCall {
@@ -21,6 +23,10 @@ export interface GatewayRelayCall {
 
 // why: agent-device's proxy allows 300 s per exchange; the rest is a margin.
 const DEFAULT_DEADLINE_MS = 330_000;
+// why: agent-device's proxy ends an exchange 300 s after it starts, and its RPC body may sit silent between progress
+// lines for most of that; a bound at or under 300 s would cut exchanges the worker still finishes. A live stream's
+// worker side already ends a capture silent for 30 s, so for a stream this only backs up a worker that hangs.
+const DEFAULT_IDLE_MS = 330_000;
 type RelayMethod = Parameters<GatewayWorkerClient["relayRequest"]>[0]["method"];
 const NO_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 
@@ -33,6 +39,7 @@ export class GatewayRelay {
         call,
         client: () => liveClient(this.options.directory.target(workerId)),
         deadlineMs: this.options.deadlineMs ?? DEFAULT_DEADLINE_MS,
+        idleMs: this.options.idleMs ?? DEFAULT_IDLE_MS,
         reject,
         resolve,
         workerId,
@@ -46,6 +53,7 @@ interface ExchangeInit {
   readonly call: GatewayRelayCall;
   readonly client: () => GatewayWorkerClient | undefined;
   readonly deadlineMs: number;
+  readonly idleMs: number;
   readonly resolve: (response: Response) => void;
   readonly reject: (error: unknown) => void;
   readonly workerId: string;
@@ -59,6 +67,7 @@ class Exchange {
   #reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #ahead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
+  #idleTimer: ReturnType<typeof setTimeout> | undefined;
   #callerBody: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #requestSent = false;
   #cancelSent = false;
@@ -172,7 +181,12 @@ class Exchange {
   #look(): Promise<ReadableStreamReadResult<Uint8Array>> {
     if (this.#ahead === undefined) {
       const read = (this.#reader as ReadableStreamDefaultReader<Uint8Array>).read();
-      read.catch((error: unknown) => this.#onChannelError(error));
+      read.then(
+        (step) => {
+          if (!step.done) this.#armIdle();
+        },
+        (error: unknown) => this.#onChannelError(error),
+      );
       this.#ahead = read;
     }
     return this.#ahead;
@@ -193,6 +207,9 @@ class Exchange {
       return;
     }
     this.#headed = true;
+    // why: once the head is in, the body is bounded by silence, not by the deadline, so a live stream is not cut.
+    clearTimeout(this.#timer);
+    this.#armIdle();
     const method = this.init.call.request.method;
     if (method === "HEAD" || NO_BODY_STATUSES.has(status)) {
       this.init.resolve(new Response(null, { headers: responseHeaders, status }));
@@ -229,7 +246,7 @@ class Exchange {
     controller.enqueue(step.value);
   }
 
-  // why: a response with no body still ends with the channel's end, which frees the channel and the deadline.
+  // why: a response with no body still ends with the channel's end, which frees the channel and its timers.
   async #drain(): Promise<void> {
     try {
       for (;;) {
@@ -244,6 +261,21 @@ class Exchange {
     } catch {
       // why: a failed channel is reported by `#onChannelError`.
     }
+  }
+
+  #armIdle(): void {
+    if (!this.#headed || this.#done) return;
+    clearTimeout(this.#idleTimer);
+    const { idleMs, workerId } = this.init;
+    this.#idleTimer = setTimeout(() => {
+      this.#fail(
+        new DispatchError(
+          "WORKER_UNREACHABLE",
+          `worker ${workerId} sent nothing on the relayed response for ${String(idleMs)} ms`,
+          { workerId },
+        ),
+      );
+    }, idleMs);
   }
 
   #invalid(): void {
@@ -271,7 +303,8 @@ class Exchange {
     }
     switch (error.reason) {
       case "aborted":
-        // why: the worker's `relay.request` answer says why it aborted; the deadline ends the wait when none comes.
+        // why: the worker's `relay.request` answer says why it aborted; when none comes, the deadline ends the wait,
+        // or after the head the idle bound does.
         this.#peerAborted = true;
         if (this.#answered) this.#fail(this.#endedEarly());
         return;
@@ -368,7 +401,8 @@ class Exchange {
   #finish(): void {
     if (this.#done) return;
     this.#done = true;
-    if (this.#timer !== undefined) clearTimeout(this.#timer);
+    clearTimeout(this.#timer);
+    clearTimeout(this.#idleTimer);
     this.init.call.request.signal.removeEventListener("abort", this.#abortListener);
     this.#callerBody?.cancel().catch(() => undefined);
   }
