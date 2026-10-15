@@ -59,7 +59,12 @@ export function Sidebar(props: {
       aria-label="Console"
     >
       <div className="sidebar-top">
-        <Wordmark short={collapsed} />
+        <span className="sidebar-mark-full">
+          <Wordmark />
+        </span>
+        <span className="sidebar-mark-short">
+          <Wordmark short />
+        </span>
         <button
           type="button"
           className="sidebar-menu"

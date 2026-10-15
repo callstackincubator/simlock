@@ -66,6 +66,15 @@
   display: none;
 }
 
+.sidebar-mark-short,
+.sidebar-collapsed .sidebar-mark-full {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-mark-short {
+  display: inline-flex;
+}
+
 .sidebar-nav {
   display: flex;
   flex-direction: column;
@@ -225,8 +234,18 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .sidebar-top {
+  .sidebar-top,
+  .sidebar-collapsed .sidebar-top {
+    justify-content: space-between;
     padding: 0;
+  }
+
+  .sidebar-collapsed .sidebar-mark-full {
+    display: inline-flex;
+  }
+
+  .sidebar-collapsed .sidebar-mark-short {
+    display: none;
   }
 
   .sidebar-menu {

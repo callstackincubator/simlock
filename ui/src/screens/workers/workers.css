@@ -81,5 +81,6 @@
 }
 
 .device-sub .id {
-  max-width: 100%;
+  display: inline;
+  max-width: none;
 }
