@@ -1,7 +1,7 @@
 # Agent-device edge
 
 Does: runs one agent-device daemon per worker and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
-Entry: `index.ts` → `createAgentDeviceEdgeParts` (worker), `createGatewayAgentDeviceFrontParts` (gateway), `createAgentDeviceFront`, `AgentDeviceSupervisor`.
+Entry: `index.ts` → `createGatewayAgentDeviceFrontParts` (gateway), `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`; the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds `AgentDeviceSupervisor`), loaded by the module host.
 Uses: ports, http (session, errors, token identity), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
 Imported by: the module registry (`definition.ts` only); `daemon/main.ts` loads `index.ts` with a dynamic `import()` on a gateway that has it on (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
 Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.

@@ -790,8 +790,8 @@ describe("optional modules: stop hooks", () => {
     expect(messages.indexOf("drain done")).toBeLessThan(messages.indexOf("Daemon stopping"));
   });
 
-  it("beforeDrain runs after agent-device's waiting allocates are cancelled through leasing", async () => {
-    const cancelledAtDrain: number[] = [];
+  it("by the time the stop ends, agent-device's waiting allocate is cancelled through leasing and another module's beforeDrain has run", async () => {
+    const drainRan: boolean[] = [];
     let directory = "";
     const rig = await start({
       http: true,
@@ -801,14 +801,7 @@ describe("optional modules: stop hooks", () => {
           fakeModule({
             hooks: {
               beforeDrain: async () => {
-                const history = await readFile(join(directory, "events.jsonl"), "utf8");
-                cancelledAtDrain.push(
-                  history
-                    .split("\n")
-                    .filter(
-                      (line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'),
-                    ).length,
-                );
+                drainRan.push(true);
               },
             },
             name: "alpha",
@@ -850,7 +843,12 @@ describe("optional modules: stop hooks", () => {
     await rig.daemon.stop("test");
     await allocate;
 
-    expect(cancelledAtDrain).toEqual([1]);
+    const history = await readFile(join(directory, "events.jsonl"), "utf8");
+    const cancelled = history
+      .split("\n")
+      .filter((line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'));
+    expect(drainRan).toEqual([true]);
+    expect(cancelled).toHaveLength(1);
   });
 
   it("beforeDriversDispose finishes before any driver's dispose starts", async () => {
