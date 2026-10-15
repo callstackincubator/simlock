@@ -3,11 +3,12 @@
 - **Status:** Proposed
 - **Date:** 2026-10-15
 - **Issue:** [#593](https://github.com/callstackincubator/simlock/issues/593)
-- **Supersedes:** nothing. Narrows [ADR
+- **Supersedes:** nothing. Amends [ADR
   0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md)
-  §4, the line "Unchanged: the 330 s deadline over the whole exchange": a
-  relay whose caller asks for it is bounded up to its response head only
-  (§7). Adds a second relay target beside agent-device's ([ADR
+  §4, the line "Unchanged: the 330 s deadline over the whole exchange": for
+  every relay, the 330 s deadline now covers only the wait for a channel
+  and for the response head, and after the head a 330 s idle timer bounds
+  the body (§7). Adds a second relay target beside agent-device's ([ADR
   0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) §2)
   and a second optional capability to the driver interface.
 - **Depends on:** ADR 0030 (the optional-module contract; not merged yet,
@@ -52,7 +53,7 @@ relays a body with no end, and whether a stream is a business event.
 flowchart LR
   HOST["module host (ADR 0030)"] --> ST["stream/ (new)"]
   ST -->|"lease-end hook"| L["leasing (ADR 0024)"]
-  ST -->|"screen.open"| DRV["Driver.screen (new, optional)"]
+  ST -->|"screenCapture.open"| DRV["Driver.screenCapture (new, optional)"]
   IOS["drivers/ios"] -.implements.-> DRV
   AND["drivers/android"] -.implements.-> DRV
   IOS --> T["capture tool (vendor/screen-capture)"]
@@ -140,18 +141,19 @@ stateDiagram-v2
 
 - **Registered before it starts.** The worker adds a capture to its
   registry of running captures, keyed by lease, before it asks the driver
-  to open the screen. The entry holds an abort controller, whose signal is
-  the one the driver's `open` gets. A lease that ends while a capture is
-  starting therefore aborts that start, and a screen that opens after the
-  abort is closed at once. Each exit of a capture removes its entry
-  exactly once.
-- **The lease end stops it.** The module's lease-end hook (ADR 0030's
-  `beforeDeviceReclaim`, through ADR 0024's port) aborts every capture of
-  the ended lease, then resolves without waiting for the capture
-  processes to exit. The reclaim does not wait on a video tool; what the
-  stop has not finished on an Android emulator, the reclaim sweeps (§6).
-  A lease end by any route (release, release-all, expiry, device lost,
-  startup) stops the stream, viewers connected or not.
+  to open the screen. A lease that ends while a capture is starting
+  therefore finds it, and a screen that opens after that is closed at
+  once. After the first frame the worker reads the lease again; a lease
+  that ended in between closes the capture instead of answering `200`.
+  Each exit of a capture removes its entry exactly once.
+- **The lease end stops it, before the reclaim.** The module's lease-end
+  hook (ADR 0030's `beforeDeviceReclaim`, through ADR 0024's port) closes
+  every capture of the ended lease and waits for those closes to finish.
+  The wait is bounded by each driver's `close` and by leasing's own signal
+  (ADR 0024 §2), so the reclaim starts on a device nothing films. What a
+  daemon killed mid-capture left on an Android emulator, the reclaim
+  sweeps (§6). A lease end by any route (release, release-all, expiry,
+  device lost, startup) stops the stream, viewers connected or not.
 - **Silence ends it.** A capture that writes nothing for 30 s ends its
   stream with an error, before and after the first frame. A viewer sees a
   stream fail, never a frozen picture that looks live. Both platforms paint
@@ -159,45 +161,51 @@ stateDiagram-v2
   second), so 30 s means the capture is broken.
 - **The daemon stopping stops it.** The module's `beforeDriversDispose`
   hook closes every capture before a driver is disposed, so the Android
-  driver never stops its adb server under a running tunnel.
+  driver never stops its adb server under a running capture.
 - **A viewer that stops reading.** Through a gateway, the byte channel
   resets after a write waits 60 s for credit (ADR 0028 §1), which aborts the
   relay and stops the capture. On a worker answering directly, the
   capture is bounded by its lease.
 
 Timers and processes go through ports (architecture rule 9): the clock,
-the process runner, and a loopback socket port for the Android tunnel. A
+the process runner, and a loopback socket port for the Android client's
+connection to the adb server. A
 fake clock then decides when silence fires, which also removes the PoC's
 flaky silence test.
 
 ### 4. A driver films a device through one optional capability
 
-`Driver` gains one optional field, in one shape, as `passthrough` is today:
+`Driver` gains one optional field, in one shape, as `passthrough` is today.
+It is declared in `src/core/screen.ts`:
 
 ```ts
-interface DriverScreen {
+interface ScreenCapture {
   /** Why this driver cannot film any device now; undefined when it can. */
-  unavailableReason(): Promise<string | undefined>;
-  /** Throws ScreenNotSupportedError for a device this driver never films. */
+  unavailable(): Promise<string | undefined>;
+  /** Throws ScreenNotSupportedError or ScreenUnavailableError. */
   open(
     device: VirtualDriverDevice | PhysicalDriverDevice,
-    picture: { fps: number; maxDimension: number; bitrateKbps: number },
-    signal: AbortSignal,
-  ): Promise<{ body: ReadableStream<Uint8Array>; close(): Promise<void> }>;
+    settings: { fps: number; maxDimension: number; bitrateKbps: number },
+  ): Promise<ScreenFeed>;
 }
-// Driver: readonly screen?: DriverScreen;
+interface ScreenFeed {
+  readonly body: ReadableStream<Uint8Array>;
+  close(): Promise<void>;
+}
+// Driver: readonly screenCapture?: ScreenCapture;
 ```
 
 - The body is the envelope of §2, meta frame first. The tag values and the
-  meta shape are declared beside `DriverScreen` in the core, once, and both
-  drivers and the stream module read them from there.
+  meta shape are declared in `src/core/screen.ts`, once, and both drivers
+  and the stream module read them from there.
 - A driver films only devices it owns, with its own tools and its own
   per-device environment (`leaseEnvironment(device)`). The PoC's flattened
   environment, in which an Android capture would see iOS's keys, is gone.
-- The stream module maps outcomes without naming a platform: no `screen`
-  field or a `ScreenNotSupportedError` is `STREAM_NOT_SUPPORTED`; an
-  `unavailableReason`, or an `open` that fails before the meta frame, is
-  `STREAM_UNAVAILABLE`.
+- The stream module maps outcomes without naming a platform. No
+  `screenCapture` field, or a `ScreenNotSupportedError`, is
+  `415 STREAM_NOT_SUPPORTED`. A reason from `unavailable()`, a
+  `ScreenUnavailableError`, or an `open` that fails before the meta frame
+  is `503 STREAM_UNAVAILABLE`.
 - Physical devices are refused not-supported by both drivers in v1.
 
 ### 5. iOS: a vendored capture tool, shipped built
@@ -214,9 +222,10 @@ serve-sim (Apache-2.0) under `vendor/screen-capture/`.
   exited 500 ms after its stdin closed gets `SIGKILL`.
 - The release workflow builds the tool on macOS, and the npm package
   carries the binary. Nothing is built or downloaded on the user's machine
-  (safety rule 4). The driver finds it inside the installed package. When
-  it is not there (a checkout that has not built it), `unavailableReason`
-  says so, and requests get `STREAM_UNAVAILABLE`.
+  (safety rule 4). The driver runs the binary inside the installed
+  package; `drivers.ios.screenCaptureCommand` overrides that path, for a
+  checkout or a hand-built tool. When the program is not there,
+  `unavailable()` says so, and requests get `STREAM_UNAVAILABLE`.
 - A physical iPhone is refused: the tool reads a simulator's framebuffer
   and has no path to a phone.
 
@@ -238,9 +247,12 @@ For each capture the client:
    `send_dummy_byte=true`, `cleanup=true`, `video_codec=h264`, and
    `max_size`, `video_bit_rate` and `max_fps` from the picture options. No
    option that changes a device setting is passed;
-3. opens a tunnel, `adb forward tcp:0 localabstract:scrcpy_<scid>`, then
-   connects to it and retries until bytes arrive, because adb accepts the
-   connection before the server listens;
+3. connects to the server's socket through the adb server's own
+   smart-socket protocol: it opens a connection to Simlock's adb server,
+   sends `host:transport:<serial>`, then `localabstract:scrcpy_<scid>`,
+   and retries until the device socket accepts. No `adb forward` is
+   created, so no host port is opened and nothing host-side is left to
+   leak;
 4. turns scrcpy's stream into the envelope: the codec header gives the
    meta frame, a config packet gives the description (an `avcC` built from
    its SPS and PPS), and each media packet becomes a key or delta frame,
@@ -250,10 +262,9 @@ For each capture the client:
 
 `cleanup=true` with no setting options only unlinks the jar when the server
 ends, and it runs in its own process, so it survives a `SIGKILL` of the
-server. On stop the client closes the socket, stops the server and removes
-its forward. The Android reclaim also removes every Simlock forward to a
-`scrcpy_` socket and every `simlock-scrcpy-*.jar` on that emulator, which
-covers a daemon that died mid-capture.
+server. On stop the client closes the socket and stops the server. The
+Android reclaim also removes every `simlock-scrcpy-*.jar` on that emulator,
+which covers a daemon that died mid-capture.
 
 A physical Android device is refused in v1. It is reached through the
 host's default adb server (safety rule 9), and pushing and running a
@@ -277,12 +288,20 @@ channels:
   not `available` in its view gets no relay; the caller gets
   `STREAM_UNAVAILABLE` with the worker's reason. A disconnected worker is
   `WORKER_UNREACHABLE`.
-- **The deadline bounds the head only.** The relay call gains an option, set
-  by its caller, that clears the relay's deadline once the response head
-  has arrived. The stream module sets it; agent-device does not, and keeps
-  the 330 s over the whole exchange. The relay names no target to decide
-  this (architecture rule 21). The body is then bounded by the worker's
-  silence timer, the lease, and the channel's 60 s waiting write (§3).
+- **The deadline bounds the head; silence bounds the body.** This amends
+  ADR 0028 §4 for every relay target alike. The gateway relay's 330 s
+  deadline now covers only the wait for a channel and for the response
+  head. Once the head is in, an idle timer bounds the body: it restarts on
+  every chunk, and when 330 s pass with no response bytes it ends the
+  exchange as a dead worker does (`WORKER_UNREACHABLE`, `relay.cancel`,
+  the channel aborted). The default is `DEFAULT_IDLE_MS`, and
+  `GatewayRelayOptions.idleMs` sets it. The relay still names no target
+  (architecture rule 21). 330 s, not less, because an agent-device `/rpc`
+  body may sit silent between progress lines, and agent-device's proxy
+  already aborts every exchange 300 s after it starts on the worker, so
+  agent-device behaves as before. A stream body is bounded first by the
+  worker's 30 s silence timer, its lease and the channel's 60 s waiting
+  write (§3); the idle timer is the gateway's own backstop.
 - **The gateway forwards bytes unparsed.** It reads the worker's head and
   never a video byte.
 - **A worker's answer is a claim.** On a `200`, each picture header must be
@@ -303,14 +322,14 @@ sequenceDiagram
   G->>G: index: L1 on W, owner ok, W stream available
   G->>W: relay target stream, requester gw:…:R, worker lease id
   W->>W: registry: requester matches, register capture
-  W-->>G: 200 + headers (deadline cleared)
+  W-->>G: 200 + headers (deadline ends, idle timer starts)
   G->>G: headers in bounds
-  G-->>B: 200, body bytes as they come
+  G-->>B: 200, body bytes as they come (each restarts the idle timer)
   alt lease ends while watched
-    W->>W: capture aborted, channel ends
+    W->>W: captures closed before reclaim, channel ends
     G-->>B: body ends
-  else uplink drops
-    G-->>B: body errors
+  else uplink drops, or 330 s with no bytes
+    G-->>B: body errors (WORKER_UNREACHABLE)
   end
 ```
 
@@ -350,7 +369,8 @@ who watched what is a separate feature with its own retention, as it is for
 `stream.fps` (1–60, default 30), `stream.maxDimension` (96–4096, default
 720) and `stream.bitrateKbps` (64–40000, default 1500). A gateway reads
 only `stream.enabled` and warns about the rest, as ADR 0030 §5 says.
-There is no `stream.command`: the tool is the driver's.
+There is no `stream.command`: the capture program is the driver's. The iOS
+driver's `drivers.ios.screenCaptureCommand` overrides its path (§5).
 
 ## Consequences
 
@@ -361,11 +381,12 @@ There is no `stream.command`: the tool is the driver's.
   two captures.
 - The npm package grows by a macOS binary and the scrcpy jar (about
   730 KB). The release workflow needs a macOS job to build the binary.
-- Simlock opens its first host-to-guest tunnel and writes its first file
-  into an emulator. During the second or so before the client connects, any
-  local process that can reach the worker's loopback could connect to the
-  forward first. This is the same trust in loopback that ADR 0023 accepts
-  for the agent-device daemon.
+- Simlock opens its first connection into an emulator and writes its first
+  file there. Because it goes through the adb server's smart-socket
+  protocol, no host port is opened and no `adb forward` can be left behind.
+- Every relayed body, agent-device's included, is now bounded by 330 s of
+  silence instead of 330 s in total. An agent-device exchange still ends
+  by 300 s, at its proxy.
 - scrcpy documents its server protocol as internal and checks its version
   by exact string. Moving off 5.0.1 is a deliberate upgrade of the jar,
   the client and the notice together. It has had one breaking wire change
@@ -407,4 +428,16 @@ There is no `stream.command`: the tool is the driver's.
   it does not need to, at a cost on every stream.
 - **`stream.opened` and `stream.ended` events.** Rejected: §8.
 - **The relay knows `stream` needs no total deadline.** Rejected: the relay
-  would name an implementation. The caller asks for head-only.
+  would name an implementation.
+- **A head-only deadline that the caller asks for, with no bound after
+  the head.** Rejected: a relayed body would then have no bound of the
+  gateway's own. One idle timer for every target bounds every body and
+  needs no option.
+- **An idle timer shorter than 330 s.** Rejected: an agent-device `/rpc`
+  body may be silent between progress lines for most of its proxy's 300 s.
+- **`adb forward` to a host port (the draft Android capture program).**
+  Rejected: it opens a loopback port any local process can reach first,
+  and leaves a forward to remove after a crash. The smart-socket connection opens neither.
+- **The lease-end hook resolves without waiting for captures to close.**
+  Rejected: the reclaim could start while a capture still films the
+  device it is wiping.
