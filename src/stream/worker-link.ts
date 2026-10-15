@@ -66,7 +66,7 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
         slot.attach(feed.close);
         stream = await readScreenFeed(feed, options.bounds);
       } catch (error) {
-        await slot.release();
+        slot.abandon();
         if (slot.ended.aborted) throw unknownLease(leaseId);
         throw refusalFor(error);
       }

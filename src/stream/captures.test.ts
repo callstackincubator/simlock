@@ -47,11 +47,19 @@ describe("the capture registry", () => {
     expect(closes).toBe(1);
   });
 
-  it("a released capture no longer counts as its lease's", async () => {
+  it("an abandoned open no longer counts as its lease's", async () => {
     const captures = createCaptureRegistry();
-    await captures.begin("lse_1").release();
+    captures.begin("lse_1").abandon();
     expect(captures.leases()).toEqual([]);
     expect(await captures.stop("lse_1")).toBe(0);
+  });
+
+  it("a released capture counts as its lease's until it is closed", async () => {
+    const captures = createCaptureRegistry();
+    const slot = captures.begin("lse_1");
+    slot.attach(async () => undefined);
+    await slot.release();
+    expect(captures.leases()).toEqual([]);
   });
 });
 

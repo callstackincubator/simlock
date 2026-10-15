@@ -52,7 +52,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "streams a leased simulator's screen as meta, an avcC description and an H.264 key frame; a viewer leaving and a lease ending under a viewer each stop the capture",
+      "streams a leased simulator's screen as meta, an avcC description and an H.264 key frame; a still screen stays open past the silence bound; a viewer leaving and a lease ending under a viewer each stop the capture",
       { timeout: 480_000 },
       async () => {
         expect(await capturesRunning(), "a capture was already running before the test").toBe(0);
@@ -122,6 +122,13 @@ describe.skipIf(process.platform !== "darwin")(
           const second = await open(new AbortController().signal);
           await readFrames(second.reader, (read) =>
             read.some((frame) => frame.tag === TAG.keyframe),
+          );
+          // why: nothing touches the simulator here, so its screen is still; the stream must stay
+          // open well past the 30 s silence bound on the capture's own idle repaints.
+          const stillUntil = Date.now() + 35_000;
+          const held = await readFrames(second.reader, () => Date.now() > stillUntil);
+          expect(held.length, "a still simulator's stream sent nothing for 35 s").toBeGreaterThan(
+            0,
           );
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);

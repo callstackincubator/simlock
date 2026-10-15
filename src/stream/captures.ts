@@ -9,6 +9,11 @@ export interface CaptureSlot {
   // film before it hands a picture out.
   readonly ended: AbortSignal;
   attach(close: () => Promise<void>): void;
+  // why: an open that failed has already cleaned up after itself; this settles and forgets the slot
+  // with nothing to close.
+  abandon(): void;
+  // why: the viewer is gone. The slot stays registered until its open settles and what it attached
+  // is closed, so a lease that ends meanwhile still waits for the device to be left alone.
   release(): Promise<void>;
 }
 
@@ -75,11 +80,14 @@ export function createCaptureRegistry(): CaptureRegistry {
           if (slot.released || slot.controller.signal.aborted) void closeSlot(slot);
         },
         ended: slot.controller.signal,
-        release: async () => {
-          slot.released = true;
+        abandon: () => {
           slot.settle();
           forget(leaseId, slot);
+        },
+        release: async () => {
+          slot.released = true;
           await closeSlot(slot);
+          forget(leaseId, slot);
         },
       };
     },

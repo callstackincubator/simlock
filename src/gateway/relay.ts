@@ -70,7 +70,7 @@ class Exchange {
   #channel: LinkChannel | undefined;
   #reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #ahead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
-  #timer: ReturnType<typeof setTimeout> | undefined;
+  #timer: TimerHandle | undefined;
   #idleTimer: TimerHandle | undefined;
   #callerBody: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #requestSent = false;
@@ -92,7 +92,7 @@ class Exchange {
       return;
     }
     signal.addEventListener("abort", this.#abortListener, { once: true });
-    this.#timer = setTimeout(() => {
+    this.#timer = this.init.clock.setTimer(deadlineMs, () => {
       this.#fail(
         new DispatchError(
           "WORKER_UNREACHABLE",
@@ -100,7 +100,7 @@ class Exchange {
           { workerId },
         ),
       );
-    }, deadlineMs);
+    });
     void this.#run();
   }
 
@@ -212,7 +212,7 @@ class Exchange {
     }
     this.#headed = true;
     // why: once the head is in, the body is bounded by silence, not by the deadline, so a live stream is not cut.
-    clearTimeout(this.#timer);
+    if (this.#timer !== undefined) this.init.clock.cancel(this.#timer);
     this.#armIdle();
     const method = this.init.call.request.method;
     if (method === "HEAD" || NO_BODY_STATUSES.has(status)) {
@@ -405,7 +405,7 @@ class Exchange {
   #finish(): void {
     if (this.#done) return;
     this.#done = true;
-    clearTimeout(this.#timer);
+    if (this.#timer !== undefined) this.init.clock.cancel(this.#timer);
     if (this.#idleTimer !== undefined) this.init.clock.cancel(this.#idleTimer);
     this.init.call.request.signal.removeEventListener("abort", this.#abortListener);
     this.#callerBody?.cancel().catch(() => undefined);

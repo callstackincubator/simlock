@@ -243,6 +243,40 @@ describe("the worker's stream link", () => {
     expect((await refusalOf(served)).code).toBe("UNKNOWN_LEASE");
   });
 
+  it("a lease that ends after the viewer left, while the open is still running, still waits for that open", async () => {
+    let finishOpening!: () => void;
+    const registry = new TestRegistry(
+      [{ deviceId: "dev_1", id: "lse_mine", ownerId: "tok_agent", requesterId: "agent-1" }],
+      [{ id: "dev_1", platform: "android" }],
+    );
+    const captures = createCaptureRegistry();
+    const link = createWorkerStreamLink({
+      bounds: { clock: new FakeClock(), silenceMs: 1_000, startMs: 5_000 },
+      captures,
+      registry,
+      screens: {
+        openScreen: () =>
+          new Promise((_resolve, reject) => {
+            finishOpening = () => reject(new Error("stopped"));
+          }),
+      },
+      settings: SETTINGS,
+    });
+    const viewer = new AbortController();
+    const served = link.serve("lse_mine", AGENT, viewer.signal);
+    await flush();
+    viewer.abort();
+    await flush();
+    let ended = false;
+    const stopping = captures.stop("lse_mine").then(() => (ended = true));
+    await flush();
+    expect(ended).toBe(false);
+    finishOpening();
+    await stopping;
+    await refusalOf(served);
+    expect(captures.leases()).toEqual([]);
+  });
+
   it("registers a running capture under its lease, and a lease that ends under a viewer ends its picture", async () => {
     const harness = setup();
     const { feed, served } = await opening(harness);
