@@ -513,7 +513,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(other.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
 
-    workers.refresh("wrk_a", {}); // any refresh re-runs dispatch, exactly as a real one would
+    workers.refresh("wrk_a", {});
 
     const grant = await grantPromise;
     expect(grant.lease.worker?.id).toBe("wrk_b");
@@ -598,7 +598,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
 
     directory.reachableButNoClient.delete("wrk_a");
-    workers.refresh("wrk_a", {}); // any refresh re-runs dispatch, exactly as a real one would
+    workers.refresh("wrk_a", {});
     await tick();
 
     const leaseRequests = (client: ScriptedWorkerClient) =>
@@ -4299,7 +4299,7 @@ describe("FleetLeaseCoordinator routes a physical request by the enrolled device
     expect(leaseRequests(client)).toHaveLength(1);
 
     for (let refresh = 0; refresh < 3; refresh += 1) {
-      clock.advance(1_000); // a new lastSeenAt on every refresh, as a real one has
+      clock.advance(1_000);
       workers.refresh("wrk_a", { devices: [iphone()] });
       await tick();
     }
