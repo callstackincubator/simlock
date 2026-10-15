@@ -88,8 +88,21 @@ export {
   DriverCatalog,
   NoDriverError,
   type ModelPreferences,
+  type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export {
+  encodeScreenFrame,
+  encodeScreenMeta,
+  type ScreenCapture,
+  type ScreenFeed,
+  SCREEN_FRAME_HEADER_BYTES,
+  SCREEN_FRAME_TAG,
+  type ScreenMeta,
+  ScreenNotSupportedError,
+  type ScreenSettings,
+  ScreenUnavailableError,
+} from "./screen.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export {

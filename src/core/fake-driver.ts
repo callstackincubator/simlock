@@ -38,6 +38,7 @@ import {
   UnknownModelError,
   uninstallPlan,
 } from "./driver.js";
+import type { ScreenCapture } from "./screen.js";
 
 export type FakeDriverOperation =
   | "resolveSpec"
@@ -126,6 +127,7 @@ export interface FakeDriverOptions {
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
   /** why: absent by default, so two fakes in one catalog do not both answer to the same tool. */
   readonly passthroughTools?: readonly string[];
+  readonly screenCapture?: ScreenCapture;
   readonly passthrough?: (
     tool: string,
     device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
@@ -188,6 +190,7 @@ export class FakeDriver implements Driver {
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTools: readonly string[] | undefined;
+  readonly screenCapture: ScreenCapture | undefined;
   readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
@@ -225,6 +228,7 @@ export class FakeDriver implements Driver {
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
     this.passthroughTools = options.passthroughTools;
+    this.screenCapture = options.screenCapture;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
