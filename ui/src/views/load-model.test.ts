@@ -73,7 +73,9 @@ describe("how full each figure is", () => {
   it("rounds a gauge's percent the way the figure above it does", () => {
     const shown = (percent: number) => Number(formatBusyPercent(percent).replace("%", ""));
 
-    for (const busyPercent of [34.4, 34.5, 0.5, 99.5]) {
+    // why: the last is the float just under a half, where the two roundings part company — the only
+    // input that tells this pair of roundings apart, so the title holds for every case here.
+    for (const busyPercent of [34.4, 34.5, 0.5, 99.5, 0.49999999999999994]) {
       const cpu = { busyPercent, cores: 10, limited: false };
 
       expect(loadGauges({ ...FULL, cpu }).cpu).toBe(shown(busyPercent));

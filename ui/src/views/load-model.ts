@@ -48,7 +48,9 @@ export function loadGauges(load: WorkerLoad): LoadGauges {
 }
 
 function clampPercent(percent: number): number {
-  return Math.round(Math.min(100, Math.max(0, percent)));
+  // why: the same round as the figures above the gauge, not Math.round — the two differ just under
+  // a half, where the text would say 1% and the bar would draw 0.
+  return roundHalfUp(Math.min(100, Math.max(0, percent)), 0);
 }
 
 function usedPercent(available: number, total: number): number | undefined {
