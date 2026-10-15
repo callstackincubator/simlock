@@ -1,6 +1,6 @@
-// fallow-ignore-next-line unused-type -- the shape of a definition's `config`, which a module's `definition.ts` names.
+// fallow-ignore-next-line unused-type -- part of the contract a module imports from this index; no module is registered yet.
 export type { ModuleConfig } from "./types.js";
-// fallow-ignore-next-line unused-type -- the dependencies a module's `mount` receives, which a module's worker names.
+// fallow-ignore-next-line unused-type -- part of the contract a module imports from this index; no module is registered yet.
 export type { MountDeps } from "./types.js";
 export type {
   ModuleCapabilitySource,
