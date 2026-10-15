@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import {
@@ -37,6 +37,12 @@ interface WorkerView {
     readonly memory?: { readonly availableBytes: number; readonly totalBytes: number };
     readonly disk?: { readonly freeBytes: number; readonly totalBytes: number };
   };
+}
+
+// why: the test rewrites one field of this route's own answer, so it names the one path it touches
+// rather than the whole view; everything else passes through as the daemon sent it.
+interface WorkerPayload {
+  load?: { memory?: { pressure?: string } } | undefined;
 }
 
 interface Status {
@@ -515,7 +521,12 @@ test.describe("the workers views", () => {
         if (wanted === undefined) return false;
         const painted = await paintedGauges(panel);
         const now = (await workerList(daemon))[0]?.load;
-        if (JSON.stringify(before) !== JSON.stringify(now)) return false;
+        // why: what has to hold still is the level, not the reading — a fresh sample that rounds to
+        // the same percents is the same pair of figures and bars. The reading's own stamp moves
+        // between two reads even when nothing in it does, so comparing it here only ever costs
+        // retries.
+        const since = now === undefined ? undefined : gaugePercents(now);
+        if (since === undefined || JSON.stringify(wanted) !== JSON.stringify(since)) return false;
         if (painted.some((bar) => bar.sliding)) return false;
         return fillsMatch(painted, wanted);
       },
@@ -559,7 +570,7 @@ test.describe("the workers views", () => {
     expect(geometry.left).toBeCloseTo(0, 0);
   });
 
-  test("a load gauge's fill takes its colour from the stylesheet and never the accent, in both themes", async ({
+  test("each memory pressure paints its gauge in that pressure's colour, and never the accent, in both themes", async ({
     daemon,
     page,
   }) => {
@@ -567,57 +578,88 @@ test.describe("the workers views", () => {
     await openConsole(page, daemon);
     const shown = card(page, host?.id ?? "");
     await expect(fact(shown, "Load")).toHaveText(/^CPU .*memory .*disk /);
+    // why: only macOS reports a memory pressure, so a Linux lane can never see a warn or critical
+    // gauge from a live reading. This answers the page's own read of the worker list with one field
+    // of the reading changed and every other field left as the daemon sent it, so what is painted
+    // is the real component's doing. The list is read again per request, so the reading stays as
+    // fresh as the daemon's own.
+    let pressure: string | undefined;
+    await page.route(
+      (url) => url.pathname === "/v1/workers",
+      async (route: Route) => {
+        const response = await route.fetch();
+        const listed = (await response.json()) as { workers: WorkerPayload[] };
+        for (const worker of listed.workers) {
+          const memory = worker.load?.memory;
+          if (memory === undefined) continue;
+          if (pressure === undefined) delete memory.pressure;
+          else memory.pressure = pressure;
+        }
+        await route.fulfill({ json: listed, response });
+      },
+    );
     await shown.getByRole("link", { name: host?.id ?? "" }).click();
+
     const panel = page.getByRole("region", { name: "Load", exact: true });
     await expect(panel.locator(".load-bar").first()).toBeVisible();
-
-    for (const colorScheme of ["light", "dark"] as const) {
-      await page.emulateMedia({ colorScheme });
-      const { accent, tones } = await readStatuses(page);
-      const fills = await panel.locator(".load-bar").evaluateAll((bars) =>
+    const memory = fact(panel, "Memory");
+    const paintedFills = () =>
+      panel.locator(".load-bar").evaluateAll((bars) =>
         bars.map((bar) => ({
           tone: /load-bar-(\w+)/.exec(bar.className)?.[1] ?? "",
           colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
         })),
       );
-      // why: CI is Linux, and only macOS reports a pressure, so a live worker can only ever paint
-      // the idle tone here. These ask the stylesheet what the other three would paint, so a tone
-      // rule cannot be deleted with the suite green; they check the colour rule only.
-      const drawn = await page.evaluate(() => {
-        const probe = document.createElement("span");
-        probe.className = "load-bar";
-        const seen = ["ok", "warn", "error", "idle"].map((tone) => {
-          probe.className = `load-bar load-bar-${tone}`;
-          const fill = document.createElement("span");
-          fill.className = "load-bar-fill";
-          probe.append(fill);
-          document.body.append(probe);
-          const colour = getComputedStyle(fill).backgroundColor;
-          probe.remove();
-          return colour;
-        });
-        return seen;
+    // why: the page polls every second, so each level shows within about that. The memory gauge is
+    // identified by its own row, so a tone read here cannot be a leftover of the last level.
+    const memoryFill = () =>
+      memory.evaluate((cell) => {
+        const bar = cell.querySelector(".load-bar") as HTMLElement;
+        return {
+          tone: /load-bar-(\w+)/.exec(bar.className)?.[1] ?? "",
+          colour: getComputedStyle(bar.firstElementChild as HTMLElement).backgroundColor,
+        };
       });
 
-      expect(fills.length).toBeGreaterThan(0);
-      for (const fill of fills) {
-        const context = `${fill.tone} gauge in ${colorScheme}`;
-        expect(fill.tone, context).not.toBe("");
-        expect(fill.colour, context).toBe(
-          tones[TONES.indexOf(fill.tone as (typeof TONES)[number])],
-        );
-        expect(fill.colour, context).not.toBe(accent);
-      }
+    // why: the four levels are the four tone rules, so each one is seen in each theme by the real
+    // component; a rule deleted, swapped or given the accent fails a named assertion here.
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      const { accent, tones } = await readStatuses(page);
 
-      for (const [index, tone] of TONES.entries()) {
-        const context = `${tone} gauge rule in ${colorScheme}`;
-        expect(drawn[index], context).toBe(tones[index]);
-        expect(drawn[index], context).not.toBe(accent);
+      for (const [level, tone] of [
+        ["normal", "ok"],
+        ["warn", "warn"],
+        ["critical", "error"],
+        [undefined, "idle"],
+      ] as const) {
+        pressure = level;
+        const want = tones[TONES.indexOf(tone)];
+        await expect
+          .poll(() => memoryFill(), {
+            timeout: 10_000,
+            message: `the ${level ?? "absent"} pressure to paint the ${tone} gauge in ${colorScheme}`,
+          })
+          .toEqual({ tone, colour: want });
+        expect(want, `the ${tone} gauge in ${colorScheme}`).not.toBe(accent);
+
+        // why: every gauge on the panel, not only the one driven above: each must show the colour of
+        // the tone class it carries, so none is painted by a stray inline colour or by the accent.
+        const fills = await paintedFills();
+        expect(fills.length).toBeGreaterThan(1);
+        for (const fill of fills) {
+          const context = `${fill.tone} gauge in ${colorScheme}`;
+          expect(fill.tone, context).not.toBe("");
+          expect(fill.colour, context).toBe(
+            tones[TONES.indexOf(fill.tone as (typeof TONES)[number])],
+          );
+          expect(fill.colour, context).not.toBe(accent);
+        }
       }
     }
   });
 
-  test("a load gauge's fill slides to a new level over --duration, and not at all under reduced motion", async ({
+  test("a load gauge's fill transitions its width over the document's duration token, and over none under reduced motion", async ({
     browserName,
     daemon,
     page,
