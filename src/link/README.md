@@ -1,8 +1,11 @@
 # Link
 
 Does: wraps one uplink transport connection; carries text messages and byte channels, small messages first.
-Entry: `index.ts` → `createLink(transport, { end, clock, logger })` → `LinkConnection`.
-Uses: ports (`UplinkTransportConnection`, `IpcConnection`, `Clock`, `Logger`). Never imports: anything else.
+Entry: `index.ts` → `createLink(transport, { end, clock, logger, generateId? })` → `LinkConnection`.
+Uses: the types of ports (`UplinkTransportConnection`, `IpcConnection`, `Clock`, `Logger`). Never imports:
+anything else, nor any Node module or package (lint: `link-is-portable`, `link-imports-port-types-only`),
+so it runs in a browser or React Native. Channel ids: `generateId`, else `crypto.randomUUID`, else
+`getRandomValues`, else an error naming `generateId`; an id outside 1–32 of `[A-Za-z0-9-]` is refused.
 Imported by: daemon (`daemon/gateway-uplink.ts` wraps with `end: "worker"`; `daemon/server.ts`
 accepts channels, `daemon/relay.ts` uses them), gateway (`gateway/service.ts` wraps with `end: "gateway"`;
 `gateway/relay.ts` opens channels), simlock-client (`openChannel` on a linked connection).
