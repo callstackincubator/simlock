@@ -144,7 +144,11 @@ Write each body so the spec check finds nothing:
 
 - no Done when line its own Tests or Scope make false, none a reviewer
   could not check, no failure mode left unanswered;
-- a Tests line for every behaviour the body states, "as today" included;
+- a Tests line for every behaviour the body states, "as today" included:
+  one per behaviour with its cases in the line, never one per case, and an
+  existing test to extend where one proves the claim next to it (testing
+  rules 1 and 7). A line that claims "every", "any", an order, one write or
+  a choice names the cases that prove it (testing rule 10);
 - a seam for the tests: the entry point they drive. Prefer an existing seam
   to a new one, the highest one that can see the behaviour, and as few as
   possible, ideally one. Name an existing test file to model them on.

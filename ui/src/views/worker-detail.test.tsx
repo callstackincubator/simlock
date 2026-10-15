@@ -317,7 +317,7 @@ describe("the Capabilities row of a worker's page", () => {
       capabilities: [
         { name: "agent-device", state: "available" },
         { name: "second", state: "off" },
-        { name: "third", reason: "found 0.20.1, need 0.21.25 or later", state: "unavailable" },
+        { name: "third", reason: "found 0.20.1, need 0.21.28 or later", state: "unavailable" },
       ],
     });
 
@@ -325,7 +325,7 @@ describe("the Capabilities row of a worker's page", () => {
     expect(html).toContain(status("ok", "available"));
     expect(html).toContain(status("idle", "off"));
     expect(html).toContain(status("warn", "unavailable"));
-    expect(text(html)).toContain("third unavailable found 0.20.1, need 0.21.25 or later");
+    expect(text(html)).toContain("third unavailable found 0.20.1, need 0.21.28 or later");
   });
 
   it("says Not reported for an absent list on a running worker", () => {

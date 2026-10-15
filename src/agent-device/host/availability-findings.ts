@@ -7,7 +7,8 @@ export function agentDeviceFindings(
   if (availability.state !== "unavailable") return [];
   return [
     {
-      kind: "agent-device-unavailable",
+      kind: "module-unavailable",
+      module: "agent-device",
       message: availability.message,
       remedy: availability.remedy,
     },

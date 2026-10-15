@@ -52,10 +52,11 @@ whose tests only gained a fixture field: `file: fixture only`.
 
 Then answer:
 
-1. For each test: can it fail for the reason its title gives? Spend your
-   probes on the tests most likely to be wired to nothing: break the code
-   the title names and see whether the test goes red on an assertion. A
-   test that stays green is a finding.
+1. For each test: can it fail for the reason its title gives? Read it
+   against testing rule 10's list first; those shapes need no probe to
+   prove. Spend your probes on the tests most likely to be wired to
+   nothing: break the code the title names and see whether the test goes
+   red on an assertion. A test that stays green is a finding.
 2. Does the diff break any rule in `rules/`? Cite the file and the rule
    number.
 

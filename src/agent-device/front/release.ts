@@ -14,6 +14,15 @@ export async function release(
     return unreachableReply(reply, call, "agent-device did not answer the release");
   }
   if (leaseId === undefined || reply.reading.kind !== "success") return relay(reply);
+  await endSimlockLease(context, identity, leaseId);
+  return relay(reply);
+}
+
+export async function endSimlockLease(
+  context: FrontContext,
+  identity: TokenIdentity,
+  leaseId: string,
+): Promise<void> {
   const entry = context.map.get(leaseId);
   if (entry === undefined || entry.identity.requesterId !== identity.requesterId) {
     // why: a lease the map does not hold for this token (as after a daemon restart) is freed by simlock's own ownership check, which refuses another token's lease.
@@ -28,5 +37,4 @@ export async function release(
     }
     context.renewals.cancelIfEnded(context, leaseId);
   }
-  return relay(reply);
 }

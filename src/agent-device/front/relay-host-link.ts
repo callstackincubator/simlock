@@ -43,7 +43,7 @@ export interface FleetLeaseFacts {
   };
 }
 
-// why: the edge imports nothing from the gateway, so the gateway's parts reach the link only through this port, built where the gateway is composed.
+// why: the edge imports nothing from the gateway, so the gateway's parts reach the link only through this port, built in `gateway.ts` from the gateway context.
 export interface FleetPort {
   readonly instanceId: string;
   // why: when this gateway process started, which opens the window in which a lease it cannot place may still come back.

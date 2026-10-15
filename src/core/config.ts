@@ -114,6 +114,9 @@ export type DownloadPolicy = "never" | "on-request" | "always";
 export type DaemonMode = "worker" | "gateway";
 
 export interface Config {
+  readonly capabilities: Readonly<
+    Record<string, { readonly enabled: boolean } & Readonly<Record<string, unknown>>>
+  >;
   /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
    * the two apart. Default `"worker"`. */
   readonly mode: DaemonMode;
@@ -250,11 +253,6 @@ export interface Config {
       readonly bootAnimation: boolean;
     };
   };
-  readonly agentDevice: {
-    readonly enabled: boolean;
-    readonly command: string;
-    readonly leaseTtlCapMs?: number;
-  };
   /**
    * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
    * on `mode`:
@@ -361,7 +359,16 @@ export interface LegacyCapacityOverrides {
 
 export type ConfigOverrides = DeepPartial<Config> & LegacyCapacityOverrides;
 
+export interface ModuleConfigEntry {
+  readonly name: string;
+  readonly validator: Validator;
+  readonly defaults: unknown;
+  readonly gatewayKeys: readonly string[];
+  readonly check?: (section: never, config: Config) => void;
+}
+
 export interface LoadConfigOptions {
+  readonly modules?: readonly ModuleConfigEntry[];
   readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
   readonly configPath?: string;
@@ -374,6 +381,7 @@ type Layer = Record<string, unknown>;
 export async function loadConfig({
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
+  modules = [],
   overrides,
   systemStats,
   warn = () => {},
@@ -389,7 +397,7 @@ export async function loadConfig({
   // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
   // about.
   const mode = resolveMode([fromFile, fromOverrides]);
-  const validators = configValidators(strategy);
+  const validators = configValidators(strategy, modules);
 
   const fileConfig = normalizeLayer(
     validateConfigLayer(fromFile, "", warn, validators),
@@ -403,14 +411,15 @@ export async function loadConfig({
   );
 
   const merged = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode), fileConfig),
+    mergeConfig(defaultConfig(systemStats, strategy, mode, modules), fileConfig),
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
-  validateAgentDeviceTtlCap(merged);
   validateEventLogBounds(merged);
+  // why: a gateway reads a module's gateway keys, so a bad value stops it too.
+  runModuleChecks(merged, modules);
   if (mode === "gateway") {
-    warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
+    warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
     // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
@@ -448,16 +457,6 @@ function validateLeaseTtls(config: Config): void {
   }
 }
 
-/** why: agent-device's shortest lease window, so a cap below it would shorten leases past what agent-device keeps. */
-const MIN_AGENT_DEVICE_LEASE_TTL_MS = 5_000;
-
-function validateAgentDeviceTtlCap(config: Config): void {
-  const cap = config.agentDevice.leaseTtlCapMs;
-  if (cap !== undefined && cap > config.lease.maxTtlMs) {
-    throw invalidValue("agentDevice.leaseTtlCapMs", "at most lease.maxTtlMs");
-  }
-}
-
 /**
  * Cross-field check: the size cap has to hold the current file and at least one full rotated
  * generation, or the sweep would delete the history the moment it rotates.
@@ -482,16 +481,13 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "eventBuffer",
   "eventLog",
   "gateway",
-  "agentDevice",
+  "capabilities",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
  * `disconnectedRetentionMs`, `execTimeoutMs`, and `leaseRequestTimeoutMs` are the ones the
  * gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
-
-// why: `command` names the program a worker runs, and a gateway runs none.
-const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
 
 /**
  * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -502,7 +498,11 @@ const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
  * Ignoring rather than failing is the deliberate choice the ADR makes, and it is what lets one
  * config file be copied between a worker and a gateway while only `mode` differs.
  */
-function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
+function warnWorkerOnlyKeys(
+  layers: readonly unknown[],
+  warn: Warn,
+  modules: readonly ModuleConfigEntry[],
+): void {
   for (const layer of layers) {
     const object = requireObject(layer, "config");
     for (const key of Object.keys(object)) {
@@ -519,15 +519,34 @@ function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
         `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
         `and this daemon runs in gateway mode.`,
     );
-    warnWorkerOnlySubKeys(
-      object,
-      "agentDevice",
-      WORKER_ONLY_AGENT_DEVICE_KEYS,
-      warn,
-      (key) =>
-        `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
-        `and this daemon runs in gateway mode.`,
-    );
+    warnWorkerOnlyModuleKeys(object, modules, warn);
+  }
+}
+
+function warnWorkerOnlyModuleKeys(
+  layer: Record<string, unknown>,
+  modules: readonly ModuleConfigEntry[],
+  warn: Warn,
+): void {
+  const sections = layer["capabilities"];
+  if (sections === undefined) return;
+  for (const [name, section] of Object.entries(requireObject(sections, "capabilities"))) {
+    const entry = modules.find((candidate) => candidate.name === name);
+    if (entry === undefined) continue;
+    for (const key of Object.keys(requireObject(section, `capabilities.${name}`))) {
+      if (key !== "enabled" && !entry.gatewayKeys.includes(key)) {
+        warn(
+          `Ignoring "capabilities.${name}.${key}": it configures a worker, ` +
+            `and this daemon runs in gateway mode.`,
+        );
+      }
+    }
+  }
+}
+
+function runModuleChecks(config: Config, modules: readonly ModuleConfigEntry[]): void {
+  for (const entry of modules) {
+    entry.check?.(config.capabilities[entry.name] as never, config);
   }
 }
 
@@ -688,9 +707,16 @@ function defaultConfig(
   systemStats: SystemStats,
   strategy: CapacityStrategyName,
   mode: DaemonMode,
+  modules: readonly ModuleConfigEntry[],
 ): Config {
   return {
     mode,
+    capabilities: Object.fromEntries(
+      modules.map((entry) => [
+        entry.name,
+        { ...(entry.defaults as Record<string, unknown>), enabled: false },
+      ]),
+    ) as Config["capabilities"],
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
@@ -760,7 +786,6 @@ function defaultConfig(
         bootAnimation: true,
       },
     },
-    agentDevice: { enabled: false, command: "agent-device" },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
@@ -823,8 +848,12 @@ const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
  * The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
  */
-function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
+function configValidators(
+  strategy: CapacityStrategyName,
+  modules: readonly ModuleConfigEntry[],
+): Record<string, Validator> {
   return {
+    capabilities: capabilitiesValidator(modules),
     mode: stringUnion(DAEMON_MODES),
     gateway: objectValidator({
       url: stringValue,
@@ -913,15 +942,32 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
         bootAnimation: booleanValue,
       }),
     }),
-    agentDevice: objectValidator({
-      enabled: booleanValue,
-      command: nonEmptyString,
-      leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
-    }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),
       minimumThresholdMs: nonNegativeNumber,
     }),
+  };
+}
+
+function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator {
+  return (value, path, warn) => {
+    const result: Record<string, unknown> = {};
+    for (const [name, section] of Object.entries(requireObject(value, path))) {
+      const sectionPath = `${path}.${name}`;
+      const entry = modules.find((candidate) => candidate.name === name);
+      if (entry === undefined) {
+        warn(`Unknown config key: "${sectionPath}"`);
+        continue;
+      }
+      const { enabled, ...rest } = requireObject(section, sectionPath);
+      result[name] = {
+        ...(entry.validator(rest, sectionPath, warn) as Record<string, unknown>),
+        ...(enabled === undefined
+          ? {}
+          : { enabled: booleanValue(enabled, `${sectionPath}.enabled`) }),
+      };
+    }
+    return result;
   };
 }
 

@@ -1773,24 +1773,6 @@ describe("loadConfig modes (ADR 0005)", () => {
     );
   });
 
-  it("reads agentDevice.enabled and leaseTtlCapMs on a gateway without a warning, and warns that it ignores agentDevice.command", async () => {
-    const warn = vi.fn();
-
-    const config = await load(
-      {
-        agentDevice: { enabled: true, leaseTtlCapMs: 10_000 },
-        mode: "gateway",
-      },
-      { warn },
-    );
-    expect(config.agentDevice).toMatchObject({ enabled: true, leaseTtlCapMs: 10_000 });
-    expect(warn).not.toHaveBeenCalled();
-
-    await load({ agentDevice: { command: "elsewhere" }, mode: "gateway" }, { warn });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice.command"'));
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "agentDevice"'));
-  });
-
   it("says nothing about worker keys on a worker, which is every daemon today", async () => {
     const warn = vi.fn();
     await load({ capacity: { strategy: "fixed", config: { maxRunning: 3 } } }, { warn });
@@ -1955,89 +1937,5 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
     expect(dottedValue(parsed, "gateway.leaseRequestTimeoutMs")).toBe(
       config.gateway.leaseRequestTimeoutMs,
     );
-  });
-});
-
-describe("agentDevice config", () => {
-  async function loadWith(contents: unknown, warn?: (message: string) => void) {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-    return loadConfig({
-      configPath,
-      filesystem,
-      systemStats: createStats(),
-      ...(warn === undefined ? {} : { warn }),
-    });
-  }
-
-  it("defaults agentDevice.enabled to false and agentDevice.command to agent-device", async () => {
-    const config = await loadWith({});
-
-    expect(dottedValue(config, "agentDevice.enabled")).toBe(false);
-    expect(dottedValue(config, "agentDevice.command")).toBe("agent-device");
-  });
-
-  it("keeps an explicit agentDevice block", async () => {
-    const config = await loadWith({
-      agentDevice: { command: "/opt/ad/bin/agent-device", enabled: true },
-    });
-
-    expect(dottedValue(config, "agentDevice.enabled")).toBe(true);
-    expect(dottedValue(config, "agentDevice.command")).toBe("/opt/ad/bin/agent-device");
-  });
-
-  it("refuses a non-boolean agentDevice.enabled, naming the key", async () => {
-    await expect(loadWith({ agentDevice: { enabled: true } })).resolves.toBeDefined();
-
-    await expect(loadWith({ agentDevice: { enabled: "yes" } })).rejects.toThrow(
-      "agentDevice.enabled",
-    );
-  });
-
-  it.each([
-    ["an empty string", ""],
-    ["a number", 7],
-  ])("refuses agentDevice.command as %s, naming the key", async (_case, command) => {
-    await expect(loadWith({ agentDevice: { command: "agent-device" } })).resolves.toBeDefined();
-
-    await expect(loadWith({ agentDevice: { command } })).rejects.toThrow("agentDevice.command");
-  });
-
-  it("leaves agentDevice.leaseTtlCapMs unset by default", async () => {
-    const config = await loadWith({});
-
-    expect(dottedValue(config, "agentDevice.leaseTtlCapMs")).toBeUndefined();
-  });
-
-  it("accepts agentDevice.leaseTtlCapMs of 5000 and of lease.maxTtlMs", async () => {
-    const lowest = await loadWith({ agentDevice: { leaseTtlCapMs: 5_000 } });
-    const highest = await loadWith({
-      agentDevice: { leaseTtlCapMs: 7_200_000 },
-      lease: { maxTtlMs: 7_200_000 },
-    });
-
-    expect(dottedValue(lowest, "agentDevice.leaseTtlCapMs")).toBe(5_000);
-    expect(dottedValue(highest, "agentDevice.leaseTtlCapMs")).toBe(7_200_000);
-  });
-
-  it.each([
-    ["4999", 4_999],
-    ["a fraction", 5_000.5],
-    ["a value above lease.maxTtlMs", 14_400_001],
-  ])("refuses agentDevice.leaseTtlCapMs of %s, naming the key", async (_case, leaseTtlCapMs) => {
-    await expect(loadWith({ agentDevice: { leaseTtlCapMs: 5_000 } })).resolves.toBeDefined();
-
-    await expect(loadWith({ agentDevice: { leaseTtlCapMs } })).rejects.toThrow(
-      "agentDevice.leaseTtlCapMs",
-    );
-  });
-
-  it("a loaded config parsed through configSchema keeps both keys", async () => {
-    const config = await loadWith({ agentDevice: { command: "ad", enabled: true } });
-
-    const parsed = configSchema.parse(config) as unknown as Config;
-    expect(dottedValue(parsed, "agentDevice.enabled")).toBe(true);
-    expect(dottedValue(parsed, "agentDevice.command")).toBe("ad");
   });
 });

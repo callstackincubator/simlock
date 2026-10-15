@@ -9,9 +9,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const NUL = 0x00;
 
-/** why: built binaries committed for tests or vendored packages are never searched as text. */
-const isCommittedBinary = (name: string): boolean =>
-  name.startsWith("e2e/fixtures/") || (name.startsWith("vendor/") && name.endsWith(".tgz"));
+/** why: built binaries committed for tests are never searched as text. */
+const isCommittedBinary = (name: string): boolean => name.startsWith("e2e/fixtures/");
 
 /**
  * why: a raw NUL byte in a text file makes `grep` and `ripgrep` classify the whole file as
@@ -21,8 +20,8 @@ const isCommittedBinary = (name: string): boolean =>
  *
  * Enumerated from `git ls-files` rather than a directory walk so the check sees every
  * tracked file in the repository (testing rule 4), not just the directories this test
- * happened to name. The exceptions are `e2e/fixtures/` and the vendored `vendor/*.tgz` tarballs: built binaries
- * committed for tests, never searched as text, so they are skipped. Untracked and ignored files are out of scope: they are not part of
+ * happened to name. The exception is `e2e/fixtures/`: built binaries committed for tests,
+ * never searched as text, so they are skipped. Untracked and ignored files are out of scope: they are not part of
  * what anyone clones or searches.
  */
 describe("tracked files", () => {
@@ -53,9 +52,6 @@ describe("tracked files", () => {
 
   it("hold no committed binary and still hold e2e/appduct-fixtures.test.ts", () => {
     expect(trackedFiles.filter(isCommittedBinary)).toEqual([]);
-    expect(trackedFiles.some((name) => name.startsWith("vendor/") && name.endsWith(".tgz"))).toBe(
-      false,
-    );
     expect(trackedFiles).toContain("e2e/appduct-fixtures.test.ts");
   });
 

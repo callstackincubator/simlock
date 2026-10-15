@@ -2,23 +2,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
-  agentDeviceCapabilitySource,
-  agentDeviceFindings,
-  agentDeviceRelayTarget,
-  AgentDeviceSupervisor,
-  cancelWaitingAllocates,
-  createAgentDeviceEdgeParts,
-  disposeAgentDeviceEdge,
-  createAgentDeviceFront,
-  createGatewayAgentDeviceFrontParts,
-  SupervisorAgentDeviceUpstream,
-  type AgentDeviceHealthProbe,
-  type AgentDeviceUpstream,
-  type FleetPort,
-  type FleetWorker,
-  NodeAgentDeviceHealthProbe,
-} from "../agent-device/index.js";
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
@@ -104,19 +87,19 @@ import {
   FileDrainStore,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
-  type WorkerRegistry,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
   GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
-  type FleetViews,
 } from "../gateway/index.js";
 import {
   WebSocketUplinkConnector,
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
+import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -127,8 +110,6 @@ import type { RelayTargets } from "./relay.js";
 import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
-  readonly agentDeviceHealth?: AgentDeviceHealthProbe;
-  readonly agentDeviceUpstream?: AgentDeviceUpstream;
   readonly clock?: Clock;
   readonly configOverrides?: ConfigOverrides;
   readonly configPath?: string;
@@ -138,6 +119,8 @@ export interface StartDaemonOptions {
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
+  /** why: test-only, replaces the registry of optional modules. */
+  readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
@@ -172,9 +155,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
+  const moduleDefinitions = options.optionalModules ?? optionalModules;
   const config = await loadConfig({
     configPath,
     filesystem,
+    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+      name,
+      ...moduleConfig,
+    })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     systemStats,
     warn: (message) => configWarnings.push(message),
@@ -230,6 +218,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       ipc,
       logger,
+      optionalModules: moduleDefinitions,
       socketPath,
       version: version,
     });
@@ -326,39 +315,43 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
     modelPreferences,
-    optionalModules: () => agentDeviceFindings(agentDevice.availability()),
+    optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
     registry,
     systemStats,
   });
-  const agentDevice = new AgentDeviceSupervisor({
-    baseEnvironment: process.env,
-    clock,
-    config: config.agentDevice,
-    driverEnvironment: Object.assign(
-      {},
-      ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
-    ),
-    filesystem,
-    healthProbe: options.agentDeviceHealth ?? new NodeAgentDeviceHealthProbe(),
-    home: dataDirectory,
-    leaseMaxTtlMs: config.lease.maxTtlMs,
-    logger: logger.child("agent-device"),
-    nodePath: process.execPath,
-    nodeVersion: process.versions.node,
-    platforms: drivers.map((driver) => driver.platform),
-    processRunner,
-    processSupervisor,
-    tcpProbe,
+  const leaseEnvironment: Record<string, string> = Object.assign(
+    {},
+    ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
+  );
+  // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
+  let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
+  const moduleHost = await createModuleHost({
+    config,
+    context: {
+      cancelPending: (requesterId) => {
+        if (cancelPendingRequest === undefined) {
+          throw new Error("leasing is not ready yet");
+        }
+        return cancelPendingRequest(requesterId);
+      },
+      clock,
+      dataDirectory,
+      environment: process.env,
+      events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
+      filesystem,
+      leaseEnvironment,
+      nodePath: process.execPath,
+      nodeVersion: process.versions.node,
+      platforms: drivers.map((driver) => driver.platform),
+      processRunner,
+      processSupervisor,
+      tcpProbe,
+    },
+    definitions: moduleDefinitions,
+    logger,
+    role: "worker",
   });
-  // why: the edge needs nothing from leasing, so it is built here, with the supervisor it reads.
-  const agentDeviceParts = config.agentDevice.enabled
-    ? createAgentDeviceEdgeParts(
-        options.agentDeviceUpstream ?? new SupervisorAgentDeviceUpstream(agentDevice),
-        clock,
-        drivers.map((driver) => driver.platform),
-      )
-    : undefined;
   // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
     clock,
@@ -369,10 +362,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: agentDeviceParts === undefined ? [] : [agentDeviceParts.leaseEnd],
+    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
+  cancelPendingRequest = (requesterId) => leasing.cancelPending(requesterId);
   // Core declared ports only leasing can implement; this is the one place they are handed over,
   // before any request is admitted (ADR 0018 §2).
   core.connect(leasing.corePorts);
@@ -481,11 +475,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
     beginStop: () => core.closeWarmPool(),
     // why: the source's name is the config key's; the core names no module, so the composition supplies it.
-    capabilitySources: [
-      agentDeviceParts === undefined
-        ? { name: "agent-device", read: async () => ({ state: "off" }) }
-        : agentDeviceCapabilitySource(agentDeviceParts),
-    ],
+    capabilitySources: [...moduleHost.capabilitySources],
     capacity: core.capacityReader,
     warmPool: core.warmPoolReader,
     catalog: core.catalog,
@@ -520,9 +510,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     presence: latestPresence,
     reaper,
     relayTargets: {
-      ...(agentDeviceParts === undefined
-        ? {}
-        : { "agent-device": agentDeviceRelayTarget(agentDeviceParts) }),
+      ...moduleHost.relayTargets,
       ...options.relayTargets,
     },
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
@@ -546,9 +534,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       // Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
-      // why: before the drivers: the Android driver stops simlock's adb server, which this
-      // daemon's agent-device uses, and a client that finds no server forks its own.
-      await agentDevice.stop();
+      await moduleHost.beforeDriversDispose();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
         if (disposal.status === "rejected") {
@@ -569,10 +555,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
     // here.
     stopAuxiliary: async () => {
-      if (agentDeviceParts !== undefined) {
-        disposeAgentDeviceEdge(agentDeviceParts);
-        await cancelWaitingAllocates(agentDeviceParts, (id) => leasing.cancelPending(id));
-      }
+      await moduleHost.beforeDrain();
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
       // Stopped with the other auxiliary frontends, and for the same reason: the uplink is a
@@ -591,9 +574,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
-      // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost
-      // the socket race never gets here, so it reaps nothing.
-      if (options.agentDeviceUpstream === undefined) void agentDevice.start();
+      moduleHost.afterSocketClaimed();
       // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
       // `status.get` never parks (it still answers `starting` during convergence), but its
       // `events.subscribe` does park on startup readiness, so the refresh that follows the
@@ -628,20 +609,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       leaseRequests: leasing.requests,
       logger: httpLogger,
-      mounts:
-        agentDeviceParts === undefined
-          ? []
-          : [
-              createAgentDeviceFront(agentDeviceParts, {
-                clock,
-                dispatch,
-                logger: logger.child("agent-device"),
-                maxRunMs: config.lease.maxTtlMs,
-                ...(config.agentDevice.leaseTtlCapMs === undefined
-                  ? {}
-                  : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
-              }),
-            ],
+      mounts: [...moduleHost.mounts({ dispatch })],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
       tokens,
@@ -707,6 +675,7 @@ interface GatewayDaemonOptions {
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly version: string;
 }
@@ -824,19 +793,24 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const gatewayRelay = new GatewayRelay({ directory: gatewayService });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
-  const agentDeviceParts = config.agentDevice.enabled
-    ? createGatewayAgentDeviceFrontParts(
-        agentDeviceFleetPort({
-          instanceId,
-          leaseIndex,
-          relay: gatewayRelay,
-          startedAt: clock.now(),
-          views: gatewayService.workers,
-        }),
-        clock,
-        config.lease.maxTtlMs,
-      )
-    : undefined;
+  const moduleHost = await createModuleHost({
+    config,
+    definitions: options.optionalModules,
+    logger,
+    parts: {
+      cancelPending: (requesterId) => fleetCoordinator.cancelPending(requesterId),
+      clock,
+      grantedDevices: () => gatewayService.workers.grantedDevices(),
+      instanceId,
+      leases: leaseIndex,
+      relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+      requesterPrefix: gatewayRequesterPrefix,
+      startedAt: clock.now(),
+      worker: (id) => gatewayService.workers.view(id),
+      workers: () => gatewayService.workers.views(),
+    },
+    role: "gateway",
+  });
 
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;
@@ -913,10 +887,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {
-      if (agentDeviceParts !== undefined) {
-        disposeAgentDeviceEdge(agentDeviceParts);
-        await cancelWaitingAllocates(agentDeviceParts, (id) => fleetCoordinator.cancelPending(id));
-      }
+      await moduleHost.beforeDrain();
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
     },
@@ -946,20 +917,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
-      mounts:
-        agentDeviceParts === undefined
-          ? []
-          : [
-              createAgentDeviceFront(agentDeviceParts, {
-                clock,
-                dispatch,
-                logger: logger.child("agent-device"),
-                maxRunMs: config.lease.maxTtlMs,
-                ...(config.agentDevice.leaseTtlCapMs === undefined
-                  ? {}
-                  : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
-              }),
-            ],
+      mounts: [...moduleHost.mounts({ dispatch })],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
       ownerRoutedFacts: daemon.ownerRoutedFacts,
@@ -1005,149 +963,6 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   if (daemonResult.status === "rejected") throw daemonResult.reason;
   if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
-}
-
-interface FleetPortParts {
-  readonly instanceId: string;
-  readonly leaseIndex: FleetLeaseIndex;
-  readonly relay: GatewayRelay;
-  readonly startedAt: number;
-  readonly views: FleetViews & Pick<WorkerRegistry, "grantedDevices">;
-}
-
-const AGENT_DEVICE = "agent-device";
-
-type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
-
-// why: the agent-device edge imports nothing from the gateway, so this is the one place the gateway's parts become its port.
-function agentDeviceFleetPort({
-  instanceId,
-  leaseIndex,
-  relay,
-  startedAt,
-  views,
-}: FleetPortParts): FleetPort {
-  const serving = (view: WorkerView, withDrained: boolean): FleetWorker | undefined => {
-    const maxTtlMs = view.lease?.maxTtlMs;
-    const available = view.capabilities?.some(
-      (entry) => entry.name === AGENT_DEVICE && entry.state === "available",
-    );
-    if (
-      view.connection !== "connected" ||
-      (view.drained && !withDrained) ||
-      available !== true ||
-      view.catalogReadAt === undefined ||
-      maxTtlMs === undefined
-    ) {
-      return undefined;
-    }
-    const platforms = (view.catalog ?? []).flatMap((entry) =>
-      entry.platform === "ios" || entry.platform === "android" ? [entry.platform] : [],
-    );
-    return { id: view.id, leaseMaxTtlMs: maxTtlMs, platforms };
-  };
-  return {
-    capableWorkers: () =>
-      views.views().flatMap((view) => {
-        const worker = serving(view, false);
-        return worker === undefined ? [] : [worker];
-      }),
-    holder: (workerId) => {
-      const view = views.view(workerId);
-      return view === undefined ? undefined : serving(view, true);
-    },
-    instanceId,
-    leasesOf: (ownerId) =>
-      leaseIndex
-        .all()
-        .filter((entry) => entry.ownerId === ownerId)
-        .map((entry) => leaseFacts(views, entry)),
-    reach: (workerId) => {
-      const view = views.view(workerId);
-      return view === undefined
-        ? undefined
-        : {
-            connected: view.connection === "connected",
-            refreshed: view.catalogReadAt !== undefined,
-          };
-    },
-    startedAt,
-    leaseOf: (leaseId) => {
-      const entry = leaseIndex.resolve(leaseId);
-      return entry === undefined ? undefined : { ownerId: entry.ownerId, workerId: entry.workerId };
-    },
-    onLeaseRemoved: (listener) =>
-      leaseIndex.onRemoved((entry) =>
-        listener({
-          leaseId: entry.gatewayLeaseId,
-          ownerId: entry.ownerId,
-          workerId: entry.workerId,
-        }),
-      ),
-    // why: looked up at each call, so a test that replaces the relay's method sits between the link and the worker.
-    relay: (workerId, request, tenant, leaseId) =>
-      relay.relay(workerId, {
-        request,
-        target: AGENT_DEVICE,
-        tenant,
-        ...(leaseId === undefined ? {} : { leaseId }),
-      }),
-  };
-}
-
-type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
-
-// why: the worker's view lists the lease, its granted device and the model's class in its catalog; a lease missing any of them is not offered for adoption.
-function listedLease(
-  views: FleetPortParts["views"],
-  view: WorkerView | undefined,
-  entry: ReturnType<FleetLeaseIndex["all"]>[number],
-): FleetLeaseFacts["listed"] {
-  const record = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
-  if (view === undefined || record === undefined) return undefined;
-  const device = views
-    .grantedDevices()
-    .find((granted) => granted.workerId === entry.workerId && granted.id === record.deviceId);
-  if (device === undefined) return undefined;
-  return describeDevice(view, record, device);
-}
-
-function describeDevice(
-  view: WorkerView,
-  record: { readonly ttlMs: number; readonly ttlDeadline: number },
-  device: ReturnType<FleetPortParts["views"]["grantedDevices"]>[number],
-): FleetLeaseFacts["listed"] {
-  const { platform, model } = device.spec;
-  if (device.address === undefined || (platform !== "ios" && platform !== "android")) {
-    return undefined;
-  }
-  const deviceClass = view.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
-    model
-  ];
-  return {
-    address: device.address,
-    model,
-    platform,
-    ttlDeadline: record.ttlDeadline,
-    ttlMs: record.ttlMs,
-    ...(deviceClass === undefined ? {} : { deviceClass }),
-  };
-}
-
-function leaseFacts(
-  views: FleetPortParts["views"],
-  entry: ReturnType<FleetLeaseIndex["all"]>[number],
-): FleetLeaseFacts {
-  const view = views.view(entry.workerId);
-  const listed = listedLease(views, view, entry);
-  return {
-    connected: view?.connection === "connected",
-    leaseId: entry.gatewayLeaseId,
-    refreshed: view?.catalogReadAt !== undefined,
-    requesterId: entry.requesterId,
-    workerId: entry.workerId,
-    ...(listed === undefined ? {} : { listed }),
-  };
 }
 
 function errorMessage(error: unknown): string {

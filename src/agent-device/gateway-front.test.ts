@@ -19,7 +19,7 @@ import {
   MemoryLogSink,
   type Filesystem,
 } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -206,19 +206,18 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const logs = new MemoryLogSink();
   let relay: GatewayRelay | undefined;
   let uplinks: WebSocketUplinkListenerFactory | undefined;
-  const agentDevice =
-    options.agentDevice === "unset"
-      ? {}
-      : {
-          enabled: true,
-          ...(options.command === undefined ? {} : { command: options.command }),
-          ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
-        };
+  const agentDevice = {
+    enabled: true,
+    ...(options.command === undefined ? {} : { command: options.command }),
+    ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
+  };
   const startGateway = async (): Promise<DaemonServer> => {
     const started = await startDaemon({
       clock,
       configOverrides: {
-        agentDevice,
+        ...(options.agentDevice === "unset"
+          ? {}
+          : { capabilities: { "agent-device": agentDevice } }),
         http: { enabled: true, host: "127.0.0.1", port },
         lease: {
           defaultTtlMs: options.defaultTtlMs ?? defaultTtlMs,
@@ -235,6 +234,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         uplinks = created;
       },
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      optionalModules: [agentDeviceModuleWith({})],
       statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions);
@@ -267,10 +267,9 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       ]);
     }
     const started = startDaemon({
-      agentDeviceUpstream: fake,
       clock: workerClock,
       configOverrides: {
-        agentDevice: { enabled: spec.capability !== "off" },
+        capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
         capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
         gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${String(port)}` },
         ...(directPort === undefined
@@ -286,6 +285,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         level: "debug",
         sink: new MemoryLogSink(),
       }),
+      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
       statePath: join(workerDirectory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
@@ -687,13 +687,13 @@ function first(rig: Rig): Member {
 }
 
 describe("the agent-device front, through a gateway", { timeout: 60_000 }, () => {
-  it("with agentDevice.enabled unset on the gateway, /v1/agent-device/health answers 404, as today", async () => {
+  it("with no capabilities.agent-device section on the gateway, /v1/agent-device/health answers 404, as today", async () => {
     const rig = await setUp({ agentDevice: "unset" });
 
     expect((await send(rig, "/health")).status).toBe(404);
   });
 
-  it("with agentDevice.command set on a gateway, the gateway logs that it ignores it and starts; with agentDevice.leaseTtlCapMs above lease.maxTtlMs on a gateway, the gateway fails to start, as a worker does", async () => {
+  it("with capabilities.agent-device.command set on a gateway, the gateway logs that it ignores it and starts; with capabilities.agent-device.leaseTtlCapMs above lease.maxTtlMs on a gateway, the gateway fails to start, as a worker does", async () => {
     const rig = await setUp({ command: "agent-device-elsewhere", workers: [] });
 
     expect((await send(rig, "/health")).status).toBe(200);
@@ -701,17 +701,17 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       rig.logs.records.some(
         (record) =>
           record.level === "warn" &&
-          record.message.includes("agentDevice.command") &&
-          record.message.includes("Ignoring"),
+          record.message ===
+            'Ignoring "capabilities.agent-device.command": it configures a worker, and this daemon runs in gateway mode.',
       ),
     ).toBe(true);
 
     await expect(setUp({ leaseTtlCapMs: gatewayMaxTtlMs + 1, workers: [] })).rejects.toThrow(
-      /agentDevice\.leaseTtlCapMs/,
+      /capabilities\.agent-device\.leaseTtlCapMs/,
     );
   });
 
-  it("with agentDevice.enabled unset on the gateway, /rpc, upload/preflight, artifacts/<id> and a diagnostics URL each answer 404", async () => {
+  it("with no capabilities.agent-device section on the gateway, /rpc, upload/preflight, artifacts/<id> and a diagnostics URL each answer 404", async () => {
     const rig = await setUp({ agentDevice: "unset" });
 
     const answers = await Promise.all([
@@ -1220,7 +1220,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     });
   });
 
-  it("`agentDevice.leaseTtlCapMs` on the gateway caps the TTL of a lease made through it", async () => {
+  it("`capabilities.agent-device.leaseTtlCapMs` on the gateway caps the TTL of a lease made through it", async () => {
     const rig = await setUp({ leaseTtlCapMs: 10_000 });
     const member = first(rig);
 
@@ -1702,9 +1702,8 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
       .toEqual([["devices"], ["devices"]]);
   });
 
-  it("through the gateway, `release_materialized_paths` is refused `refused: this agent-device is too old to use through a gateway; update it`, and an `install_from_source` naming the token's lease reaches its worker", async () => {
+  it("through the gateway, `release_materialized_paths` and an `install_from_source` naming the token's lease are refused `refused: unknown method <method>`, and no worker sees either", async () => {
     const rig = await twoLeasesOnTwoWorkers();
-    const target = holderOf(rig, 2);
     const before = rig.members.map((member) => member.fake.requests.length);
 
     const released = await envelopeOf(
@@ -1712,18 +1711,21 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
         materializationId: "m-1",
       }),
     );
+    const installed = await envelopeOf(
+      await rpc(rig, "agent_device.install_from_source", {
+        meta: { leaseId: hex(2) },
+        platform: "ios",
+        source: { kind: "url", url: "https://example.com/App.zip" },
+      }),
+    );
 
-    expect(released.error?.message).toBe(tooOld);
+    expect(released.error?.message).toBe(
+      "refused: unknown method agent_device.release_materialized_paths",
+    );
+    expect(installed.error?.message).toBe(
+      "refused: unknown method agent_device.install_from_source",
+    );
     expect(rig.members.map((member) => member.fake.requests.length)).toEqual(before);
-
-    await rpc(rig, "agent_device.install_from_source", {
-      meta: { leaseId: hex(2) },
-      platform: "ios",
-      source: { kind: "url", url: "https://example.com/App.zip" },
-    });
-
-    expect(target.fake.rpcRequests("agent_device.install_from_source")).toHaveLength(1);
-    expect(holderOf(rig, 1).fake.rpcRequests("agent_device.install_from_source")).toHaveLength(0);
   });
 });
 

@@ -15,8 +15,10 @@ import {
   REDACTED_VALUE,
   Registry,
 } from "../core/index.js";
-import { FakeAgentDeviceHealth } from "../agent-device/testing.js";
+import { agentDeviceModule } from "../agent-device/definition.js";
+import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
+import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -45,6 +47,7 @@ import {
   type DriverDiscoveryContext,
   type StartDaemonOptions,
 } from "./main.js";
+import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -2407,7 +2410,7 @@ describe("startDaemon with the agent-device edge", () => {
     return new ScriptedProcessRunner([
       {
         match: { args: [realCli, "--version"], command: process.execPath },
-        result: { code: 0, stderr: "", stdout: "0.21.25-dev\n" },
+        result: { code: 0, stderr: "", stdout: "0.21.28\n" },
       },
       {
         hangs: true,
@@ -2419,7 +2422,9 @@ describe("startDaemon with the agent-device edge", () => {
   async function startEdge(
     setup: Awaited<ReturnType<typeof setUp>>,
     ports: {
+      readonly agentDevice?: OptionalModuleDefinition<unknown>;
       readonly drivers?: StartDaemonOptions["drivers"];
+      readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
     },
@@ -2427,7 +2432,6 @@ describe("startDaemon with the agent-device edge", () => {
     const clock = new FakeClock(1_000);
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
-      agentDeviceHealth: new FakeAgentDeviceHealth(),
       clock,
       dataDirectory: setup.directory,
       drivers: ports.drivers ?? [
@@ -2436,6 +2440,12 @@ describe("startDaemon with the agent-device edge", () => {
       filesystem: setup.filesystem,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+      optionalModules: [
+        ports.agentDevice ?? agentDeviceModuleWith({ health: new FakeAgentDeviceHealth() }),
+        ...(ports.modules ?? []).map(
+          (module) => module.definition as OptionalModuleDefinition<unknown>,
+        ),
+      ],
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
       statePath: join(setup.directory, "state.json"),
@@ -2446,8 +2456,58 @@ describe("startDaemon with the agent-device edge", () => {
     return { daemon, sink };
   }
 
+  it("runs a module's beforeDriversDispose and stops agent-device's child, both before the drivers are disposed", async () => {
+    const setup = await setUp({
+      capabilities: { "agent-device": { command, enabled: true }, alpha: { enabled: true } },
+    });
+    const events: string[] = [];
+    const processSupervisor = new KillingSupervisor();
+    const runner = versionAndDaemon(setup.directory);
+    const spawn = runner.spawn.bind(runner);
+    vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
+      const handle = spawn(spawned, args, options);
+      if (args[0] === entry) {
+        processSupervisor.markAlive(handle.pid);
+        processSupervisor.kills.set(handle.pid, () => handle.kill());
+        void handle.wait().then(() => events.push("agent-device exited"));
+      }
+      return handle;
+    });
+    const clock = new FakeClock(1_000);
+    class DisposingDriver extends FakeDriver {
+      async dispose(): Promise<void> {
+        events.push("driver disposed");
+      }
+    }
+    const { daemon } = await startEdge(setup, {
+      drivers: [new DisposingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      modules: [
+        fakeModule({
+          hooks: {
+            beforeDriversDispose: () => {
+              events.push("module beforeDriversDispose");
+              return Promise.resolve();
+            },
+          },
+          name: "alpha",
+        }),
+      ],
+      processRunner: runner,
+      processSupervisor,
+    });
+    await pollUntil(() => runner.calls.length === 2);
+
+    await daemon.stop("test");
+
+    expect(events.at(-1)).toBe("driver disposed");
+    expect(events.slice(0, -1).sort()).toEqual([
+      "agent-device exited",
+      "module beforeDriversDispose",
+    ]);
+  });
+
   it("resolves and grants a lease to an ordinary client while agent-device's /health never answers, and stops the child before the drivers are disposed", async () => {
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const events: string[] = [];
     const processSupervisor = new KillingSupervisor();
     const runner = versionAndDaemon(setup.directory);
@@ -2486,7 +2546,7 @@ describe("startDaemon with the agent-device edge", () => {
   });
 
   async function spawnedEnvironment(drivers: (clock: FakeClock) => StartDaemonOptions["drivers"]) {
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const runner = versionAndDaemon(setup.directory);
     await startEdge(setup, {
       drivers: drivers(new FakeClock(1_000)),
@@ -2526,7 +2586,7 @@ describe("startDaemon with the agent-device edge", () => {
 
   it("still starts and grants a lease when agent-device is not found", async () => {
     const setup = await setUp({
-      agentDevice: { command: "/opt/missing/agent-device", enabled: true },
+      capabilities: { "agent-device": { command: "/opt/missing/agent-device", enabled: true } },
     });
     const runner = new ScriptedProcessRunner([]);
 
@@ -2545,7 +2605,7 @@ describe("startDaemon with the agent-device edge", () => {
   it("builds no supervisor in gateway mode: no ps and no agent-device process run, and no signal is sent", async () => {
     const setup = await setUp(
       {
-        agentDevice: { command, enabled: true },
+        capabilities: { "agent-device": { command, enabled: true } },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         mode: "gateway",
       },
@@ -2561,14 +2621,97 @@ describe("startDaemon with the agent-device edge", () => {
     expect(processSupervisor.signals).toEqual([]);
   });
 
+  it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "op",
+      role: "admin",
+    } as const;
+    for (const config of [{}, { capabilities: { "agent-device": { enabled: false } } }]) {
+      const setup = await setUp(config);
+      const { daemon } = await startEdge(setup, {
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+
+      const status = await daemon.dispatch("status.get", {}, admin);
+
+      expect(status.capabilities).toEqual([{ name: "agent-device", state: "off" }]);
+    }
+  });
+
+  it("a worker with agent-device off never calls agent-device's loadWorker", async () => {
+    let loads = 0;
+    const spying: OptionalModuleDefinition<unknown> = {
+      ...agentDeviceModule,
+      loadWorker: () => {
+        loads += 1;
+        return agentDeviceModule.loadWorker();
+      },
+    } as OptionalModuleDefinition<unknown>;
+    const setup = await setUp({ capabilities: { "agent-device": { enabled: false } } });
+    const { daemon } = await startEdge(setup, {
+      agentDevice: spying,
+      processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+    await daemon.stop("test");
+
+    expect(loads).toBe(0);
+
+    const on = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
+    await startEdge(on, {
+      agentDevice: spying,
+      processRunner: versionAndDaemon(on.directory),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+    expect(loads).toBe(1);
+  });
+
+  it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "op",
+      role: "admin",
+    } as const;
+    const setup = await setUp({ agentDevice: { command, enabled: true } });
+
+    const { daemon, sink } = await startEdge(setup, {
+      processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
+    });
+
+    expect(sink.records.map((record) => record.message)).toContain(
+      'Unknown config key: "agentDevice"',
+    );
+    expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
+      { name: "agent-device", state: "off" },
+    ]);
+  });
+
+  it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {
+    const setup = await setUp(
+      { capabilities: { "agent-device": { command, enabled: false } } },
+      { record: { pid: 900 } },
+    );
+    const runner = new ScriptedProcessRunner([]);
+    const processSupervisor = new FakeProcessSupervisor([900]);
+
+    await startEdge(setup, { processRunner: runner, processSupervisor });
+    await pollUntil(() => false, 100);
+
+    expect(runner.calls).toEqual([]);
+    expect(processSupervisor.signals).toEqual([]);
+  });
+
   it("runs no ps and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
-    const first = await setUp({ agentDevice: { enabled: false } });
+    const first = await setUp({ capabilities: { "agent-device": { enabled: false } } });
     await startEdge(first, {
       processRunner: new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(),
     });
     const second = await setUp(
-      { agentDevice: { command, enabled: true } },
+      { capabilities: { "agent-device": { command, enabled: true } } },
       { directory: first.directory, record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
@@ -2593,10 +2736,10 @@ describe("startDaemon with the agent-device edge", () => {
     };
 
     const agentDeviceFinding = (report: Report) =>
-      report.findings.find((finding) => finding.kind === "agent-device-unavailable");
+      report.findings.find((finding) => finding.kind === "module-unavailable");
 
-    it("reports agent-device-unavailable naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
-      const setup = await setUp({ agentDevice: { command, enabled: true } });
+    it("reports module-unavailable for agent-device, naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
       const runner = new ScriptedProcessRunner([
         {
           match: { args: [realCli, "--version"], command: process.execPath },
@@ -2617,8 +2760,9 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
-          message: expect.stringContaining("found 0.20.3, need 0.21.25 or later"),
+          kind: "module-unavailable",
+          module: "agent-device",
+          message: expect.stringContaining("found 0.20.3, need 0.21.28 or later"),
           remedy: expect.any(String),
         });
       await expect(daemon.dispatch("lease.request", lease, agent)).resolves.toMatchObject({
@@ -2626,9 +2770,42 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("reports agent-device-unavailable naming the command when agentDevice.command is found nowhere", async () => {
+    it("lists agent-device's module-unavailable finding before a module's own", async () => {
       const setup = await setUp({
-        agentDevice: { command: "/opt/missing/agent-device", enabled: true },
+        capabilities: {
+          "agent-device": { command: "/opt/missing/agent-device", enabled: true },
+          alpha: { enabled: true },
+        },
+      });
+      const { daemon } = await startEdge(setup, {
+        modules: [
+          fakeModule({
+            findings: () => [{ message: "it is down", remedy: "bring it up" }],
+            name: "alpha",
+          }),
+        ],
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+
+      await expect
+        .poll(
+          async () =>
+            (
+              (await daemon.dispatch("doctor.run", {}, operator)) as {
+                readonly findings: readonly { readonly kind: string; readonly module?: string }[];
+              }
+            ).findings
+              .filter((finding) => finding.kind === "module-unavailable")
+              .map((finding) => finding.module),
+          { timeout: 5_000 },
+        )
+        .toEqual(["agent-device", "alpha"]);
+    });
+
+    it("reports module-unavailable for agent-device, naming the command when capabilities.agent-device.command is found nowhere", async () => {
+      const setup = await setUp({
+        capabilities: { "agent-device": { command: "/opt/missing/agent-device", enabled: true } },
       });
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -2644,13 +2821,14 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
+          kind: "module-unavailable",
+          module: "agent-device",
           message: expect.stringContaining("/opt/missing/agent-device"),
         });
     }, 10_000);
 
-    it("reports no agent-device-unavailable with agentDevice.enabled false", async () => {
-      const setup = await setUp({ agentDevice: { enabled: false } });
+    it("reports no module-unavailable finding with capabilities.agent-device.enabled false", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { enabled: false } } });
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
         processSupervisor: new FakeProcessSupervisor(),
@@ -2661,8 +2839,8 @@ describe("startDaemon with the agent-device edge", () => {
       expect(agentDeviceFinding(report)).toBeUndefined();
     });
 
-    it("reports no agent-device-unavailable while agent-device's /health never answers and the readiness budget has not run out", async () => {
-      const setup = await setUp({ agentDevice: { command, enabled: true } });
+    it("reports no module-unavailable finding while agent-device's /health never answers and the readiness budget has not run out", async () => {
+      const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
       const runner = versionAndDaemon(setup.directory);
       const { daemon } = await startEdge(setup, {
         processRunner: runner,

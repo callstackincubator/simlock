@@ -35,6 +35,8 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | Module | Does | Manual |
 |---|---|---|
 | contract | Every operation, schema, role, error code, protocol range | [contract](../../src/contract/AGENTS.md) |
+| modules | Optional-module contract and the host that loads each turned-on module | [modules](../../src/modules/AGENTS.md) |
+| module-registry | The list of optional modules, read by the composition root and the CLI | [module-registry](../../src/module-registry/AGENTS.md) |
 | daemon | Composition root, socket server, `Dispatcher`, sessions, uplink dialler | [daemon](../../src/daemon/AGENTS.md) |
 | leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/AGENTS.md) |
 | core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/AGENTS.md) |
@@ -68,6 +70,9 @@ Arrows point from the optional to the required (architecture rule 15).
 | `core-not-leasing` | Core declares a port; the composition root connects leasing to it |
 | `core-not-drivers` | Core and leasing reach a platform only through the `Driver` interface |
 | `no-fs-or-process` | Core, leasing, agent-device and host-load use ports, never `fs` or `child_process` |
+| `definition-is-light` | A module's definition file imports its own module only for types or by dynamic import |
+| `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |
+| `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |
 | `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
 | `gateway-not-edges`, `gateway-only-dispatch` | Gateway imports no driver or frontend, and from daemon only `src/daemon/dispatch.ts` |

@@ -57,6 +57,7 @@ that goes through the reviews its diff's kind gets and the merge gate:
 | Routine            | Skill               | When   |
 | ------------------ | ------------------- | ------ |
 | Test hardening     | `harden-tests`      | weekly |
+| Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
 | Review calibration | `calibrate-reviews` | weekly |
 
@@ -68,8 +69,8 @@ Tests that start real simulators or emulators. Run them only through
 - It holds a machine-wide lock, runs detached, prints its log path at once,
   and writes `<log>.exit` when the run ends.
 - Exit 75: another run holds the lock; the script prints the holder.
-- Exit 69: the machine is unfit (low disk, another tool's build at the
-  wrong commit or not built); the script prints why.
+- Exit 69: the machine is unfit (low disk, another tool at the
+  wrong version or not built); the script prints why.
 - Vitest arguments pass through: `-t "<title>"` runs one test, `--bail=1`
   ends the run at the first failure.
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh
@@ -89,7 +90,7 @@ The machine can run a line only if:
 | iOS        | `uname -s` is `Darwin`; `xcrun simctl list runtimes` lists one |
 | Android    | `command -v emulator adb` finds both                       |
 | Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
-| agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in a checkout of agent-device at the commit `vendor/README.md` names, built with `pnpm install && pnpm build && pnpm build:android` (the last builds the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
+| agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in an install of the agent-device version `package.json` pins for `@agent-device/proxy` (`npm install -g agent-device@<version>`, or a checkout at tag `v<version>` built with `pnpm install && pnpm build && pnpm build:android`, the last building the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
 | Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
 | Physical Android, a person at the phone | the Physical Android checks above, and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-android-physical-manual.test.ts` |
 | Physical iOS, a person at the phone | the Physical iOS checks above, a passcode set on the phone (locking it then needs the passcode), and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-ios-physical-manual.test.ts` |
@@ -107,16 +108,25 @@ and names the slow-lane test that proves it.
 ## Other tools' source
 
 A spec's Facts row about another tool cites that tool's source at the
-commit this repo uses, or a command run on this machine; never a summary or
+version this repo uses, or a command run on this machine; never a summary or
 the tool's docs alone.
 
 | Tool | Version | Read it |
 | ---- | ------- | ------- |
-| agent-device | the commit `vendor/README.md` names | `git -C <checkout> show <commit>:<path>` in a clone of `callstackincubator/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstackincubator/agent-device/contents/<path>?ref=<commit>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
+| agent-device | the version `package.json` pins for `@agent-device/proxy` (tag `v<version>`) | `git -C <checkout> show v<version>:<path>` in a clone of `callstackincubator/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstackincubator/agent-device/contents/<path>?ref=v<version>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
 | Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
 | simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
 
 ## Project checks
+
+- **Strict test areas** (testing rule 3): `src/leasing/`; in `src/core/`,
+  the registry and its lock (`registry.ts`, `serialized-decision.ts`,
+  `device-operation-claims.ts`), reclaim, quarantine and destruction
+  (`reclaim-coordinator.ts`, `quarantine-coordinator.ts`, `reaper.ts`,
+  `cleanup/`, `cleanup-executor.ts`, `nuke.ts`, `nuke-service.ts`,
+  `managed-device-lifecycle.ts`), ownership (`device-root.ts`,
+  `physical-enrollment.ts`) and startup (`startup-converger.ts`); and the
+  validators of wire input in `src/contract/` (safety rule 10).
 
 - **Published surfaces.** A change to a schema, a contract type or a
   validator reruns the tests of every surface that publishes it: MCP

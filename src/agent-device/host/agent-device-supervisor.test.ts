@@ -65,7 +65,6 @@ interface Options {
   readonly command?: string;
   readonly daemonJson?: (startIndex: number) => DaemonJson;
   readonly driverEnvironment?: Readonly<Record<string, string>>;
-  readonly enabled?: boolean;
   readonly expectations?: readonly ScriptedProcessExpectation[];
   readonly filesystem?: MemoryFilesystem;
   readonly home?: string;
@@ -139,7 +138,7 @@ async function arrange(options: Options = {}) {
           httpPort,
           pid: mode === "ready" ? pid : pid + 1_000,
           token,
-          version: "0.21.25-dev",
+          version: "0.21.28",
         }),
       );
     }
@@ -164,7 +163,7 @@ async function arrange(options: Options = {}) {
       PATH: "/usr/local/bin:/usr/bin",
     },
     clock,
-    config: { command: options.command ?? "agent-device", enabled: options.enabled ?? true },
+    config: { command: options.command ?? "agent-device" },
     driverEnvironment: options.driverEnvironment ?? {},
     filesystem,
     healthProbe: health,
@@ -232,7 +231,7 @@ async function installAgentDevice(
   await options.layout?.(filesystem);
 }
 
-function versionRun(output = "0.21.25-dev\n", extra: Partial<ScriptedProcessExpectation> = {}) {
+function versionRun(output = "0.21.28\n", extra: Partial<ScriptedProcessExpectation> = {}) {
   return {
     match: { args: [realCli, "--version"], command: nodePath },
     result: { code: 0, stderr: "", stdout: output },
@@ -343,23 +342,6 @@ async function readJson(harness: Harness, path: string): Promise<Record<string, 
 }
 
 describe("AgentDeviceSupervisor off and starting", () => {
-  it("with agentDevice.enabled false, start() reaps a recorded daemon, starts no process, runs no --version, and availability is off before and after", async () => {
-    const harness = await arrange({
-      enabled: false,
-      expectations: [psRun(900, ownLine())],
-      livePids: [900],
-      record: record(900),
-    });
-    expect(stateOf(harness)).toBe("off");
-
-    await advancing(harness, harness.begin());
-
-    expect(harness.processes.signals).toEqual([{ pid: 900, signal: "SIGTERM" }]);
-    expect(commandsRun(harness)).toEqual([["ps", "-ww", "-o", "args=", "-p", "900"]]);
-    await expect(harness.filesystem.exists(recordPath)).resolves.toBe(false);
-    expect(stateOf(harness)).toBe("off");
-  });
-
   it("enabled, availability is starting before start() settles", async () => {
     const harness = await arrange({ daemonJson: () => "none" });
     expect(stateOf(harness)).toBe("starting");
@@ -418,8 +400,8 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
       message: 'agent-device not found: "agent-device" is not on PATH',
       reason: "not-found",
     });
-    expect(unavailable(harness).remedy).toContain("agentDevice.command");
-    expect(unavailable(harness).remedy).toContain("0.21.25 or later");
+    expect(unavailable(harness).remedy).toContain("capabilities.agent-device.command");
+    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(harness.runner.calls).toEqual([]);
   });
@@ -477,7 +459,7 @@ describe("AgentDeviceSupervisor checking the install", () => {
 
     expect(unavailable(harness).reason).toBe("not-agent-device");
     expect(unavailable(harness).message).toContain(word);
-    expect(unavailable(harness).remedy).toContain("agentDevice.command");
+    expect(unavailable(harness).remedy).toContain("capabilities.agent-device.command");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(daemonSpawns(harness)).toEqual([]);
   });
@@ -510,21 +492,24 @@ describe("AgentDeviceSupervisor checking the install", () => {
     const harness = await run({ expectations: [versionRun("0.20.3\n")] });
 
     expect(unavailable(harness)).toMatchObject({
-      message: "found 0.20.3, need 0.21.25 or later",
+      message: "found 0.20.3, need 0.21.28 or later",
       reason: "wrong-version",
     });
-    expect(unavailable(harness).remedy).toContain("0.21.25 or later");
+    expect(unavailable(harness).remedy).toContain("0.21.28 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
   });
 
-  it.each(["abc", "0.21", "0.9.100"])("reports %s as wrong-version", async (printed) => {
-    const harness = await run({ expectations: [versionRun(`${printed}\n`)] });
+  it.each(["abc", "0.21", "0.9.100", "0.21.27", "0.21.28-nightly.20261013.49"])(
+    "reports %s as wrong-version",
+    async (printed) => {
+      const harness = await run({ expectations: [versionRun(`${printed}\n`)] });
 
-    expect(unavailable(harness).reason).toBe("wrong-version");
-    expect(daemonSpawns(harness)).toEqual([]);
-  });
+      expect(unavailable(harness).reason).toBe("wrong-version");
+      expect(daemonSpawns(harness)).toEqual([]);
+    },
+  );
 
-  it.each(["0.21.25-dev", "0.21.25", "0.22.0", "0.100.0", "1.0.0+build.7"])(
+  it.each(["0.21.28", "0.21.28+build.7", "0.21.29-dev", "0.22.0", "0.100.0", "1.0.0+build.7"])(
     "starts a daemon for the version %s",
     async (printed) => {
       const harness = await run({ expectations: [versionRun(`${printed}\n`), daemonSpawn()] });
@@ -797,7 +782,7 @@ describe("AgentDeviceSupervisor readiness", () => {
       platforms: ["ios", "android"],
       state: "running",
       token,
-      version: "0.21.25-dev",
+      version: "0.21.28",
     });
     expect(harness.health.reads).toContain(`http://127.0.0.1:${httpPort}`);
   });
@@ -811,7 +796,7 @@ describe("AgentDeviceSupervisor readiness", () => {
     const pid = harness.children[0]?.pid;
     await harness.filesystem.writeFileAtomic(
       daemonJsonPath,
-      JSON.stringify({ httpPort, pid, token, version: "0.21.25-dev" }),
+      JSON.stringify({ httpPort, pid, token, version: "0.21.28" }),
     );
     harness.probe.startListening(httpPort);
     await advanceUntil(harness, () => stateOf(harness) === "running", 10_000);
@@ -851,7 +836,7 @@ describe("AgentDeviceSupervisor readiness", () => {
     await advancing(harness, harness.begin());
 
     expect(unavailable(harness)).toMatchObject({
-      message: "agent-device 0.21.25-dev speaks RPC protocol 3, need 2",
+      message: "agent-device 0.21.28 speaks RPC protocol 3, need 2",
       reason: "wrong-version",
     });
     expect(unavailable(harness).remedy).toContain("RPC protocol 2");
@@ -1157,22 +1142,6 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
       expect(commandsRun(harness).filter((call) => call[0] === nodePath)).toEqual([]);
     },
   );
-
-  it("logs a warning naming the pid, stays off and runs nothing 30 s later when ps fails with the edge off", async () => {
-    const harness = await run({
-      enabled: false,
-      expectations: [psRun(900, "", 1)],
-      livePids: [900],
-      record: record(900),
-    });
-    const callsAfterStart = harness.runner.calls.length;
-
-    await advanceBy(harness, 60_000);
-
-    expect(warnings(harness).some((line) => line.includes("900"))).toBe(true);
-    expect(stateOf(harness)).toBe("off");
-    expect(harness.runner.calls).toHaveLength(callsAfterStart);
-  });
 });
 
 describe("AgentDeviceSupervisor after the daemon is running", () => {

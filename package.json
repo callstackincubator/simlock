@@ -65,7 +65,7 @@
     "mutate": "node scripts/mutate.mjs"
   },
   "dependencies": {
-    "@agent-device/proxy": "file:vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz",
+    "@agent-device/proxy": "0.21.28",
     "@hono/node-server": "2.0.10",
     "@hono/zod-validator": "^0.9.1",
     "@modelcontextprotocol/sdk": "1.29.0",

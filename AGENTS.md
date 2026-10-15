@@ -23,7 +23,9 @@ changes in this repo:
   root validation fails closed, wire input is a claim not a fact.
 - [testing.md](docs/internal/agent-rules/testing.md) — a test's title is a claim its
   body must prove; every test must be able to fail for the right reason;
-  untested code is code you can delete with a green suite.
+  what a caller can see is tested, and in a strict area every path is;
+  test a module through its surface; prove each claim once, at the
+  cheapest level.
 - [documentation.md](docs/internal/agent-rules/documentation.md) — end-user
   docs (`docs/`) vs. maintainer/agent docs (`docs/internal/`); no ADR links
   or internal-doc links from end-user docs; nothing the tool prints names a

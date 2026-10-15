@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeAgentDevice } from "../agent-device/testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
@@ -62,6 +62,7 @@ describe("lease.request requires, through a gateway", () => {
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
+      optionalModules: [agentDeviceModuleWith({})],
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
@@ -86,9 +87,8 @@ describe("lease.request requires, through a gateway", () => {
     const fake = new FakeAgentDevice();
     if (options.capability === "unavailable") fake.setUnavailable("down");
     const daemon = await startDaemon({
-      agentDeviceUpstream: fake,
       configOverrides: {
-        agentDevice: { enabled: options.capability !== "off" },
+        capabilities: { "agent-device": { enabled: options.capability !== "off" } },
         capacity: { config: { maxRunning: options.maxRunning ?? 2 }, strategy: "fixed" },
         gateway: {
           label: options.label,
@@ -105,6 +105,7 @@ describe("lease.request requires, through a gateway", () => {
           platform: "android",
         }),
       ],
+      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),

@@ -26,6 +26,7 @@ import { relay, type FrontContext } from "./context.js";
 import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-filter.js";
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
+import { releaseEndedLeases } from "./ended.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
 
@@ -166,7 +167,9 @@ async function runCommand(
     end();
     throw error;
   }
-  return isUnreachableAnswer(response) ? response : untilBodyEnds(response, end);
+  if (isUnreachableAnswer(response)) return response;
+  releaseEndedLeases(context, identity, response);
+  return untilBodyEnds(response, end);
 }
 
 // why: a command counts as running until its body has gone out, since the stream is what the CLI waits on.

@@ -40,7 +40,7 @@ class Refused extends Error {
 const refuse = (message: string): Refused => new Refused(refusal(message));
 
 interface Unit {
-  readonly kind: "command" | "allocate" | "install";
+  readonly kind: "command" | "allocate";
   readonly owner: Fields;
   readonly command: string;
   readonly isStep: boolean;
@@ -215,7 +215,6 @@ function ruleAddresses(check: Check, unit: Unit): void {
 }
 
 async function ruleSelectors(check: Check, unit: Unit): Promise<void> {
-  if (unit.kind === "install") return;
   ruleAddresses(check, unit);
   if (unit.kind === "allocate") return;
   if (unit.command === "test") return ruleShardList(check, unit);
@@ -291,7 +290,6 @@ async function applyRules(check: Check, unit: Unit): Promise<void> {
     }
   }
   rulePlatform(check, unit);
-  if (unit.kind === "install") return;
   ruleDeviceSet(unit);
   await ruleSelectors(check, unit);
   await ruleSharding(check, unit);
@@ -311,9 +309,6 @@ function unitFor(name: string, params: Fields): Unit | undefined {
   }
   if (name === "lease.allocate") {
     return { command: "", isStep: false, kind: "allocate", owner: params };
-  }
-  if (name === "install_from_source") {
-    return { command: "", isStep: false, kind: "install", owner: params };
   }
   return undefined;
 }
