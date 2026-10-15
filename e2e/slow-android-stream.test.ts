@@ -185,10 +185,47 @@ describe.skipIf(!hasAndroidSdk)(
           // for it; a screen that kept painting would pass the line above without proving anything.
           expect(tags, "no alive frame: the screen never went still").toContain(TAG.alive);
 
+          // why: the viewer leaves while the screen is still, the case where the server writes
+          // nothing and only the close can end it; the device must be left with no server and no jar.
+          await watched.cancel();
+          await reading;
+          await waitFor(
+            async () => {
+              const processes = await env.cli(["adb", "shell", "ps", "-A", "-o", "ARGS"]);
+              const files = await env.cli(["adb", "shell", "ls", "/data/local/tmp"]);
+              return (
+                processes.code === 0 &&
+                !processes.stdout.includes("com.genymobile.scrcpy.Server") &&
+                files.code === 0 &&
+                !files.stdout.includes("simlock-scrcpy-")
+              );
+            },
+            {
+              interval: 500,
+              label: "no scrcpy server and no jar left after a viewer left a still screen",
+              timeout: 30_000,
+            },
+          );
+
+          const last = await fetch(`${baseUrl}/v1/stream/leases/${encodeURIComponent(leaseId)}`, {
+            headers: { authorization },
+          });
+          expect(last.status).toBe(200);
+          const lastReader = last.body?.getReader();
+          if (lastReader === undefined) throw new Error("the stream answered without a body");
+          await lastReader.read();
+          let lastEnded = false;
+          const draining = (async () => {
+            for (;;) {
+              const step = await lastReader.read().catch(() => ({ done: true }));
+              if (step.done) break;
+            }
+            lastEnded = true;
+          })();
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);
-          await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 15_000))]);
-          expect(ended, "the stream outlived its lease").toBe(true);
+          await Promise.race([draining, new Promise((resolve) => setTimeout(resolve, 15_000))]);
+          expect(lastEnded, "the stream outlived its lease").toBe(true);
           const hostShells = await new Promise<string>((resolve) => {
             execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
           });

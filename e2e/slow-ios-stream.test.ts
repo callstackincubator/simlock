@@ -130,6 +130,8 @@ describe.skipIf(process.platform !== "darwin")(
           expect(held.length, "a still simulator's stream sent nothing for 35 s").toBeGreaterThan(
             0,
           );
+          const after = await second.reader.read();
+          expect(after.done, "a still simulator's stream ended inside 35 s").toBe(false);
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);
           const ended = await Promise.race([

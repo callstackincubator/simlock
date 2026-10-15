@@ -70,9 +70,6 @@ process at its start and by `rm -f` on close.
 - **The slow-lane stream test has not passed yet.** `e2e/slow-android-stream.test.ts` failed at the
   lease on a nearly full disk. A live check on a Pixel 9 emulator streamed, and once the host
   `adb shell` died no scrcpy process and no jar were left on the device.
-- **A daemon killed outright can leave a screen server running.** Its host `adb shell` dies with it,
-  but on a still screen the device server writes nothing, so it notices only at the next screen
-  change. Reclaim (snapshot load or wipe) ends it; a stop through `simlock daemon stop` closes it.
 - **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **Physical Android devices have no screen stream**, and the jar's digest is not checked at push.

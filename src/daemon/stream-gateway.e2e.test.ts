@@ -174,6 +174,22 @@ describe("a screen stream through a gateway", () => {
   );
 
   it(
+    "a viewer leaving the gateway stops the capture on the worker",
+    { timeout: 30_000 },
+    async () => {
+      const { screen, stream } = await fleet(true);
+      const viewer = new AbortController();
+      const response = await stream(viewer.signal);
+      expect(response.status).toBe(200);
+      const reader = response.body?.getReader();
+      if (reader === undefined) throw new Error("no body");
+      await reader.read();
+      viewer.abort();
+      await vi.waitFor(() => expect(screen.closes()).toBe(1), { timeout: 10_000 });
+    },
+  );
+
+  it(
     "answers 503 STREAM_UNAVAILABLE naming the worker when that worker does not stream",
     { timeout: 30_000 },
     async () => {
