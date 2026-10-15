@@ -68,7 +68,7 @@ describe("module manuals, flow docs and the architecture map", () => {
     expect(offenders).toEqual([]);
   });
 
-  it(`each fit in ${BUDGET} lines`, () => {
+  it(`each manual and flow doc fits in ${BUDGET} lines; the map has no budget`, () => {
     const over = [...manuals, ...flows]
       .map((doc) => ({ doc, count: lines(doc).length - 1 }))
       .filter(({ count }) => count > BUDGET)
