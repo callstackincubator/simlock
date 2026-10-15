@@ -65,7 +65,6 @@ interface Options {
   readonly command?: string;
   readonly daemonJson?: (startIndex: number) => DaemonJson;
   readonly driverEnvironment?: Readonly<Record<string, string>>;
-  readonly enabled?: boolean;
   readonly expectations?: readonly ScriptedProcessExpectation[];
   readonly filesystem?: MemoryFilesystem;
   readonly home?: string;
@@ -164,7 +163,7 @@ async function arrange(options: Options = {}) {
       PATH: "/usr/local/bin:/usr/bin",
     },
     clock,
-    config: { command: options.command ?? "agent-device", enabled: options.enabled ?? true },
+    config: { command: options.command ?? "agent-device" },
     driverEnvironment: options.driverEnvironment ?? {},
     filesystem,
     healthProbe: health,
@@ -343,23 +342,6 @@ async function readJson(harness: Harness, path: string): Promise<Record<string, 
 }
 
 describe("AgentDeviceSupervisor off and starting", () => {
-  it("with agentDevice.enabled false, start() reaps a recorded daemon, starts no process, runs no --version, and availability is off before and after", async () => {
-    const harness = await arrange({
-      enabled: false,
-      expectations: [psRun(900, ownLine())],
-      livePids: [900],
-      record: record(900),
-    });
-    expect(stateOf(harness)).toBe("off");
-
-    await advancing(harness, harness.begin());
-
-    expect(harness.processes.signals).toEqual([{ pid: 900, signal: "SIGTERM" }]);
-    expect(commandsRun(harness)).toEqual([["ps", "-ww", "-o", "args=", "-p", "900"]]);
-    await expect(harness.filesystem.exists(recordPath)).resolves.toBe(false);
-    expect(stateOf(harness)).toBe("off");
-  });
-
   it("enabled, availability is starting before start() settles", async () => {
     const harness = await arrange({ daemonJson: () => "none" });
     expect(stateOf(harness)).toBe("starting");
@@ -1160,22 +1142,6 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
       expect(commandsRun(harness).filter((call) => call[0] === nodePath)).toEqual([]);
     },
   );
-
-  it("logs a warning naming the pid, stays off and runs nothing 30 s later when ps fails with the edge off", async () => {
-    const harness = await run({
-      enabled: false,
-      expectations: [psRun(900, "", 1)],
-      livePids: [900],
-      record: record(900),
-    });
-    const callsAfterStart = harness.runner.calls.length;
-
-    await advanceBy(harness, 60_000);
-
-    expect(warnings(harness).some((line) => line.includes("900"))).toBe(true);
-    expect(stateOf(harness)).toBe("off");
-    expect(harness.runner.calls).toHaveLength(callsAfterStart);
-  });
 });
 
 describe("AgentDeviceSupervisor after the daemon is running", () => {

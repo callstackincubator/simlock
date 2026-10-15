@@ -26,11 +26,8 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function checkNames(
-  definitions: readonly OptionalModuleDefinition<unknown>[],
-  wiredElsewhere: readonly string[],
-): void {
-  const seen = new Set<string>(wiredElsewhere);
+function checkNames(definitions: readonly OptionalModuleDefinition<unknown>[]): void {
+  const seen = new Set<string>();
   for (const { name } of definitions) {
     if (!capabilityNameSchema.safeParse(name).success) {
       throw new Error(`Optional module "${name}": the name is not a valid capability name`);
@@ -43,7 +40,7 @@ function checkNames(
       throw new Error(`Optional module "${name}": the name is reserved for a core route`);
     }
   }
-  const total = definitions.length + wiredElsewhere.length;
+  const total = definitions.length;
   if (total > MAX_CAPABILITIES) {
     const last = definitions[definitions.length - 1]?.name ?? "";
     throw new Error(
@@ -97,8 +94,8 @@ async function runHook(
 }
 
 export async function createModuleHost(options: ModuleHostOptions): Promise<ModuleHost> {
-  const { definitions, logger, wiredElsewhere } = options;
-  checkNames(definitions, wiredElsewhere);
+  const { definitions, logger } = options;
+  checkNames(definitions);
 
   const capabilitySources: ModuleCapabilitySource[] = [];
   const started: Started[] = [];

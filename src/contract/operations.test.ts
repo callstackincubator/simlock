@@ -1121,7 +1121,6 @@ describe("operation input/output round trips", () => {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
       },
-      agentDevice: { command: "agent-device", enabled: false },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
@@ -1179,7 +1178,6 @@ describe("operation input/output round trips", () => {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
       },
-      agentDevice: { command: "agent-device", enabled: false },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     const config = (pool: object) => ({

@@ -3,30 +3,32 @@
 Does: runs one agent-device daemon per worker and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
 Entry: `index.ts` → `createAgentDeviceEdgeParts` (worker), `createGatewayAgentDeviceFrontParts` (gateway), `createAgentDeviceFront`, `AgentDeviceSupervisor`.
 Uses: ports, http (session, errors, token identity), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
-Imported by: `daemon/main.ts` only (index; tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
-Off unless `agentDevice.enabled` (false). Off: nothing mounted, no daemon.
+Imported by: the module registry (`definition.ts` only); `daemon/main.ts` loads `index.ts` with a dynamic `import()` on a gateway that has it on (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
+Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
 
 ## Files
 
-| File                                                          | Role                                                                         |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop the daemon; availability state                      |
-| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                     |
-| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                             |
-| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`                                   |
-| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                  |
-| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap         |
-| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)          |
-| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                 |
-| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                           |
-| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                              |
-| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                |
-| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                         |
-| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                          |
-| `front/host-link.ts`                                          | `HostLink` port; `InProcessHostLink` (worker)                                |
-| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                       |
-| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope |
-| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                |
+| File                                                          | Role                                                                             |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `definition.ts`                                               | `agentDeviceModule`: config, defaults, cap check; loads `worker.ts` only when on |
+| `worker.ts`                                                   | `createWorker`: supervisor, edge parts, capability, relay target, mount, hooks   |
+| `host/agent-device-supervisor.ts`                             | Reap, start, watch, stop the daemon; availability state                          |
+| `host/install.ts`                                             | `findAgentDevice`: command → install root → daemon entry                         |
+| `host/health.ts`                                              | `NodeAgentDeviceHealthProbe`: `GET /health`, 5 s                                 |
+| `host/availability-findings.ts`                               | `agentDeviceFindings` for `simlock doctor`                                       |
+| `host/upstream.ts`                                            | `AgentDeviceUpstream` port; `SupervisorAgentDeviceUpstream`                      |
+| `host/host.ts`                                                | `AgentDeviceHost`: `@agent-device/proxy`, tenant, 2 GiB download cap             |
+| `host/lease-end.ts`                                           | `ReleaseScopeRecord`, `AgentDeviceLeaseEnd` (lease-end participant)              |
+| `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                     |
+| `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                               |
+| `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                  |
+| `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                    |
+| `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                             |
+| `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                              |
+| `front/host-link.ts`                                          | `HostLink` port; `InProcessHostLink` (worker)                                    |
+| `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                           |
+| `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope     |
+| `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                    |
 
 ## How it works
 
@@ -34,7 +36,7 @@ Supervisor start (`AgentDeviceSupervisor.start`, at daemon start):
 
 1. Reap — pid from `<data dir>/agent-device-daemon.json`, else the state dir's `daemon.json`.
    Signal only if `ps` args end in `--simlock-home=<data dir>`; SIGTERM, check again, SIGKILL.
-2. Find — `agentDevice.command` (`agent-device`) on `PATH` or as a path; `package.json`
+2. Find — `capabilities.agent-device.command` (`agent-device`) on `PATH` or as a path; `package.json`
    names `agent-device`; a daemon entry under `dist/src`. Never downloads.
 3. Check — `--version` ≥ 0.21.28 (a prerelease of it is older); Node ≥ 22.12.0 (`shared/compatibility.ts`).
 4. Prepare — state dir `<data dir>/agent-device` (0700, ours), policy file denying
@@ -86,7 +88,7 @@ under leasing's signal (`lease.endWaitMs`).
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
 2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, or no lease id.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class; TTL = sent, capped by `agentDevice.leaseTtlCapMs`, at least 5 s;
+   `--target` → class; TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`), no
    `device`/`deviceKey`/`target`, `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
@@ -110,16 +112,16 @@ under leasing's signal (`lease.endWaitMs`).
 
 ## State and timers
 
-| What                                           | Value                           | Key                         |
-| ---------------------------------------------- | ------------------------------- | --------------------------- |
-| Ready wait / health read / `--version`         | 15 s / 5 s / 10 s               | none                        |
-| Start retry; stable run before instant restart | 30 s; 60 s                      | none                        |
-| Stop grace                                     | SIGTERM 10 s, SIGKILL 2 s       | none                        |
-| Allocate queue wait                            | 330 s                           | none                        |
-| Lease TTL cap, floor                           | unset, 5 s                      | `agentDevice.leaseTtlCapMs` |
-| agent-device lease ceiling                     | max(24 h, 2 × `lease.maxTtlMs`) | `lease.maxTtlMs`            |
-| Renewal tick                                   | TTL / 3                         | lease TTL                   |
-| Download cap; `/rpc` body                      | 2 GiB; 1 MiB                    | none                        |
+| What                                           | Value                           | Key                                       |
+| ---------------------------------------------- | ------------------------------- | ----------------------------------------- |
+| Ready wait / health read / `--version`         | 15 s / 5 s / 10 s               | none                                      |
+| Start retry; stable run before instant restart | 30 s; 60 s                      | none                                      |
+| Stop grace                                     | SIGTERM 10 s, SIGKILL 2 s       | none                                      |
+| Allocate queue wait                            | 330 s                           | none                                      |
+| Lease TTL cap, floor                           | unset, 5 s                      | `capabilities.agent-device.leaseTtlCapMs` |
+| agent-device lease ceiling                     | max(24 h, 2 × `lease.maxTtlMs`) | `lease.maxTtlMs`                          |
+| Renewal tick                                   | TTL / 3                         | lease TTL                                 |
+| Download cap; `/rpc` body                      | 2 GiB; 1 MiB                    | none                                      |
 
 Disk: `<data dir>/agent-device/` (agent-device's own files) and the pid record. Front map,
 renewals and release scopes: memory only.

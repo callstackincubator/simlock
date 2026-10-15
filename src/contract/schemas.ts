@@ -906,11 +906,6 @@ export const configSchema = z.object({
     host: z.string(),
     port: z.number(),
   }),
-  agentDevice: z.object({
-    enabled: z.boolean(),
-    command: z.string(),
-    leaseTtlCapMs: z.number().optional(),
-  }),
   health: z.object({
     enabled: z.boolean(),
     probeIntervalMs: z.number(),

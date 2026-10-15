@@ -169,6 +169,17 @@ export default {
       from: { path: "^src/modules/", pathNot: linkTestFile },
       to: { path: "^src/bus/", dependencyTypesNot: ["type-only"] },
     },
+    {
+      name: "main-loads-modules-lazily",
+      comment:
+        "main.ts imports src/agent-device only by dynamic import or for types, so a daemon that has the module turned off loads none of its code",
+      severity: "error",
+      from: { path: "^src/daemon/main\\.ts$" },
+      to: {
+        dependencyTypesNot: ["type-only", "type-import", "dynamic-import"],
+        path: "^src/agent-device/",
+      },
+    },
     direction(
       "not-modules",
       "core, leasing, the drivers, the gateway and the contract import nothing from the optional-module host or its registry",

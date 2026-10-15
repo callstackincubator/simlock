@@ -67,7 +67,7 @@ async function arrange(version: string) {
   const supervisor = new AgentDeviceSupervisor({
     baseEnvironment: { HOME: "/home/operator", PATH: "/usr/local/bin:/usr/bin" },
     clock,
-    config: { command: "agent-device", enabled: true },
+    config: { command: "agent-device" },
     driverEnvironment: {},
     filesystem,
     healthProbe: health,

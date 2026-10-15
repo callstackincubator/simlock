@@ -275,7 +275,7 @@ state, in the order it sends them (at most 16, no name twice):
 `name` is lower-case letters, digits and `-`, starting with a letter, up to 32
 characters. `state` is `available`, `unavailable` or `off`. `reason` is there
 for `unavailable` only: 1 to 500 characters, with control characters replaced
-by spaces. A worker with `agentDevice.enabled` `false` or unset sends
+by spaces. A worker with `capabilities.agent-device.enabled` `false` or unset sends
 `agent-device` as `off`. A status read that takes over 1 s or fails shows
 `unavailable` with `could not read <name>'s status`. A gateway's own answer
 leaves `capabilities` out: each worker's list is on its entry in `workers`.
@@ -1522,7 +1522,7 @@ has no optional module of its own, so no such route exists yet.
 
 ### `/v1/agent-device/*`
 
-A **worker** with `agentDevice.enabled` and `http.enabled` both `true` serves
+A **worker** with `capabilities.agent-device.enabled` and `http.enabled` both `true` serves
 agent-device's proxy URL here. Point the agent-device CLI at it and give it
 your Simlock token:
 
@@ -1534,7 +1534,7 @@ agent-device snapshot
 agent-device close
 ```
 
-With `agentDevice.enabled` `false` or unset, on a worker or a gateway, every
+With `capabilities.agent-device.enabled` `false` or unset, on a worker or a gateway, every
 `/v1/agent-device` URL answers `404`.
 
 Downloads (artifacts) up to 2 GB (2147483648 bytes) are carried. A download
@@ -1543,7 +1543,7 @@ whose `content-length` is over that is answered `413` with
 read. A download with no usable `content-length` that passes 2 GB is cut with
 a failed response, never one that ends as if it were whole.
 
-A **gateway** with `agentDevice.enabled` serves the same URL, and the CLI is
+A **gateway** with `capabilities.agent-device.enabled` serves the same URL, and the CLI is
 pointed at the gateway the same way. `open` lands only on a worker whose
 agent-device is available, and the commands, heartbeats and `close` of that
 lease go to the same worker. An agent on a gateway never shares an
@@ -1594,7 +1594,7 @@ agent-device session with an agent on a worker's own tokens. Through a gateway:
   `devices`. Once agent-device answers it, Simlock renews the lease to now plus
   its TTL, unless the lease already runs longer (a longer renewal by the agent
   stands). A heartbeat's `ttlMs` changes that TTL, at least 5 seconds and at
-  most `agentDevice.leaseTtlCapMs` when that is set. While a command runs, the
+  most `capabilities.agent-device.leaseTtlCapMs` when that is set. While a command runs, the
   lease is renewed every third of its TTL, and once more when the command ends.
   An agent that stops sending heartbeats loses the device one TTL later.
 - **A lease Simlock ended is not replaced quietly.** When the lease is gone
@@ -1629,7 +1629,7 @@ What `open` asks Simlock for:
 | `--platform ios` or `android` | that platform, any device Simlock grants |
 | `--target mobile`, `tv`, `desktop` | the class `phone`, `tv`, `desktop` |
 | `--device "iPhone 17 Pro"` | that model, and no class: the model wins over `--target` |
-| `ttlMs` | that TTL, at least 5 seconds and at most `agentDevice.leaseTtlCapMs` when set; none sent means that cap, or `lease.defaultTtlMs` without one |
+| `ttlMs` | that TTL, at least 5 seconds and at most `capabilities.agent-device.leaseTtlCapMs` when set; none sent means that cap, or `lease.defaultTtlMs` without one |
 
 Messages the route prints. The agent-device CLI reads the message in the body
 (a JSON-RPC error on `/rpc`, `{ "ok": false, "error", "code" }` elsewhere), not

@@ -25,7 +25,6 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
   return {
     capabilities: {},
     mode: "worker",
-    agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     gateway: {

@@ -2,6 +2,7 @@ import { createHash, type Hash } from "node:crypto";
 
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import { agentDeviceModule } from "./definition.js";
+import { createWorkerWith } from "./worker.js";
 import type { AgentDeviceHealthProbe } from "./host/health.js";
 import type { AgentDeviceUpstream, AgentDeviceUpstreamState } from "./host/upstream.js";
 
@@ -693,9 +694,12 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   }
 }
 
-export function agentDeviceModuleWith(_fakes: {
+export function agentDeviceModuleWith(fakes: {
   readonly upstream?: AgentDeviceUpstream;
   readonly health?: AgentDeviceHealthProbe;
 }): OptionalModuleDefinition<unknown> {
-  return agentDeviceModule as OptionalModuleDefinition<unknown>;
+  return {
+    ...agentDeviceModule,
+    loadWorker: () => Promise.resolve({ createWorker: createWorkerWith(fakes) }),
+  } as OptionalModuleDefinition<unknown>;
 }

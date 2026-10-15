@@ -139,7 +139,7 @@ function defineSuite(target: Target): void {
       driver: "real",
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        agentDevice: { enabled: true, command: pinned },
+        capabilities: { "agent-device": { enabled: true, command: pinned } },
         capacity: {
           config: { limits: { [platform]: { maxDevices: 1, maxRunning: 1 } } },
         },
@@ -433,77 +433,83 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with agentDevice.leaseTtlCapMs 20000, an agent that sends no more commands gets lease.expired at most 25 s after its last command, and another agent's open then gets the device",
+    "with capabilities.agent-device.leaseTtlCapMs 20000, an agent that sends no more commands gets lease.expired at most 25 s after its last command, and another agent's open then gets the device",
     { timeout: 900_000 },
     async () => {
-      await env.withConfig({ agentDevice: { leaseTtlCapMs: 20_000 } }, async () => {
-        await awaitAgentDevice();
-        const a = await agent("a");
-        const b = await agent("b");
-        ok(await open(a));
-        const [lease] = await listLeases(env);
-        const lastCommandAt = Date.now();
+      await env.withConfig(
+        { capabilities: { "agent-device": { leaseTtlCapMs: 20_000 } } },
+        async () => {
+          await awaitAgentDevice();
+          const a = await agent("a");
+          const b = await agent("b");
+          ok(await open(a));
+          const [lease] = await listLeases(env);
+          const lastCommandAt = Date.now();
 
-        let expired: RecordedEvent | undefined;
-        await waitFor(
-          async () => {
-            expired = await eventAfter(
-              env,
-              "lease.expired",
-              lastCommandAt - 5_000,
-              forLease(lease?.id),
-            );
-            return expired !== undefined;
-          },
-          { timeout: 60_000, interval: 1_000, label: "lease.expired for a's lease" },
-        );
-        expect((expired as RecordedEvent).timestamp - lastCommandAt).toBeLessThanOrEqual(25_000);
+          let expired: RecordedEvent | undefined;
+          await waitFor(
+            async () => {
+              expired = await eventAfter(
+                env,
+                "lease.expired",
+                lastCommandAt - 5_000,
+                forLease(lease?.id),
+              );
+              return expired !== undefined;
+            },
+            { timeout: 60_000, interval: 1_000, label: "lease.expired for a's lease" },
+          );
+          expect((expired as RecordedEvent).timestamp - lastCommandAt).toBeLessThanOrEqual(25_000);
 
-        ok(await open(b));
-        expect(await listLeases(env)).toHaveLength(1);
-      });
+          ok(await open(b));
+          expect(await listLeases(env)).toHaveLength(1);
+        },
+      );
     },
   );
 
   it(
-    "with agentDevice.leaseTtlCapMs 20000, after a graceful simlock daemon restart an old simlock lease whose agent sends nothing gets lease.expired at most 5 s after the later of its last renewal + 20 s and the moment the restarted daemon answers simlock status",
+    "with capabilities.agent-device.leaseTtlCapMs 20000, after a graceful simlock daemon restart an old simlock lease whose agent sends nothing gets lease.expired at most 5 s after the later of its last renewal + 20 s and the moment the restarted daemon answers simlock status",
     { timeout: 900_000 },
     async () => {
-      await env.withConfig({ agentDevice: { leaseTtlCapMs: 20_000 } }, async () => {
-        await awaitAgentDevice();
-        const a = await agent("a");
-        ok(await open(a));
-        const [lease] = await listLeases(env);
+      await env.withConfig(
+        { capabilities: { "agent-device": { leaseTtlCapMs: 20_000 } } },
+        async () => {
+          await awaitAgentDevice();
+          const a = await agent("a");
+          ok(await open(a));
+          const [lease] = await listLeases(env);
 
-        await env.restart();
-        const answeredAt = Date.now();
+          await env.restart();
+          const answeredAt = Date.now();
 
-        let expired: RecordedEvent | undefined;
-        await waitFor(
-          async () => {
-            expired = await eventAfter(env, "lease.expired", 0, forLease(lease?.id));
-            return expired !== undefined;
-          },
-          { timeout: 60_000, interval: 1_000, label: "lease.expired for the old lease" },
-        );
-        const lastRenewal = Math.max(
-          ...(await env.events())
-            .filter(
-              (event) =>
-                (event.event === "lease.granted" || event.event === "lease.renewed") &&
-                forLease(lease?.id)(event),
-            )
-            .map((event) => event.timestamp),
-        );
-        expect((expired as RecordedEvent).timestamp).toBeLessThanOrEqual(
-          Math.max(lastRenewal + 20_000, answeredAt) + 5_000,
-        );
-      });
+          let expired: RecordedEvent | undefined;
+          await waitFor(
+            async () => {
+              expired = await eventAfter(env, "lease.expired", 0, forLease(lease?.id));
+              return expired !== undefined;
+            },
+            { timeout: 60_000, interval: 1_000, label: "lease.expired for the old lease" },
+          );
+          const lastRenewal = Math.max(
+            ...(await env.events())
+              .filter(
+                (event) =>
+                  (event.event === "lease.granted" || event.event === "lease.renewed") &&
+                  forLease(lease?.id)(event),
+              )
+              .map((event) => event.timestamp),
+          );
+          expect((expired as RecordedEvent).timestamp).toBeLessThanOrEqual(
+            Math.max(lastRenewal + 20_000, answeredAt) + 5_000,
+          );
+        },
+      );
     },
   );
 
   it(
-    "with agentDevice.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports module-unavailable with found 0.9.2, need 0.21.28 or later",
+    "with capabilities.agent-device.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports module-unavailable with found 0.9.2, need 0.21.28 or later",
     { timeout: 900_000 },
     async () => {
       const root = await mkdtemp(join(tmpdir(), "simlock-ad-old-"));
@@ -517,7 +523,7 @@ function defineSuite(target: Target): void {
       await chmod(entry, 0o755);
       const message = "found 0.9.2, need 0.21.28 or later";
 
-      await env.withConfig({ agentDevice: { command: entry } }, async () => {
+      await env.withConfig({ capabilities: { "agent-device": { command: entry } } }, async () => {
         const a = await agent("a");
         let finding: { kind: string; message: string } | undefined;
         await waitFor(

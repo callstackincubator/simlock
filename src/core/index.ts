@@ -38,6 +38,7 @@ export {
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
+export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,

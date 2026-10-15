@@ -8,7 +8,6 @@ const gibibyte = 1024 ** 3;
 const config: Config = {
   capabilities: {},
   mode: "worker",
-  agentDevice: { command: "agent-device", enabled: false },
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
   gateway: {

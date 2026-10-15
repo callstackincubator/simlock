@@ -141,5 +141,4 @@ export interface ModuleHostOptions {
   readonly config: Config;
   readonly logger: Logger;
   readonly context: Omit<WorkerContext<unknown>, "name" | "config" | "daemonConfig" | "logger">;
-  readonly wiredElsewhere: readonly string[];
 }

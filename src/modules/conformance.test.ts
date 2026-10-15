@@ -67,7 +67,6 @@ describe("every optional module's contract", () => {
       definitions: [definition],
       logger: new NoopLogger(),
       role: "worker",
-      wiredElsewhere: [],
     });
 
     expect(loadWorker).not.toHaveBeenCalled();

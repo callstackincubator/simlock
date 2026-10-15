@@ -2,23 +2,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
-  agentDeviceCapabilitySource,
-  agentDeviceFindings,
-  agentDeviceRelayTarget,
-  AgentDeviceSupervisor,
-  cancelWaitingAllocates,
-  createAgentDeviceEdgeParts,
-  disposeAgentDeviceEdge,
-  createAgentDeviceFront,
-  createGatewayAgentDeviceFrontParts,
-  SupervisorAgentDeviceUpstream,
-  type AgentDeviceHealthProbe,
-  type AgentDeviceUpstream,
-  type FleetPort,
-  type FleetWorker,
-  NodeAgentDeviceHealthProbe,
-} from "../agent-device/index.js";
+import type { FleetPort, FleetWorker } from "../agent-device/index.js";
+import type { AgentDeviceModuleConfig } from "../agent-device/definition.js";
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
@@ -129,8 +114,6 @@ import type { RelayTargets } from "./relay.js";
 import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
-  readonly agentDeviceHealth?: AgentDeviceHealthProbe;
-  readonly agentDeviceUpstream?: AgentDeviceUpstream;
   readonly clock?: Clock;
   readonly configOverrides?: ConfigOverrides;
   readonly configPath?: string;
@@ -335,10 +318,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
     modelPreferences,
-    optionalModules: () => [
-      ...agentDeviceFindings(agentDevice.availability()),
-      ...moduleHost.findings(),
-    ],
+    optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
     registry,
     systemStats,
@@ -347,31 +327,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     {},
     ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
   );
-  const agentDevice = new AgentDeviceSupervisor({
-    baseEnvironment: process.env,
-    clock,
-    config: config.agentDevice,
-    driverEnvironment: leaseEnvironment,
-    filesystem,
-    healthProbe: options.agentDeviceHealth ?? new NodeAgentDeviceHealthProbe(),
-    home: dataDirectory,
-    leaseMaxTtlMs: config.lease.maxTtlMs,
-    logger: logger.child("agent-device"),
-    nodePath: process.execPath,
-    nodeVersion: process.versions.node,
-    platforms: drivers.map((driver) => driver.platform),
-    processRunner,
-    processSupervisor,
-    tcpProbe,
-  });
-  // why: the edge needs nothing from leasing, so it is built here, with the supervisor it reads.
-  const agentDeviceParts = config.agentDevice.enabled
-    ? createAgentDeviceEdgeParts(
-        options.agentDeviceUpstream ?? new SupervisorAgentDeviceUpstream(agentDevice),
-        clock,
-        drivers.map((driver) => driver.platform),
-      )
-    : undefined;
   // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const moduleHost = await createModuleHost({
@@ -399,7 +354,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     definitions: moduleDefinitions,
     logger,
     role: "worker",
-    wiredElsewhere: ["agent-device"],
   });
   // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
@@ -411,10 +365,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [
-      ...(agentDeviceParts === undefined ? [] : [agentDeviceParts.leaseEnd]),
-      ...moduleHost.leaseEndParticipants,
-    ],
+    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
@@ -527,12 +478,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
     beginStop: () => core.closeWarmPool(),
     // why: the source's name is the config key's; the core names no module, so the composition supplies it.
-    capabilitySources: [
-      agentDeviceParts === undefined
-        ? { name: "agent-device", read: async () => ({ state: "off" }) }
-        : agentDeviceCapabilitySource(agentDeviceParts),
-      ...moduleHost.capabilitySources,
-    ],
+    capabilitySources: [...moduleHost.capabilitySources],
     capacity: core.capacityReader,
     warmPool: core.warmPoolReader,
     catalog: core.catalog,
@@ -567,9 +513,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     presence: latestPresence,
     reaper,
     relayTargets: {
-      ...(agentDeviceParts === undefined
-        ? {}
-        : { "agent-device": agentDeviceRelayTarget(agentDeviceParts) }),
       ...moduleHost.relayTargets,
       ...options.relayTargets,
     },
@@ -594,9 +537,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       // Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
-      // why: before the drivers: the Android driver stops simlock's adb server, which this
-      // daemon's agent-device uses, and a client that finds no server forks its own.
-      await agentDevice.stop();
       await moduleHost.beforeDriversDispose();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
@@ -618,10 +558,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
     // here.
     stopAuxiliary: async () => {
-      if (agentDeviceParts !== undefined) {
-        disposeAgentDeviceEdge(agentDeviceParts);
-        await cancelWaitingAllocates(agentDeviceParts, (id) => leasing.cancelPending(id));
-      }
       await moduleHost.beforeDrain();
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
@@ -642,9 +578,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     onSocketClaimed: () => {
       socketClaimed = true;
       moduleHost.afterSocketClaimed();
-      // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost
-      // the socket race never gets here, so it reaps nothing.
-      if (options.agentDeviceUpstream === undefined) void agentDevice.start();
       // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
       // `status.get` never parks (it still answers `starting` during convergence), but its
       // `events.subscribe` does park on startup readiness, so the refresh that follows the
@@ -679,22 +612,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       leaseRequests: leasing.requests,
       logger: httpLogger,
-      mounts: [
-        ...(agentDeviceParts === undefined
-          ? []
-          : [
-              createAgentDeviceFront(agentDeviceParts, {
-                clock,
-                dispatch,
-                logger: logger.child("agent-device"),
-                maxRunMs: config.lease.maxTtlMs,
-                ...(config.agentDevice.leaseTtlCapMs === undefined
-                  ? {}
-                  : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
-              }),
-            ]),
-        ...moduleHost.mounts({ dispatch }),
-      ],
+      mounts: [...moduleHost.mounts({ dispatch })],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
       tokens,
@@ -877,8 +795,14 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const gatewayRelay = new GatewayRelay({ directory: gatewayService });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
-  const agentDeviceParts = config.agentDevice.enabled
-    ? createGatewayAgentDeviceFrontParts(
+  const agentDeviceSection = config.capabilities["agent-device"] as
+    | (Partial<AgentDeviceModuleConfig> & { readonly enabled?: boolean })
+    | undefined;
+  // why: loaded only when turned on, so no daemon loads agent-device's code through a static import.
+  const agentDeviceModule =
+    agentDeviceSection?.enabled === true ? await import("../agent-device/index.js") : undefined;
+  const agentDeviceParts = agentDeviceModule
+    ? agentDeviceModule.createGatewayAgentDeviceFrontParts(
         agentDeviceFleetPort({
           instanceId,
           leaseIndex,
@@ -966,9 +890,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {
-      if (agentDeviceParts !== undefined) {
-        disposeAgentDeviceEdge(agentDeviceParts);
-        await cancelWaitingAllocates(agentDeviceParts, (id) => fleetCoordinator.cancelPending(id));
+      if (agentDeviceModule !== undefined && agentDeviceParts !== undefined) {
+        agentDeviceModule.disposeAgentDeviceEdge(agentDeviceParts);
+        await agentDeviceModule.cancelWaitingAllocates(agentDeviceParts, (id) =>
+          fleetCoordinator.cancelPending(id),
+        );
       }
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
@@ -1000,17 +926,17 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
       mounts:
-        agentDeviceParts === undefined
+        agentDeviceModule === undefined || agentDeviceParts === undefined
           ? []
           : [
-              createAgentDeviceFront(agentDeviceParts, {
+              agentDeviceModule.createAgentDeviceFront(agentDeviceParts, {
                 clock,
                 dispatch,
                 logger: logger.child("agent-device"),
                 maxRunMs: config.lease.maxTtlMs,
-                ...(config.agentDevice.leaseTtlCapMs === undefined
+                ...(agentDeviceSection?.leaseTtlCapMs === undefined
                   ? {}
-                  : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
+                  : { leaseTtlCapMs: agentDeviceSection.leaseTtlCapMs }),
               }),
             ],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there

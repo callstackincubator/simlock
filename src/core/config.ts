@@ -253,11 +253,6 @@ export interface Config {
       readonly bootAnimation: boolean;
     };
   };
-  readonly agentDevice: {
-    readonly enabled: boolean;
-    readonly command: string;
-    readonly leaseTtlCapMs?: number;
-  };
   /**
    * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
    * on `mode`:
@@ -420,7 +415,6 @@ export async function loadConfig({
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
-  validateAgentDeviceTtlCap(merged);
   validateEventLogBounds(merged);
   if (mode === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
@@ -462,16 +456,6 @@ function validateLeaseTtls(config: Config): void {
   }
 }
 
-/** why: agent-device's shortest lease window, so a cap below it would shorten leases past what agent-device keeps. */
-const MIN_AGENT_DEVICE_LEASE_TTL_MS = 5_000;
-
-function validateAgentDeviceTtlCap(config: Config): void {
-  const cap = config.agentDevice.leaseTtlCapMs;
-  if (cap !== undefined && cap > config.lease.maxTtlMs) {
-    throw invalidValue("agentDevice.leaseTtlCapMs", "at most lease.maxTtlMs");
-  }
-}
-
 /**
  * Cross-field check: the size cap has to hold the current file and at least one full rotated
  * generation, or the sweep would delete the history the moment it rotates.
@@ -496,7 +480,6 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "eventBuffer",
   "eventLog",
   "gateway",
-  "agentDevice",
   "capabilities",
 ];
 
@@ -504,9 +487,6 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
  * `disconnectedRetentionMs`, `execTimeoutMs`, and `leaseRequestTimeoutMs` are the ones the
  * gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
-
-// why: `command` names the program a worker runs, and a gateway runs none.
-const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
 
 /**
  * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
@@ -536,15 +516,6 @@ function warnWorkerOnlyKeys(
       warn,
       (key) =>
         `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
-        `and this daemon runs in gateway mode.`,
-    );
-    warnWorkerOnlySubKeys(
-      object,
-      "agentDevice",
-      WORKER_ONLY_AGENT_DEVICE_KEYS,
-      warn,
-      (key) =>
-        `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
         `and this daemon runs in gateway mode.`,
     );
     warnWorkerOnlyModuleKeys(object, modules, warn);
@@ -814,7 +785,6 @@ function defaultConfig(
         bootAnimation: true,
       },
     },
-    agentDevice: { enabled: false, command: "agent-device" },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
@@ -970,11 +940,6 @@ function configValidators(
         audio: booleanValue,
         bootAnimation: booleanValue,
       }),
-    }),
-    agentDevice: objectValidator({
-      enabled: booleanValue,
-      command: nonEmptyString,
-      leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),
