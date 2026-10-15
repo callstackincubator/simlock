@@ -189,7 +189,12 @@ stateDiagram-v2
   sends nothing, so the Android driver sends an `alive` frame after 5 s
   with nothing new, once its first key frame is out; an encoder that never
   paints meets the silence bound. The bounds nest: 5 s alive < 30 s
-  silence < 330 s relay idle (§7).
+  silence < 330 s relay idle (§7). The console waits 90 s for a stream's
+  headers, not the 10 s every other console request gets ([ADR
+  0013](0013-the-console-reads-routes-and-follows-the-event-stream.md)):
+  a worker may take up to 75 s (push, server start, meta frame) before it
+  answers, and a console that gave up first would show its own timeout
+  instead of the worker's reason.
 - **A device rebooted under a lease.** On Android the stream ends when
   the device socket closes or at the silence bound, and close runs its
   cleanup against the serial it stored at open. On iOS the capture
