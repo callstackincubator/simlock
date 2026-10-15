@@ -169,8 +169,11 @@ stateDiagram-v2
   lease-end participant (ADR 0024) aborts every open of the ended lease,
   waits for each open in progress to settle, then closes what attached
   and waits for those closes. The wait is bounded by each driver's own
-  bounds and by leasing's signal (ADR 0024 §2), so the reclaim starts on a
-  device nothing films. A lease end by any route (release, release-all,
+  bounds and by leasing's signal (ADR 0024 §2), which fires at
+  `lease.endWaitMs` (default 10 minutes). Within that the reclaim starts on
+  a device nothing films. Past it the wipe starts anyway, and an Android
+  open still pushing (up to 30 s) or starting its server (up to 15 s) can
+  overlap the reclaim; that is accepted, with that bound. A lease end by any route (release, release-all,
   expiry, device lost, startup) stops the stream, viewers connected or
   not. A nuke or a daemon shutdown aborts the participants first, so its
   wipe may run while a capture is still closing; that is accepted, since
@@ -310,8 +313,8 @@ For each capture the client:
    has not exited after 1 s, then `rm -f` of the jar.
 
 `cleanup=true` with no setting options only unlinks the jar: the server
-does it as it starts, and its clean-up process, which survives the
-server, does it again. Killing the
+starts a clean-up process, which survives the server and unlinks the jar
+as it starts. Killing the
 host-side `adb shell` ends the server on the device. So a closed capture
 leaves no jar and no server behind. When the daemon dies mid-capture, its
 socket closes and the server ends at its next failed write.
@@ -345,7 +348,8 @@ channels:
   head. Once the head is in, an idle timer bounds the body: it restarts on
   every chunk, and when 330 s pass with no response bytes it ends the
   exchange as a dead worker does (`WORKER_UNREACHABLE`, `relay.cancel`,
-  the channel aborted). `GatewayRelayOptions.idleMs` sets it. The relay
+  the channel aborted). It runs on the daemon's Clock port;
+  `GatewayRelayOptions.idleMs` sets it. The relay
   still names no target (architecture rule 21). 330 s, not less, because
   an agent-device `/rpc` body may sit silent between progress lines, and
   agent-device's proxy already aborts every exchange 300 s after it starts
@@ -434,7 +438,7 @@ a contract change, so the daemon protocol goes up by one.
   an encoder, on Android an encoder inside the emulator. Two viewers cost
   two captures, with no limit per lease in v1.
 - A lease end on a lease whose capture is still opening waits for that
-  open to stop, up to the driver's own bounds or leasing's signal.
+  open to stop, up to the driver's own bounds or `lease.endWaitMs`.
 - iOS streams need Xcode on the worker when `pnpm build` runs. A worker
   built without it reports why in its `stream` capability.
 - A slow viewer slows its own capture rather than losing frames on the
@@ -485,8 +489,8 @@ a contract change, so the daemon protocol goes up by one.
 - **`cleanup=false`.** Rejected: the jar would stay in the emulator after a
   daemon was killed. With no setting options, `cleanup=true` changes no
   device setting.
-- **A reclaim sweep of `simlock-scrcpy-*` jars.** Not needed: the server
-  unlinks its jar as it starts, and close runs `rm -f` for one that never
+- **A reclaim sweep of `simlock-scrcpy-*` jars.** Not needed: the
+  server's clean-up process unlinks the jar as it starts, and close runs `rm -f` for one that never
   started.
 - **Drop deltas in the Android client when its reader falls behind.**
   Rejected: the body is pulled, so the client never holds a backlog;
