@@ -55,7 +55,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open past the silence bound, and ends when its lease is released under a viewer",
+      "streams a leased emulator's screen as meta, an avcC description and an H.264 key frame, leaves no server or jar once the viewer goes, keeps a still screen open 15 s past the silence bound with alive frames, and ends when its lease is released under a viewer",
       { timeout: 480_000 },
       async () => {
         const { env, port } = await withHttpDaemon((httpPort) => ({
@@ -178,9 +178,12 @@ describe.skipIf(!hasAndroidSdk)(
             }
             ended = true;
           })();
-          await new Promise((resolve) => setTimeout(resolve, 40_000));
+          await new Promise((resolve) => setTimeout(resolve, 45_000));
           expect(ended, "a still screen's stream ended inside the silence bound").toBe(false);
           expect(tags).toContain(TAG.keyframe);
+          // why: an `alive` frame is the evidence the screen went still and the stream was kept open
+          // for it; a screen that kept painting would pass the line above without proving anything.
+          expect(tags, "no alive frame: the screen never went still").toContain(TAG.alive);
 
           const release = await env.cli(["release", leaseId]);
           expect(release.code, release.stderr).toBe(0);

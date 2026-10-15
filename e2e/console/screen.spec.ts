@@ -105,6 +105,14 @@ async function frames(page: Page): Promise<number> {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+async function streamCapability(host: RunningDaemon): Promise<string | undefined> {
+  const listed = await host.cli(["worker", "list", "--json"]);
+  expect(listed.code, listed.stderr).toBe(0);
+  const views = (listed.json as { workers: { capabilities?: { name: string; state: string }[] }[] })
+    .workers;
+  return views[0]?.capabilities?.find((entry) => entry.name === "stream")?.state;
+}
+
 async function captureLogLines(dir: string, word: string): Promise<number> {
   const log = await captureLog(dir);
   return log.split("\n").filter((line) => line.startsWith(word)).length;
@@ -120,6 +128,7 @@ test.describe("the Screen pane", () => {
       await expect.poll(() => fact(page, "Picture")).toBe("—");
       await expect.poll(() => fact(page, "State")).toBe("off");
       expect(await captureLogLines(started.dir, "opened")).toBe(0);
+      expect(await streamCapability(started.host)).toBe("available");
     } finally {
       await cleanup(started);
     }
@@ -199,6 +208,7 @@ test.describe("the Screen pane", () => {
       await openLeasePage(page, host, lease);
       await showButton(page).click();
       await expect(page.getByRole("alert")).toContainText("stream.enabled is on");
+      expect(await streamCapability(host)).toBeUndefined();
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLog(dir)).toBe("");
     } finally {

@@ -844,7 +844,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // `GatewayOwnerRoutedFacts`'s own doc comment for why the fleet's lease index, not a worker's
   // relayed payload, is what a fleet lease's push has to be routed by.
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
-  const gatewayRelay = new GatewayRelay({ directory: gatewayService });
+  const gatewayRelay = new GatewayRelay({ clock, directory: gatewayService });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
   const agentDeviceParts = config.agentDevice.enabled

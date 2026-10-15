@@ -5,6 +5,7 @@
 import { isSimlockError, relayHeaderPairs, type AnySimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
+import { type Clock, SystemClock, type TimerHandle } from "../ports/index.js";
 import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
 
@@ -12,6 +13,7 @@ export interface GatewayRelayOptions {
   readonly directory: WorkerDirectory;
   readonly deadlineMs?: number;
   readonly idleMs?: number;
+  readonly clock?: Clock;
 }
 
 export interface GatewayRelayCall {
@@ -39,6 +41,7 @@ export class GatewayRelay {
         call,
         client: () => liveClient(this.options.directory.target(workerId)),
         deadlineMs: this.options.deadlineMs ?? DEFAULT_DEADLINE_MS,
+        clock: this.options.clock ?? new SystemClock(),
         idleMs: this.options.idleMs ?? DEFAULT_IDLE_MS,
         reject,
         resolve,
@@ -54,6 +57,7 @@ interface ExchangeInit {
   readonly client: () => GatewayWorkerClient | undefined;
   readonly deadlineMs: number;
   readonly idleMs: number;
+  readonly clock: Clock;
   readonly resolve: (response: Response) => void;
   readonly reject: (error: unknown) => void;
   readonly workerId: string;
@@ -67,7 +71,7 @@ class Exchange {
   #reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #ahead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
-  #idleTimer: ReturnType<typeof setTimeout> | undefined;
+  #idleTimer: TimerHandle | undefined;
   #callerBody: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #requestSent = false;
   #cancelSent = false;
@@ -265,9 +269,9 @@ class Exchange {
 
   #armIdle(): void {
     if (!this.#headed || this.#done) return;
-    clearTimeout(this.#idleTimer);
-    const { idleMs, workerId } = this.init;
-    this.#idleTimer = setTimeout(() => {
+    if (this.#idleTimer !== undefined) this.init.clock.cancel(this.#idleTimer);
+    const { clock, idleMs, workerId } = this.init;
+    this.#idleTimer = clock.setTimer(idleMs, () => {
       this.#fail(
         new DispatchError(
           "WORKER_UNREACHABLE",
@@ -275,7 +279,7 @@ class Exchange {
           { workerId },
         ),
       );
-    }, idleMs);
+    });
   }
 
   #invalid(): void {
@@ -402,7 +406,7 @@ class Exchange {
     if (this.#done) return;
     this.#done = true;
     clearTimeout(this.#timer);
-    clearTimeout(this.#idleTimer);
+    if (this.#idleTimer !== undefined) this.init.clock.cancel(this.#idleTimer);
     this.init.call.request.signal.removeEventListener("abort", this.#abortListener);
     this.#callerBody?.cancel().catch(() => undefined);
   }
