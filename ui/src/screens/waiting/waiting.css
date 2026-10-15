@@ -1,0 +1,44 @@
+/* why: the list row's lead track is a 10px square's width; a place in the queue (`#12`) is text, so
+ * here the track grows to fit it. */
+.waiting-list .list-row {
+  grid-template-columns: minmax(2.5ch, auto) minmax(0, 1fr) auto;
+}
+
+.waiting-place {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.waiting-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.waiting-card-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.waiting-card-value {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 500;
+}
+
+.waiting-card-word {
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+
+.waiting-card-note {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
