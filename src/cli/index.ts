@@ -92,7 +92,7 @@ const LEASE_LOST_EXIT_CODE = 14;
 const WORKER_INSTALL_INCOMPLETE_EXIT_CODE = 15;
 
 /**
- * A key that is safe to the left of `=` in a shell `export`. Anything else is a command
+ * why: A key that is safe to the left of `=` in a shell `export`. Anything else is a command
  * waiting for `eval` to run it, and escaping the value alone defends the half an attacker
  * does not need. Not reachable through the shipped drivers (their keys are literals), but
  * `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
@@ -106,12 +106,6 @@ class UsageError extends Error {
   }
 }
 
-/**
- * Points a human at `--help` from inside the single structured stderr line,
- * for the two usage errors most likely to strand someone at a terminal: an
- * unrecognized command and a missing required argument. The full command
- * banner is no longer dumped to stderr on every failure; it is one flag away.
- */
 function withHelpHint(message: string): string {
   return `${message} (run \`simlock --help\` for usage)`;
 }
@@ -122,100 +116,37 @@ interface Output {
 
 type McpStdioRunner = () => Promise<void>;
 
-/**
- * ADR 0003 §11: the CLI renders the contract, and nothing else. Every daemon-touching command
- * goes through `connectAdmin`/`connectExistingAdmin` -- both always hand back a
- * `SimlockAdminClient` (ADR §5: "the CLI connects as admin whenever the local file is
- * readable, falling back to an agent session ... when it is not"). Whether the connection
- * actually *is* admin is entirely the daemon's call (`client.role`); an unauthenticated
- * connection still gets an admin-shaped client back, and simply gets `FORBIDDEN` from the
- * daemon on any operation that requires more than agent. This is what lets `lease`/`release`
- * (agent-role operations) and `list`/`cleanup`/`nuke`/`token`/... (admin-role operations) share
- * one connection helper instead of two.
- */
 export interface CliEnvironment {
-  /**
-   * The `Clock` port (architecture rule 9). A holder's renew timer runs on it, so a test can
-   * drive the cadence by hand instead of waiting out a real TTL.
-   */
   readonly clock: Clock;
   readonly configPath: string;
-  /** ADR §4's requester default and this connection's fixed principal: `SIMLOCK_AGENT_ID`, else
-   * the agent tool's session id, else the pid (`resolveRequesterId`). See §9's
-   * "SIMLOCK_AGENT_ID and --agent-id still set the requester id ... they are not the
-   * principal": `--agent-id` overrides `lease.request`'s `requesterId` field, never this. */
   readonly requesterId: string;
-  /**
-   * Connects (auto-launching the daemon if it is not already running) and completes `hello`
-   * with whatever `resolveCredential` resolves to.
-   *
-   * `resolveCredential` is called only *after* the raw connection is established -- which is
-   * also where auto-launch happens (ADR §5: "written atomically after the socket claim
-   * succeeds"). A caller resolving the local `admin.token` file before the connection exists
-   * (the pre-fix bug: B2) races the whole daemon spawn instead of just the narrow
-   * claim-to-persist window the file-retry loop is meant for. See `readAdminTokenFileWithRetry`.
-   */
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient>;
-  /** Same as `connectAdmin` but never auto-launches -- `daemon stop`/`daemon status` must not
-   * start a daemon just to ask whether one is running. */
   readonly connectExistingAdmin: (
     resolveCredential: () => Promise<string | undefined>,
   ) => Promise<SimlockAdminClient>;
-  /** `SIMLOCK_ADMIN_TOKEN`, ADR §5's second resolution source. */
   readonly adminTokenFromEnv?: string;
-  /** One read attempt at the local `admin.token` file, ADR §5's third resolution source.
-   * `undefined` for "missing, unreadable, or empty" -- callers retry, not this. */
   readonly readAdminTokenFile: () => Promise<string | undefined>;
   readonly sleep: (milliseconds: number) => Promise<void>;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
-  /** `config set` (ADR §11 part D): validates the merged file through the config loader before
-   * `writeConfigFile` is ever called. Throws (any error) for an invalid merged config. */
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
   readonly readLogFile?: () => Promise<string>;
-  /** `daemon logs --follow`: prints the log's tail, then each new line, until interrupted. */
   readonly followLogFile?: () => Promise<void>;
-  /** The event file's history newer than `sinceTs`, for `events --since` with no daemon running. */
   readonly readEventFile: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
-  /** Loads the MCP frontend only when the `mcp` command is dispatched. */
   readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
-  /** The pid a running `lease` watches by default -- the parent captured at CLI startup. */
   readonly parentPid?: number;
   readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
   readonly stdout: Output;
-  /** `| undefined` explicitly: under `exactOptionalPropertyTypes` that is what lets a caller
-   * (and a test) say "there is no terminal to ask" rather than merely omitting the field. */
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
-  /**
-   * Runs a daemon-resolved passthrough command and resolves with its exit code. A hook
-   * rather than a direct spawn so the `simctl` / `adb` wrappers are testable without a
-   * child process, the same way every other external effect here is injected.
-   */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
-  /**
-   * Reads this process's piped stdin to EOF, for the one command that can forward it: a
-   * `device.exec` passthrough, whose `stdin` is a one-shot string (ADR 0005 §19c). Resolves
-   * `undefined` when stdin is a terminal -- nothing was piped in, and reading would block on a
-   * human. A hook rather than a direct `process.stdin` read for the usual reason: an external
-   * effect a test has to be able to script.
-   */
   readonly readStdin?: () => Promise<string | undefined>;
 }
 
-/**
- * ADR §5: "a daemon still writing the file" is a real race between the daemon claiming its
- * socket (reachable) and `admin.token` landing on disk (`DaemonServer#start` awaits the socket
- * claim, *then* `adminSecret.persist()`). A CLI invocation that races a fresh `daemon start`
- * retries a few times, briefly, rather than either blocking indefinitely or giving up on the
- * first empty read. This only ever runs *after* the connection is already established (see
- * `connectAdmin`'s doc) -- so the race it covers is the narrow claim-to-persist window, not the
- * whole daemon spawn.
- */
 const ADMIN_TOKEN_FILE_READ_ATTEMPTS = 3;
 const ADMIN_TOKEN_FILE_RETRY_DELAY_MS = 50;
 
@@ -232,18 +163,12 @@ async function readAdminTokenFileWithRetry(
   return undefined;
 }
 
-/** Where a resolved admin credential came from -- distinguishes an explicit-but-wrong
- * credential (flag/env) from a stale local file (B1) for the fallback notice, and "none" for
- * "every source came up empty" (unchanged from before). */
 type CredentialSource = "flag" | "env" | "file" | "none";
 
 function isAdminAuthFailure(error: unknown): boolean {
   return isSimlockError(error) && error.code === "ADMIN_AUTHENTICATION_FAILED";
 }
 
-/** ADR §5's fallback: "an agent session with a stderr notice." B1 extends this to a credential
- * the daemon actively rejected (not just one that was never found), and calls out a stale
- * `admin.token` by name -- the actionable case a generic notice would otherwise bury. */
 function writeAgentFallbackNotice(environment: CliEnvironment, source: CredentialSource): void {
   const notice =
     source === "file"
@@ -256,22 +181,6 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
   environment.stderr.write(`${JSON.stringify({ notice })}\n`);
 }
 
-/**
- * The one connection helper every daemon-touching command uses (ADR §5's "the CLI is the
- * operator interface").
- *
- * ADR §5's resolution order -- `--token`, then `SIMLOCK_ADMIN_TOKEN`, then the local
- * `admin.token` file (briefly retried, see `readAdminTokenFileWithRetry`) -- is implemented as
- * a resolver passed to `connectAdmin`/`connectExistingAdmin`, not resolved up front: the file
- * source must not be read until the connection (and any auto-launch it triggers) has already
- * settled (B2), since the daemon only writes it after claiming its socket.
- *
- * B1: a credential the daemon actively rejects (`ADMIN_AUTHENTICATION_FAILED` -- most commonly
- * a stale `admin.token` left behind by an unclean shutdown) degrades to a fresh agent-role
- * connection with a stderr notice, exactly like "no credential found" does, instead of failing
- * the whole invocation. Retried at most once, and only when a credential was actually offered --
- * an agent connection legitimately failing `hello` for an unrelated reason still propagates.
- */
 async function connectDaemonClient(
   environment: CliEnvironment,
   tokenFlag: string | undefined,
@@ -306,11 +215,6 @@ async function connectDaemonClient(
   }
 }
 
-/** Auto-launches the daemon on a refused/missing socket, at the raw `IpcConnector` level:
- * `simlock/admin`'s `connector` option accepts any `IpcConnector`, so this is the entire seam
- * needed to keep `lease`'s "start the daemon if it isn't running" behaviour with a typed client
- * that deliberately does no starting of its own (ADR §10). MCP has its own copy in
- * `src/mcp/connect.ts`; the two differ in launch policy and are kept separate on purpose. */
 class AutoLaunchIpcConnector implements IpcConnector {
   constructor(
     private readonly ipc: IpcConnector,
@@ -342,8 +246,6 @@ class AutoLaunchIpcConnector implements IpcConnector {
   }
 }
 
-/** True only for "nothing is listening yet" -- a refused/missing socket -- never for a `hello`
- * rejection (ADR §6: the client never restarts the daemon on mismatch). */
 function isUnavailable(error: unknown): boolean {
   return (
     error instanceof IpcError &&
@@ -351,10 +253,6 @@ function isUnavailable(error: unknown): boolean {
   );
 }
 
-/** The infrastructure `defaultCliEnvironment` wires up. Factored out so tests can build the
- * exact same environment logic (credential-resolution ordering, `config set` validation)
- * against in-memory ports instead of the real filesystem/socket/subprocess -- see
- * `src/cli/index.test.ts`'s cold-start and stale-token suites. */
 export interface CliEnvironmentPorts {
   readonly filesystem: Filesystem;
   readonly clock: Clock;
@@ -366,22 +264,12 @@ export interface CliEnvironmentPorts {
   readonly signals?: Signals;
   readonly stderr?: Output;
   readonly stdout?: Output;
-  /** `| undefined` explicitly: under `exactOptionalPropertyTypes` that is what lets a caller
-   * (and a test) say "there is no terminal to ask" rather than merely omitting the field. */
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
-  /** Injected so the `simctl` / `adb` wrappers are testable without spawning a child. */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
-  /** See `CliEnvironment.readStdin`. */
   readonly readStdin?: () => Promise<string | undefined>;
   readonly parentPid?: number;
 }
 
-/**
- * Builds a `CliEnvironment` from an explicit set of ports (see `CliEnvironmentPorts`) plus the
- * bits still read straight from `env`/`process` (the requester id default, `SIMLOCK_ADMIN_TOKEN`,
- * `process.ppid`). `defaultCliEnvironment` is this with real Node ports; tests call it directly
- * with in-memory ones.
- */
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -390,9 +278,6 @@ export function buildCliEnvironment(
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
-  // `SIMLOCK_AGENT_ID`, else the agent tool's session id, else this process's pid. The
-  // per-invocation `--agent-id` flag on `lease` (parsed at that command's own boundary) takes
-  // precedence over this default.
   const requesterId = resolveRequesterId(env, String(process.pid));
   // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
   // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
@@ -400,15 +285,11 @@ export function buildCliEnvironment(
     await loadConfig({ configPath, filesystem, systemStats });
   });
 
-  // ADR §5 / B2: the raw connection (and, for `connectAdmin`, any auto-launch it triggers) is
-  // established *before* `resolveCredential` is ever called -- `admin.token` is written only
-  // after the daemon claims its socket, so reading it any earlier races the whole daemon spawn
-  // instead of the narrow claim-to-persist window `readAdminTokenFileWithRetry` covers.
   const connect = async (
     connector: IpcConnector,
     resolveCredential: () => Promise<string | undefined>,
   ): Promise<SimlockAdminClient> => {
-    // Resolved here rather than once during construction, because it can throw: a
+    // why: Resolved here rather than once during construction, because it can throw: a
     // `SIMLOCK_HOME` whose socket path exceeds the platform limit is a `SocketPathTooLongError`.
     // `runCli` takes its environment as a *default parameter*, and a default initializer runs
     // before the function body -- so resolving eagerly put that throw outside `runCli`'s own
@@ -436,8 +317,6 @@ export function buildCliEnvironment(
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),
     readAdminTokenFile: () => readAdminTokenFile(filesystem, adminTokenPath),
     sleep: (milliseconds) => new Promise<void>((resolve) => clock.setTimer(milliseconds, resolve)),
-    // Captured once at process startup, before anything can reparent this
-    // process -- `--bind-pid` overrides it per invocation.
     parentPid: ports.parentPid ?? process.ppid,
     parentWatch: ports.parentWatch ?? new NodeParentWatch(),
     readConfigFile: async () => {
@@ -448,23 +327,12 @@ export function buildCliEnvironment(
     readStdin: ports.readStdin ?? readPipedStdin,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
-      // Owner-only on every write: the file can hold `gateway.token`, and the atomic rename
+      // why: Owner-only on every write: the file can hold `gateway.token`, and the atomic rename
       // replaces the old file, so a mode the user set by hand would not survive otherwise.
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`, {
         mode: 0o600,
       });
     },
-    // ADR §11 part D: "validates the merged file through the config loader before writing."
-    // B9: two things the pre-fix version got wrong --
-    //  - `warn` was never passed, so `validateConfigLayer`'s default no-op silently dropped
-    //    unknown/mistyped keys instead of rejecting them. Collected here and thrown when any
-    //    "Unknown config key" warning fires -- but not for a legacy-spelling warning (still
-    //    valid config, just deprecated), so a legitimate legacy `config set` keeps working.
-    //  - `configPath` pointed at a sentinel file inside the *real* data directory, which a
-    //    stray file there could turn into a false pass or fail, despite the comment's claim
-    //    that the path was "never read" -- `loadConfig`'s `readConfigFile` does read it when it
-    //    exists. A fresh `MemoryFilesystem` makes that literally true: nothing can ever exist
-    //    at this path.
     validateConfig: async (merged) => {
       const unknownKeyWarnings: string[] = [];
       await loadConfig({
@@ -496,17 +364,6 @@ export function buildCliEnvironment(
   };
 }
 
-/**
- * Reads piped stdin to EOF, or `undefined` when stdin is a terminal (nothing was piped, and
- * reading would block on a human). The only caller is the remote passthrough path, whose
- * `stdin` is one shot -- see `CliEnvironment.readStdin`.
- *
- * No bound on the read itself: ADR 0005 §19c sends the whole piped input as a single string,
- * so there is nowhere to send a partial one, and a caller whose stdin is a pipe nothing ever
- * closes (an inherited, never-redirected pipe in CI) hangs here with no timeout -- see
- * "`simlock simctl` / `simlock adb` can hang forever reading a piped stdin" in
- * `docs/internal/KNOWN-PITFALLS.md`. Accepted deliberately, not an oversight.
- */
 export async function readPipedStdin(): Promise<string | undefined> {
   if (process.stdin.isTTY === true) return undefined;
   process.stdin.setEncoding("utf8");
@@ -553,9 +410,6 @@ async function loadDefaultMcpStdio(): Promise<McpStdioRunner> {
   return (await import("../mcp/main.js")).runMcpStdio;
 }
 
-/** `--token <secret>` is a global flag (ADR §5's first credential source), recognized anywhere
- * on the command line rather than per-command, since almost every command can use it. Stripped
- * before the remaining argv reaches that command's own `parseArgs` call. */
 function extractGlobalToken(argv: readonly string[]): {
   readonly token: string | undefined;
   readonly rest: string[];
@@ -580,11 +434,6 @@ function extractGlobalToken(argv: readonly string[]): {
   return { token, rest };
 }
 
-/**
- * The command switch: one arm per published command, each one line handing off to that
- * command's own function.
- */
-// fallow-ignore-next-line complexity -- flat dispatch: the cyclomatic count is the number of commands Simlock publishes (cognitive complexity is 6, and every arm is a single delegation). `worker` is ADR 0005's addition to it; splitting the switch would hide the CLI's surface rather than simplify it.
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
@@ -645,13 +494,6 @@ export async function runCli(
   }
 }
 
-/**
- * Every CLI failure writes exactly one structured line to stderr so agents
- * can branch on `error.code` instead of parsing prose. `code` is the
- * daemon's own error code where the failure came from the daemon, and a
- * stable CLI-level code otherwise (`USAGE` for bad flags/arguments,
- * `INTERNAL` for anything unexpected).
- */
 function writeError(environment: CliEnvironment, error: unknown): void {
   environment.stderr.write(
     `${JSON.stringify({ error: { code: cliErrorCode(error), message: errorMessage(error) } })}\n`,
@@ -664,29 +506,14 @@ function cliErrorCode(error: unknown): string {
   return "INTERNAL";
 }
 
-/**
- * Asks the daemon which command reaches Simlock's devices for this tool, then runs it here.
- * The split is architecture rule 8 in one function: the daemon owns the scoping (it is the
- * process that knows which root and which adb port), and the CLI owns the terminal, so an
- * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
- */
 async function runPassthrough(
   tool: "simctl" | "adb",
   args: readonly string[],
   environment: CliEnvironment,
   token: string | undefined,
 ): Promise<number> {
-  // `--lease` is accepted on both paths so one command line works against either kind of
-  // daemon (docs/CLI.md), and it is stripped here, before the branch, for the same reason:
-  // whether it is *meaningful* depends on the daemon's mode, but whether it is the tool's
-  // argument must not. Scanning stops at the first argument that is not `--lease` -- from
-  // there on everything belongs to the tool, `adb shell ... --lease x` included.
   const { leaseFlag, rest } = extractLeaseFlag(args);
   const client = await connectDaemonClient(environment, token);
-  // ADR 0005 §19c: which path this invocation takes is a fact about the daemon, not a flag --
-  // a `worker` owns the devices it serves, so the command it resolves can be spawned right
-  // here with a real terminal; a `gateway` owns none, so the command has to run on whichever
-  // worker does. The daemon says which it is, rather than the CLI guessing from its transport.
   let daemon;
   try {
     ({ daemon } = await client.getStatus());
@@ -701,8 +528,6 @@ async function runPassthrough(
       await client.close();
     }
   }
-  // Only the local path spawns anything, so only it needs a spawner -- and the connection is
-  // this function's to close on the way out, even when there is nothing to run it with.
   const run = environment.runPassthrough;
   if (run === undefined) {
     await client.close();
@@ -710,32 +535,15 @@ async function runPassthrough(
   }
   let command;
   try {
-    // `rest`, not `args`: a `--lease` in front of the tool's own arguments is Simlock's, and
-    // ignoring it here (rather than forwarding it to `simctl`/`adb`, which would fail) is what
-    // "accepted so one command line works against either" means.
     command = await client.resolvePassthrough({ args: [...rest], tool });
   } catch (error: unknown) {
-    // A verb the driver refuses is the caller getting it wrong, not a daemon fault, so it
-    // surfaces as usage rather than as an internal error -- through the same relabelling the
-    // remote path uses, so both answer a refusal identically.
     throw asUsageIfRefused(error);
   } finally {
-    // Resolved before the command runs, so an interactive `adb shell` does not hold a daemon
-    // connection open for its whole session.
     await client.close();
   }
   return run(command);
 }
 
-/**
- * ADR 0005 §19c's other half: the command runs on the daemon's machine and its output is
- * streamed here. Nothing about the arguments changes -- the daemon resolves them through the
- * same driver passthrough, with the same refusals -- so the only visible differences are the
- * ones §19c names: no pseudo-terminal, and a lease has to be named.
- *
- * The connection is held for the whole command, unlike the local path (which closes it before
- * spawning): the output arrives on it.
- */
 async function runRemotePassthrough(
   tool: "simctl" | "adb",
   args: readonly string[],
@@ -745,14 +553,7 @@ async function runRemotePassthrough(
 ): Promise<number> {
   try {
     const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
-    // Read to EOF before the command starts, because `stdin` is one shot (ADR 0005 §19c):
-    // there is no channel to feed it through afterwards. Nothing is read when stdin is a
-    // terminal -- a `simlock adb shell input text hi` typed at a prompt must not block
-    // waiting for the human to press ^D.
     const stdin = await environment.readStdin?.();
-    // `requesterId` is read only on an admin session (see the operation's `authorize` hook),
-    // and on one it is required to match the lease. An agent-role connection is gated on the
-    // lease it owns instead, so it sends none rather than a value that would be ignored.
     const requesterId = client.role === "admin" ? environment.requesterId : undefined;
     const { exitCode } = await client.exec(
       {
@@ -763,9 +564,6 @@ async function runRemotePassthrough(
         ...(stdin === undefined ? {} : { stdin }),
       },
       {
-        // Written straight through, unbuffered and unjoined: whatever the command wrote, where
-        // it wrote it. A caller piping `simlock adb logcat` sees the same bytes in the same
-        // order it would have seen locally.
         onOutput: (chunk) => {
           const sink = chunk.stream === "stdout" ? environment.stdout : environment.stderr;
           sink.write(chunk.chunk);
@@ -778,14 +576,6 @@ async function runRemotePassthrough(
   }
 }
 
-/**
- * The daemon's refusals, rendered the way this CLI renders a caller's mistake: `USAGE`, exit 2,
- * with the daemon's own message. Both refusal codes and both paths go through this one
- * function -- the local `driver.passthrough` and the remote `device.exec` refuse with the same
- * two codes for the same reasons (ADR 0005 §19c: the CLI keeps no copy of the list, it relabels
- * what comes back), and a caller who typed `simlock adb kill-server` should not be able to tell
- * from the answer which path answered. Anything else is left exactly as it arrived.
- */
 function asUsageIfRefused(error: unknown): unknown {
   if (
     isSimlockError(error) &&
@@ -796,22 +586,6 @@ function asUsageIfRefused(error: unknown): unknown {
   return error;
 }
 
-/**
- * Pulls a leading `--lease <id>` (or `--lease=<id>`) off the argument list, leaving the rest
- * for the tool.
- *
- * Scanning **stops at the first argument that is not `--lease`** -- a bare word, the tool's
- * own flag, anything. That is the whole reason this can exist at all next to "every argument
- * after the tool name is the tool's": everything from that point on is the tool's, including
- * something spelled `--lease`. So `simlock adb --lease lse_1 shell input text --lease` names
- * a lease once and types the word once, and `simlock adb -s emulator-5554 --lease lse_1 ...`
- * does not name one at all -- the `-s` ended the scan, so the `--lease` after it goes to
- * `adb`, which is the same rule read from the other side rather than a special case.
- *
- * It is accepted on both paths, not just the remote one: only a gateway *needs* it (the
- * command runs against a lease there), but a caller should be able to write one command line
- * and have it work against either kind of daemon, so a worker takes the flag and ignores it.
- */
 function extractLeaseFlag(args: readonly string[]): {
   readonly leaseFlag: string | undefined;
   readonly rest: readonly string[];
@@ -833,9 +607,6 @@ function extractLeaseFlag(args: readonly string[]): {
       index += 1;
       continue;
     }
-    // Any other flag is the tool's, and so is everything from here on: a flag Simlock does not
-    // know cannot be told apart from one whose *value* looks like a flag, so the scan stops
-    // rather than guessing.
     break;
   }
   return { leaseFlag, rest: args.slice(index) };
@@ -863,9 +634,6 @@ async function resolveRemoteLeaseId(
   return (own[0] as { readonly id: string }).id;
 }
 
-/** ADR §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
- * second mappings" -- driven from `ERROR_TABLE`'s `cliExitCode` column rather than a second,
- * CLI-maintained map. */
 function errorExitCode(error: unknown): number {
   if (error instanceof UsageError || error instanceof SocketPathTooLongError) return 2;
   if (isSimlockError(error)) return ERROR_TABLE[error.code].cliExitCode;
@@ -884,14 +652,12 @@ async function runMcp(argv: readonly string[], environment: CliEnvironment): Pro
   return 0;
 }
 
-/** Parses user-facing durations only at the CLI boundary. */
 export function parseDuration(value: string): number {
   const milliseconds = parseDurationMs(value);
   if (milliseconds === undefined) throw new UsageError(`Invalid duration: ${value}`);
   return milliseconds;
 }
 
-/** Parses `--bind-pid` only at the CLI boundary. `undefined` input means the flag was not given. */
 function parseBindPid(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   const pid = typeof value === "string" ? Number(value) : NaN;
@@ -945,39 +711,22 @@ async function runLease(
   const requesterId = (values["agent-id"] as string | undefined) ?? environment.requesterId;
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
-  // Sent as-is: the daemon caps it against `lease.maxTtlMs`; clamping here would change what the caller wrote.
   const ttlMs = typeof values.ttl === "string" ? parseDuration(values.ttl) : undefined;
-  // A reparented holder keeps renewing, so a TTL cannot bound it; watching the parent does (KNOWN-PITFALLS).
+  // why: A reparented holder keeps renewing, so a TTL cannot bound it; watching the parent does (KNOWN-PITFALLS).
   const bindPid = parseBindPid(values["bind-pid"]);
   const watchedPid = bindPid ?? environment.parentPid;
   const termination = detached
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
-  // ADR 0004 §2: holding is this process's own policy -- it renews on its own timer (below).
-  // There is no capability to declare and no daemon-initiated push to answer.
   const client = await connectDaemonClient(environment, token);
-  // Set once the daemon says this connection's lease ended without us asking. ADR 0003 §8:
-  // lease-scoped pushes go to every live connection sharing the lease's owner -- filtered below
-  // against this connection's own granted lease id, the same way the pre-typed-client CLI did,
-  // since a second CLI invocation sharing this principal (a lease from an earlier `--detach`,
-  // say) can otherwise deliver a push for a lease this process never held.
   let leaseLost = false;
   let ourLeaseId: string | undefined;
-  /** Reported in the `DAEMON_CONNECTION_LOST` line below, so a reader knows how long the
-   * still-standing lease has left to be renewed in. */
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
   });
-  /**
-   * The lease ended without this process asking, from either of the two places that can find
-   * out -- the daemon's push, or a renewal it rejects. Both write the one `lease-lost` line a
-   * script tails for (whichever gets there first; the flag is what makes that structural
-   * rather than a matter of ordering), stop the wait, skip the release this process can no
-   * longer perform, and leave `runLease` returning the lost-lease code.
-   */
   let wroteLeaseLost = false;
   const markLeaseLost = (notice: {
     readonly deviceId: string;
@@ -995,14 +744,6 @@ async function runLease(
     if (push.leaseId !== ourLeaseId) return;
     markLeaseLost(push);
   });
-  /**
-   * ADR 0004 §3: a dead connection is not a dead lease. The daemon released nothing, so the
-   * lease is still granted, still counting down, and a later `simlock lease renew <id>` picks
-   * it straight back up -- but this process can neither renew nor release it, and the CLI
-   * deliberately does not reconnect (ADR 0003 §10). So it says exactly that, naming the lease
-   * and the deadline the next invocation has to beat, and exits 1. Distinct from exit 14, which
-   * means the daemon *ended* the lease while the connection was alive.
-   */
   let connectionLost = false;
   let notifyConnectionLost: (() => void) | undefined;
   const connectionLostSignal = new Promise<void>((resolve) => {
@@ -1028,28 +769,16 @@ async function runLease(
   const offRecovered = client.onDeviceRecovered((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-recovered", ...push })}\n`);
   });
-  /**
-   * ADR 0004 §2/§3: the release a holder owes when it stops holding -- an exit, parent death, a
-   * catchable signal, or a throw on the way to any of them. It runs from the `finally` below so
-   * no exit path can skip it (a broken `--export-env` key or an EPIPE on a closed pipe both
-   * throw between the grant and the wait), and it is now the *only* thing that frees the device
-   * before the deadline: the daemon releases nothing when this connection closes.
-   *
-   * Set only for a holder, and cleared as it runs, so it happens exactly once and never for
-   * `--detach` (whose lease deliberately outlives this process), for a lease the daemon has
-   * already ended (`leaseLost` -- asking again would only raise UNKNOWN_LEASE), or over a
-   * connection that is already gone (`connectionLost`).
-   */
   let heldLeaseId: string | undefined;
   const releaseHeldLease = async (): Promise<void> => {
-    // A dead connection can neither carry the release nor needs to: the lease outlives this
+    // why: A dead connection can neither carry the release nor needs to: the lease outlives this
     // process either way, and `client.releaseLease` would only reject `DAEMON_CONNECTION_LOST`
     // a second time.
     if (heldLeaseId === undefined || leaseLost || connectionLost) return;
     const leaseId = heldLeaseId;
     heldLeaseId = undefined;
     try {
-      // Bounded like MCP's farewell release: a daemon that accepts the frame and never answers
+      // why: Bounded like MCP's farewell release: a daemon that accepts the frame and never answers
       // must not leave `simlock lease` hanging after a Ctrl-C.
       await awaitWithin(
         environment.clock,
@@ -1089,67 +818,34 @@ async function runLease(
     ourLeaseDeadline = grant.lease.ttlDeadline;
     if (!detached) heldLeaseId = grant.lease.id;
     const result = { ...grant, role: client.role };
-    // A holder keeps holding after this line, whichever shape its output took: `--export-env`
-    // only changes what stdout carries, never how long the lease lives.
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult(environment, result);
-    // `--detach` is the only invocation without a termination watch: it prints and exits,
-    // with no timer and no release, exactly as it did before ADR 0004.
     if (termination === undefined) return 0;
-    // The connection can die between the grant and the wait below; the listener above has
-    // already written its line, so this only has to reach the same exit.
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
-    // ADR 0004 §2: what a holder does while alive is renew on a timer at a third of the TTL --
-    // computed from the deadline the daemon just returned, not from a config value this process
-    // does not have. Each renew names no TTL of its own, so the daemon re-applies the lease's
-    // stored width and the deadline keeps moving out at its original width.
     renewal = startLeaseRenewal({
       clock: environment.clock,
       leaseId: grant.lease.id,
-      // Both, and they do different jobs: the width sets the cadence (a duration needs no
-      // shared clock), the deadline bounds it.
       ttlMs: grant.lease.ttlMs,
       ttlDeadline: grant.lease.ttlDeadline,
       renew: (leaseId) => client.renewLease({ leaseId }),
-      // Every renewal moves the deadline, and the `DAEMON_CONNECTION_LOST` line above names
-      // it: without this the line would keep quoting the grant-time deadline, which after
-      // about one TTL of uptime is a moment in the past on a lease that is perfectly alive.
       onRenewed: (renewed) => {
         ourLeaseDeadline = renewed.ttlDeadline;
       },
-      // A retryable attempt failed (see `startLeaseRenewal`): diagnostic output on the same
-      // structured stderr channel as a failed release, and not an exit condition -- the lease
-      // is still this process's until something says otherwise.
-      //
-      // Except once the connection is gone: a `lease.renew` in flight when the socket dies
-      // rejects with `DAEMON_CONNECTION_LOST` too, and that would print a second line saying
-      // the same thing right after the one the listener above already wrote -- the one that
-      // names the lease and its deadline. A holder loses its daemon once, so it says so once.
       onError: (error) => {
         if (connectionLost) return;
         writeError(environment, error);
       },
-      // Something did say otherwise: renewal ended, either because the daemon answered that
-      // this lease is gone or not ours (`renew-rejected`) or because it could not be kept
-      // alive to its deadline (`renew-failed`). Both are the same ending as the `lease-lost`
-      // push -- the same stderr line, so a script watching for `push: "lease-lost"` sees every
-      // way of losing a lease; exit 14; and no farewell release for a lease this process can
-      // no longer speak for. The error line follows as the detail of why.
       onLeaseGone: (reason, error) => {
         markLeaseLost({ deviceId: grant.lease.deviceId, leaseId: grant.lease.id, reason });
         writeError(environment, error);
       },
     });
     await Promise.race([termination.settled, leaseLostSignal, connectionLostSignal]);
-    // Three ways to get here, three answers: the daemon ended the lease (14, and
-    // `releaseHeldLease` skips a lease that is already gone), the connection died while the
-    // lease stood (1, nothing released), or this process was asked to stop (0, and it releases
-    // on the way out).
     if (leaseLost) return LEASE_LOST_EXIT_CODE;
     if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
     return 0;
   } finally {
-    // Stopped before the release, always: a renew must never race the release of the lease it
+    // why: Stopped before the release, always: a renew must never race the release of the lease it
     // is renewing, and no timer may outlive this command.
     renewal?.stop();
     await releaseHeldLease();
@@ -1384,9 +1080,6 @@ async function runDoctor(
   }
   const purgeOrphans = values["purge-orphans"] === true;
   if (purgeOrphans) {
-    // Destructive, so it confirms exactly as `release --all` and `nuke` do (safety rule 5),
-    // and a missing confirm hook refuses rather than proceeds: a non-interactive caller
-    // that meant it says `--yes`.
     const confirmed =
       values.yes ?? (await environment.confirm?.("Destroy every orphaned device? [y/N] "));
     if (!confirmed) throw new UsageError("doctor --purge-orphans requires confirmation or --yes");
@@ -1405,14 +1098,6 @@ async function runDoctor(
   }
 }
 
-/**
- * `driver-advisory` findings (`src/core/doctor.ts`) are configuration-level information, not
- * drift -- `--fix` never acts on them (see `Doctor#applySafeFixes`). Surfaced as plain warning
- * lines on stderr, distinct from every drift-finding kind, so a human running `doctor`
- * interactively notices them without having to parse the JSON report; stdout keeps carrying
- * every finding kind unmodified via `writeResult`, matching the JSON-passthrough convention
- * `list`/`cleanup`/`nuke` already use, so a scripted consumer of stdout sees no behavior change.
- */
 function writeDriverAdvisoryWarnings(environment: CliEnvironment, report: DoctorReport): void {
   for (const finding of report.findings) {
     if (finding.kind !== "driver-advisory") continue;
@@ -1420,11 +1105,6 @@ function writeDriverAdvisoryWarnings(environment: CliEnvironment, report: Doctor
   }
 }
 
-/**
- * `prerequisite-missing` findings, one stderr line each, for the same reason as the advisories
- * above: a human sees what to install without reading the JSON, which stdout still carries whole.
- * Not a failure either -- the exit code stays 0.
- */
 function writeMissingPrerequisites(environment: CliEnvironment, report: DoctorReport): void {
   for (const finding of report.findings) {
     if (finding.kind !== "prerequisite-missing") continue;
@@ -1434,11 +1114,6 @@ function writeMissingPrerequisites(environment: CliEnvironment, report: DoctorRe
   }
 }
 
-/**
- * `warm-pool-target-unreachable` findings, one stderr line each: the target, what is wrong with
- * it and what to do, so a human sees it without reading the JSON, which stdout still carries
- * whole. Not a failure either -- the exit code stays 0.
- */
 function writeUnreachableWarmTargets(environment: CliEnvironment, report: DoctorReport): void {
   for (const finding of report.findings) {
     if (finding.kind !== "warm-pool-target-unreachable") continue;
@@ -1521,11 +1196,6 @@ async function runEvents(
   }
 }
 
-/**
- * Connects for `simlock events`. History alone (`--since` without `--follow`, passed as
- * `historySinceTs`) needs no daemon: with nothing listening it prints the event file's history
- * and resolves `undefined` rather than starting one.
- */
 async function connectForEvents(
   environment: CliEnvironment,
   token: string | undefined,
@@ -1543,10 +1213,6 @@ async function connectForEvents(
   }
 }
 
-/**
- * Prints the replay, then streams until a termination signal. Subscribes before replaying, so
- * nothing emitted in between is lost; a push the replay already holds is printed once.
- */
 async function followEvents(
   client: SimlockAdminClient,
   replayInput: { readonly sinceTs?: number },
@@ -1569,11 +1235,6 @@ async function followEvents(
   await unsubscribe();
 }
 
-/**
- * The refusal, when a failed connection reached a daemon that answered and refused it (a
- * `SimlockError` of a kind other than `transport`); `undefined` when nothing is listening.
- * `daemon status` reports the second as "stopped"; `events --since` reads the event file.
- */
 function daemonRefusal(error: unknown): AnySimlockError | undefined {
   return isSimlockError(error) && error.kind !== "transport" ? error : undefined;
 }
@@ -1634,13 +1295,6 @@ async function runDaemon(
       }
       return 0;
     } catch (error: unknown) {
-      // ADR §11: distinguish socket-absent from handshake-refused using the error `kind`,
-      // instead of reporting "stopped" on any error. A `SimlockError` whose `kind` is not
-      // `"transport"` means the socket was reachable and a daemon answered, but the
-      // connection was refused at or after `hello` (bad credential, version mismatch, ...);
-      // anything else (a raw `IpcError`, or a `transport`-kind `SimlockError` such as
-      // `DAEMON_CONNECTION_LOST`) means nothing is listening -- the pre-existing "stopped"
-      // outcome.
       const refusal = daemonRefusal(error);
       if (refusal !== undefined) {
         if (values.json) {
@@ -1717,9 +1371,6 @@ async function runConfig(
       throw new UsageError("Usage: simlock config set <key> <value>");
     const config = await environment.readConfigFile();
     writeConfigValue(config, key, parseConfigValue(rawValue));
-    // ADR §11 part D: "config set stays a file write ... but validates the merged file through
-    // the config loader before writing." Any failure here is bad input, same class as a bad
-    // flag -- surfaced as a usage error (exit 2) rather than a new CLI-level error code.
     try {
       await environment.validateConfig(config);
     } catch (error: unknown) {
@@ -1818,25 +1469,12 @@ async function runTokenRevoke(
   return 0;
 }
 
-/**
- * ADR 0005 §8 adds `worker`: a join token, minted on a gateway and put in a worker's
- * `gateway.token`. It is deliberately mintable on either mode -- the CLI does not know which
- * daemon it is talking to, and a token minted on a worker is simply a credential nothing will
- * ever present to it, which is not worth a mode check the daemon would have to duplicate.
- */
 function parseTokenRole(value: unknown): "agent" | "operator" | "worker" {
   if (value !== "agent" && value !== "operator" && value !== "worker")
     throw new UsageError(withHelpHint("token create requires --role <agent|operator|worker>"));
   return value;
 }
 
-/**
- * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation, so
- * this function is argument parsing and rendering and nothing else. A worker daemon answers as a
- * fleet of one (ADR 0012): `list` shows the host itself, and `drain`, `undrain` and `remove`
- * answer `UNSUPPORTED_IN_WORKER_MODE`, which surfaces as the daemon's own error line rather than
- * a mode check the CLI would have to keep in step.
- */
 async function runWorker(
   argv: readonly string[],
   environment: CliEnvironment,
@@ -1912,7 +1550,6 @@ const DEVICE_USAGE =
   "Usage: simlock device add --platform <ios|android> <id> [--json]\n" +
   "       simlock device remove <id> [--json]\n";
 
-// `device remove` asks for no confirmation: it changes nothing on the device (safety rule 5).
 async function runDevice(
   argv: readonly string[],
   environment: CliEnvironment,
@@ -2060,10 +1697,6 @@ async function runComponent(
   }
 }
 
-/**
- * ADR 0010 §8: `component list` renders the daemon's `component.list` as one JSON object on
- * stdout. Which components are Simlock's, and how many devices use each, is the daemon's answer.
- */
 async function runComponentList(
   argv: readonly string[],
   environment: CliEnvironment,
@@ -2095,12 +1728,6 @@ async function runComponentList(
   }
 }
 
-/**
- * ADR 0010 §8: `component remove` renders the daemon's `component.remove` as one JSON line on
- * stdout. Destructive, so without `--dry-run` it confirms or requires `--yes`, exactly as
- * `release --all` does (safety rule 5); a dry run removes nothing and asks nothing. Whether the
- * component may go is the daemon's answer.
- */
 async function runComponentRemove(
   argv: readonly string[],
   environment: CliEnvironment,
@@ -2131,7 +1758,6 @@ async function runComponentRemove(
   }
 }
 
-/** `component remove`'s arguments: exactly a platform and a version and its flags, or `--help`. */
 function parseComponentRemoveArgs(argv: readonly string[]):
   | {
       readonly platform: "ios" | "android";
@@ -2156,8 +1782,6 @@ function parseComponentRemoveArgs(argv: readonly string[]):
   return { dryRun: values["dry-run"] === true, platform, version, yes: values.yes === true };
 }
 
-/** `component install`'s arguments: exactly a platform and a version, optionally the workers to
- * install on (`--worker`, repeatable, or `--all-workers`, never both), or `--help`. */
 function parseComponentInstallArgs(argv: readonly string[]):
   | {
       readonly platform: "ios" | "android";
@@ -2182,7 +1806,6 @@ function parseComponentInstallArgs(argv: readonly string[]):
   return workers === undefined ? { platform, version } : { platform, version, workers };
 }
 
-/** The workers `--worker`/`--all-workers` name, or none for an install on this daemon. */
 function installTargets(named: string[] | undefined, all: unknown): "all" | string[] | undefined {
   if (all !== true) return named;
   if (named !== undefined) {
@@ -2236,7 +1859,6 @@ function workerLoadLine(worker: WorkerView, now: number): string {
   return `\n  ${formatLoadLine(parts, Math.ceil(Math.max(0, now - readAt) / 1000))}`;
 }
 
-/** A worker's state words: its connection, then `starting` while it has not finished starting, then `drained`. */
 function workerState(worker: WorkerView): string {
   return [
     worker.connection,
@@ -2245,13 +1867,11 @@ function workerState(worker: WorkerView): string {
   ].join(", ");
 }
 
-/** How many leases a worker holds, or that they are unknown: a starting worker has not been read. */
 function leaseCount(worker: WorkerView): string {
   if (worker.leases === undefined) return "leases unknown";
   return `${String(worker.leases.length)} lease(s)`;
 }
 
-/** `Install ios 26.4: downloading for 42s, 2 waiters` -- platform, component, state, age, waiters. */
 function formatInstall(
   install: NonNullable<StatusGetOutput["installs"]>[number],
   now: number,
@@ -2266,7 +1886,6 @@ function formatGibibytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 }
 
-/** `macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9` -- the machine, then each tool. */
 function formatHost(host: StatusGetOutput["host"]): string {
   const system = `${host.os} ${host.osVersion} ${host.arch}`;
   const tools = host.tools.map(
@@ -2288,7 +1907,7 @@ function commandArgs(
 }
 
 /**
- * Writes the export lines, and -- when there are none -- one line to stderr saying so.
+ * why: Writes the export lines, and -- when there are none -- one line to stderr saying so.
  * Silence would be worse than it looks: the lease is committed and TTL-bound either way,
  * and a caller that was told neither its id nor that anything was missing can neither
  * renew nor release it, and has no scoping to reach the device with. stdout stays clean so
@@ -2307,7 +1926,7 @@ function writeExportEnv(
 }
 
 /**
- * Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
+ * why: Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
  * they are the only shell quoting that takes every byte literally, and `'\''` is the one way
  * to get a literal quote back inside them -- a device-set path is a user-configurable path
  * and may hold a space or an apostrophe. Sorted so repeated runs produce identical output.
@@ -2366,11 +1985,6 @@ function parseConfigValue(value: string): unknown {
   }
 }
 
-/**
- * Reads the rotated generation (if present) followed by the current log, so a fatal
- * crash written just before rotation is never silently lost. `NodeFileLogSink` keeps
- * at most one rotated generation at `<logPath>.1`.
- */
 export async function readLogFile(filesystem: Filesystem, logPath: string): Promise<string> {
   const rotatedPath = `${logPath}.1`;
   const segments: string[] = [];
@@ -2444,7 +2058,6 @@ function loadLines(status: StatusGetOutput): string[] {
     : [formatLoadLine(status.load, Math.ceil(status.load.ageMs / 1000))];
 }
 
-/** The web console's address line, for `status` and `daemon start`: none when HTTP is off. */
 function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
   return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
 }
@@ -2452,9 +2065,6 @@ function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
-  // A starting daemon answers with `daemon` and `host` only: the registry has not been checked,
-  // so there is nothing to show about devices, leases or capacity, and saying nothing about them
-  // would read as an empty fleet.
   if (
     capacity === undefined ||
     devices === undefined ||
@@ -2485,7 +2095,6 @@ function formatStatus(status: StatusGetOutput, now: number): string {
     workers === undefined
       ? []
       : [formatWorkers(workers, { now }), ""].filter((line) => line !== "");
-  // A gateway keeps no pool of its own: each worker's is on its entry in the JSON.
   const warmPoolLines =
     status.warmPool === undefined || daemon.mode === "gateway"
       ? []
@@ -2550,7 +2159,6 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
   ];
 }
 
-/** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */
 function quarantineMarker(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   const attempts = device.quarantineAttempts ?? 0;
   const nextRetryAt =
@@ -2567,10 +2175,6 @@ function formatCatalog(response: CatalogGetOutput): string {
   return response.platforms
     .map((entry) => {
       const defaultRuntime = entry.defaultRuntime ?? "(none)";
-      // Each model with the runtimes it pairs with: a model and a runtime both listed for the
-      // platform are not necessarily leasable together.
-      // A model's other names follow it on a line of their own.
-      // A model that exists only because of something on that machine is marked `(custom)`.
       const custom = new Set(entry.customModels ?? []);
       const modelLine = (model: string): string[] => {
         const paired =
@@ -2583,10 +2187,8 @@ function formatCatalog(response: CatalogGetOutput): string {
           ...(aliases.length > 0 ? [`        Other names: ${aliases.join(", ")}`] : []),
         ];
       };
-      // Models sit under a line for their class, in the order of the enum, then `(no class)`.
       const classOf = (model: string): string | undefined =>
         Object.hasOwn(entry.modelClasses, model) ? entry.modelClasses[model] : undefined;
-      // A class line says which model Simlock would create for it on this host, or `none`.
       const classLine = (deviceClass: string | undefined): string => {
         if (deviceClass === undefined) return "    (no class):";
         const model = Object.hasOwn(entry.classDefaults, deviceClass)
@@ -2606,7 +2208,6 @@ function formatCatalog(response: CatalogGetOutput): string {
         `  Runtimes: ${entry.runtimes.length > 0 ? entry.runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
-        // Only a platform whose driver has images says anything about them.
         ...(entry.images === undefined
           ? []
           : [images.length > 0 ? "  Images (runtime, tag, ABI):" : "  Images: (none)", ...images]),
@@ -2615,21 +2216,6 @@ function formatCatalog(response: CatalogGetOutput): string {
     .join("\n");
 }
 
-/**
- * Resolves on SIGINT, SIGTERM, or (when `parentWatch`/`parentPid` are given)
- * the watched parent dying -- all three converge on the same `finish`, so a
- * dead parent is handled through the exact release-then-exit path in
- * `runLease` that a signal already takes, not a second shutdown path.
- * `parentPid` is skipped when unset or non-positive: nothing meaningful to
- * watch (e.g. an already-reparented process at startup) degrades to today's
- * signal-only behavior rather than failing to start.
- *
- * A registered signal listener keeps Node's event loop alive on its own, and so
- * does a pending parent poll, so any path that stops waiting *without* a signal
- * arriving -- the daemon taking the lease back -- has to detach both itself,
- * otherwise the CLI finishes its work, sets an exit code, and then hangs with
- * nothing left to do. Hence the disposer.
- */
 interface TerminationWatch {
   readonly settled: Promise<void>;
   dispose(): void;
@@ -2641,7 +2227,7 @@ function waitForTermination(
   parentPid?: number,
 ): TerminationWatch {
   let detach!: () => void;
-  // Declared before `finish` closes over it: an adapter that reported an
+  // why: Declared before `finish` closes over it: an adapter that reported an
   // already-dead parent synchronously from `watch()` would otherwise reach
   // this binding before its initialiser ran.
   let watchHandle: ParentWatchHandle | undefined;
