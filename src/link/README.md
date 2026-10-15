@@ -3,7 +3,7 @@
 Does: wraps one uplink transport connection; carries text messages and byte channels, small messages first.
 Entry: `index.ts` → `createLink(transport, { end, clock, logger, generateId? })` → `LinkConnection`.
 Uses: the types of ports (`UplinkTransportConnection`, `IpcConnection`, `Clock`, `Logger`). Never imports:
-anything else, nor any Node module or package (lint: `link-is-portable`, `link-imports-port-types-only`),
+anything else, nor (outside its test helpers) any Node module or package (lint: `link-is-portable`, `link-imports-port-types-only`),
 so it runs in a browser or React Native. Channel ids: `generateId`, else `crypto.randomUUID`, else
 `getRandomValues`, else an error naming `generateId`; an id outside 1–32 of `[A-Za-z0-9-]` is refused.
 Imported by: daemon (`daemon/gateway-uplink.ts` wraps with `end: "worker"`; `daemon/server.ts`
@@ -28,7 +28,7 @@ accepts channels, `daemon/relay.ts` uses them), gateway (`gateway/service.ts` wr
 
 1. **Messages** — `write(text)` goes in the priority lane. Text received before
    any `onData` listener is held, then handed to the first one.
-2. **Open** — `openChannel` sends `OPEN` with a random id (priority lane).
+2. **Open** — `openChannel` sends `OPEN` with a new id from `generateId` (priority lane).
    The worker numbers odd from 1, the gateway even from 2. Numbers are 32-bit
    and never reused on a connection.
 3. **Name it** — the user puts `channel.id` in a message (e.g. `relay.request`).

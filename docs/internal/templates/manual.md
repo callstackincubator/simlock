@@ -8,7 +8,8 @@ git. Budget: 150 lines.
 
 Write like a checklist in a cockpit: short lines, numbered steps, defaults
 next to the knob. Name files and exported names, never private members
-(`#field`). Every path in backticks must exist; a test checks it.
+(`#field`). A test checks that every backticked `.ts`, `.tsx`, `.mjs`, `.js`
+or `.md` path, and every path ending in `/`, exists.
 
 ```markdown
 # <Module>
