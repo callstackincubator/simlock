@@ -3,6 +3,7 @@ import { Channel, LinkChannelError, type ChannelHost, type LinkChannel } from ".
 import {
   ENVELOPE,
   MAX_CHANNEL_NUMBER,
+  isChannelId,
   isEnvelopeType,
   parseChannelId,
   parseCredit,
@@ -25,6 +26,7 @@ export interface LinkOptions {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly firstChannelNumber?: number;
+  readonly generateId?: () => string;
 }
 
 const OPEN_LIMIT = 64;
@@ -42,6 +44,7 @@ class Link implements LinkConnection, ChannelHost {
   readonly scheduler: Scheduler;
   readonly #transport: UplinkTransportConnection;
   readonly #ownParity: number;
+  readonly #generateId: () => string;
   readonly #channels = new Map<number, Channel>();
   readonly #unaccepted = new Map<string, Channel>();
   readonly #waiters: OpenWaiter[] = [];
@@ -60,6 +63,7 @@ class Link implements LinkConnection, ChannelHost {
     this.logger = options.logger;
     this.#transport = transport;
     this.#ownParity = options.end === "worker" ? 1 : 0;
+    this.#generateId = options.generateId ?? randomId;
     this.#nextOwn = options.firstChannelNumber ?? (options.end === "worker" ? 1 : 2);
     this.scheduler = new Scheduler(transport);
     transport.onData((chunk) => this.#onText(chunk));
@@ -168,16 +172,24 @@ class Link implements LinkConnection, ChannelHost {
       this.logger.warn("link: this side has used every channel number on the connection");
       throw new Error("the link has no channel numbers left on this connection");
     }
+    let id = this.#newId();
+    while (this.#channels.size > 0 && [...this.#channels.values()].some((c) => c.id === id)) {
+      id = this.#newId();
+    }
     const number = this.#nextOwn;
     this.#nextOwn += 2;
-    let id = randomId();
-    while (this.#channels.size > 0 && [...this.#channels.values()].some((c) => c.id === id)) {
-      id = randomId();
-    }
     const channel = new Channel(this, number, id, true);
     this.#channels.set(number, channel);
     this.#ownOpen += 1;
     return channel;
+  }
+
+  #newId(): string {
+    const id = this.#generateId();
+    if (!isChannelId(id)) {
+      throw new Error("link: `generateId` must make ids of 1 to 32 characters from [A-Za-z0-9-]");
+    }
+    return id;
   }
 
   #drainWaiters(): void {
@@ -277,7 +289,13 @@ class Link implements LinkConnection, ChannelHost {
 }
 
 function randomId(): string {
-  return crypto.randomUUID().replaceAll("-", "");
+  const source = globalThis.crypto as Crypto | undefined;
+  if (typeof source?.randomUUID === "function") return source.randomUUID().replace(/-/g, "");
+  if (typeof source?.getRandomValues === "function") {
+    const bytes = source.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  throw new Error("link: this runtime has no crypto to make channel ids; pass `generateId`");
 }
 
 export function createLink(

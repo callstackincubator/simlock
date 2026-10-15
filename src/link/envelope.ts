@@ -63,7 +63,34 @@ export function parseResetReason(payload: Uint8Array): ResetReason | undefined {
   return undefined;
 }
 
+// why: counted the way Buffer.byteLength counts, so the link needs no Buffer (a browser has none).
+export function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && isLowSurrogate(text.charCodeAt(at + 1))) {
+      bytes += 4;
+      at += 1;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+export function isChannelId(id: string): boolean {
+  return CHANNEL_ID.test(id);
+}
+
 export function parseChannelId(payload: Uint8Array): string | undefined {
   const id = new TextDecoder().decode(payload);
-  return CHANNEL_ID.test(id) ? id : undefined;
+  return isChannelId(id) ? id : undefined;
 }

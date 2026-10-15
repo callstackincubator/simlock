@@ -13,6 +13,7 @@ function findComponents(dir) {
 
 const escape = (path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const testFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?)$";
+const linkTestFile = "(\\.test\\.tsx?|/test-[^/]+\\.tsx?|/testing\\.ts)$";
 const fsOrProcess = "^(node:)?(fs|fs/promises|child_process)$";
 
 // why: e2e imports the compiled package from dist/, which mirrors src/, so each component's rule covers its compiled copy too.
@@ -60,6 +61,33 @@ export default {
       severity: "error",
       from: { pathNot: testFile },
       to: { path: "(^|/)(testing|test-[^/]+)\\.tsx?$" },
+    },
+    {
+      name: "link-is-portable",
+      comment:
+        "the link uses no Node module and no package, so it runs in a browser or React Native and can move to its own package",
+      severity: "error",
+      from: { path: "^src/link/", pathNot: linkTestFile },
+      to: {
+        dependencyTypes: [
+          "core",
+          "npm",
+          "npm-dev",
+          "npm-optional",
+          "npm-peer",
+          "npm-bundled",
+          "npm-no-pkg",
+          "npm-unknown",
+        ],
+      },
+    },
+    {
+      name: "link-imports-port-types-only",
+      comment:
+        "the link imports only the types of src/ports/, because a value from the ports barrel pulls in every Node adapter",
+      severity: "error",
+      from: { path: "^src/link/", pathNot: linkTestFile },
+      to: { path: "^src/ports/", dependencyTypesNot: ["type-only"] },
     },
     direction(
       "core-not-leasing",

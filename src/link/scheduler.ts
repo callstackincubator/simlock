@@ -1,5 +1,5 @@
 import type { UplinkTransportConnection } from "../ports/index.js";
-import { KIB } from "./envelope.js";
+import { KIB, utf8Length } from "./envelope.js";
 
 const UNSENT_MARK = 256 * KIB;
 const PRIORITY_SHARE = 64 * KIB;
@@ -104,7 +104,7 @@ export class Scheduler {
     const message = this.#priority.shift();
     if (message === undefined) return;
     if (message.kind === "text") {
-      this.#prioritySinceBulk += Buffer.byteLength(message.text);
+      this.#prioritySinceBulk += utf8Length(message.text);
       const done = () => message.resolve();
       this.#transport.write(message.text).then(done, done);
       return;
