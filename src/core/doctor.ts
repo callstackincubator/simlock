@@ -120,11 +120,17 @@ export type DoctorFinding =
       readonly kind: "agent-device-unavailable";
       readonly message: string;
       readonly remedy: string;
+    }
+  | {
+      readonly kind: "module-unavailable";
+      readonly module: string;
+      readonly message: string;
+      readonly remedy: string;
     };
 
 export type OptionalModuleFinding = Extract<
   DoctorFinding,
-  { readonly kind: "agent-device-unavailable" }
+  { readonly kind: "agent-device-unavailable" | "module-unavailable" }
 >;
 
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";

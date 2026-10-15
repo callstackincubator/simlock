@@ -195,12 +195,12 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with this working agent-device, simlock doctor reports no agent-device-unavailable finding and no finding whose message names agent-device",
+    "with this working agent-device, simlock doctor reports no module-unavailable finding and no finding whose message names agent-device",
     { timeout: 600_000 },
     async () => {
       const doctor = await env.cli(["doctor"], { timeout: 60_000 });
       const findings = (doctor.json as { findings: { kind: string; message?: string }[] }).findings;
-      expect(findings.map((finding) => finding.kind)).not.toContain("agent-device-unavailable");
+      expect(findings.map((finding) => finding.kind)).not.toContain("module-unavailable");
       expect(findings.filter((finding) => /agent-device/i.test(finding.message ?? ""))).toEqual([]);
     },
   );
@@ -503,7 +503,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "with agentDevice.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports agent-device-unavailable with found 0.9.2, need 0.21.28 or later",
+    "with agentDevice.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports module-unavailable with found 0.9.2, need 0.21.28 or later",
     { timeout: 900_000 },
     async () => {
       const root = await mkdtemp(join(tmpdir(), "simlock-ad-old-"));
@@ -525,10 +525,10 @@ function defineSuite(target: Target): void {
             const doctor = await env.cli(["doctor"], { timeout: 60_000 });
             finding = (
               doctor.json as { findings: { kind: string; message: string }[] }
-            ).findings.find((row) => row.kind === "agent-device-unavailable");
+            ).findings.find((row) => row.kind === "module-unavailable");
             return finding !== undefined;
           },
-          { timeout: 60_000, interval: 500, label: "doctor reports agent-device-unavailable" },
+          { timeout: 60_000, interval: 500, label: "doctor reports module-unavailable" },
         );
         expect(finding?.message).toContain(message);
 

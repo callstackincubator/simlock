@@ -206,7 +206,7 @@ describe("DaemonServer", () => {
     [34, "cannot read status.get's load block"],
     [35, "cannot read a worker view's load"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 36, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 37, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -216,7 +216,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 36, max: 36 } },
+          details: { client: { min: version, max: version }, daemon: { min: 37, max: 37 } },
         },
         ok: false,
       });

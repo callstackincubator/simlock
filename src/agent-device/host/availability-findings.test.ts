@@ -13,7 +13,7 @@ describe("agentDeviceFindings", () => {
   ] as const;
 
   it.each(reasons)(
-    "returns one finding with the availability's message and remedy for the %s reason",
+    "returns one finding with module agent-device and the availability's message and remedy for the %s reason",
     (reason) => {
       const availability: AgentDeviceAvailability = {
         message: `message for ${reason}`,
@@ -24,7 +24,8 @@ describe("agentDeviceFindings", () => {
 
       expect(agentDeviceFindings(availability)).toStrictEqual([
         {
-          kind: "agent-device-unavailable",
+          kind: "module-unavailable",
+          module: "agent-device",
           message: `message for ${reason}`,
           remedy: `remedy for ${reason}`,
         },

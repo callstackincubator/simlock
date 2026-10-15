@@ -2593,9 +2593,9 @@ describe("startDaemon with the agent-device edge", () => {
     };
 
     const agentDeviceFinding = (report: Report) =>
-      report.findings.find((finding) => finding.kind === "agent-device-unavailable");
+      report.findings.find((finding) => finding.kind === "module-unavailable");
 
-    it("reports agent-device-unavailable naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
+    it("reports module-unavailable for agent-device, naming the found and needed versions, and an ordinary client is still granted a lease", async () => {
       const setup = await setUp({ agentDevice: { command, enabled: true } });
       const runner = new ScriptedProcessRunner([
         {
@@ -2617,7 +2617,8 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
+          kind: "module-unavailable",
+          module: "agent-device",
           message: expect.stringContaining("found 0.20.3, need 0.21.28 or later"),
           remedy: expect.any(String),
         });
@@ -2626,7 +2627,7 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("reports agent-device-unavailable naming the command when agentDevice.command is found nowhere", async () => {
+    it("reports module-unavailable for agent-device, naming the command when agentDevice.command is found nowhere", async () => {
       const setup = await setUp({
         agentDevice: { command: "/opt/missing/agent-device", enabled: true },
       });
@@ -2644,12 +2645,13 @@ describe("startDaemon with the agent-device edge", () => {
           },
         )
         .toMatchObject({
-          kind: "agent-device-unavailable",
+          kind: "module-unavailable",
+          module: "agent-device",
           message: expect.stringContaining("/opt/missing/agent-device"),
         });
     }, 10_000);
 
-    it("reports no agent-device-unavailable with agentDevice.enabled false", async () => {
+    it("reports no module-unavailable finding with agentDevice.enabled false", async () => {
       const setup = await setUp({ agentDevice: { enabled: false } });
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -2661,7 +2663,7 @@ describe("startDaemon with the agent-device edge", () => {
       expect(agentDeviceFinding(report)).toBeUndefined();
     });
 
-    it("reports no agent-device-unavailable while agent-device's /health never answers and the readiness budget has not run out", async () => {
+    it("reports no module-unavailable finding while agent-device's /health never answers and the readiness budget has not run out", async () => {
       const setup = await setUp({ agentDevice: { command, enabled: true } });
       const runner = versionAndDaemon(setup.directory);
       const { daemon } = await startEdge(setup, {

@@ -656,22 +656,40 @@ describe("the status device entry's absent state (ADR 0022 §7)", () => {
   });
 });
 
-describe("doctorReportSchema's agent-device-unavailable finding", () => {
+describe("doctorReportSchema's module-unavailable finding", () => {
   const finding = {
-    kind: "agent-device-unavailable",
+    kind: "module-unavailable",
+    module: "agent-device",
     message: "found 0.20.3, need 0.21.28 or later",
     remedy: "install agent-device 0.21.28 or later",
   };
+  const parses = (candidate: unknown) =>
+    doctorReportSchema.safeParse({ findings: [candidate] }).success;
 
-  it("parses a report with the finding, and refuses one without message or without remedy", () => {
+  it("parses a module-unavailable finding, and refuses one without module, without message or without remedy", () => {
     expect(doctorReportSchema.parse({ findings: [finding] })).toStrictEqual({
       findings: [finding],
     });
 
+    const { module: _module, ...withoutModule } = finding;
     const { message: _message, ...withoutMessage } = finding;
     const { remedy: _remedy, ...withoutRemedy } = finding;
-    expect(doctorReportSchema.safeParse({ findings: [withoutMessage] }).success).toBe(false);
-    expect(doctorReportSchema.safeParse({ findings: [withoutRemedy] }).success).toBe(false);
+    expect(parses(withoutModule)).toBe(false);
+    expect(parses(withoutMessage)).toBe(false);
+    expect(parses(withoutRemedy)).toBe(false);
+  });
+
+  it("refuses a module that fails the capability name check", () => {
+    for (const module of ["", "Agent-Device", "1abc", "has space", `a${"b".repeat(32)}`]) {
+      expect(parses({ ...finding, module })).toBe(false);
+    }
+    expect(parses({ ...finding, module: `a${"b".repeat(31)}` })).toBe(true);
+  });
+
+  it("refuses the old agent-device-unavailable kind", () => {
+    const { module: _module, ...rest } = finding;
+    expect(parses({ ...rest, kind: "agent-device-unavailable" })).toBe(false);
+    expect(parses({ ...finding, kind: "agent-device-unavailable" })).toBe(false);
   });
 });
 

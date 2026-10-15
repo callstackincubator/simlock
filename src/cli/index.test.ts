@@ -1421,11 +1421,12 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     );
   });
 
-  it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
+  it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
     const output = outputCapture();
     const findings = [
       {
-        kind: "agent-device-unavailable" as const,
+        kind: "module-unavailable" as const,
+        module: "agent-device",
         message: `found 0.20.3,\n  need ${"x".repeat(600)}`,
         remedy: `install agent-device 0.21.28 or later,\nthen ${"y".repeat(600)}`,
       },
@@ -1474,6 +1475,29 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeGreaterThan(-1);
     }
     expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
+  it("simlock doctor writes <module>  fail  … for a finding of another module", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        kind: "module-unavailable" as const,
+        message: "needs\n  tmux",
+        module: "other-mod",
+        remedy: "install tmux",
+      },
+    ];
+
+    await runCli(
+      ["doctor"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+      }),
+    );
+
+    expect(output.stderr.split("\n")).toContain("other-mod  fail  needs tmux; install tmux");
+    expect(output.stderr).not.toContain("agent-device");
   });
 
   it("simlock doctor writes no agent-device line when the report has no such finding", async () => {

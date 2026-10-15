@@ -2650,7 +2650,8 @@ describe("Doctor with a platform it cannot observe", () => {
 
 describe("Doctor: optional module findings", () => {
   const unavailable: OptionalModuleFinding = {
-    kind: "agent-device-unavailable",
+    kind: "module-unavailable",
+    module: "agent-device",
     message: "found 0.20.3, need 0.21.28 or later",
     remedy: "install agent-device 0.21.28 or later, then restart the daemon",
   };
@@ -2740,12 +2741,12 @@ describe("Doctor: optional module findings", () => {
 
     expect(report.findings.map((finding) => finding.kind)).toEqual([
       "warm-pool-target-unreachable",
-      "agent-device-unavailable",
+      "module-unavailable",
     ]);
     expect(report.findings.at(-1)).toStrictEqual(unavailable);
   });
 
-  it("returns no agent-device-unavailable when optionalModules is omitted or returns none", async () => {
+  it("returns no module-unavailable finding when optionalModules is omitted or returns none", async () => {
     const omitted = await (await setup()).doctor.reconcile();
     const none = await (await setup({ optionalModules: () => [] })).doctor.reconcile();
 
@@ -2788,7 +2789,7 @@ describe("Doctor: optional module findings", () => {
     expect(destroysWhenCalled).toBe(1);
     expect(report.findings.map((finding) => finding.kind)).toEqual([
       "registry-device-missing",
-      "agent-device-unavailable",
+      "module-unavailable",
     ]);
   });
 
