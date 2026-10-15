@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, signIn, startDaemon, test } from "./fixtures.js";
+import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
 
 /** What `GET /v1/lease-requests` answers, as far as these tests read. */
 interface WaitingRequest {
@@ -226,8 +226,7 @@ test.describe("the Waiting page", () => {
       expect(await hasHorizontalScroll(page)).toBe(false);
       await page.getByRole("list", { name: "Waiting requests" }).getByRole("link").click();
       await expect(page.getByRole("heading", { level: 2 })).toBeVisible();
-      // why: The inspector slides in from the right; the page is measured once it has settled.
-      await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+      await settled(page);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();

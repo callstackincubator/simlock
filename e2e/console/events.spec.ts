@@ -7,6 +7,7 @@ import {
   signIn,
   startDaemon,
   startFleet,
+  settled,
   test,
 } from "./fixtures.js";
 
@@ -106,9 +107,7 @@ async function openEvent(page: Page, id: string): Promise<void> {
 }
 
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
-  await page.evaluate(() =>
-    Promise.all(document.getAnimations().map((animation) => animation.finished)),
-  );
+  await settled(page);
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
