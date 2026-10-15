@@ -1317,6 +1317,9 @@ async function discoverIosDriver(
   }
 }
 
+/** Placeholder until green: wires nothing yet. */
+export function logAndroidDiagnostic(_logger: Logger, _diagnostic: AndroidDriverDiagnostic): void {}
+
 /**
  * Android refuses for one more reason than iOS does -- it needs a private adb server as
  * well as an owned root -- and both refusals cost the platform rather than the daemon.

@@ -39,6 +39,7 @@ import {
   deviceModeWiring,
   modelPreferenceWiring,
   discoverDrivers,
+  logAndroidDiagnostic,
   emitSlimDiagnostic,
   processRunnerFor,
   startDaemon,
@@ -1672,6 +1673,66 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     );
   });
 
+  it("logs a warning when the Android driver reports that devices.xml could not be read", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    const previousUserHome = process.env.ANDROID_USER_HOME;
+    process.env.ANDROID_USER_HOME = "/android-user";
+    try {
+      await filesystem.mkdirp("/android-user");
+      await filesystem.writeFileAtomic("/android-user/devices.xml", "not xml at all {{{");
+      const sink = new MemoryLogSink();
+      const processRunner = new ScriptedProcessRunner([
+        {
+          match: {
+            args: ["list", "device"],
+            command: "/android-sdk/cmdline-tools/latest/bin/avdmanager",
+          },
+          result: { code: 0, stderr: "", stdout: "Available devices:\n" },
+        },
+      ]);
+
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        logger: new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }),
+        processRunner,
+      });
+      await drivers.find((driver) => driver.platform === "android")?.listCatalog();
+
+      expect(sink.records.filter((record) => record.level === "warn")).toContainEqual(
+        expect.objectContaining({
+          fields: expect.objectContaining({ path: "/android-user/devices.xml" }),
+        }),
+      );
+    } finally {
+      if (previousUserHome === undefined) {
+        delete process.env.ANDROID_USER_HOME;
+      } else {
+        process.env.ANDROID_USER_HOME = previousUserHome;
+      }
+    }
+  });
+
+  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+    const sink = new MemoryLogSink();
+
+    logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
+      avdName: "simlock_one",
+      kind: "snapshot-cold-boot",
+      readyAfterMs: 30_000,
+    });
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        level: "warn",
+      }),
+    ]);
+  });
+
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
@@ -1693,7 +1754,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "processRunner">
+      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
     > = {},
   ) {
     return discoverDrivers({
@@ -1706,11 +1767,13 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,
-      logger: new JsonLinesLogger({
-        clock: new FakeClock(),
-        level: "debug",
-        sink: new MemoryLogSink(),
-      }),
+      logger:
+        overrides.logger ??
+        new JsonLinesLogger({
+          clock: new FakeClock(),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
       processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(livePids),
       simlockHome: SIMLOCK_HOME,
