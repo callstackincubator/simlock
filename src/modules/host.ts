@@ -1,6 +1,9 @@
 import { CORE_ROUTE_SEGMENTS, MAX_CAPABILITIES, capabilityNameSchema } from "../contract/index.js";
-import type { Logger } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
 import type {
+  GatewayHostOptions,
+  GatewayModule,
+  GatewayModuleHost,
   ModuleCapabilitySource,
   ModuleHost,
   ModuleHostOptions,
@@ -9,7 +12,6 @@ import type {
   ModuleRelayTarget,
   MountDeps,
   OptionalModuleDefinition,
-  WorkerHooks,
   WorkerModule,
 } from "./types.js";
 
@@ -83,7 +85,7 @@ async function createOne(
 async function runHook(
   logger: Logger,
   module: string,
-  hook: keyof WorkerHooks,
+  hook: string,
   call: () => unknown,
 ): Promise<void> {
   try {
@@ -93,7 +95,119 @@ async function runHook(
   }
 }
 
-export async function createModuleHost(options: ModuleHostOptions): Promise<ModuleHost> {
+async function runWithDeadline(
+  logger: Logger,
+  clock: Clock,
+  hook: string,
+  steps: readonly { readonly name: string; readonly call: () => unknown }[],
+): Promise<void> {
+  const running = new Set<string>();
+  const calls = steps.map(({ call, name }) => {
+    running.add(name);
+    return runHook(logger, name, hook, call).finally(() => {
+      running.delete(name);
+    });
+  });
+  if (calls.length === 0) return;
+  let timer: ReturnType<typeof clock.setTimer> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = clock.setTimer(HOOK_DEADLINE_MS, resolve);
+  });
+  await Promise.race([Promise.all(calls), deadline]);
+  if (timer !== undefined) clock.cancel(timer);
+  for (const module of running) {
+    logger.warn("Optional module hook ran out of time", { hook, module });
+  }
+}
+
+async function createGatewaySide(
+  definition: OptionalModuleDefinition<unknown>,
+  options: GatewayHostOptions,
+): Promise<GatewayModule> {
+  const { name } = definition;
+  const { parts } = options;
+  try {
+    const loaded = await definition.loadGateway?.();
+    const section = Object.fromEntries(
+      Object.entries(options.config.capabilities[name] ?? {}).filter(([key]) => key !== "enabled"),
+    );
+    return (
+      loaded?.createGateway({
+        cancelPending: (requesterId) => parts.cancelPending(requesterId),
+        clock: parts.clock,
+        config: section,
+        daemonConfig: options.config,
+        grantedDevices: () => parts.grantedDevices(),
+        instanceId: parts.instanceId,
+        leases: parts.leases,
+        logger: options.logger.child(name),
+        name,
+        relay: (workerId, request, tenant, leaseId) =>
+          parts.relay(workerId, {
+            request,
+            target: name,
+            tenant,
+            ...(leaseId === undefined ? {} : { leaseId }),
+          }),
+        requesterPrefix: parts.requesterPrefix,
+        serving: () =>
+          parts
+            .workers()
+            .filter(
+              (view) =>
+                view.connection === "connected" &&
+                view.capabilities?.some(
+                  (entry) => entry.name === name && entry.state === "available",
+                ) === true,
+            ),
+        startedAt: parts.startedAt,
+        worker: (id) => parts.worker(id),
+        workers: () => parts.workers(),
+      }) ?? {}
+    );
+  } catch (error: unknown) {
+    throw new Error(`Optional module "${name}" failed to start: ${messageOf(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayModuleHost> {
+  checkNames(options.definitions);
+  const started: { readonly name: string; readonly gateway: GatewayModule }[] = [];
+  for (const definition of options.definitions) {
+    if (options.config.capabilities[definition.name]?.enabled !== true) continue;
+    if (definition.loadGateway === undefined) continue;
+    started.push({ gateway: await createGatewaySide(definition, options), name: definition.name });
+  }
+  return {
+    beforeDrain: () =>
+      runWithDeadline(
+        options.logger,
+        options.parts.clock,
+        "beforeDrain",
+        started.flatMap(({ gateway, name }) => {
+          const call = gateway.hooks?.beforeDrain;
+          return call === undefined ? [] : [{ call: () => call(), name }];
+        }),
+      ),
+    mounts: (deps) =>
+      started.flatMap(({ gateway, name }) =>
+        gateway.mount === undefined ? [] : [{ handle: gateway.mount(deps), prefix: name }],
+      ),
+  };
+}
+
+export function createModuleHost(options: GatewayHostOptions): Promise<GatewayModuleHost>;
+export function createModuleHost(options: ModuleHostOptions): Promise<ModuleHost>;
+export async function createModuleHost(
+  options: GatewayHostOptions | ModuleHostOptions,
+): Promise<GatewayModuleHost | ModuleHost> {
+  if (options.role === "gateway") return createGatewayHost(options);
+  return createWorkerHost(options);
+}
+
+async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost> {
   const { definitions, logger } = options;
   checkNames(definitions);
 
@@ -125,30 +239,16 @@ export async function createModuleHost(options: ModuleHostOptions): Promise<Modu
     }
   }
 
-  const runStopStep = async (hook: StopHook): Promise<void> => {
-    const running = new Set<string>();
-    const calls = started.flatMap(({ name, worker }) => {
-      const call = worker.hooks?.[hook];
-      if (call === undefined) return [];
-      running.add(name);
-      return [
-        runHook(logger, name, hook, () => call()).finally(() => {
-          running.delete(name);
-        }),
-      ];
-    });
-    if (calls.length === 0) return;
-    const { clock } = options.context;
-    let timer: ReturnType<typeof clock.setTimer> | undefined;
-    const deadline = new Promise<void>((resolve) => {
-      timer = clock.setTimer(HOOK_DEADLINE_MS, resolve);
-    });
-    await Promise.race([Promise.all(calls), deadline]);
-    if (timer !== undefined) clock.cancel(timer);
-    for (const module of running) {
-      logger.warn("Optional module hook ran out of time", { hook, module });
-    }
-  };
+  const runStopStep = (hook: StopHook): Promise<void> =>
+    runWithDeadline(
+      logger,
+      options.context.clock,
+      hook,
+      started.flatMap(({ name, worker }) => {
+        const call = worker.hooks?.[hook];
+        return call === undefined ? [] : [{ call: () => call(), name }];
+      }),
+    );
 
   // why: doctor reads findings at every run and at startup, so a module that keeps throwing is logged when it starts to, not on every read.
   const unreadable = new Set<string>();

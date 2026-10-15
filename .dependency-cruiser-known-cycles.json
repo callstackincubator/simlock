@@ -25,29 +25,6 @@
   {
     "type": "cycle",
     "from": "src/daemon",
-    "to": "src/agent-device",
-    "rule": {
-      "severity": "error",
-      "name": "no-cycle-between-components"
-    },
-    "cycle": [
-      {
-        "name": "src/agent-device",
-        "dependencyTypes": []
-      },
-      {
-        "name": "src/http",
-        "dependencyTypes": []
-      },
-      {
-        "name": "src/daemon",
-        "dependencyTypes": []
-      }
-    ]
-  },
-  {
-    "type": "cycle",
-    "from": "src/daemon",
     "to": "src/gateway",
     "rule": {
       "severity": "error",

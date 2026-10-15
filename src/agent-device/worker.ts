@@ -17,7 +17,7 @@ import {
   createAgentDeviceFront,
   disposeAgentDeviceEdge,
   type AgentDeviceFrontParts,
-} from "./index.js";
+} from "./front/edge-parts.js";
 import { frontReplyFor, notAvailable } from "./shared/replies.js";
 
 interface AgentDeviceEdgeParts extends AgentDeviceFrontParts {

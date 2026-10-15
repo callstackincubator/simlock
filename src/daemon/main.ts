@@ -2,8 +2,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { FleetPort, FleetWorker } from "../agent-device/index.js";
-import type { AgentDeviceModuleConfig } from "../agent-device/definition.js";
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
@@ -89,13 +87,11 @@ import {
   FileDrainStore,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
-  type WorkerRegistry,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
   GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
-  type FleetViews,
 } from "../gateway/index.js";
 import {
   WebSocketUplinkConnector,
@@ -222,6 +218,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       ipc,
       logger,
+      optionalModules: moduleDefinitions,
       socketPath,
       version: version,
     });
@@ -678,6 +675,7 @@ interface GatewayDaemonOptions {
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly version: string;
 }
@@ -795,25 +793,24 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const gatewayRelay = new GatewayRelay({ directory: gatewayService });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
-  const agentDeviceSection = config.capabilities["agent-device"] as
-    | (Partial<AgentDeviceModuleConfig> & { readonly enabled?: boolean })
-    | undefined;
-  // why: loaded only when turned on, so no daemon loads agent-device's code through a static import.
-  const agentDeviceModule =
-    agentDeviceSection?.enabled === true ? await import("../agent-device/index.js") : undefined;
-  const agentDeviceParts = agentDeviceModule
-    ? agentDeviceModule.createGatewayAgentDeviceFrontParts(
-        agentDeviceFleetPort({
-          instanceId,
-          leaseIndex,
-          relay: gatewayRelay,
-          startedAt: clock.now(),
-          views: gatewayService.workers,
-        }),
-        clock,
-        config.lease.maxTtlMs,
-      )
-    : undefined;
+  const moduleHost = await createModuleHost({
+    config,
+    definitions: options.optionalModules,
+    logger,
+    parts: {
+      cancelPending: (requesterId) => fleetCoordinator.cancelPending(requesterId),
+      clock,
+      grantedDevices: () => gatewayService.workers.grantedDevices(),
+      instanceId,
+      leases: leaseIndex,
+      relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+      requesterPrefix: gatewayRequesterPrefix,
+      startedAt: clock.now(),
+      worker: (id) => gatewayService.workers.view(id),
+      workers: () => gatewayService.workers.views(),
+    },
+    role: "gateway",
+  });
 
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;
@@ -890,12 +887,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {
-      if (agentDeviceModule !== undefined && agentDeviceParts !== undefined) {
-        agentDeviceModule.disposeAgentDeviceEdge(agentDeviceParts);
-        await agentDeviceModule.cancelWaitingAllocates(agentDeviceParts, (id) =>
-          fleetCoordinator.cancelPending(id),
-        );
-      }
+      await moduleHost.beforeDrain();
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
     },
@@ -925,20 +917,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
-      mounts:
-        agentDeviceModule === undefined || agentDeviceParts === undefined
-          ? []
-          : [
-              agentDeviceModule.createAgentDeviceFront(agentDeviceParts, {
-                clock,
-                dispatch,
-                logger: logger.child("agent-device"),
-                maxRunMs: config.lease.maxTtlMs,
-                ...(agentDeviceSection?.leaseTtlCapMs === undefined
-                  ? {}
-                  : { leaseTtlCapMs: agentDeviceSection.leaseTtlCapMs }),
-              }),
-            ],
+      mounts: [...moduleHost.mounts({ dispatch })],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
       ownerRoutedFacts: daemon.ownerRoutedFacts,
@@ -984,149 +963,6 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   if (daemonResult.status === "rejected") throw daemonResult.reason;
   if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
-}
-
-interface FleetPortParts {
-  readonly instanceId: string;
-  readonly leaseIndex: FleetLeaseIndex;
-  readonly relay: GatewayRelay;
-  readonly startedAt: number;
-  readonly views: FleetViews & Pick<WorkerRegistry, "grantedDevices">;
-}
-
-const AGENT_DEVICE = "agent-device";
-
-type WorkerView = NonNullable<ReturnType<FleetViews["view"]>>;
-
-// why: the agent-device edge imports nothing from the gateway, so this is the one place the gateway's parts become its port.
-function agentDeviceFleetPort({
-  instanceId,
-  leaseIndex,
-  relay,
-  startedAt,
-  views,
-}: FleetPortParts): FleetPort {
-  const serving = (view: WorkerView, withDrained: boolean): FleetWorker | undefined => {
-    const maxTtlMs = view.lease?.maxTtlMs;
-    const available = view.capabilities?.some(
-      (entry) => entry.name === AGENT_DEVICE && entry.state === "available",
-    );
-    if (
-      view.connection !== "connected" ||
-      (view.drained && !withDrained) ||
-      available !== true ||
-      view.catalogReadAt === undefined ||
-      maxTtlMs === undefined
-    ) {
-      return undefined;
-    }
-    const platforms = (view.catalog ?? []).flatMap((entry) =>
-      entry.platform === "ios" || entry.platform === "android" ? [entry.platform] : [],
-    );
-    return { id: view.id, leaseMaxTtlMs: maxTtlMs, platforms };
-  };
-  return {
-    capableWorkers: () =>
-      views.views().flatMap((view) => {
-        const worker = serving(view, false);
-        return worker === undefined ? [] : [worker];
-      }),
-    holder: (workerId) => {
-      const view = views.view(workerId);
-      return view === undefined ? undefined : serving(view, true);
-    },
-    instanceId,
-    leasesOf: (ownerId) =>
-      leaseIndex
-        .all()
-        .filter((entry) => entry.ownerId === ownerId)
-        .map((entry) => leaseFacts(views, entry)),
-    reach: (workerId) => {
-      const view = views.view(workerId);
-      return view === undefined
-        ? undefined
-        : {
-            connected: view.connection === "connected",
-            refreshed: view.catalogReadAt !== undefined,
-          };
-    },
-    startedAt,
-    leaseOf: (leaseId) => {
-      const entry = leaseIndex.resolve(leaseId);
-      return entry === undefined ? undefined : { ownerId: entry.ownerId, workerId: entry.workerId };
-    },
-    onLeaseRemoved: (listener) =>
-      leaseIndex.onRemoved((entry) =>
-        listener({
-          leaseId: entry.gatewayLeaseId,
-          ownerId: entry.ownerId,
-          workerId: entry.workerId,
-        }),
-      ),
-    // why: looked up at each call, so a test that replaces the relay's method sits between the link and the worker.
-    relay: (workerId, request, tenant, leaseId) =>
-      relay.relay(workerId, {
-        request,
-        target: AGENT_DEVICE,
-        tenant,
-        ...(leaseId === undefined ? {} : { leaseId }),
-      }),
-  };
-}
-
-type FleetLeaseFacts = ReturnType<FleetPort["leasesOf"]>[number];
-
-// why: the worker's view lists the lease, its granted device and the model's class in its catalog; a lease missing any of them is not offered for adoption.
-function listedLease(
-  views: FleetPortParts["views"],
-  view: WorkerView | undefined,
-  entry: ReturnType<FleetLeaseIndex["all"]>[number],
-): FleetLeaseFacts["listed"] {
-  const record = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
-  if (view === undefined || record === undefined) return undefined;
-  const device = views
-    .grantedDevices()
-    .find((granted) => granted.workerId === entry.workerId && granted.id === record.deviceId);
-  if (device === undefined) return undefined;
-  return describeDevice(view, record, device);
-}
-
-function describeDevice(
-  view: WorkerView,
-  record: { readonly ttlMs: number; readonly ttlDeadline: number },
-  device: ReturnType<FleetPortParts["views"]["grantedDevices"]>[number],
-): FleetLeaseFacts["listed"] {
-  const { platform, model } = device.spec;
-  if (device.address === undefined || (platform !== "ios" && platform !== "android")) {
-    return undefined;
-  }
-  const deviceClass = view.catalog?.find((catalog) => catalog.platform === platform)?.modelClasses[
-    model
-  ];
-  return {
-    address: device.address,
-    model,
-    platform,
-    ttlDeadline: record.ttlDeadline,
-    ttlMs: record.ttlMs,
-    ...(deviceClass === undefined ? {} : { deviceClass }),
-  };
-}
-
-function leaseFacts(
-  views: FleetPortParts["views"],
-  entry: ReturnType<FleetLeaseIndex["all"]>[number],
-): FleetLeaseFacts {
-  const view = views.view(entry.workerId);
-  const listed = listedLease(views, view, entry);
-  return {
-    connected: view?.connection === "connected",
-    leaseId: entry.gatewayLeaseId,
-    refreshed: view?.catalogReadAt !== undefined,
-    requesterId: entry.requesterId,
-    workerId: entry.workerId,
-    ...(listed === undefined ? {} : { listed }),
-  };
 }
 
 function errorMessage(error: unknown): string {

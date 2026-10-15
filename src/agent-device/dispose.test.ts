@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeClock } from "../ports/clock.js";
-import { disposeAgentDeviceEdge, type AgentDeviceFrontParts } from "./index.js";
+import { disposeAgentDeviceEdge, type AgentDeviceFrontParts } from "./front/edge-parts.js";
 import { FrontMap } from "./front/front-map.js";
 import { Renewals } from "./front/renewals.js";
 import type { HostLink } from "./front/host-link.js";

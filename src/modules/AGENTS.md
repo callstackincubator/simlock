@@ -3,15 +3,15 @@
 Does: the contract an optional module implements, and the host that loads each turned-on module and plugs its handle into the daemon.
 Entry: `index.ts` → `createModuleHost` and the contract types; `testing.ts` → `fakeModule`, `fakeWorkerContext`.
 Uses: ports, contract, core; the bus for types only. Never imports: leasing, gateway, drivers, agent-device, `fs`.
-Imported by: `daemon/main.ts` (the factory and types). Core, leasing, drivers, gateway and contract never import it.
+Imported by: `daemon/main.ts` (the factory and types); on a gateway it is handed the gateway parts and binds each module's context to its name. Core, leasing, drivers, gateway and contract never import it.
 
 ## Files
 
-| File         | Role                                                                                                            |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `types.ts`   | `OptionalModuleDefinition`, `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies |
-| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules, runs hooks                                           |
-| `testing.ts` | Fake module and context for tests and the conformance suite                                                     |
+| File         | Role                                                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`   | `OptionalModuleDefinition`, `ModuleConfig`, `WorkerModule`, `WorkerHooks`, `WorkerContext`, the by-shape copies                                                         |
+| `host.ts`    | `createModuleHost`: checks names, loads turned-on modules (`role: "worker"` or `"gateway"`), runs hooks; a gateway host runs `beforeDrain` under the same 30 s deadline |
+| `testing.ts` | Fake module and context for tests and the conformance suite                                                                                                             |
 
 ## Rules
 

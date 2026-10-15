@@ -189,6 +189,40 @@ export interface ModuleHost {
   beforeDriversDispose(): Promise<void>;
 }
 
+export interface GatewayParts {
+  readonly clock: Clock;
+  readonly instanceId: string;
+  readonly startedAt: number;
+  readonly requesterPrefix: string;
+  workers(): readonly WorkerView[];
+  worker(id: string): WorkerView | undefined;
+  grantedDevices(): readonly FleetGrantedDevice[];
+  readonly leases: FleetLeases;
+  relay(
+    workerId: string,
+    call: {
+      readonly request: Request;
+      readonly target: string;
+      readonly tenant: string;
+      readonly leaseId?: string;
+    },
+  ): Promise<Response>;
+  cancelPending(requesterId: string): Promise<unknown>;
+}
+
+export interface GatewayModuleHost {
+  mounts(deps: MountDeps): readonly ModuleMount[];
+  beforeDrain(): Promise<void>;
+}
+
+export interface GatewayHostOptions {
+  readonly role: "gateway";
+  readonly definitions: readonly OptionalModuleDefinition<unknown>[];
+  readonly config: Config;
+  readonly logger: Logger;
+  readonly parts: GatewayParts;
+}
+
 export interface ModuleHostOptions {
   readonly role: "worker";
   readonly definitions: readonly OptionalModuleDefinition<unknown>[];

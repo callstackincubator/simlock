@@ -1,9 +1,9 @@
 # Agent-device edge
 
 Does: runs one agent-device daemon per worker and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
-Entry: `index.ts` → `createGatewayAgentDeviceFrontParts` (gateway), `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`; the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds `AgentDeviceSupervisor`), loaded by the module host.
+Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds `AgentDeviceSupervisor`). The module host loads both.
 Uses: ports, http (session, errors, token identity), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
-Imported by: the module registry (`definition.ts` only); `daemon/main.ts` loads `index.ts` with a dynamic `import()` on a gateway that has it on (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
+Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
 Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no daemon.
 
 ## Files
@@ -27,6 +27,8 @@ Off unless `capabilities.agent-device.enabled` (false). Off: nothing mounted, no
 | `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                              |
 | `front/host-link.ts`                                          | `HostLink` port; `InProcessHostLink` (worker)                                    |
 | `front/relay-host-link.ts`                                    | `RelayHostLink` (gateway); `FleetPort`                                           |
+| `front/edge-parts.ts`                                         | Front parts, dispose and cancel steps, `createAgentDeviceFront`                  |
+| `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`     |
 | `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope     |
 | `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                    |
 
@@ -130,7 +132,7 @@ renewals and release scopes: memory only.
 
 - The simlock lease is the only clock; an agent-device lease never outlives it.
 - A pid is signalled only after the `--simlock-home` marker matches.
-- The edge names no gateway type; the gateway reaches it through `FleetPort`.
+- The edge names no gateway type; the gateway side builds `FleetPort` from its gateway context.
 - A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
 - Tests: `edge.test.ts`, `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.
 

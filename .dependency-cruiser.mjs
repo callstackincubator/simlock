@@ -172,13 +172,10 @@ export default {
     {
       name: "main-loads-modules-lazily",
       comment:
-        "main.ts imports src/agent-device only by dynamic import or for types, so a daemon that has the module turned off loads none of its code",
+        "main.ts imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
       severity: "error",
       from: { path: "^src/daemon/main\\.ts$" },
-      to: {
-        dependencyTypesNot: ["type-only", "type-import", "dynamic-import"],
-        path: "^src/agent-device/",
-      },
+      to: { path: "^src/agent-device/" },
     },
     direction(
       "not-modules",
