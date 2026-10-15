@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,6 +85,8 @@ interface RigOptions {
   readonly modules: readonly OptionalModuleDefinition<unknown>[];
   readonly on?: readonly string[];
   readonly http?: boolean;
+  // why: agent-device's allocate names no model, so the driver must list a default phone for it.
+  readonly phones?: boolean;
   readonly extra?: Partial<StartDaemonOptions>;
   readonly overrides?: Record<string, unknown>;
   readonly notes?: string[];
@@ -100,7 +102,21 @@ async function prepare(options: RigOptions) {
   const clock = new FakeClock(1_000);
   const sink = new MemoryLogSink();
   const notes = options.notes ?? [];
-  const driver = new NotingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }, notes);
+  const driver = new NotingDriver(
+    {
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      ...(options.phones === true
+        ? {
+            defaultModels: { phone: ["iPhone 16"] },
+            knownModels: ["iPhone 16"],
+            modelClasses: { "iPhone 16": "phone" as const },
+          }
+        : {}),
+    },
+    notes,
+  );
   const port = options.http === true ? await freeLoopbackPort() : undefined;
   const startOptions = {
     clock,
@@ -160,6 +176,8 @@ async function leaseAndRelease(daemon: DaemonServer): Promise<string> {
   return grant.lease.id;
 }
 
+// why: a value no default uses, so a timer with it is the lease-end wait ceiling a participant arms.
+const END_WAIT_MS = 7_777;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("optional modules: turning on", () => {
@@ -181,10 +199,12 @@ describe("optional modules: turning on", () => {
   });
 
   it("a module turned on is loaded once and reports the state its capability source answers", async () => {
-    const module = fakeModule({ name: "alpha", state: "available" });
+    const module = fakeModule({ name: "alpha", state: "unavailable" });
     const { daemon } = await start({ modules: definitions(module), on: ["alpha"] });
 
-    expect(await capabilities(daemon)).toContainEqual({ name: "alpha", state: "available" });
+    expect(await capabilities(daemon)).toContainEqual(
+      expect.objectContaining({ name: "alpha", state: "unavailable" }),
+    );
     expect({ loads: module.loads, creates: module.creates }).toEqual({ creates: 1, loads: 1 });
   });
 
@@ -412,7 +432,7 @@ describe("optional modules: a start that cannot go on", () => {
     {
       bad: () => Array.from({ length: 16 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
       good: () => Array.from({ length: 15 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
-      names: ["16"],
+      names: ["mod-15", "16"],
       title: "16 fake modules plus agent-device wired by hand (17 capabilities)",
     },
     {
@@ -653,21 +673,25 @@ describe("optional modules: afterSocketClaimed", () => {
 describe("optional modules: beforeDeviceReclaim", () => {
   it("a release reclaims the device when no turned-on module has beforeDeviceReclaim", async () => {
     const notes: string[] = [];
-    const { daemon } = await start({
+    const { clock, daemon } = await start({
       modules: definitions(fakeModule({ name: "alpha" })),
       notes,
       on: ["alpha"],
+      overrides: { lease: { endWaitMs: END_WAIT_MS } },
     });
+
+    const timers = vi.spyOn(clock, "setTimer");
 
     await leaseAndRelease(daemon);
 
     await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
+    expect(timers.mock.calls.map(([delay]) => delay)).not.toContain(END_WAIT_MS);
   });
 
   it("beforeDeviceReclaim runs after a release commits and before the device's reclaim starts", async () => {
     const notes: string[] = [];
     let live: DaemonServer | undefined;
-    const { daemon } = await start({
+    const { clock, daemon } = await start({
       modules: definitions(
         fakeModule({
           hooks: {
@@ -689,13 +713,16 @@ describe("optional modules: beforeDeviceReclaim", () => {
       ),
       notes,
       on: ["alpha"],
+      overrides: { lease: { endWaitMs: END_WAIT_MS } },
     });
     live = daemon;
+    const timers = vi.spyOn(clock, "setTimer");
 
     await leaseAndRelease(daemon);
     await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
 
     expect(notes).toEqual(["lease gone", "hook done", "driver reclaim"]);
+    expect(timers.mock.calls.map(([delay]) => delay)).toContain(END_WAIT_MS);
   });
 });
 
@@ -735,6 +762,68 @@ describe("optional modules: stop hooks", () => {
     expect(notes).toEqual(["gateway 200"]);
     expect(messages.indexOf("drain done")).toBeGreaterThanOrEqual(0);
     expect(messages.indexOf("drain done")).toBeLessThan(messages.indexOf("Daemon stopping"));
+  });
+
+  it("beforeDrain runs after agent-device's waiting allocates are cancelled through leasing", async () => {
+    const cancelledAtDrain: number[] = [];
+    let directory = "";
+    const rig = await start({
+      extra: { agentDeviceUpstream: new FakeAgentDevice() },
+      http: true,
+      modules: definitions(
+        fakeModule({
+          hooks: {
+            beforeDrain: async () => {
+              const history = await readFile(join(directory, "events.jsonl"), "utf8");
+              cancelledAtDrain.push(
+                history
+                  .split("\n")
+                  .filter(
+                    (line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'),
+                  ).length,
+              );
+            },
+          },
+          name: "alpha",
+        }),
+      ),
+      on: ["alpha"],
+      phones: true,
+      overrides: {
+        agentDevice: { enabled: true },
+        capacity: { config: { maxRunning: 1 }, strategy: "fixed" },
+      },
+    });
+    directory = rig.directory;
+    const headers = await agentHeaders(rig.daemon);
+    await rig.daemon.dispatch("lease.request", ios, agent);
+    const allocate = fetch(`${rig.origin}/v1/agent-device/rpc`, {
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "agent_device.lease.allocate",
+        params: {
+          clientId: "client-1",
+          leaseId: "2".padStart(32, "0"),
+          leaseProvider: "proxy",
+          platform: "ios",
+          runId: "run-1",
+          ttlMs: 120_000,
+        },
+      }),
+      headers: { ...headers, "content-type": "application/json" },
+      method: "POST",
+    }).catch(() => undefined);
+    await vi.waitFor(async () =>
+      expect(
+        ((await rig.daemon.dispatch("list.get", { kind: "requests" }, admin)) as unknown[]).length,
+      ).toBe(1),
+    );
+
+    await rig.daemon.stop("test");
+    await allocate;
+
+    expect(cancelledAtDrain).toEqual([1]);
   });
 
   it("beforeDriversDispose finishes before any driver's dispose starts", async () => {

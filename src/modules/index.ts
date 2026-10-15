@@ -1,4 +1,5 @@
 export type {
+  ModuleConfig,
   ModuleCapabilitySource,
   ModuleDispatch,
   ModuleEndedLease,
@@ -6,6 +7,7 @@ export type {
   ModuleLeaseEndParticipant,
   ModuleMount,
   ModuleRelayTarget,
+  MountDeps,
   OptionalModuleDefinition,
   WorkerContext,
   WorkerHooks,

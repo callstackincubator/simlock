@@ -82,7 +82,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 ## Readiness
 
 `DaemonServer.start`: claim → host load start → `admin.token` write → converge
-starts → `onSocketClaimed` (HTTP, agent-device, module `afterSocketClaimed`, uplink) → await converge → arm.
+starts → `onSocketClaimed` (module `afterSocketClaimed`, agent-device, uplink, HTTP) → await converge → arm.
 Health: `starting` → `running`, or `failed`.
 
 - `hello` and `status.get` answer at once; `status.get` while `starting` carries

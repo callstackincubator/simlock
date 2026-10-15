@@ -17,6 +17,7 @@ import {
 } from "../core/index.js";
 import { FakeAgentDeviceHealth } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
+import { fakeModule, type FakeModule } from "../modules/testing.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -45,6 +46,7 @@ import {
   type DriverDiscoveryContext,
   type StartDaemonOptions,
 } from "./main.js";
+import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -2420,6 +2422,7 @@ describe("startDaemon with the agent-device edge", () => {
     setup: Awaited<ReturnType<typeof setUp>>,
     ports: {
       readonly drivers?: StartDaemonOptions["drivers"];
+      readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
     },
@@ -2436,6 +2439,13 @@ describe("startDaemon with the agent-device edge", () => {
       filesystem: setup.filesystem,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+      ...(ports.modules === undefined
+        ? {}
+        : {
+            optionalModules: ports.modules.map(
+              (module) => module.definition as OptionalModuleDefinition<unknown>,
+            ),
+          }),
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
       statePath: join(setup.directory, "state.json"),
@@ -2445,6 +2455,57 @@ describe("startDaemon with the agent-device edge", () => {
     runningDaemons.push(daemon);
     return { daemon, sink };
   }
+
+  it("runs a module's beforeDriversDispose after agent-device's child is stopped and before the drivers are disposed", async () => {
+    const setup = await setUp({
+      agentDevice: { command, enabled: true },
+      capabilities: { alpha: { enabled: true } },
+    });
+    const events: string[] = [];
+    const processSupervisor = new KillingSupervisor();
+    const runner = versionAndDaemon(setup.directory);
+    const spawn = runner.spawn.bind(runner);
+    vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
+      const handle = spawn(spawned, args, options);
+      if (args[0] === entry) {
+        processSupervisor.markAlive(handle.pid);
+        processSupervisor.kills.set(handle.pid, () => handle.kill());
+        void handle.wait().then(() => events.push("agent-device exited"));
+      }
+      return handle;
+    });
+    const clock = new FakeClock(1_000);
+    class DisposingDriver extends FakeDriver {
+      async dispose(): Promise<void> {
+        events.push("driver disposed");
+      }
+    }
+    const { daemon } = await startEdge(setup, {
+      drivers: [new DisposingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      modules: [
+        fakeModule({
+          hooks: {
+            beforeDriversDispose: () => {
+              events.push("module beforeDriversDispose");
+              return Promise.resolve();
+            },
+          },
+          name: "alpha",
+        }),
+      ],
+      processRunner: runner,
+      processSupervisor,
+    });
+    await pollUntil(() => runner.calls.length === 2);
+
+    await daemon.stop("test");
+
+    expect(events).toEqual([
+      "agent-device exited",
+      "module beforeDriversDispose",
+      "driver disposed",
+    ]);
+  });
 
   it("resolves and grants a lease to an ordinary client while agent-device's /health never answers, and stops the child before the drivers are disposed", async () => {
     const setup = await setUp({ agentDevice: { command, enabled: true } });
@@ -2626,6 +2687,37 @@ describe("startDaemon with the agent-device edge", () => {
         lease: { id: expect.any(String) },
       });
     }, 10_000);
+
+    it("lists agent-device's module-unavailable finding before a module's own", async () => {
+      const setup = await setUp({
+        agentDevice: { command: "/opt/missing/agent-device", enabled: true },
+        capabilities: { alpha: { enabled: true } },
+      });
+      const { daemon } = await startEdge(setup, {
+        modules: [
+          fakeModule({
+            findings: () => [{ message: "it is down", remedy: "bring it up" }],
+            name: "alpha",
+          }),
+        ],
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+
+      await expect
+        .poll(
+          async () =>
+            (
+              (await daemon.dispatch("doctor.run", {}, operator)) as {
+                readonly findings: readonly { readonly kind: string; readonly module?: string }[];
+              }
+            ).findings
+              .filter((finding) => finding.kind === "module-unavailable")
+              .map((finding) => finding.module),
+          { timeout: 5_000 },
+        )
+        .toEqual(["agent-device", "alpha"]);
+    });
 
     it("reports module-unavailable for agent-device, naming the command when agentDevice.command is found nowhere", async () => {
       const setup = await setUp({

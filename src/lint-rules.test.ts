@@ -545,6 +545,7 @@ describe("a module's definition.ts, read by the registry without loading the mod
     "src/light/index.ts": "export {};\n",
     "src/module-registry/index.ts":
       'import "../heavy/definition.js";\nimport "../light/definition.js";\nexport {};\n',
+    "src/module-registry/other.ts": 'import "../light/impl.js";\nexport {};\n',
   };
 
   function worldViolations(): Violation[] {
@@ -571,6 +572,7 @@ describe("a module's definition.ts, read by the registry without loading the mod
     const found = worldViolations();
 
     expect(found.filter((v) => v.from === "src/module-registry/index.ts")).toEqual([]);
+    expect(found.filter((v) => v.from === "src/module-registry/other.ts")).not.toEqual([]);
   });
 });
 
