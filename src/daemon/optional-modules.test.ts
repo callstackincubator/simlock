@@ -444,10 +444,10 @@ describe("optional modules: a start that cannot go on", () => {
       title: "two definitions with one name",
     },
     {
-      bad: () => [fakeModule({ name: "agent-device" })],
-      good: () => [fakeModule({ name: "agent-devices" })],
+      bad: () => [fakeModule({ name: "agent-device" }), fakeModule({ name: "agent-device" })],
+      good: () => [fakeModule({ name: "agent-device" }), fakeModule({ name: "agent-devices" })],
       names: ["agent-device"],
-      title: "a definition named agent-device while it is wired by hand",
+      title: "two definitions named agent-device",
     },
     {
       bad: () => [fakeModule({ name: "Bad_Name" })],
@@ -456,10 +456,10 @@ describe("optional modules: a start that cannot go on", () => {
       title: "a name that fails the capability name check",
     },
     {
-      bad: () => Array.from({ length: 16 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
-      good: () => Array.from({ length: 15 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
-      names: ["mod-15", "16"],
-      title: "16 fake modules plus agent-device wired by hand (17 capabilities)",
+      bad: () => Array.from({ length: 17 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
+      good: () => Array.from({ length: 16 }, (_, i) => fakeModule({ name: `mod-${String(i)}` })),
+      names: ["mod-16", "17"],
+      title: "17 fake modules (17 capabilities)",
     },
     {
       bad: () => [fakeModule({ loadError: new Error("no such file"), name: "alpha" })],

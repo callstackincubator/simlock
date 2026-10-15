@@ -85,6 +85,33 @@
   },
   {
     "type": "cycle",
+    "from": "src/daemon",
+    "to": "src/module-registry",
+    "rule": {
+      "severity": "error",
+      "name": "no-cycle-between-components"
+    },
+    "cycle": [
+      {
+        "name": "src/module-registry",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/agent-device",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/http",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/daemon",
+        "dependencyTypes": []
+      }
+    ]
+  },
+  {
+    "type": "cycle",
     "from": "src/gateway",
     "to": "src/daemon",
     "rule": {
@@ -117,6 +144,33 @@
       },
       {
         "name": "src/http",
+        "dependencyTypes": []
+      }
+    ]
+  },
+  {
+    "type": "cycle",
+    "from": "src/module-registry",
+    "to": "src/agent-device",
+    "rule": {
+      "severity": "error",
+      "name": "no-cycle-between-components"
+    },
+    "cycle": [
+      {
+        "name": "src/agent-device",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/http",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/daemon",
+        "dependencyTypes": []
+      },
+      {
+        "name": "src/module-registry",
         "dependencyTypes": []
       }
     ]

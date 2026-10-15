@@ -416,11 +416,12 @@ export async function loadConfig({
   ) as unknown as Config;
   validateLeaseTtls(merged);
   validateEventLogBounds(merged);
+  // why: a gateway reads a module's gateway keys, so a bad value stops it too.
+  runModuleChecks(merged, modules);
   if (mode === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
-    runModuleChecks(merged, modules);
     // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);

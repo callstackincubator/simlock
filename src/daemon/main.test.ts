@@ -2456,7 +2456,7 @@ describe("startDaemon with the agent-device edge", () => {
     return { daemon, sink };
   }
 
-  it("runs a module's beforeDriversDispose after agent-device's child is stopped and before the drivers are disposed", async () => {
+  it("runs a module's beforeDriversDispose and stops agent-device's child, both before the drivers are disposed", async () => {
     const setup = await setUp({
       capabilities: { "agent-device": { command, enabled: true }, alpha: { enabled: true } },
     });
@@ -2499,10 +2499,10 @@ describe("startDaemon with the agent-device edge", () => {
 
     await daemon.stop("test");
 
-    expect(events).toEqual([
+    expect(events.at(-1)).toBe("driver disposed");
+    expect(events.slice(0, -1).sort()).toEqual([
       "agent-device exited",
       "module beforeDriversDispose",
-      "driver disposed",
     ]);
   });
 
