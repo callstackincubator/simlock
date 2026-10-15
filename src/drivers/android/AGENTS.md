@@ -183,9 +183,9 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 - **Port checks are partial.** After a restart `shutdown` sends `emu kill` to the stored serial
   unchecked; reclaim's `snapshot load` goes to the serial before readiness checks it. A port
   handed out but not yet booted reads free to another instance.
-- **Screen streams are not proven on a device.** `e2e/slow-android-stream.test.ts` is written, not run.
-  Unverified: that SIGKILL on the host `adb shell` (adbd then sends SIGHUP to the device shell)
-  reaches `app_process`; until then the server exits at its next failed write.
+- **The slow-lane stream test has not passed yet.** `e2e/slow-android-stream.test.ts` failed at the
+  lease on a nearly full disk. A live check on a Pixel 9 emulator streamed, and once the host
+  `adb shell` died no scrcpy process and no jar were left on the device.
 - **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
 - **Physical Android devices have no screen stream**, and the jar's digest is not checked at push.
