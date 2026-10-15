@@ -87,15 +87,16 @@ registry loads no module code.
 
 - the capability a worker reports;
 - the relay target a gateway sends to;
-- the `module` field of its doctor finding (§6);
-- its config key, in camelCase: `agent-device` is `agentDevice`.
+- the `module` field of its doctor finding (§7);
+- its key under `capabilities` in the config (§5).
 
 The name passes the capability name check (`^[a-z][a-z0-9-]{0,31}$`). A
-test over the registry checks every name and its config key.
+test over the registry checks every name.
 
 ### 2. A module is loaded only when it is turned on
 
-The host reads `<configKey>.enabled`. When it is `false`, the host calls
+The host reads `capabilities.<name>.enabled`. When it is `false` or the
+section is missing, the host calls
 nothing of the module and loads none of its code. It reports the module's
 capability as `off` itself.
 
@@ -143,12 +144,14 @@ Each hook's name is a promise the host keeps:
 |---|---|---|---|
 | `afterSocketClaimed` | once this daemon holds its socket; never in a daemon that lost the race | no | — |
 | `beforeDeviceReclaim` | after leasing commits a lease's end, before it reclaims the device | yes, by leasing | leasing's lease-end ceiling (ADR 0024 §2) |
-| `beforeDrain` | on stop, after new work is refused, before leasing settles | yes | the host's hook deadline |
-| `beforeDriversDispose` | on stop, before any driver is disposed | yes | the host's hook deadline |
+| `beforeDrain` | on stop, after new work is refused, before leasing settles | yes | the host's hook deadline, 30 s |
+| `beforeDriversDispose` | on stop, before any driver is disposed | yes | the host's hook deadline, 30 s |
 
 The host keeps these rows in one table and runs every module's hooks
 through it. It is the one place that bounds them and logs a hook that runs
-out of time. The technical spec sets the deadlines from today's waits.
+out of time. Both stop hooks share one deadline of 30 s. It sits above
+agent-device's slowest stop: a start still in progress, then 10 s after
+SIGTERM and 2 s after SIGKILL.
 `beforeDeviceReclaim` reaches leasing through the lease-end port ADR 0024
 already defines; leasing does not change.
 
@@ -213,16 +216,41 @@ are declared in `src/modules` by shape, because a module may not import
 agent-device's gateway fleet port moves out of `main.ts` into the module
 and is built from this context.
 
-### 5. A module owns its config
+### 5. A module owns its config, under `capabilities`
 
-`ModuleConfig<C>` holds the module's config schema, its defaults, the keys
-a gateway reads, and a check that may read the rest of the merged config
-(agent-device's `leaseTtlCapMs` must not exceed `lease.maxTtlMs`).
+Every module's config sits under one key, `capabilities`, keyed by the
+module's name:
+
+```json
+{ "capabilities": { "agent-device": { "enabled": true, "command": "agent-device" } } }
+```
+
+Users meet one word: they turn a capability on here, see its state in
+status, and name it in a lease request's `requires`. The top-level
+`agentDevice` key goes. agent-device's integration has not been released,
+so nothing migrates it: an old `agentDevice` key is an unknown key, warned
+about and ignored like any other.
+
+`ModuleConfig<C>` holds the module's validator, its defaults, the keys a
+gateway reads, and a check that may read the rest of the merged config
+(agent-device's `leaseTtlCapMs` must not exceed `lease.maxTtlMs`). It
+follows the shape capacity strategies already use: a validator and
+defaults beside the definition.
 
 `loadConfig` takes the registry's configs from its caller, the daemon or
 the CLI. The core declares the shape it takes and imports nothing from a
-module. Keys stay top-level, so no user's `config.json` changes. A gateway
-warns about a module key it does not read, as today.
+module. A section for a name no module has is an unknown key. A gateway
+warns about a module key it does not read, as it does today.
+
+`config.get` returns the same layout. The contract types the section by
+shape, so it never changes for a new module:
+
+```ts
+capabilities: z.record(capabilityNameSchema, z.object({ enabled: z.boolean() }).catchall(z.unknown())),
+```
+
+A client reads `enabled` typed and the rest as `unknown`. The daemon has
+already checked each section with its module's validator.
 
 ### 6. Shared types live in `src/modules`
 
@@ -242,8 +270,8 @@ The doctor finding `agent-device-unavailable` becomes:
 ```
 
 A module's `findings()` returns it. The core doctor, the contract and the
-CLI know the one kind, not any module. The protocol version moves from 36
-to 37 with no shim, and the changelog says so.
+CLI know the one kind, not any module. The protocol version moves up with
+no shim, and the changelog says so.
 
 ### 8. Tests swap modules, not module parts
 
@@ -254,13 +282,16 @@ conformance suite runs over the registry with `describe.each`:
 
 - a module turned off is not loaded and reports `off`;
 - each hook's row in §3 holds;
-- the name and config key pass §1's checks.
+- the name passes §1's check.
 
 ## Consequences
 
 - Adding an optional module is a directory, a `definition.ts` and one
   registry line. `main.ts`, the core config, the doctor and the contract do
   not change.
+- `agentDevice` in `config.json` becomes `capabilities.agent-device`, and
+  `config.get` and the client's `SimlockConfig` change with it. The
+  protocol version moves up.
 - `main.ts` names no module. agent-device's 14 imports and its gateway
   fleet port leave it.
 - Every module turned off reports `off`, and its code is never loaded.
@@ -268,7 +299,8 @@ conformance suite runs over the registry with `describe.each`:
   makes an old client refuse a new daemon rather than misread it.
 - A leftover agent-device daemon is not reaped while agent-device is off.
   `docs/CONFIGURATION.md`'s line "A daemon a killed Simlock left behind is
-  stopped at the next start" gains "with `agentDevice.enabled` `true`".
+  stopped at the next start" gains "with
+  `capabilities.agent-device.enabled` `true`".
 - The supervisor's path for `enabled: false` is deleted, with its test.
 - Streaming lands on this contract when it becomes a feature. Its
   capability and relay target then share one name.
@@ -296,8 +328,14 @@ conformance suite runs over the registry with `describe.each`:
 - **Gateway adapters stay in `main.ts`, one per module.** Rejected: about
   120 lines of per-module code stay in the start-up file, and a module's
   code is split across two places.
-- **Config under `modules.<name>`.** Rejected: it breaks every existing
-  `config.json` for a tidier layout.
+- **One top-level key per module (`agentDevice`), typed in the contract
+  and checked by a test.** Rejected: every module would add a contract
+  entry, and the key would need a camelCase rule to match the name.
+- **The namespace called `modules`.** Rejected: users see `capabilities`
+  in status, `requires` and `CAPABILITY_MISSING`, and would meet a second
+  word for the same thing.
+- **Any extra top-level key let through untyped (`catchall`).** Rejected:
+  the core's own keys would lose their strictness.
 - **The core keeps every module's config, checked by a test.** Rejected:
   each module would still edit the core.
 - **A doctor finding kind per module.** Rejected: each module would edit
