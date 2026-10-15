@@ -154,6 +154,32 @@ const licensesClaimedOf = (name: string): string[] => {
 };
 
 /**
+ * why: some licenses' verbatim text never names the license -- BSD-3-Clause is a copyright line
+ * and three conditions -- so a name-word check would reject the verbatim text rule 3 demands. For
+ * those, the name is checked against the clause that makes the text that license instead: the
+ * third condition is what separates BSD-3-Clause from BSD-2-Clause.
+ */
+const clauseNamingLicense: Readonly<Record<string, RegExp>> = {
+  "BSD-3-Clause": /Neither the name of[\s\S]+?may\s+be\s+used\s+to\s+endorse\s+or\s+promote/,
+};
+
+/** why: what in `text` contradicts the license `name` claims to hold, one line per mismatch. */
+const licenseMismatchesOf = (name: string, text: string): string[] => {
+  const base = name.slice(name.lastIndexOf("/") + 1).replace(/\.txt$/i, "");
+  const clause = clauseNamingLicense[base.slice(base.indexOf(".") + 1)];
+  if (clause !== undefined) {
+    return clause.test(text)
+      ? []
+      : [`${name}: its text lacks the clause that makes it that license`];
+  }
+  const claimed = licensesClaimedOf(name);
+  if (claimed.length === 0) return [`${name}: its file name names no license`];
+  return claimed
+    .filter((word) => !new RegExp(`\\b${word}\\b`, "i").test(text))
+    .map((word) => `${name}: its text never says ${word}`);
+};
+
+/**
  * why: the rule has to be enforced everywhere it applies or it only guards the directories someone
  * remembered (testing rule 4). Vendor and third-party code rule 2
  * (`docs/internal/agent-rules/vendor-and-third-party-code.md`): a first-level directory under
@@ -179,14 +205,9 @@ describe("a first-level directory under vendor/", () => {
   it("holds a license text under LICENSES/ whose text matches its name", () => {
     const missing = [...vendoredDirs.keys()].filter((dir) => licenseTextsOf(dir).length === 0);
     const mismatched = [...vendoredDirs.keys()].flatMap((dir) =>
-      licenseTextsOf(dir).flatMap((name) => {
-        const claimed = licensesClaimedOf(name);
-        const text = readFileSync(join(REPO_ROOT, name), "utf8");
-        if (claimed.length === 0) return [`${name}: its file name names no license`];
-        return claimed
-          .filter((word) => !new RegExp(`\\b${word}\\b`, "i").test(text))
-          .map((word) => `${name}: its text never says ${word}`);
-      }),
+      licenseTextsOf(dir).flatMap((name) =>
+        licenseMismatchesOf(name, readFileSync(join(REPO_ROOT, name), "utf8")),
+      ),
     );
     expect({ missing, mismatched }).toEqual({ missing: [], mismatched: [] });
   });
@@ -195,9 +216,7 @@ describe("a first-level directory under vendor/", () => {
     // why: rule 3 -- our own code often sits beside theirs, so a license text names what it covers
     // instead of taking the name that states it covers everything nearby.
     const isBareLicense = (name: string): boolean => /^LICENSE(\.|$)/.test(basename(name));
-    const bare = vendoredFiles.filter(
-      (name) => name.split("/").length > 2 && isBareLicense(name),
-    );
+    const bare = vendoredFiles.filter((name) => name.split("/").length > 2 && isBareLicense(name));
     expect(bare).toEqual([]);
   });
 });

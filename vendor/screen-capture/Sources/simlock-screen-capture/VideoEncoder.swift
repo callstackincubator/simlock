@@ -1,3 +1,9 @@
+// MODIFIED FILE — this file is derived from serve-sim (Copyright 2026 Evan Bacon, Apache-2.0;
+// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock rewrote
+// it from upstream's `Sources/SimNative/VideoEncoder.swift` at the commit NOTICE.md names, and the
+// result stays under Apache-2.0 as a modified file of serve-sim, not under simlock's MIT license.
+// `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
+// it derives from. Read that notice before editing this file.
 import CoreGraphics
 import CoreVideo
 import Foundation

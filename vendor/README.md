@@ -18,10 +18,10 @@ against, so it stays the first 40-character commit hash in this file:
 
 ## What else lives here
 
-| Directory | Upstream | License | Notice |
-| --- | --- | --- | --- |
-| `screen-capture/` | `EvanBacon/serve-sim` — a capture and encode pipeline we patched | Apache-2.0 | [`screen-capture/NOTICE.md`](screen-capture/NOTICE.md) |
-| `scrcpy/` | `Genymobile/scrcpy` — the server artifact, byte-identical, not yet consumed | Apache-2.0 | [`scrcpy/NOTICE.md`](scrcpy/NOTICE.md) |
+| Directory         | Upstream                                                                                                                                                                | License                                                                     | Notice                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `screen-capture/` | `EvanBacon/serve-sim` — a capture and encode pipeline we patched, four files rewritten                                                                                  | Apache-2.0 (our own three files MIT)                                        | [`screen-capture/NOTICE.md`](screen-capture/NOTICE.md) |
+| `scrcpy/`         | `Genymobile/scrcpy` — the server artifact, byte-identical, pushed unmodified to a leased emulator by the Android driver, whose client is ours in `src/drivers/android/` | Apache-2.0, plus BSD-3-Clause and BSL-1.0 code in the bundled Kotlin stdlib | [`scrcpy/NOTICE.md`](scrcpy/NOTICE.md)                 |
 
 A first-level directory here is third-party or derived-from-third-party code, and
 it holds the artifact(s), the license text(s) they require in `LICENSES/`, and a
