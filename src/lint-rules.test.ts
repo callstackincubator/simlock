@@ -576,7 +576,7 @@ describe("a module's definition.ts, read by the registry without loading the mod
   });
 });
 
-describe("main.ts loads optional modules lazily", () => {
+describe("main.ts imports nothing from any module", () => {
   function mainViolations(source: string): string[] {
     const dir = join(scratch, `main-lazy-${counter++}`);
     const world: Record<string, string> = {
@@ -598,41 +598,24 @@ describe("main.ts loads optional modules lazily", () => {
     {
       kind: "a value import",
       source: 'import { value } from "../agent-device/index.js";\nexport { value };\n',
-      verdict: "fails",
-    },
-    {
-      kind: "a re-export",
-      source: 'export { value } from "../agent-device/index.js";\n',
-      verdict: "fails",
-    },
-    {
-      kind: "a bare import",
-      source: 'import "../agent-device/index.js";\nexport {};\n',
-      verdict: "fails",
     },
     {
       kind: "a dynamic import",
       source: 'export const load = () => import("../agent-device/index.js");\n',
-      verdict: "passes",
     },
+    { kind: "a re-export", source: 'export { value } from "../agent-device/index.js";\n' },
+    { kind: "a bare import", source: 'import "../agent-device/index.js";\nexport {};\n' },
     {
       kind: "a type-only import",
       source: 'import type { Shape } from "../agent-device/index.js";\nexport type S = Shape;\n',
-      verdict: "passes",
     },
     {
       kind: "a type import",
       source: 'export type S = import("../agent-device/index.js").Shape;\n',
-      verdict: "passes",
     },
-  ])(
-    "dependency-cruiser $verdict $kind of src/agent-device from main.ts",
-    ({ source, verdict }) => {
-      expect(mainViolations(source).includes("main-loads-modules-lazily")).toBe(
-        verdict === "fails",
-      );
-    },
-  );
+  ])("dependency-cruiser fails $kind of src/agent-device from main.ts", ({ source }) => {
+    expect(mainViolations(source)).toContain("main-loads-modules-lazily");
+  });
 });
 
 describe("the cycle check between components", () => {

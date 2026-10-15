@@ -10,11 +10,16 @@ import {
   ScriptedProcessRunner,
 } from "../ports/index.js";
 import type {
+  FleetLease,
+  FleetLeases,
+  GatewayContext,
+  GatewayModule,
   ModuleFinding,
   OptionalModuleDefinition,
   WorkerContext,
   WorkerHooks,
   WorkerModule,
+  WorkerView,
 } from "./index.js";
 
 export interface FakeModuleConfig {
@@ -31,12 +36,23 @@ export interface FakeModuleOptions {
   readonly mount?: WorkerModule["mount"];
   readonly loadError?: Error;
   readonly onCreate?: (ctx: WorkerContext<FakeModuleConfig>) => void;
+  readonly gateway?: FakeGatewaySide;
+}
+
+export interface FakeGatewaySide {
+  readonly loadError?: Error;
+  readonly createError?: Error;
+  readonly module?: GatewayModule;
+  readonly onCreate?: (ctx: GatewayContext<FakeModuleConfig>) => void;
 }
 
 export interface FakeModule {
   readonly definition: OptionalModuleDefinition<FakeModuleConfig>;
   loads: number;
   creates: number;
+  gatewayLoads: number;
+  gatewayCreates: number;
+  readonly gatewayContexts: GatewayContext<FakeModuleConfig>[];
   readonly contexts: WorkerContext<FakeModuleConfig>[];
 }
 
@@ -44,6 +60,9 @@ export function fakeModule(options: FakeModuleOptions): FakeModule {
   const fake: FakeModule = {
     contexts: [],
     creates: 0,
+    gatewayContexts: [],
+    gatewayCreates: 0,
+    gatewayLoads: 0,
     definition: {
       config: {
         defaults: { greeting: "hello" },
@@ -56,6 +75,24 @@ export function fakeModule(options: FakeModuleOptions): FakeModule {
           return { greeting: section["greeting"] ?? "hello" };
         },
       },
+      ...(options.gateway === undefined
+        ? {}
+        : {
+            loadGateway: () => {
+              const side = options.gateway;
+              fake.gatewayLoads += 1;
+              if (side?.loadError !== undefined) return Promise.reject(side.loadError);
+              return Promise.resolve({
+                createGateway: (ctx: GatewayContext<FakeModuleConfig>): GatewayModule => {
+                  fake.gatewayCreates += 1;
+                  if (side?.createError !== undefined) throw side.createError;
+                  fake.gatewayContexts.push(ctx);
+                  side?.onCreate?.(ctx);
+                  return side?.module ?? {};
+                },
+              });
+            },
+          }),
       loadWorker: () => {
         fake.loads += 1;
         if (options.loadError !== undefined) return Promise.reject(options.loadError);
@@ -123,5 +160,57 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
     },
     processRunner,
     processSupervisor,
+  };
+}
+
+export interface FakeGatewayContext<C> {
+  readonly clock: FakeClock;
+  readonly ctx: GatewayContext<C>;
+  readonly relayed: { readonly workerId: string; readonly url: string; readonly tenant: string }[];
+}
+
+export async function fakeGatewayContext<C>(
+  name: string,
+  config: C,
+  facts: {
+    readonly serving?: readonly WorkerView[];
+    readonly relay?: (request: Request) => Response;
+  } = {},
+): Promise<FakeGatewayContext<C>> {
+  const clock = new FakeClock(1_000);
+  const daemonConfig: Config = await loadConfig({
+    filesystem: new MemoryFilesystem(),
+    systemStats: new FakeSystemStats({ cpuCount: 4, totalRamBytes: 16 * 1024 ** 3 }),
+  });
+  const serving = facts.serving ?? [];
+  const leases: FleetLeases = {
+    all: (): readonly FleetLease[] => [],
+    onRemoved: () => undefined,
+    resolve: () => undefined,
+  };
+  const relayed: FakeGatewayContext<C>["relayed"][number][] = [];
+  return {
+    clock,
+    ctx: {
+      cancelPending: () => Promise.resolve(undefined),
+      clock,
+      config,
+      daemonConfig,
+      grantedDevices: () => [],
+      instanceId: "gw-test",
+      leases,
+      logger: new NoopLogger(),
+      name,
+      relay: (workerId, request, tenant) => {
+        relayed.push({ tenant, url: request.url, workerId });
+        return Promise.resolve(facts.relay?.(request) ?? new Response("{}"));
+      },
+      requesterPrefix: "gw:gw-test:",
+      serving: () => serving,
+      startedAt: clock.now(),
+      worker: (id) => serving.find((view) => view.id === id),
+      workers: () => serving,
+    },
+    relayed,
   };
 }

@@ -3,6 +3,12 @@ export type { ModuleConfig } from "./types.js";
 // fallow-ignore-next-line unused-type -- part of the contract a module imports from this index; no registered module names it yet.
 export type { MountDeps } from "./types.js";
 export type {
+  FleetGrantedDevice,
+  FleetLease,
+  FleetLeases,
+  GatewayContext,
+  GatewayHooks,
+  GatewayModule,
   ModuleCapabilitySource,
   ModuleDispatch,
   ModuleEndedLease,
@@ -14,5 +20,6 @@ export type {
   WorkerContext,
   WorkerHooks,
   WorkerModule,
+  WorkerView,
 } from "./types.js";
 export { createModuleHost } from "./host.js";

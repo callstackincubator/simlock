@@ -4,7 +4,7 @@ import { loadConfig } from "../core/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { FakeSystemStats, MemoryFilesystem, NoopLogger } from "../ports/index.js";
 import { createModuleHost, type ModuleEndedLease, type OptionalModuleDefinition } from "./index.js";
-import { fakeModule, fakeWorkerContext } from "./testing.js";
+import { fakeGatewayContext, fakeModule, fakeWorkerContext } from "./testing.js";
 
 const HOOK_DEADLINE_MS = 30_000;
 
@@ -30,10 +30,14 @@ const hooked = fakeModule({
   name: "hooked",
 });
 const plain = fakeModule({ name: "plain" });
+const gatewayHooked = fakeModule({
+  gateway: { module: { hooks: { beforeDrain: () => Promise.resolve() } } },
+  name: "gateway-hooked",
+});
 
 const subjects: readonly (readonly [string, OptionalModuleDefinition<unknown>])[] = [
   ...optionalModules.map((definition) => [definition.name, definition] as const),
-  ...[hooked, plain].map(
+  ...[hooked, plain, gatewayHooked].map(
     (module) =>
       [module.definition.name, module.definition as OptionalModuleDefinition<unknown>] as const,
   ),
@@ -120,6 +124,35 @@ describe("every optional module's contract", () => {
       await Promise.all(pending);
 
       expect(settled.sort()).toEqual(Object.keys(hooks).sort());
+    },
+  );
+});
+
+const gatewaySubjects = subjects.filter(([, definition]) => definition.loadGateway !== undefined);
+
+describe("every optional module's gateway side", () => {
+  it.each(gatewaySubjects)("%s: createGateway starts nothing", async (name, definition) => {
+    const { ctx, clock } = await fakeGatewayContext(name, definition.config.defaults);
+
+    (await definition.loadGateway?.())?.createGateway(ctx);
+
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it.each(gatewaySubjects)(
+    "%s: beforeDrain settles within the hook deadline",
+    async (name, definition) => {
+      const { ctx, clock } = await fakeGatewayContext(name, definition.config.defaults);
+      const gateway = (await definition.loadGateway?.())?.createGateway(ctx);
+      let settled = false;
+
+      const pending = Promise.resolve(gateway?.hooks?.beforeDrain?.()).then(() => {
+        settled = true;
+      });
+      clock.advance(HOOK_DEADLINE_MS);
+      await pending;
+
+      expect(settled).toBe(true);
     },
   );
 });

@@ -1,7 +1,13 @@
 import type { z } from "zod";
 
 import type { EventHandler, EventName } from "../bus/index.js";
-import type { OPERATIONS, OperationName, Role } from "../contract/index.js";
+import type {
+  OPERATIONS,
+  OperationName,
+  Role,
+  grantedDeviceSchema,
+  workerViewSchema,
+} from "../contract/index.js";
 import type { Config, Platform } from "../core/index.js";
 import type {
   Clock,
@@ -112,11 +118,59 @@ export interface WorkerContext<C> {
   };
 }
 
+export type WorkerView = z.infer<typeof workerViewSchema>;
+
+export type FleetGrantedDevice = z.infer<typeof grantedDeviceSchema> & {
+  readonly workerId: string;
+};
+
+export interface FleetLease {
+  readonly gatewayLeaseId: string;
+  readonly workerId: string;
+  readonly workerLeaseId: string;
+  readonly requesterId: string;
+  readonly ownerId: string;
+  readonly grantedAt: number;
+}
+
+export interface FleetLeases {
+  all(): readonly FleetLease[];
+  resolve(gatewayLeaseId: string): FleetLease | undefined;
+  onRemoved(listener: (entry: FleetLease) => void): void;
+}
+
+export interface GatewayHooks {
+  readonly beforeDrain?: () => Promise<void>;
+}
+
+export interface GatewayModule {
+  readonly mount?: (deps: MountDeps) => ModuleHandler;
+  readonly hooks?: GatewayHooks;
+}
+
+export interface GatewayContext<C> {
+  readonly name: string;
+  readonly config: C;
+  readonly daemonConfig: Config;
+  readonly logger: Logger;
+  readonly clock: Clock;
+  readonly instanceId: string;
+  readonly startedAt: number;
+  readonly requesterPrefix: string;
+  workers(): readonly WorkerView[];
+  worker(id: string): WorkerView | undefined;
+  serving(): readonly WorkerView[];
+  grantedDevices(): readonly FleetGrantedDevice[];
+  readonly leases: FleetLeases;
+  relay(workerId: string, request: Request, tenant: string, leaseId?: string): Promise<Response>;
+  cancelPending(requesterId: string): Promise<unknown>;
+}
+
 export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
   loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
-  loadGateway?(): Promise<unknown>;
+  loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
 }
 
 export interface ModuleHost {
