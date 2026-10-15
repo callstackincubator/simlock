@@ -688,8 +688,8 @@ test.describe("the workers views", () => {
           .toEqual({ tone, colour: want });
         expect(want, `the ${tone} gauge in ${colorScheme}`).not.toBe(accent);
 
-        // why: every gauge on the panel, not only the one driven above, so a rule that coloured a
-        // gauge by something other than its own tone class fails here too.
+        // why: the poll above watches the memory gauge; this watches the rest of the panel, for the
+        // one thing a poll of a single gauge cannot see.
         const fills = await paintedFills();
         expect(fills.length).toBeGreaterThan(1);
         expect(gaugeToneFaults(fills, accent)).toEqual([]);
