@@ -56,7 +56,7 @@ async function cleanup(started: StreamingHost): Promise<void> {
 async function openLeasePage(page: Page, host: RunningDaemon, lease: string): Promise<void> {
   await page.goto(new URL(`/leases/${encodeURIComponent(lease)}`, host.url).toString());
   await signIn(page, host.tokens.operator);
-  await expect(page.getByRole("heading", { level: 2, name: "Screen" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 3, name: "Screen" })).toBeVisible();
 }
 
 function showButton(page: Page) {
@@ -92,6 +92,7 @@ async function averageColour(page: Page): Promise<string> {
 
 async function fact(page: Page, label: string): Promise<string> {
   return page
+    .getByRole("region", { exact: true, name: "Screen" })
     .locator(".facts > div")
     .filter({ has: page.getByText(label, { exact: true }) })
     .first()
@@ -197,7 +198,9 @@ test.describe("the Screen pane", () => {
     }
   });
 
-  test("a worker with streaming off refuses the picture and says what to do", async ({ page }) => {
+  test("a worker with streaming off disables Show screen and says why before any click", async ({
+    page,
+  }) => {
     const dir = await mkdtemp(join(tmpdir(), "simlock-screen-"));
     let host: RunningDaemon | undefined;
     try {
@@ -206,8 +209,8 @@ test.describe("the Screen pane", () => {
       expect(granted.code, granted.stderr).toBe(0);
       const lease = (granted.json as { lease: { id: string } }).lease.id;
       await openLeasePage(page, host, lease);
-      await showButton(page).click();
-      await expect(page.getByRole("alert")).toContainText("capabilities.stream.enabled is on");
+      await expect(showButton(page)).toBeDisabled();
+      await expect(page.getByText(/^Streaming is off on /)).toBeVisible();
       expect(await streamCapability(host)).toBe("off");
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLog(dir)).toBe("");
@@ -234,7 +237,7 @@ test.describe("the Screen pane", () => {
       // still connected is not observable from a browser -- it is pinned in
       // `src/stream/captures.test.ts`, where a capture can be held open past the lease.
       await logReached(started.dir, "closed", 1);
-      await expect(page.getByText("Lease not found")).toBeVisible();
+      await expect(page.getByText("Lease not found.")).toBeVisible();
       expect(await captureLogLines(started.dir, "opened")).toBe(1);
     } finally {
       await cleanup(started);
