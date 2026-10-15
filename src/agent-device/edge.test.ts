@@ -15,7 +15,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import { FakeAgentDevice } from "./testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -162,13 +162,20 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const logs = new MemoryLogSink();
   const launch = () =>
     startDaemon({
-      agentDeviceUpstream: fake,
       clock,
       configOverrides: {
-        agentDevice: {
-          ...(options.enabled === "unset" ? {} : { enabled: options.enabled ?? true }),
-          ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
-        },
+        ...(options.enabled === "unset"
+          ? {}
+          : {
+              capabilities: {
+                "agent-device": {
+                  enabled: options.enabled ?? true,
+                  ...(options.leaseTtlCapMs === undefined
+                    ? {}
+                    : { leaseTtlCapMs: options.leaseTtlCapMs }),
+                },
+              },
+            }),
         capacity: { config: { maxRunning: options.maxRunning ?? 4 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port },
         lease: {
@@ -182,6 +189,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       drivers,
       filesystem,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
+      optionalModules: [agentDeviceModuleWith({ upstream: fake })],
       statePath,
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
@@ -522,7 +530,7 @@ async function runningCommand(rig: Rig, n: number, options: Omit<SendOptions, "b
 }
 
 describe("the agent-device front, through the whole worker daemon", () => {
-  it("with agentDevice.enabled false, and unset on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
+  it("with capabilities.agent-device.enabled false, and unset on a gateway-mode daemon, /v1/agent-device/health answers 404, as today", async () => {
     const enabled = await setUp();
     expect((await send(enabled, "/health")).status).toBe(200);
 
@@ -559,7 +567,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     });
   });
 
-  it("with agentDevice.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
+  it("with capabilities.agent-device.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
     const rig = await setUp();
     const reason = "found 0.20.3, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
@@ -2149,14 +2157,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await deadlineOf(restarted, 1)).toBe(before);
   });
 
-  it("`config.get` returns `agentDevice.leaseTtlCapMs` when it is set", async () => {
+  it("`config.get` returns `capabilities.agent-device.leaseTtlCapMs` when it is set, and no `agentDevice` key", async () => {
     const rig = await setUp({ leaseTtlCapMs: 10_000 });
 
     const config = (await rig.daemon.dispatch("config.get", {}, adminSession)) as {
-      readonly agentDevice: { readonly leaseTtlCapMs?: number };
+      readonly capabilities: Record<string, { readonly leaseTtlCapMs?: number }>;
     };
 
-    expect(config.agentDevice.leaseTtlCapMs).toBe(10_000);
+    expect(config.capabilities["agent-device"]?.leaseTtlCapMs).toBe(10_000);
+    expect(config).not.toHaveProperty("agentDevice");
   });
 });
 
@@ -2551,7 +2560,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(rig)).toEqual([]);
   });
 
-  it("with agentDevice.enabled false, release-all reclaims at once, as today", async () => {
+  it("with capabilities.agent-device.enabled false, release-all reclaims at once, as today", async () => {
     const rig = await setUp({ enabled: false });
     await plainLease(rig, "plain-1");
     const before = wipes(rig);
@@ -3701,7 +3710,7 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     return (await rig.daemon.dispatch("status.get", {}, adminSession)).capabilities;
   }
 
-  it("a worker with agentDevice.enabled unset answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
+  it("a worker with no capabilities.agent-device section answers status.get with capabilities [{name: agent-device, state: off}], and so does one with it false", async () => {
     const unset = await setUp({ enabled: "unset" });
     const off = await setUp({ enabled: false });
     const running = await setUp();

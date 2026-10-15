@@ -207,8 +207,9 @@ describe("DaemonServer", () => {
     [35, "cannot read a worker view's load"],
     [36, "cannot read the module-unavailable finding in doctor.run"],
     [37, "cannot read config.get's capabilities"],
+    [38, "cannot read agent-device's section under config.get's capabilities"],
   ])(
-    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 38, to a client on protocol %i, which %s",
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 39, to a client on protocol %i, which %s",
     async (version) => {
       const harness = await createHarness();
       const previous = await createClient(harness.socketPath);
@@ -218,7 +219,7 @@ describe("DaemonServer", () => {
       ).resolves.toMatchObject({
         error: {
           code: "PROTOCOL_VERSION_UNSUPPORTED",
-          details: { client: { min: version, max: version }, daemon: { min: 38, max: 38 } },
+          details: { client: { min: version, max: version }, daemon: { min: 39, max: 39 } },
         },
         ok: false,
       });

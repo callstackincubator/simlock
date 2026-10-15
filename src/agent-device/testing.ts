@@ -1,5 +1,7 @@
 import { createHash, type Hash } from "node:crypto";
 
+import type { OptionalModuleDefinition } from "../modules/index.js";
+import { agentDeviceModule } from "./definition.js";
 import type { AgentDeviceHealthProbe } from "./host/health.js";
 import type { AgentDeviceUpstream, AgentDeviceUpstreamState } from "./host/upstream.js";
 
@@ -689,4 +691,11 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+export function agentDeviceModuleWith(_fakes: {
+  readonly upstream?: AgentDeviceUpstream;
+  readonly health?: AgentDeviceHealthProbe;
+}): OptionalModuleDefinition<unknown> {
+  return agentDeviceModule as OptionalModuleDefinition<unknown>;
 }

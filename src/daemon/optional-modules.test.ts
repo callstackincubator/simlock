@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeAgentDevice } from "../agent-device/testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
@@ -208,17 +208,19 @@ describe("optional modules: turning on", () => {
     expect({ loads: module.loads, creates: module.creates }).toEqual({ creates: 1, loads: 1 });
   });
 
-  it("the capability list is agent-device's entry first, then registered modules in registry order", async () => {
+  it("the capability list follows registry order, with agent-device as a registered module", async () => {
     const { daemon } = await start({
-      extra: { agentDeviceUpstream: new FakeAgentDevice() },
-      modules: definitions(fakeModule({ name: "zulu" }), fakeModule({ name: "alpha" })),
-      on: ["zulu", "alpha"],
-      overrides: { agentDevice: { enabled: true } },
+      modules: [
+        ...definitions(fakeModule({ name: "zulu" })),
+        agentDeviceModuleWith({ upstream: new FakeAgentDevice() }),
+        ...definitions(fakeModule({ name: "alpha" })),
+      ],
+      on: ["zulu", "agent-device", "alpha"],
     });
 
     expect((await capabilities(daemon)).map((entry) => entry.name)).toEqual([
-      "agent-device",
       "zulu",
+      "agent-device",
       "alpha",
     ]);
   });
@@ -270,20 +272,21 @@ describe("optional modules: HTTP routes", () => {
   it("with agent-device on and a fake module registered, both modules' routes and relay targets answer, and both capabilities are listed", async () => {
     const seen: string[] = [];
     const { daemon, origin } = await start({
-      extra: { agentDeviceUpstream: new FakeAgentDevice() },
       http: true,
-      modules: definitions(
-        fakeModule({
-          mount: () => handler,
-          name: "alpha",
-          relayTarget: (_request, tenant) => {
-            seen.push(tenant);
-            return Promise.resolve(new Response("alpha"));
-          },
-        }),
-      ),
-      on: ["alpha"],
-      overrides: { agentDevice: { enabled: true } },
+      modules: [
+        agentDeviceModuleWith({ upstream: new FakeAgentDevice() }),
+        ...definitions(
+          fakeModule({
+            mount: () => handler,
+            name: "alpha",
+            relayTarget: (_request, tenant) => {
+              seen.push(tenant);
+              return Promise.resolve(new Response("alpha"));
+            },
+          }),
+        ),
+      ],
+      on: ["agent-device", "alpha"],
     });
     const headers = await agentHeaders(daemon);
     const uplink = await openUplink(daemon);
@@ -791,29 +794,30 @@ describe("optional modules: stop hooks", () => {
     const cancelledAtDrain: number[] = [];
     let directory = "";
     const rig = await start({
-      extra: { agentDeviceUpstream: new FakeAgentDevice() },
       http: true,
-      modules: definitions(
-        fakeModule({
-          hooks: {
-            beforeDrain: async () => {
-              const history = await readFile(join(directory, "events.jsonl"), "utf8");
-              cancelledAtDrain.push(
-                history
-                  .split("\n")
-                  .filter(
-                    (line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'),
-                  ).length,
-              );
+      modules: [
+        agentDeviceModuleWith({ upstream: new FakeAgentDevice() }),
+        ...definitions(
+          fakeModule({
+            hooks: {
+              beforeDrain: async () => {
+                const history = await readFile(join(directory, "events.jsonl"), "utf8");
+                cancelledAtDrain.push(
+                  history
+                    .split("\n")
+                    .filter(
+                      (line) => line.includes('"lease.rejected"') && line.includes('"cancelled"'),
+                    ).length,
+                );
+              },
             },
-          },
-          name: "alpha",
-        }),
-      ),
-      on: ["alpha"],
+            name: "alpha",
+          }),
+        ),
+      ],
+      on: ["agent-device", "alpha"],
       phones: true,
       overrides: {
-        agentDevice: { enabled: true },
         capacity: { config: { maxRunning: 1 }, strategy: "fixed" },
       },
     });

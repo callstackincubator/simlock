@@ -576,6 +576,42 @@ describe("a module's definition.ts, read by the registry without loading the mod
   });
 });
 
+describe("main.ts loads optional modules lazily", () => {
+  function mainViolations(source: string): string[] {
+    const dir = join(scratch, `main-lazy-${counter++}`);
+    const world: Record<string, string> = {
+      "src/agent-device/index.ts": "export const value = 1;\nexport type Shape = number;\n",
+      "src/daemon/main.ts": source,
+    };
+    for (const [path, contents] of Object.entries(world)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src"])
+      .filter((v) => v.from === "src/daemon/main.ts")
+      .map((v) => v.rule.name);
+  }
+
+  it("dependency-cruiser fails a value import of src/agent-device from main.ts, and passes a dynamic, a type-only and a type-import one", () => {
+    expect(
+      mainViolations('import { value } from "../agent-device/index.js";\nexport { value };\n'),
+    ).toContain("main-loads-modules-lazily");
+    expect(
+      mainViolations('export const load = () => import("../agent-device/index.js");\n'),
+    ).not.toContain("main-loads-modules-lazily");
+    expect(
+      mainViolations(
+        'import type { Shape } from "../agent-device/index.js";\nexport type S = Shape;\n',
+      ),
+    ).not.toContain("main-loads-modules-lazily");
+    expect(
+      mainViolations('export type S = import("../agent-device/index.js").Shape;\n'),
+    ).not.toContain("main-loads-modules-lazily");
+  });
+});
+
 describe("the cycle check between components", () => {
   function cycleWorld(files: Record<string, string>): Violation[] {
     const dir = join(scratch, `cycles-${counter++}`);

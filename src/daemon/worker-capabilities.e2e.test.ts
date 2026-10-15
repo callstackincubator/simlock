@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
-import { FakeAgentDevice } from "../agent-device/testing.js";
+import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -51,6 +51,7 @@ describe("a worker's capabilities through a gateway", () => {
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo({ arch: "x64", os: "Linux", osVersion: "6.8.0" }),
       logger: new NoopLogger(),
+      optionalModules: [agentDeviceModuleWith({})],
       statePath: join(gatewayDirectory, "state.json"),
       version: "1.0.0-e2e",
     });
@@ -63,9 +64,8 @@ describe("a worker's capabilities through a gateway", () => {
     const workerDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-caps-worker-"));
     directories.push(workerDirectory);
     const worker = await startDaemon({
-      agentDeviceUpstream: options.fake,
       configOverrides: {
-        agentDevice: { enabled: options.enabled ?? true },
+        capabilities: { "agent-device": { enabled: options.enabled ?? true } },
         gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${String(port)}` },
       },
       dataDirectory: workerDirectory,
@@ -77,6 +77,7 @@ describe("a worker's capabilities through a gateway", () => {
           platform: "android",
         }),
       ],
+      optionalModules: [agentDeviceModuleWith({ upstream: options.fake })],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
       statePath: join(workerDirectory, "state.json"),
@@ -117,7 +118,7 @@ describe("a worker's capabilities through a gateway", () => {
     ]);
   }, 30_000);
 
-  it("the gateway's worker.list shows a worker with agentDevice.enabled false as off", async () => {
+  it("the gateway's worker.list shows a worker with capabilities.agent-device.enabled false as off", async () => {
     const { gateway } = await startFleet({ enabled: false, fake: new FakeAgentDevice() });
 
     const { workers } = await gateway.dispatch("worker.list", {}, admin);

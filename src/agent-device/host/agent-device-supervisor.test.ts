@@ -418,7 +418,7 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
       message: 'agent-device not found: "agent-device" is not on PATH',
       reason: "not-found",
     });
-    expect(unavailable(harness).remedy).toContain("agentDevice.command");
+    expect(unavailable(harness).remedy).toContain("capabilities.agent-device.command");
     expect(unavailable(harness).remedy).toContain("0.21.28 or later");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(harness.runner.calls).toEqual([]);
@@ -477,7 +477,7 @@ describe("AgentDeviceSupervisor checking the install", () => {
 
     expect(unavailable(harness).reason).toBe("not-agent-device");
     expect(unavailable(harness).message).toContain(word);
-    expect(unavailable(harness).remedy).toContain("agentDevice.command");
+    expect(unavailable(harness).remedy).toContain("capabilities.agent-device.command");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(daemonSpawns(harness)).toEqual([]);
   });

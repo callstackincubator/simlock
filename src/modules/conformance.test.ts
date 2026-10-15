@@ -124,3 +124,9 @@ describe("every optional module's contract", () => {
     },
   );
 });
+
+describe("the registry", () => {
+  it("registers agent-device, so the conformance suite above runs over it", () => {
+    expect(subjects.map(([name]) => name)).toContain("agent-device");
+  });
+});
