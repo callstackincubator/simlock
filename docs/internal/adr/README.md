@@ -68,3 +68,4 @@ the status is stale.
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted |
 | [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
+| [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Proposed |
