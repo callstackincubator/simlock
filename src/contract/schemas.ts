@@ -683,6 +683,8 @@ const driverDeviceSchema = z.object({
 });
 
 /** Mirrors the `DoctorFinding` discriminated union (src/core/doctor.ts) field for field. */
+export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+
 const doctorFindingSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("registry-device-missing"),
@@ -744,7 +746,8 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     remedy: z.string(),
   }),
   z.object({
-    kind: z.literal("agent-device-unavailable"),
+    kind: z.literal("module-unavailable"),
+    module: capabilityNameSchema,
     message: z.string(),
     remedy: z.string(),
   }),
@@ -1050,8 +1053,6 @@ export const statusInstallsSchema = boundedInstalls(
  * fleet list must itself fit, or the schema cuts it wherever the merge left it.
  */
 export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
-
-export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
 // why: \p{Cc} is exactly U+0000-U+001F and U+007F-U+009F, the spec's control characters.
 const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu;

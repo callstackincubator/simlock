@@ -155,6 +155,10 @@ specification those changes are written against.
   The lease stands until its deadline and any later invocation can
   `simlock lease renew <lease-id>` it. Exit `14` keeps its narrower meaning:
   the daemon ended the lease while the connection was alive.
+- **`doctor` reports an unavailable optional module as `module-unavailable`.**
+  The finding carries a `module` field (`agent-device` today) and replaces
+  `agent-device-unavailable`; the stderr line is `<module>  fail  <message>;
+<remedy>`. The daemon protocol is now 37.
 
 ### Features
 

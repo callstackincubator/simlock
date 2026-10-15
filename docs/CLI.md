@@ -2196,8 +2196,8 @@ warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed
 It never changes the exit code, and `--fix` never acts on it. With
 `warmPool.enabled` `false` there is none.
 
-With `agentDevice.enabled` `true`, `doctor` reports an `agent-device-unavailable`
-finding when the agent-device daemon is not running: agent-device is not on
+With `agentDevice.enabled` `true`, `doctor` reports a `module-unavailable`
+finding (its `module` is `agent-device`) when the agent-device daemon is not running: agent-device is not on
 `PATH`, is too old or speaks another RPC protocol, is not agent-device at all,
 cannot use its state folder, or failed to start. It carries what was found, what
 is needed, and what to do, and is printed to stderr as one line, cut to 500
