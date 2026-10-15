@@ -112,8 +112,14 @@ describe("iOS screen capture", () => {
   it("close stops the program through stdin and resolves once it has exited", async () => {
     const { capture, launcher } = await setup();
     const feed = await capture.open(simulator, settings, new AbortController().signal);
-    await feed.close();
+    launcher.last.exitOnStdinClose = false;
+    let closed = false;
+    const closing = feed.close().then(() => (closed = true));
+    for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setImmediate(resolve));
     expect(launcher.last.stdinClosed).toBe(true);
+    expect(closed).toBe(false);
+    launcher.last.exit({ code: 0, signal: null });
+    await closing;
     expect(launcher.last.kills).toEqual([]);
   });
 

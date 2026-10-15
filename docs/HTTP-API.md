@@ -265,7 +265,7 @@ device, oldest first, in the shape
 [`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
 sends it, empty when nothing waits; an older daemon leaves it out.
 
-**`capabilities`** lists each optional module the daemon knows of, with its
+**`capabilities`** lists the optional modules the daemon reports, with their
 state, in the order it sends them (at most 16, no name twice):
 
 ```json
@@ -276,7 +276,7 @@ state, in the order it sends them (at most 16, no name twice):
 characters. `state` is `available`, `unavailable` or `off`. `reason` is there
 for `unavailable` only: 1 to 500 characters, with control characters replaced
 by spaces. A worker with `agentDevice.enabled` `false` or unset sends
-`agent-device` as `off`. A status read that takes over 1 s or fails shows
+`agent-device` as `off`; one with `stream.enabled` off sends no `stream` row. A status read that takes over 1 s or fails shows
 `unavailable` with `could not read <name>'s status`. A gateway's own answer
 leaves `capabilities` out: each worker's list is on its entry in `workers`.
 

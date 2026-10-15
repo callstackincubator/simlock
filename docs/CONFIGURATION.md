@@ -39,7 +39,7 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `agentDevice.leaseTtlCapMs`       | **Both sides.** Caps the TTL of the leases the agent-device CLI makes and renews through Simlock: a longer `ttlMs` is lowered to it, and a lease that sends none gets it. A whole number of milliseconds from `5000` to `lease.maxTtlMs`; a value outside that range stops the daemon at start, on a gateway too. Used only when `agentDevice.enabled` is `true`. | unset (no cap) |
 | `agentDevice.command`             | **Worker side.** The agent-device executable: a name looked up on `PATH`, or a path. A gateway ignores it and logs a warning. Used only when `agentDevice.enabled` is `true`. | `agent-device` |
 | `stream.enabled`                  | **Both sides.** Offer a live view of a leased simulator's or emulator's screen. On a worker: answer `GET /v1/stream/leases/{leaseId}` (see [HTTP-API.md](HTTP-API.md#get-v1streamleasesleaseid)) by capturing the screen of the device that lease holds. On a gateway: serve the same URL and relay each request to the worker that holds the lease. Off by default because a stream is a capture pinned to a leased device — with it off, nothing is running until someone asks to look, and nothing is running when they stop. Read at start; changing it needs a restart. | `false` |
-| `stream.fps`                      | **Worker side.** The frame rate the encoder is asked for. A capture only produces frames when the device's screen changes, so this is a ceiling and not a promise: an untouched home screen stays far below it, which is what keeps an idle stream cheap. A whole number from `1` to `60`. | `30` |
+| `stream.fps`                      | **Worker side.** The frame rate the encoder is asked for. A capture sends full frames only when the device's screen changes, and on a still screen only small keep-alive frames, so this is a ceiling and not a promise: an untouched home screen stays far below it, which is what keeps an idle stream cheap. A whole number from `1` to `60`. | `30` |
 | `stream.maxDimension`             | **Worker side.** Cap on the encoded picture's longest side, in pixels; the other side follows the device's aspect ratio. This is the lever that costs the most bandwidth — a device that encodes at about 6 Mbit/s native is nearer 1.4 Mbit/s at `720`. A whole number from `96` to `4096`. | `720` |
 | `stream.bitrateKbps`              | **Worker side.** Target bitrate in kilobits per second, handed to the encoder as an average rather than a ceiling; a frame that needs more takes it. A whole number from `100` to `40000`; the iOS encoder takes nothing lower. | `1500` |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
@@ -607,8 +607,9 @@ lease on a physical iPhone or Android phone is refused with
 the reader has to guess.
 
 - **iOS** needs the capture program `pnpm build` builds on a Mac with Xcode
-  selected. Without it, `simlock status` reports why and an iOS stream is
-  refused with `STREAM_UNAVAILABLE`. `drivers.ios.screenCaptureCommand` names a
+  selected. Without it an iOS stream is refused with
+  `STREAM_UNAVAILABLE`, saying why; `simlock status` says why too when no
+  platform on the worker can stream. `drivers.ios.screenCaptureCommand` names a
   program at another path.
 - **Android** needs nothing more than the SDK the emulators already use. Each
   stream copies a small screen server into the emulator, and removes it when

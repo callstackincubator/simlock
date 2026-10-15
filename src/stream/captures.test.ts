@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
 function ended(leaseId: string) {
   return { leaseId } as Parameters<ReturnType<typeof createStreamLeaseEnd>["leaseEnded"]>[0];
 }
@@ -60,7 +64,7 @@ describe("the capture registry", () => {
     let finish!: () => void;
     slot.attach(() => new Promise<void>((resolve) => (finish = resolve)));
     const releasing = slot.release();
-    await Promise.resolve();
+    await flush();
     expect(captures.leases()).toEqual(["lse_1"]);
     finish();
     await releasing;
@@ -92,7 +96,7 @@ describe("the stream's lease-end participant", () => {
       .then(() => {
         returned = true;
       });
-    await Promise.resolve();
+    await flush();
     expect(returned).toBe(false);
     finish();
     await done;

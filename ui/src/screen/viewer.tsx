@@ -113,12 +113,7 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
       title="Screen"
       description="A live view of the device, captured on the worker that holds it. Nothing runs while this is off."
       actions={
-        <button
-          className="button button-secondary"
-          disabled={phase === "starting"}
-          onClick={live ? stop : start}
-          type="button"
-        >
+        <button className="button button-secondary" onClick={live ? stop : start} type="button">
           {live ? "Stop" : "Show screen"}
         </button>
       }

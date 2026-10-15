@@ -225,9 +225,9 @@ on the worker the same way, and a lease that ends — released, expired, or lost
 its device — ends the picture with it rather than leaving a frame that looks
 live on the page. What you are looking at is either moving or gone.
 
-The panel is there wherever the worker it runs on has screen streaming turned on
-(see [`stream.enabled`](CONFIGURATION.md)). Where it is off, the panel says so in
-the worker's own words; where the lease is on a device a screen cannot be
+The panel is on every lease's page, and streams wherever the worker the lease
+runs on has screen streaming turned on (see [`stream.enabled`](CONFIGURATION.md)).
+Where it is off, the panel says so; where the lease is on a device a screen cannot be
 captured from — a physical iPhone or Android phone — it says that a live screen
 comes only from a simulator or an emulator. Either way it starts nothing.
 

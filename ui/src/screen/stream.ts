@@ -45,9 +45,9 @@ export interface StreamMeta {
 }
 
 /**
- * why: three frame counts rather than one, because the three places a frame can stop answer different
- * questions — the capture sent it, the decoder was given it, the browser painted it — and the gap
- * between two of them is where a slow viewer's problem lives.
+ * why: three frame counts rather than one, because they answer different questions — the decoder was
+ * given it, the browser painted it, or it was dropped rather than drawn behind an earlier one — and
+ * the gap between two of them is where a slow viewer's problem lives.
  */
 export interface StreamStats {
   readonly fed: number;

@@ -75,8 +75,9 @@ envelope -- and the console lane runs a stand-in program that writes the same
 envelope from stills (`e2e/console/screen-capture.ts`), named by the fake
 driver's `screenCaptureCommand`. A change to the Swift program is checked by
 hand on a machine with a simulator, where
-`node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` says whether
-the bytes it wrote decode.
+`node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` turns the
+bytes it wrote into Annex-B and counts each tag, and `ffprobe out.264` says
+whether they decode.
 
 ## Slow lane
 
