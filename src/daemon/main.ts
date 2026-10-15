@@ -91,6 +91,7 @@ import {
   NodeSystemStats,
   NodeTcpProbe,
   resolveDaemonSocketPath,
+  readPackageVersion,
   resolveSimlockHome,
   SystemClock,
   type SystemStats,
@@ -157,6 +158,7 @@ export interface StartDaemonOptions {
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
+  const version = options.version ?? readPackageVersion();
   const dataDirectory = options.dataDirectory ?? resolveSimlockHome();
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
@@ -229,7 +231,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       ipc,
       logger,
       socketPath,
-      version: options.version ?? "1.0.0",
+      version: version,
     });
   }
   // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
@@ -530,7 +532,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     resolveRole,
     adminSecret,
     tokens,
-    version: options.version ?? "1.0.0",
+    version: version,
     converge: convergeStartup,
     settle: async () => {
       stopping = true;

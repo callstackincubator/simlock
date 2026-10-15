@@ -5,6 +5,7 @@ export {
   NodeFilesystem,
 } from "./filesystem.js";
 export type { PathDetails } from "./filesystem.js";
+export { readPackageVersion } from "./package-version.js";
 export { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
 export { type DaemonLauncher, FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
 export {

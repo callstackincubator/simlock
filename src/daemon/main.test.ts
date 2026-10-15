@@ -84,6 +84,40 @@ async function start(
   return { daemon, directory, sink };
 }
 
+describe("the version a daemon reports", () => {
+  it("is the version in package.json when the caller names none", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
+    const daemon = await startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      socketPath,
+      statePath: join(directory, "state.json"),
+    });
+    runningDaemons.push(daemon);
+    const packageJson = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+
+    const client = await connectRetrying(socketPath);
+    try {
+      const hello = await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      expect(hello.payload).toMatchObject({ version: packageJson.version });
+    } finally {
+      client.socket.end();
+    }
+  });
+});
+
 describe("the event file sink", () => {
   it("judges retention by the injected clock, so a generation younger than the retention on that clock survives the start-up sweep", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
