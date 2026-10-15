@@ -587,16 +587,24 @@ describe("the Load gauges", () => {
     const { cpu: _cpu, ...noCpu } = LOAD;
     const { memory: _memory, ...noMemory } = LOAD;
     const { disk: _disk, ...noDisk } = LOAD;
-    const zeroTotal = {
-      ...LOAD,
-      memory: { ...LOAD.memory, availableBytes: 12 * GIB, totalBytes: 0 },
-    };
 
     expect(row(panelOf({ ...RUNNING, load: noCpu }), "CPU")).toContain("Unavailable");
     expect(row(panelOf({ ...RUNNING, load: noCpu }), "CPU")).not.toContain("load-bar");
     expect(row(panelOf({ ...RUNNING, load: noMemory }), "Memory")).not.toContain("load-bar");
     expect(row(panelOf({ ...RUNNING, load: noDisk }), "Disk")).not.toContain("load-bar");
-    expect(row(panelOf({ ...RUNNING, load: zeroTotal }), "Memory")).not.toContain("load-bar");
+  });
+
+  it("a worker's detail prints a figure whose total is zero without a gauge", () => {
+    // why: a reading that cannot be divided has no percent to draw, but its number is still the
+    // worker's own and still belongs on the page.
+    const zeroTotal = {
+      ...LOAD,
+      memory: { ...LOAD.memory, availableBytes: 12 * GIB, totalBytes: 0 },
+    };
+    const panel = panelOf({ ...RUNNING, load: zeroTotal });
+
+    expect(row(panel, "Memory")).toContain("available");
+    expect(row(panel, "Memory")).not.toContain("load-bar");
   });
 
   it("a worker's detail colours the memory gauge with its pressure, and idle where the view has none", () => {
