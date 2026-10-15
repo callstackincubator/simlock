@@ -1,14 +1,14 @@
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import { type AttentionPage, attentionPageOf, type AttentionRow } from "../model/attention";
-import { TABLE_SIZES } from "../model/paging";
+import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
 import { useRecentEvents } from "./events";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { bothViews, loadView, mapView } from "./resource";
-import { usePath } from "./router";
+import { usePath, useSearch } from "./router";
 
 export type {
   AttentionDetail,
@@ -39,6 +39,10 @@ export function useAttentionRows(rows: readonly AttentionRow[]): {
   readonly paging: Paging;
 } {
   const paging = usePaging({ sizes: TABLE_SIZES, total: rows.length });
+  const keep = listSearch(useSearch());
   const start = (paging.page - 1) * paging.size;
-  return { paging, shown: rows.slice(start, start + paging.size) };
+  return {
+    paging,
+    shown: rows.slice(start, start + paging.size).map((row) => ({ ...row, to: row.to + keep })),
+  };
 }

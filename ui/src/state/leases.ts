@@ -14,13 +14,13 @@ import {
   leaseRows,
   type TokenList,
 } from "../model/leases";
-import { TABLE_SIZES } from "../model/paging";
+import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import type { WorkerList } from "../model/workers";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { usePath } from "./router";
+import { usePath, useSearch } from "./router";
 
 export {
   LEASE_FILTERS,
@@ -65,7 +65,10 @@ export function useLeases(): Leases {
     total: all.kind === "ready" ? shown.length : undefined,
   });
   const start = (paging.page - 1) * paging.size;
-  const rows = shown.slice(start, start + paging.size);
+  const keep = listSearch(useSearch());
+  const rows = shown
+    .slice(start, start + paging.size)
+    .map((row) => ({ ...row, to: row.to + keep }));
   const view = mapView(all, (every) => ({
     chosen: urlId ?? rows[0]?.id,
     held: every.length,

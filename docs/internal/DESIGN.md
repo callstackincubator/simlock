@@ -81,7 +81,7 @@ think "this is Simlock" or "I can act here", nothing else.
 | Token | Light | Dark | Means |
 | --- | --- | --- | --- |
 | `--status-ok` | `#15803d` | `#4ade80` | healthy, connected, ready |
-| `--status-warn` | `#a16207` | `#facc15` | needs a look soon: drained, stalled, over a limit, absent (a physical device that is enrolled and not there) |
+| `--status-warn` | `#92570a` | `#facc15` | needs a look soon: drained, stalled, over a limit, absent (a physical device that is enrolled and not there) |
 | `--status-error` | `#b91c1c` | `#f87171` | broken: disconnected, incompatible, quarantined, a refused sign-in |
 | `--status-idle` | `#57534e` | `#a8a29e` | neither: shut down, waiting, unknown |
 

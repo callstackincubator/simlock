@@ -91,19 +91,6 @@ export function upMeta(workers: readonly WorkerView[]): string {
   return `${up} / ${workers.length} up`;
 }
 
-// why: choosing a row must not throw the list back to its first page, but the inspector's own
-// pagers (devices, warm pool) belong to one worker and are left behind.
-export function listSearch(search: string): string {
-  const query = new URLSearchParams(search);
-  const kept = new URLSearchParams();
-  for (const key of ["page", "size"]) {
-    const value = query.get(key);
-    if (value !== null) kept.set(key, value);
-  }
-  const written = kept.toString();
-  return written === "" ? "" : `?${written}`;
-}
-
 export type MeterTone = Tone | "neutral";
 
 export interface LoadDetail {

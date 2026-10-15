@@ -3,11 +3,10 @@ import { useState } from "react";
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
 import type { TokenList } from "../model/leases";
-import { TABLE_SIZES } from "../model/paging";
+import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import {
   filterWorkers,
-  listSearch,
   upMeta,
   type WorkerFilter,
   type WorkerInspector,

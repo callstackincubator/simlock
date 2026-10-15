@@ -63,3 +63,16 @@ export function rangeOf(at: PageAt, total: number): string {
   const last = Math.min(total, at.page * at.size);
   return `${formatCount(first)}–${formatCount(last)} of ${formatCount(total)}`;
 }
+
+// why: choosing a row must not throw the list back to its first page, but the inspector's own
+// pagers (devices, warm pool) belong to one worker and are left behind.
+export function listSearch(search: string): string {
+  const query = new URLSearchParams(search);
+  const kept = new URLSearchParams();
+  for (const key of ["page", "size"]) {
+    const value = query.get(key);
+    if (value !== null) kept.set(key, value);
+  }
+  const written = kept.toString();
+  return written === "" ? "" : `?${written}`;
+}

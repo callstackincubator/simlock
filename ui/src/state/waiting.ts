@@ -1,6 +1,6 @@
 import type { LoadView } from "../ds/loaded";
 import type { Paging } from "../ds/pager";
-import { TABLE_SIZES } from "../model/paging";
+import { listSearch, TABLE_SIZES } from "../model/paging";
 import { itemIdFrom } from "../model/paths";
 import {
   chooseWaiting,
@@ -13,7 +13,7 @@ import type { WorkerList } from "../model/workers";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
-import { usePath } from "./router";
+import { usePath, useSearch } from "./router";
 
 export type { WaitingQueue, WaitingRow } from "../model/waiting";
 
@@ -30,13 +30,16 @@ export function useWaiting(): LoadView<WaitingPage> {
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
   const now = useNow();
   const id = itemIdFrom("/waiting", usePath());
+  const keep = listSearch(useSearch());
   const table = mapView(requests, (list) => waitingTable(list.requests, workers, now.server));
   const paging = usePaging({
     sizes: TABLE_SIZES,
     total: table.kind === "ready" ? table.data.rows.length : undefined,
   });
   return mapView(table, (all) => {
-    const rows = all.rows.slice((paging.page - 1) * paging.size, paging.page * paging.size);
+    const rows = all.rows
+      .slice((paging.page - 1) * paging.size, paging.page * paging.size)
+      .map((row) => ({ ...row, to: row.to + keep }));
     return {
       ...chooseWaiting(all.rows, id, rows),
       count: all.rows.length,

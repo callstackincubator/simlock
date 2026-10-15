@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { listSearch } from "./paging";
 import {
   filterWorkers,
-  listSearch,
   upMeta,
   type WorkerInspector,
   workerInspectorOf,
