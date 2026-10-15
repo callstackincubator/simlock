@@ -8,34 +8,46 @@ internet.
 The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
-This version has sign-in and a page for each tab along the top of the
-console: Workers, Leases, Waiting, Attention and Events. On a narrow screen
-the row of tabs scrolls sideways.
+## Finding your way
 
-Each page starts with a row of cards that count what the page shows, such as
-the leases held and how many expire within 15 minutes. A long id, such as a
-lease's, is cut to fit its column; point at it to see it whole, or open its
-page.
+A sidebar on the left leads to every page: **Overview**, **Workers**,
+**Leases**, **Waiting**, **Attention** and **Events**. **Attention** shows how
+many items need you, on every page. At the bottom of the sidebar are the
+connection (see [Live updates](#live-updates)), **Sign out**, and the button
+that collapses the sidebar to its icons and widens it again. The console
+remembers your choice in this browser, and changing pages never changes it.
+A window narrower than 1280 pixels starts with the sidebar collapsed until you
+choose. On a phone the sidebar is a bar along the top with a menu button.
+
+Every page but the overview is a list on the left and the one you choose on
+the right. The address names what you chose, such as `/workers/<id>`, so a
+reload, the browser's back button or a link you share opens the same one. With
+nothing chosen, a wide window shows the first in the list; a phone shows the
+list, and the chosen one in its place after you select it.
+
+A list row is short on purpose: a square of colour, a name, one figure. The
+colour always has a word behind it: point at the square to read it, and a
+screen reader reads it as the square's name. The page on the right has
+everything else. A long id is cut to fit; point at it to see it whole.
 
 ## Long lists
 
-Every table of workers, devices, leases, requests or attention items shows 25
-rows at a time. Under it, the pager says which rows you
-see, such as `26–50 of 1,240`, and has **Previous**, **Next**, the page
-number, and **Per page**: 25, 50 or 100. When everything fits on one page,
-there is no pager. (The **Minute by minute** table under a chart always lists
-its 60 minutes.) The worker cards on **Workers** page the same way, 24 at a
-time, or 48 or 96.
+Every list of workers, leases, requests or attention items shows 25 at a time.
+Under it, the pager says which ones you see, such as `26–50 of 1,240`, and
+has **Previous**, **Next**, the page number, and **Per page**: 25, 50 or 100.
+When everything fits on one page, there is no pager. Tables on a page, such
+as a worker's devices, page the same way. (The **Minute by minute** table
+under a chart always lists its 60 minutes.)
 
-The page you are on is in the address, such as `/leases?page=3&size=50`, so
-a reload or a link you share opens the same page. A page with two tables,
-such as a worker's, keeps each one's page under its own name:
-`?devices-page=2&leases-page=3`.
+The page you are on is in the address, such as `/leases?page=3&size=50`, so a
+reload or a link you share opens the same page. A page with two tables, such
+as a worker's devices and its warm pool, keeps each one's page under its own
+name: `?devices-page=2`.
 
-Rows keep their order as the page refreshes itself, so a row stays on its
-page unless the list changes. When the list shrinks below the page you are
-on, you see its last page instead. Leases are listed oldest first, by when
-they were granted.
+Rows keep their order as the page refreshes itself, so a row stays on its page
+unless the list changes. When the list shrinks below the page you are on, you
+see its last page instead. Leases are listed oldest first, by when they were
+granted.
 
 ## Turn it on
 
@@ -121,77 +133,88 @@ The console keeps the token in this browser tab only.
 Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
 tab may still be signed in.
 
+## Overview
+
+The console opens on **Overview**: the whole fleet on one page.
+
+- **Tiles**: how full the fleet is (leases held, as a share of every running
+  slot on connected workers), the leases held, the requests waiting and the
+  longest wait, the workers connected of all, and the leases granted in the
+  last hour. A tile that has a page of its own opens it.
+- **Leases held, last hour**: a chart of how many leases were held at the end
+  of each minute. It starts from the leases held now and counts back through
+  the lease events of the last hour, the same events the Events page shows, so
+  it can only go back as far as those. A lease that ends with no event, such
+  as one on a worker removed from a gateway, is not counted back. The line
+  under it says now, the highest and the lowest, and **Minute by minute**
+  lists each minute's number.
+- **Capacity**: per platform, the devices running of the limit, and a bar
+  split into leased, ready and booting.
+- **Workers**: a row per worker with its status square, a square per device
+  slot (leased, ready, booting, quarantined, absent or free), its CPU and
+  memory, and the leases it holds. Select a worker to open it.
+- **Attention** and **Activity**: what needs you, and the latest events. Each
+  opens its own page.
+
 ## Workers
 
 **Workers** lists every worker the daemon knows, as `simlock worker list`
 does. On a gateway that is every worker that has joined it. On a single host
 it is one worker: the host itself. The console looks the same either way.
 
-Each worker shows:
+Each row is the worker's status square, its name, its devices running of its
+limit and a bar of how full it is. The square shows the worst of what is wrong
+with the worker:
 
-| Fact | What it says |
+| Square | When |
 | --- | --- |
-| Connection | `connected`, `disconnected` or `incompatible`, and `drained` when the gateway sends it no new leases |
-| Health | The worker daemon's own health: `running`, `starting` or `failed` |
-| Protocol | `compatible`, or `incompatible` with the protocol versions each side speaks, so you can see which one to upgrade |
-| Version | The worker's Simlock version |
-| Devices | How many devices are running, and how many are leased |
-| Capacity | Devices running out of the limit, per platform |
-| Capabilities | Each optional module the worker knows of, such as agent-device: `available`, `off`, or `unavailable` with its reason |
-| Load | The machine's CPU, memory and disk use, such as `CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free`. A figure the worker limits itself to, such as a container's, is marked `(limit)`, and one it could not read says `unavailable`. A disconnected worker says "No reading while disconnected" |
+| Red | The worker is `disconnected` or `incompatible`, or its health is `failed`; or its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more |
+| Amber | The worker is `drained`, `starting` or over its RAM budget; or its memory pressure is `warn`, or a figure is 85% full or more |
+| Green | Nothing is wrong |
 
-A worker the gateway could not read from yet says "Not reported" where it
-has nothing to show. A worker that is still starting shows its health as
-`starting`, and leaves out its devices, capacity and capabilities: they appear once it has
-finished starting. Its page shows the status and the host, and says that devices,
-leases and capacity appear once startup finishes.
+**Issues** shows only the workers whose square is not green, and **Busy** the
+ones using three quarters of their slots or more.
 
-Above the workers, **Leases, last hour** charts how many leases were held at
-the end of each minute. It starts from the leases held now and counts back
-through the lease events of the last hour, the same events the Events page
-shows, so it can only go back as far as those. A lease that ends with no
-event, such as one on a worker removed from a gateway, is not counted back. **Minute by minute** under the
-chart lists each minute's number. **Busiest workers** ranks the five workers
-holding the most leases now. With more than five workers, a link under it,
-such as **All 12 workers**, takes you to the cards for the rest.
+Select a worker to see it on the right, under three tabs:
 
-Select a worker to open its page. It adds:
-
-- **Devices**: every device on the worker, with its state, platform, type
-  (Physical or Virtual), model, runtime, mode and image tag (both `—` for a
-  physical device, which has neither). A leased device shows how long ago its lease
-  was granted, and a device being provisioned or reclaimed on a connected
-  worker how long that has taken so far. Other states show `—`: the daemon
-  reports no time for them.
-- **Leases**: the leases on this worker, as the Leases page shows them.
-- **Host**: the operating system, the CPU architecture, and the version of
-  each platform tool, such as Xcode or the Android emulator.
-- **Catalog**: the models and runtimes the worker can lease. It is read again
+- **Overview**:
+  - **CPU**, **Memory** and **Disk**, each as the figure the worker reads,
+    such as `28% busy, 12 cores` or `20.9 GiB of 36.0 GiB available`, with a
+    bar under it showing how full it is. A bar is neutral until the figure is
+    **85% full or more**, amber to 95%, red from there: the console's own
+    rule, read off the one figure it is drawn from. Where memory reports a
+    pressure (`normal`, `warn` or `critical`), that word decides memory's
+    colour instead. Swap used and when the reading was taken are beside them.
+    A figure the worker limits itself to, such as a container's, is marked
+    `(limit)`, and one it could not read says `Unavailable`. A disconnected
+    worker says "No reading while disconnected".
+  - **Leases**: how many the worker holds.
+  - **iOS** and **Android**: a square per slot the worker may run, shaded by
+    what each device is doing, and the devices running of the limit.
+  - **Devices**: every device, with its state, model and runtime, Physical or
+    Virtual, its mode where it is not the worker's default, and its image tag.
+    A leased device names its holder, linked to the lease, and how long the
+    lease has left. A device being provisioned or reclaimed on a connected
+    worker shows how long that has taken so far.
+- **Host**: the worker's id, connection, health and protocol (`compatible`,
+  or `incompatible` with the protocol versions each side speaks, so you can
+  see which one to upgrade); the operating system, the CPU architecture and
+  the version of each platform tool; each optional module, such as
+  agent-device, as `available`, `off`, or `unavailable` with its reason; and
+  the models and runtimes the worker can lease. The catalog is read again
   straight after a component is installed, and otherwise every 30 seconds.
-- **Load**: how busy the machine is right now: CPU busy share and cores,
-  memory available of total, swap used, memory pressure (`normal`, `warn` or
-  `critical`, left out where the system does not report it), and disk free of
-  total. CPU, memory and disk each have a bar under the figure showing how full
-  it is, for scanning at a glance. A bar is neutral until the figure is
-  **85% full or more**, amber to 95%, red from there — the console's own rule,
-  read off the one figure it is drawn from and nothing else. Where memory
-  reports a pressure, that word wins instead: its bar is green, amber or red for
-  `normal`, `warn` or `critical` however full it is. Only the bar is coloured
-  this way: the figures themselves are printed as numbers, and `simlock status`
-  reports them without a verdict. A part the worker could not read says
-  `Unavailable`, and has no bar. **Read** says how
-  long ago the reading was taken, and it ticks up until the next one. A
-  worker that sent no load says "Not reported.", and a disconnected one "No
-  reading while disconnected."
 - **Warm pool**: whether the worker keeps devices warm, the running slots it
   holds back per platform, and a row for each kind of device the targets name
-  (targets that resolve to the same device are one row, their counts added)
-  with the model, runtime and mode it keeps ready, how many it wants, how many are ready and how many are booting.
-  A target the worker could do nothing for shows the reason, such as
-  `runtime-missing`, in the last column, and `—` when it has none. It says "Not
-  reported" for a worker that has not sent it.
-- **Installs in progress**: each runtime or system image being downloaded or
-  waiting to, how long it has been going, and how many requests wait on it.
+  (targets that resolve to the same device are one row, their counts added),
+  with how many it wants, how many are ready and how many are booting. A
+  target the worker could do nothing for shows the reason, such as
+  `runtime-missing`. Under it, **Installs in progress**: each runtime or
+  system image being downloaded or waiting to, how long it has been going,
+  and how many requests wait on it.
+
+A worker the gateway could not read from yet says "Not reported" where it has
+nothing to show. A worker that is still starting leaves out its devices,
+capacity and warm pool: they appear once it has finished starting.
 
 A page the daemon cannot answer on a single host says "Not available on a
 single host" in place of its content.
@@ -202,28 +225,28 @@ single host" in place of its content.
 does. On a gateway that is every lease on every worker, including the ones a
 worker granted itself. On a single host it is the host's own leases.
 
-Each lease shows:
+Each row is who holds the lease (see below), how long it has left, the
+device's model and worker, and a bar of the time left. The time turns amber,
+and the lease reads `expiring`, when less than 15 minutes are left unless it
+is renewed. **Expiring**, **iOS** and **Android** narrow the list.
 
-| Fact | What it says |
-| --- | --- |
-| Holder | Who holds the lease (see below) |
-| Worker | The worker the device is on, by its label, or its id when it has none |
-| Device | The device's model and id |
-| Mode | `slim` or `full`, or `—` for a lease on a physical device, which has none |
-| Image tag | The image tag the device was created from, or `—` |
-| Granted | How long ago the lease was granted |
-| Expires in | How long until the lease expires unless it is renewed. It counts down every second. |
-| Last renewed | How long ago the lease was last renewed, or granted if it never was |
+Select a lease to see it on the right:
 
-Select a lease to open its page. It shows the same facts, the device's UDID,
-and the id of the request that was granted the lease, while the daemon still
-keeps it. A lease that has been released or has
-expired says "Lease not found".
+- **Expires in**: the time left, counting down every second, how long the
+  lease has been held, how long ago it was last renewed, and when it was
+  granted.
+- **Device**: the model, runtime, mode (none for a physical device), image
+  tag, Physical or Virtual, the worker it is on, and the device's id and UDID.
+- **Lease**: the lease's id and the id of the request that was granted it,
+  while the daemon still keeps it.
+- **Screen**, beside them: the device's live picture (see below).
+
+A lease that has been released or has expired says "Lease not found."
 
 ### Watching a lease's screen
 
-A lease's page ends with a **Screen** panel: one button, **Show screen**, and
-while it is on, the device's picture with the facts beside it — its size and
+A lease's page has a **Screen** panel: one button, **Show screen**, and
+while it is on, the device's picture with the facts under it — its size and
 codec, the frames painted, the rate they arrive at, the bandwidth they cost, and
 how many were dropped rather than drawn behind an earlier one.
 
@@ -235,7 +258,8 @@ live on the page. What you are looking at is either moving or gone.
 
 The panel is on every lease's page, and streams wherever the worker the lease
 runs on has screen streaming turned on (see [`capabilities.stream.enabled`](CONFIGURATION.md)).
-Where it is off, the panel says so; where the lease is on a device a screen cannot be
+Where it is off, the panel says so before you press anything, and the button
+cannot be pressed; where the lease is on a device a screen cannot be
 captured from — a physical iPhone or Android phone — it says that a live screen
 comes only from a simulator or an emulator. Either way it starts nothing.
 
@@ -245,9 +269,9 @@ start shows the worker's reason rather than a timeout.
 
 ### Who holds a lease
 
-A lease taken over the HTTP API belongs to the token that took it. The console
-shows that token's label, with the token id beside it: `ci-runner-3
-tok_9f2c`. Give each agent's token a label when you create it, so you can tell
+A lease taken over the HTTP API belongs to the token that took it. The list
+shows that token's label, `ci-runner-3`, and the lease's page the token id
+beside it: `ci-runner-3 tok_9f2c`. Give each agent's token a label when you create it, so you can tell
 them apart:
 
 ```sh
@@ -264,39 +288,43 @@ directly shows its holder's id as that worker reports it.
 
 ## Waiting
 
-**Waiting** lists every request waiting for a device, oldest first, as
-`simlock list --requests` does. Each shows:
+**Waiting** lists every request waiting for a device, as `simlock list
+--requests` does. Each row is its place in its queue, the agent that asked,
+how long it has waited, the device it asked for, and its stage: `queued`
+while it waits its turn, `starting` while the daemon is working on it
+(placing it as it arrives, or finding, creating, booting or downloading a
+device for it).
+
+Select a request to see it on the right:
 
 | Fact | What it says |
 | --- | --- |
-| Requester | The agent that asked |
+| Waiting | How long since the daemon received it |
+| Place | Where it stands in its own line, counting from 1, the requests ahead of it in that line that are already starting included; `—` while starting. A request for a physical device waits in a line of its own, and says so |
+| Stage | `queued` or `starting` |
 | Device | The platform and the model it asked for, or the class for a request that named a class, or only the platform for one that named neither; and the runtime, mode and image tag when it named them |
-| Worker | The worker whose own queue it waits in, or `—` for a request in a gateway's queue |
-| Stage | `queued` while it waits its turn, `starting` while the daemon is working on it: placing it as it arrives, or finding, creating, booting or downloading a device for it |
-| Place in queue | Where it stands in its own line, counting from 1, the requests ahead of it in that line that are already starting included; `—` while starting. A request for a physical device waits in a line of its own and shows `(physical)` after its place, for example `1 (physical)` |
-| Waiting for | How long since the daemon received it |
+| Queue | The worker whose own queue it waits in, or the gateway's queue |
 
 On a gateway the list has the gateway's own queue and, for each connected
 worker, the requests its own agents sent to it directly. A request the
-gateway has passed to a worker shows once, as the gateway's. On a single
-host every request shows that host as its worker.
+gateway has passed to a worker shows once, as the gateway's.
 
 A request leaves the list as soon as it gets its device, fails, or is
-cancelled.
+cancelled; its page then says "Request not waiting."
 
 ## Attention
 
-**Attention** lists everything that needs you, in one place. Each item names
-its worker and links to that worker's page. An item leaves the list as soon as
-the daemon reports that its condition cleared. A gateway keeps a disconnected
-worker's devices and RAM use as the worker last reported them, so their items
-stay until the worker reconnects or is removed. The console only shows these;
-it does not fix them.
+**Attention** lists everything that needs you, in one place. Each row is the
+condition, its colour, and the worker or device it is about. An item leaves the
+list as soon as the daemon reports that its condition cleared, and its page
+then says "Resolved." A gateway keeps a disconnected worker's devices and RAM
+use as the worker last reported them, so their items stay until the worker
+reconnects or is removed. The console only shows these; it does not fix them.
 
 | Item | What it means |
 | --- | --- |
 | `disconnected` | The gateway has lost its connection to the worker. |
-| `incompatible` | The worker and the gateway have no protocol version in common. The worker's page says which versions each speaks. |
+| `incompatible` | The worker and the gateway have no protocol version in common. Its page says which versions each speaks. |
 | `drained` | The worker gets no new leases (`simlock worker drain`). |
 | `over RAM budget` | The devices on the worker use more RAM than its budget allows, as `simlock status` reports with `(over limit)`. |
 | `quarantined` | A device Simlock could not clean up. It retries the cleanup in the background and leases the device to no one meanwhile. |
@@ -306,8 +334,10 @@ The first three come from a gateway only: a single host has no gateway to lose
 or disagree with, and cannot be drained. The other three show on a single host
 too.
 
-The **Attention** tab shows how many items there are, on every page. It shows
-no number while there are none.
+Select an item to see the facts that matter for it, such as when a
+disconnected worker was last seen or how much RAM a worker uses of its budget,
+and the events of the last hour about that worker or device. **Open worker**
+opens the worker's page.
 
 Each item shows within about a second of the daemon reporting it. A stalled
 device is the exception on a gateway: a device becomes stalled when its time
@@ -319,35 +349,30 @@ reads that worker, which it does at least every 30 seconds.
 **Events** lists recent events, newest first: the same events as
 `simlock events --since 1h`. New events appear at the top as they happen.
 
-Each event shows:
+Each row is the event's time, on your computer's clock face, its name, such as
+`lease.granted`, and a line saying who, which device and which worker it is
+about, from what its payload names. An event this version of the console does
+not know still shows.
 
-- its time, on your computer's clock face
-- its name, such as `lease.granted`
-- on a gateway, the worker it came from, by its label, or by its id if the
-  worker has no label or the gateway no longer knows it. A `worker.rejected`
-  event names no worker here: its id is only what the refused worker claimed,
-  and it shows in the payload.
-- its payload, as each key and its value, exactly as the daemon sent it
+Above the list, **Events per minute** charts how many of the events the page
+holds happened in each minute of the last hour, and **Minute by minute** lists
+each minute's number. The filter picks which events to list: all of them, or
+only those about leases, devices, workers or components. **Other** lists the
+rest, such as `daemon.started`. The filter is in the address too.
 
-An event this version of the console does not know still shows, with its
-whole payload.
+The list scrolls in a box of its own; the page around it stays put. Click in
+the box, or Tab to it, to scroll it with the keyboard. While you are at the
+top, new events push the list down, so the newest is always in view. Once you
+scroll down to read, what you are reading stays where it is, and a button at
+the top counts the events that came in since, such as **3 new events**.
+Select it to go back to the top.
 
-**Show** picks which events to list: all of them, or only those about leases,
-devices, workers or components. **Other** lists the rest, such as
-`daemon.started`.
-
-The events sit in a box of their own that scrolls; the page around it stays
-put. Click in the box, or Tab to it, to scroll it with the keyboard. While
-you are at the top of the box, new events push the list down, so the newest
-is always in view. Once you scroll down to read, what you are reading stays
-where it is, and a button at the top counts the events that came in since,
-such as **3 new events**. Select it to go back to the top.
+Select an event to see its whole payload, each key and its value exactly as
+the daemon sent it, and a button to the lease, worker, request or attention
+item it is about, when the console has a page for it. An event older than the
+last hour says "Event not in the last hour."
 
 The page keeps the newest 10,000 events. Older ones drop off the end.
-
-**Events per minute** charts how many of the events the page holds happened in
-each minute of the last hour, whatever **Show** picks. **Minute by minute**
-under it lists each minute's number.
 
 When the console loses the daemon, or the tab was hidden, it loads the events
 it missed as soon as it is back, so the list has no gap. An event the console
@@ -369,8 +394,9 @@ are off by as much.
 A hidden tab stops asking the daemon for anything. When you come back to it,
 it catches up at once.
 
-The box at the top right, beside **Sign out**, says how the console's
-connection is:
+The bottom of the sidebar, above **Sign out**, says how the console's
+connection is (with the sidebar collapsed, as its square: point at it to read
+it):
 
 | It says | What it means |
 | --- | --- |
@@ -380,7 +406,7 @@ connection is:
 
 While reconnecting, the console keeps the last data on screen and tries the
 daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
-daemon answers, the console refreshes the page and the box goes back to
+daemon answers, the console refreshes the page and it goes back to
 Connected. You do not need to reload.
 
 ## What the page loads
