@@ -1,11 +1,9 @@
 import type { z } from "zod";
 
 import type { workerViewSchema } from "../../../src/contract/schemas";
-import type { Stat } from "./stat";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
 export type WorkerDevice = NonNullable<WorkerView["devices"]>[number];
-export type WorkerCatalogEntry = NonNullable<WorkerView["catalog"]>[number];
 
 export interface WorkerList {
   readonly workers: readonly WorkerView[];
@@ -20,16 +18,6 @@ export function workerPath(id: string): `/${string}` {
   return `/workers/${encodeURIComponent(id)}`;
 }
 
-export function workerIdFrom(path: string): string | undefined {
-  const rest = path.replace(/^\/workers\/?/, "").replace(/\/$/, "");
-  if (rest === "") return undefined;
-  try {
-    return decodeURIComponent(rest);
-  } catch {
-    return rest;
-  }
-}
-
 const PLATFORM_NAMES: Readonly<Partial<Record<string, string>>> = {
   android: "Android",
   ios: "iOS",
@@ -37,14 +25,6 @@ const PLATFORM_NAMES: Readonly<Partial<Record<string, string>>> = {
 
 export function platformName(platform: string): string {
   return PLATFORM_NAMES[platform] ?? platform;
-}
-
-// why: a starting worker's capacity and leases were never read, so there is nothing to report.
-export function deviceCounts(
-  worker: WorkerView,
-): { readonly running: number; readonly leased: number } | undefined {
-  if (worker.capacity === undefined || worker.leases === undefined) return undefined;
-  return { leased: worker.leases.length, running: worker.capacity.global.running };
 }
 
 export function capacityByPlatform(
@@ -60,23 +40,6 @@ export function capacityByPlatform(
 
 export function leasesHeld(workers: readonly WorkerView[]): number {
   return workers.reduce((sum, worker) => sum + (worker.leases?.length ?? 0), 0);
-}
-
-export function workersStats(workers: readonly WorkerView[]): readonly Stat[] {
-  const connected = workers.filter((worker) => worker.connection === "connected").length;
-  const devices = workers.reduce((sum, worker) => sum + (worker.devices?.length ?? 0), 0);
-  const running = workers.reduce((sum, worker) => sum + (deviceCounts(worker)?.running ?? 0), 0);
-  const waiting = workers.reduce((sum, worker) => sum + (worker.waiting?.length ?? 0), 0);
-  return [
-    { caption: `connected of ${workers.length}`, label: "Workers", value: String(connected) },
-    { caption: `running of ${devices}`, label: "Devices", value: String(running) },
-    { caption: "held now", label: "Leases", value: String(leasesHeld(workers)) },
-    { caption: "requests in the workers' queues", label: "Waiting", value: String(waiting) },
-  ];
-}
-
-export function busiestWorkers(workers: readonly WorkerView[]): readonly WorkerView[] {
-  return [...workers].sort((a, b) => (b.leases?.length ?? 0) - (a.leases?.length ?? 0));
 }
 
 // why: the age is read only from a connected worker: a gateway moves `lastSeenAt` when a worker

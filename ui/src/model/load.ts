@@ -10,10 +10,6 @@ function roundHalfUp(value: number, decimals: number): number {
   return Math.floor(value * scale + 0.5) / scale;
 }
 
-function isGib(bytes: number): boolean {
-  return bytes > 0 && Math.floor(bytes / MIB + 0.5) >= 1024;
-}
-
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
   const mebibytes = Math.floor(bytes / MIB + 0.5);
@@ -56,25 +52,4 @@ function clampPercent(percent: number): number {
 function usedPercent(available: number, total: number): number | undefined {
   if (!(total > 0)) return undefined;
   return clampPercent((1 - available / total) * 100);
-}
-
-export function loadSummary(load: WorkerLoad): string {
-  const { cpu, disk, memory } = load;
-  const cpuPart =
-    cpu === undefined
-      ? "CPU unavailable"
-      : `CPU ${formatBusyPercent(cpu.busyPercent)}${cpu.limited ? " (limit)" : ""}`;
-  let memoryPart = "memory unavailable";
-  if (memory !== undefined) {
-    const bothGib = isGib(memory.availableBytes) && isGib(memory.totalBytes);
-    const available = bothGib
-      ? roundHalfUp(memory.availableBytes / GIB, 1).toFixed(1)
-      : formatBytes(memory.availableBytes);
-    memoryPart = `memory ${available} of ${formatBytes(memory.totalBytes)}${
-      memory.limited ? " (limit)" : ""
-    }`;
-  }
-  const diskPart =
-    disk === undefined ? "disk unavailable" : `disk ${formatBytes(disk.freeBytes)} free`;
-  return [cpuPart, memoryPart, diskPart].join(" · ");
 }
