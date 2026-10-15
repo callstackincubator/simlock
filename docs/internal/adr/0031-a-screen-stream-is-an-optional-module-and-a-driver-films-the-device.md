@@ -75,9 +75,10 @@ target, a lease-end participant (§3) and a capability source. A gateway
 gets one: the HTTP mount. With the module off, `daemon/main.ts` builds
 nothing: no route, no relay target, no capability row.
 
-The capability is `available` when at least one driver can film a device
-now, with the other drivers' reasons, and `unavailable` with every
-driver's reason otherwise.
+The capability is `available`, with no reason, when at least one driver
+can film a device now; the wire carries no reason for `available`. It is
+`unavailable` with each platform's reason otherwise. A platform that
+cannot film on a host where another can says why in its stream's `503`.
 
 ADR 0030's module host is not merged. This module does not wait for it.
 If ADR 0030 is accepted, `stream` moves onto its contract with the same
@@ -121,7 +122,9 @@ reader needs nothing else.
 The request is the only start: nothing is filmed until someone asks. There
 is no stop endpoint and no stop frame. Closing the request, by any route
 (Stop in the console, leaving the page, a client abort, a lost network),
-stops the capture. Two viewers of one lease get two captures.
+stops the capture. Two viewers of one lease get two captures, and v1 sets
+no limit per lease: only the lease holder or an operator can open one,
+and each costs one capture and, through a gateway, one of 64 channels.
 
 Who may watch follows `GET /v1/leases/{id}`: an agent its own lease, an
 operator any lease. A lease that does not exist, has ended, or belongs to
@@ -134,9 +137,10 @@ cannot list leases. Refusals use the API's one shape, `{ "error": { "code",
 | `404 UNKNOWN_LEASE` | unknown, ended or not yours; a lease id that will not URL-decode |
 | `405 BAD_REQUEST` | any method but `GET` |
 | `415 STREAM_NOT_SUPPORTED` | the lease's device can never be filmed here (§4) |
-| `503 STREAM_UNAVAILABLE` | it could be, but not now: program missing, capture failed before its first frame; gateway: the worker has streaming off |
-| `503 WORKER_UNREACHABLE` | gateway only: the lease's worker is not connected, or did not answer in time |
-| `502` | gateway only: the worker answered `2xx` with no picture |
+| `503 STREAM_UNAVAILABLE` | it could be, but not now: program missing, capture failed before its meta frame; gateway: the worker has streaming off |
+| `503 WORKER_UNREACHABLE` | gateway only: the lease's worker is not connected, or did not answer in time (any fleet code the relay fails with is passed on as `503`) |
+| `502` | gateway only: the worker answered `2xx` with no `simlock-stream-codec` header or no body; the code is the worker's if shaped like ours, else `STREAM_UNAVAILABLE` |
+| `500 INTERNAL` | anything else, e.g. a relay that fails with no code |
 
 With the module turned off, the route does not exist.
 
@@ -146,32 +150,44 @@ With the module turned off, the route does not exist.
 stateDiagram-v2
   [*] --> starting: GET, ownership proved, capture registered
   starting --> live: meta frame read, lease re-read, 200 sent
-  starting --> stopped: lease ended / request closed / no frame in 30 s / failed
+  starting --> stopped: lease ended / request closed / no meta frame in 30 s / failed
   live --> stopped: request closed / lease ended / 30 s silence / capture died
   stopped --> [*]
 ```
 
 - **Registered before it starts.** The worker adds a capture to its
   registry of running captures, keyed by lease, before it asks the driver
-  to open the screen. A lease that ends, or a request that is aborted,
-  while the driver is still opening finds it, and the capture is closed
-  the moment the driver hands it over. After the first frame the worker
-  reads the lease again; a lease that ended in between closes the capture
-  instead of answering `200`. The viewer, the body's end and the lease end
-  can each close a capture; the driver's close runs once.
-- **The lease end stops it, before the reclaim.** The module's lease-end
-  participant (ADR 0024) closes every capture of the ended lease and waits
-  for those closes. The wait is bounded by each driver's close and by
-  leasing's own signal (ADR 0024 §2), so the reclaim starts on a device
-  nothing films. A lease end by any route (release, release-all, expiry,
-  device lost, startup) stops the stream, viewers connected or not.
-- **Two bounds on the worker, on the Clock port.** The first frame must
-  come within 30 s. After it, a capture that writes nothing for 30 s ends
-  its stream with an error. A viewer sees a stream fail, never a frozen
-  picture that looks live. The iOS tool paints at least every 200 ms. On
-  a still Android screen scrcpy sends nothing, so the Android driver sends
-  an `alive` frame after 5 s with nothing new. The bounds nest:
-  5 s alive < 30 s silence < 330 s relay idle (§7).
+  to open the screen, and passes the driver a signal that aborts when the
+  viewer leaves or the lease ends. A driver stops an open in progress on
+  that signal and cleans up what it started before it throws. A capture
+  that attaches after its viewer or lease left is closed at once. After
+  the meta frame the worker reads the lease again; a lease that ended in
+  between closes the capture instead of answering `200`. The viewer, the
+  body's end and the lease end can each close a capture; the driver's
+  close runs once.
+- **The lease end waits for the device to be left alone.** The module's
+  lease-end participant (ADR 0024) aborts every open of the ended lease,
+  waits for each open in progress to settle, then closes what attached
+  and waits for those closes. The wait is bounded by each driver's own
+  bounds and by leasing's signal (ADR 0024 §2), so the reclaim starts on a
+  device nothing films. A lease end by any route (release, release-all,
+  expiry, device lost, startup) stops the stream, viewers connected or
+  not. A nuke or a daemon shutdown aborts the participants first, so its
+  wipe may run while a capture is still closing; that is accepted, since
+  maintenance is an operator's reset.
+- **Every step is bounded, on the Clock port.** The driver bounds its own
+  open (Android: the push 30 s, then 15 s to the server's size packet;
+  iOS: a spawn). Then the meta frame must come within 30 s, and after it a
+  capture that writes nothing for 30 s ends its stream with an error. A
+  viewer sees a stream fail, never a frozen picture that looks live. The
+  iOS tool paints at least every 200 ms. On a still Android screen scrcpy
+  sends nothing, so the Android driver sends an `alive` frame after 5 s
+  with nothing new, once its first key frame is out; an encoder that never
+  paints meets the silence bound. The bounds nest: 5 s alive < 30 s
+  silence < 330 s relay idle (§7).
+- **A device rebooted under a lease.** The stream ends when the device
+  socket closes or at the silence bound; Android's close runs its cleanup
+  against the serial it stored at open.
 - **The daemon stopping.** The module has no stop hook of its own. An
   iOS tool stops when the daemon's process ends and its stdin closes. An
   Android server ends at its next failed write once the daemon's socket or
@@ -203,6 +219,7 @@ interface ScreenCapture {
   open(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     settings: { fps: number; maxDimension: number; bitrateKbps: number },
+    signal: AbortSignal, // the viewer left or the lease ended
   ): Promise<ScreenFeed>;
 }
 interface ScreenFeed {
@@ -224,7 +241,8 @@ interface ScreenFeed {
   Android capture would see iOS's keys, is gone.
 - The stream module maps outcomes without naming a platform.
   `ScreenNotSupportedError` is `415 STREAM_NOT_SUPPORTED`. Any other
-  failure before the meta frame is `503 STREAM_UNAVAILABLE`.
+  failure before the meta frame is `503 STREAM_UNAVAILABLE`, with the
+  driver's reason.
 - Both drivers ask for H.264. The meta and the headers also accept
   `mjpeg`, the iOS tool's other mode, which the console paints as stills.
 - Physical devices are refused not-supported by both drivers in v1.
@@ -275,6 +293,8 @@ For each capture the client:
    protocol: a TCP connection to Simlock's adb server sends
    `host:transport:<serial>`, then `localabstract:scrcpy_<scid>`, retried
    every 100 ms until the server listens, within one 15 s start budget.
+   The open checks its stop signal before and after the push (the push
+   itself cannot be interrupted) and between connection attempts.
    No `adb forward` is created, so no host port is opened and nothing
    host-side is left to leak;
 4. turns scrcpy's stream into the envelope: each session packet gives a
@@ -284,12 +304,14 @@ For each capture the client:
    new session: a new meta frame, then a new description, which the
    console follows mid-stream;
 5. reads the socket only when the body is pulled, so nothing is dropped,
-   and sends `alive` after 5 s with nothing new (§3);
+   and, once its first key frame is out, sends `alive` after 5 s with
+   nothing new (§3);
 6. closes within 5 s: the socket, then `SIGKILL` for the `adb shell` if it
    has not exited after 1 s, then `rm -f` of the jar.
 
-`cleanup=true` with no setting options only unlinks the jar, and the
-server does it as it starts, in a process of its own. Killing the
+`cleanup=true` with no setting options only unlinks the jar: the server
+does it as it starts, and its clean-up process, which survives the
+server, does it again. Killing the
 host-side `adb shell` ends the server on the device. So a closed capture
 leaves no jar and no server behind. When the daemon dies mid-capture, its
 socket closes and the server ends at its next failed write.
@@ -312,9 +334,11 @@ channels:
   own registry, as for `device.exec`. Both answer unknown and not-yours the
   same way.
 - **A relay that fails is a stream refusal.** A worker with streaming off
-  has no `stream` relay target; the gateway answers `503
+  has no `stream` relay target; its `RELAY_TARGET_MISSING` becomes `503
   STREAM_UNAVAILABLE`, naming the worker. A disconnected worker, or one
-  that does not answer in time, is `503 WORKER_UNREACHABLE`.
+  that does not answer in time, is `503 WORKER_UNREACHABLE`; any other
+  fleet code the relay fails with is passed on with `503`. A failure with
+  no code, such as an abort, is `500 INTERNAL`.
 - **The deadline bounds the head; silence bounds the body.** This amends
   ADR 0028 §4 for every relay target alike. The gateway relay's 330 s
   deadline now covers only the wait for a channel and for the response
@@ -334,8 +358,9 @@ channels:
 - **A worker's answer is a claim.** On a `200`, the picture headers pass
   the same check as a meta frame (`checkedMeta`: codec `h264` or `mjpeg`;
   width and height whole numbers from 1 to 16384; fps a whole number from
-  0 to 240), or the caller gets `STREAM_UNAVAILABLE`. A `2xx` without a
-  picture is `502`. On a refusal, the gateway reads at most 16 KiB of
+  0 to 240), or the caller gets `STREAM_UNAVAILABLE`. A `2xx` with no
+  `simlock-stream-codec` header or no body is `502`. On a refusal, the
+  gateway reads at most 16 KiB of
   body. It passes the worker's code on only when it matches
   `^[A-Z][A-Z0-9_]{0,63}$` and the message is a non-empty string, cut to
   1,000 characters; anything else becomes `STREAM_UNAVAILABLE`, naming the
@@ -394,10 +419,12 @@ separate feature with its own retention, as it is for `device.exec`.
 
 `stream.enabled` (both sides, default `false`), and on the worker
 `stream.fps` (1–60, default 30), `stream.maxDimension` (96–4096, default
-720) and `stream.bitrateKbps` (64–40000, default 1500). A gateway reads
-only `stream.enabled` and warns about the rest. There is no
-`stream.command`: the capture program is the driver's. The iOS driver's
-`drivers.ios.screenCaptureCommand` overrides its program (§5).
+720) and `stream.bitrateKbps` (100–40000, default 1500; the iOS encoder
+takes nothing lower). A gateway reads only `stream.enabled` and warns
+about the rest. There is no `stream.command`: the capture program is the
+driver's. The iOS driver's `drivers.ios.screenCaptureCommand` overrides
+its program (§5). The config shape `config.get` returns gains `stream`,
+a contract change, so the daemon protocol goes up by one.
 
 ## Consequences
 
@@ -405,7 +432,9 @@ only `stream.enabled` and warns about the rest. There is no
   on one worker or through a gateway; an agent can watch its own over HTTP.
 - A watched device costs its worker a capture: on iOS about 66–78 MB and
   an encoder, on Android an encoder inside the emulator. Two viewers cost
-  two captures.
+  two captures, with no limit per lease in v1.
+- A lease end on a lease whose capture is still opening waits for that
+  open to stop, up to the driver's own bounds or leasing's signal.
 - iOS streams need Xcode on the worker when `pnpm build` runs. A worker
   built without it reports why in its `stream` capability.
 - A slow viewer slows its own capture rather than losing frames on the
@@ -486,5 +515,9 @@ only `stream.enabled` and warns about the rest. There is no
   and leaves a forward to remove after a crash. The smart-socket connection
   opens neither.
 - **The lease-end participant resolves without waiting for captures to
-  close.** Rejected: the reclaim could start while a capture still films
-  the device it is wiping.
+  close, or for an open in progress.** Rejected: the reclaim could start
+  while a capture still films, or is still being started on, the device
+  it is wiping.
+- **A limit on captures per lease.** Not in v1: only the lease holder or
+  an operator can open one, and the gateway's 64 channels bound a fleet
+  viewer. A limit can come with a need for one.
