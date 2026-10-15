@@ -156,6 +156,7 @@ function sequence() {
 
 function config(): Config {
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },

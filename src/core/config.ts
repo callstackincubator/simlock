@@ -114,6 +114,9 @@ export type DownloadPolicy = "never" | "on-request" | "always";
 export type DaemonMode = "worker" | "gateway";
 
 export interface Config {
+  readonly capabilities: Readonly<
+    Record<string, { readonly enabled: boolean } & Readonly<Record<string, unknown>>>
+  >;
   /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
    * the two apart. Default `"worker"`. */
   readonly mode: DaemonMode;
@@ -383,6 +386,7 @@ type Layer = Record<string, unknown>;
 export async function loadConfig({
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
+  modules = [],
   overrides,
   systemStats,
   warn = () => {},
@@ -398,7 +402,7 @@ export async function loadConfig({
   // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
   // about.
   const mode = resolveMode([fromFile, fromOverrides]);
-  const validators = configValidators(strategy);
+  const validators = configValidators(strategy, modules);
 
   const fileConfig = normalizeLayer(
     validateConfigLayer(fromFile, "", warn, validators),
@@ -412,16 +416,17 @@ export async function loadConfig({
   );
 
   const merged = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode), fileConfig),
+    mergeConfig(defaultConfig(systemStats, strategy, mode, modules), fileConfig),
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
   validateAgentDeviceTtlCap(merged);
   validateEventLogBounds(merged);
   if (mode === "gateway") {
-    warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
+    warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
+    runModuleChecks(merged, modules);
     // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);
@@ -492,6 +497,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "eventLog",
   "gateway",
   "agentDevice",
+  "capabilities",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
@@ -511,7 +517,11 @@ const WORKER_ONLY_AGENT_DEVICE_KEYS: readonly string[] = ["command"];
  * Ignoring rather than failing is the deliberate choice the ADR makes, and it is what lets one
  * config file be copied between a worker and a gateway while only `mode` differs.
  */
-function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
+function warnWorkerOnlyKeys(
+  layers: readonly unknown[],
+  warn: Warn,
+  modules: readonly ModuleConfigEntry[],
+): void {
   for (const layer of layers) {
     const object = requireObject(layer, "config");
     for (const key of Object.keys(object)) {
@@ -537,6 +547,34 @@ function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
         `Ignoring "agentDevice.${key}": it names the program a worker runs, ` +
         `and this daemon runs in gateway mode.`,
     );
+    warnWorkerOnlyModuleKeys(object, modules, warn);
+  }
+}
+
+function warnWorkerOnlyModuleKeys(
+  layer: Record<string, unknown>,
+  modules: readonly ModuleConfigEntry[],
+  warn: Warn,
+): void {
+  const sections = layer["capabilities"];
+  if (sections === undefined) return;
+  for (const [name, section] of Object.entries(requireObject(sections, "capabilities"))) {
+    const entry = modules.find((candidate) => candidate.name === name);
+    if (entry === undefined) continue;
+    for (const key of Object.keys(requireObject(section, `capabilities.${name}`))) {
+      if (key !== "enabled" && !entry.gatewayKeys.includes(key)) {
+        warn(
+          `Ignoring "capabilities.${name}.${key}": it configures a worker, ` +
+            `and this daemon runs in gateway mode.`,
+        );
+      }
+    }
+  }
+}
+
+function runModuleChecks(config: Config, modules: readonly ModuleConfigEntry[]): void {
+  for (const entry of modules) {
+    entry.check?.(config.capabilities[entry.name] as never, config);
   }
 }
 
@@ -697,9 +735,16 @@ function defaultConfig(
   systemStats: SystemStats,
   strategy: CapacityStrategyName,
   mode: DaemonMode,
+  modules: readonly ModuleConfigEntry[],
 ): Config {
   return {
     mode,
+    capabilities: Object.fromEntries(
+      modules.map((entry) => [
+        entry.name,
+        { ...(entry.defaults as Record<string, unknown>), enabled: false },
+      ]),
+    ) as Config["capabilities"],
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
@@ -832,8 +877,12 @@ const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
  * The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
  */
-function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
+function configValidators(
+  strategy: CapacityStrategyName,
+  modules: readonly ModuleConfigEntry[],
+): Record<string, Validator> {
   return {
+    capabilities: capabilitiesValidator(modules),
     mode: stringUnion(DAEMON_MODES),
     gateway: objectValidator({
       url: stringValue,
@@ -931,6 +980,28 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       thresholdMultiplier: numberAtLeast(1),
       minimumThresholdMs: nonNegativeNumber,
     }),
+  };
+}
+
+function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator {
+  return (value, path, warn) => {
+    const result: Record<string, unknown> = {};
+    for (const [name, section] of Object.entries(requireObject(value, path))) {
+      const sectionPath = `${path}.${name}`;
+      const entry = modules.find((candidate) => candidate.name === name);
+      if (entry === undefined) {
+        warn(`Unknown config key: "${sectionPath}"`);
+        continue;
+      }
+      const { enabled, ...rest } = requireObject(section, sectionPath);
+      result[name] = {
+        ...(entry.validator(rest, sectionPath, warn) as Record<string, unknown>),
+        ...(enabled === undefined
+          ? {}
+          : { enabled: booleanValue(enabled, `${sectionPath}.enabled`) }),
+      };
+    }
+    return result;
   };
 }
 

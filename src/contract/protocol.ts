@@ -10,7 +10,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 37, max: 37 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 38, max: 38 };
 
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
@@ -79,4 +79,16 @@ export const helloReplySchema = z.object({
 });
 
 /** The first path segment of every route the HTTP app registers itself; a module's name may not start with one. */
-export const CORE_ROUTE_SEGMENTS: readonly string[] = [];
+export const CORE_ROUTE_SEGMENTS: readonly string[] = [
+  "catalog",
+  "components",
+  "devices",
+  "events",
+  "healthz",
+  "lease-requests",
+  "leases",
+  "status",
+  "tokens",
+  "uplink",
+  "workers",
+];

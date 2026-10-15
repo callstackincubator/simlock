@@ -117,7 +117,8 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
-import type { OptionalModuleDefinition } from "../modules/index.js";
+import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
+import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -175,9 +176,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
+  const moduleDefinitions = options.optionalModules ?? optionalModules;
   const config = await loadConfig({
     configPath,
     filesystem,
+    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+      name,
+      ...moduleConfig,
+    })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     systemStats,
     warn: (message) => configWarnings.push(message),
@@ -329,19 +335,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
     modelPreferences,
-    optionalModules: () => agentDeviceFindings(agentDevice.availability()),
+    optionalModules: () => [
+      ...agentDeviceFindings(agentDevice.availability()),
+      ...moduleHost.findings(),
+    ],
     prerequisiteChecks,
     registry,
     systemStats,
   });
+  const leaseEnvironment: Record<string, string> = Object.assign(
+    {},
+    ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
+  );
   const agentDevice = new AgentDeviceSupervisor({
     baseEnvironment: process.env,
     clock,
     config: config.agentDevice,
-    driverEnvironment: Object.assign(
-      {},
-      ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
-    ),
+    driverEnvironment: leaseEnvironment,
     filesystem,
     healthProbe: options.agentDeviceHealth ?? new NodeAgentDeviceHealthProbe(),
     home: dataDirectory,
@@ -362,6 +372,35 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         drivers.map((driver) => driver.platform),
       )
     : undefined;
+  // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
+  let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
+  const moduleHost = await createModuleHost({
+    config,
+    context: {
+      cancelPending: (requesterId) => {
+        if (cancelPendingRequest === undefined) {
+          throw new Error("leasing is not ready yet");
+        }
+        return cancelPendingRequest(requesterId);
+      },
+      clock,
+      dataDirectory,
+      environment: process.env,
+      events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
+      filesystem,
+      leaseEnvironment,
+      nodePath: process.execPath,
+      nodeVersion: process.versions.node,
+      platforms: drivers.map((driver) => driver.platform),
+      processRunner,
+      processSupervisor,
+      tcpProbe,
+    },
+    definitions: moduleDefinitions,
+    logger,
+    role: "worker",
+    wiredElsewhere: ["agent-device"],
+  });
   // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
     clock,
@@ -372,10 +411,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: agentDeviceParts === undefined ? [] : [agentDeviceParts.leaseEnd],
+    leaseEndParticipants: [
+      ...(agentDeviceParts === undefined ? [] : [agentDeviceParts.leaseEnd]),
+      ...moduleHost.leaseEndParticipants,
+    ],
     logger,
     modelPreferences,
   });
+  cancelPendingRequest = (requesterId) => leasing.cancelPending(requesterId);
   // Core declared ports only leasing can implement; this is the one place they are handed over,
   // before any request is admitted (ADR 0018 §2).
   core.connect(leasing.corePorts);
@@ -488,6 +531,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       agentDeviceParts === undefined
         ? { name: "agent-device", read: async () => ({ state: "off" }) }
         : agentDeviceCapabilitySource(agentDeviceParts),
+      ...moduleHost.capabilitySources,
     ],
     capacity: core.capacityReader,
     warmPool: core.warmPoolReader,
@@ -526,6 +570,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       ...(agentDeviceParts === undefined
         ? {}
         : { "agent-device": agentDeviceRelayTarget(agentDeviceParts) }),
+      ...moduleHost.relayTargets,
       ...options.relayTargets,
     },
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
@@ -552,6 +597,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       // why: before the drivers: the Android driver stops simlock's adb server, which this
       // daemon's agent-device uses, and a client that finds no server forks its own.
       await agentDevice.stop();
+      await moduleHost.beforeDriversDispose();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
         if (disposal.status === "rejected") {
@@ -576,6 +622,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         disposeAgentDeviceEdge(agentDeviceParts);
         await cancelWaitingAllocates(agentDeviceParts, (id) => leasing.cancelPending(id));
       }
+      await moduleHost.beforeDrain();
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
       // Stopped with the other auxiliary frontends, and for the same reason: the uplink is a
@@ -594,6 +641,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
+      moduleHost.afterSocketClaimed();
       // why: not awaited, since simlock's start never waits for agent-device, and a daemon that lost
       // the socket race never gets here, so it reaps nothing.
       if (options.agentDeviceUpstream === undefined) void agentDevice.start();
@@ -631,8 +679,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       leaseRequests: leasing.requests,
       logger: httpLogger,
-      mounts:
-        agentDeviceParts === undefined
+      mounts: [
+        ...(agentDeviceParts === undefined
           ? []
           : [
               createAgentDeviceFront(agentDeviceParts, {
@@ -644,7 +692,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
                   ? {}
                   : { leaseTtlCapMs: config.agentDevice.leaseTtlCapMs }),
               }),
-            ],
+            ]),
+        ...moduleHost.mounts({ dispatch }),
+      ],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
       tokens,

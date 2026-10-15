@@ -15,6 +15,7 @@ import { createCapacityStrategy } from "../core/testing.js";
 const gibibyte = 1024 ** 3;
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const config: Config = {
+  capabilities: {},
   mode: "worker",
   agentDevice: { command: "agent-device", enabled: false },
   exec: { timeoutMs: 600_000 },

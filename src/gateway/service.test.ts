@@ -1234,7 +1234,7 @@ describe("GatewayService", () => {
       min: PROTOCOL_VERSION_RANGE.max - 1,
       max: PROTOCOL_VERSION_RANGE.max - 1,
     };
-    expect(PROTOCOL_VERSION_RANGE.max).toBe(37);
+    expect(PROTOCOL_VERSION_RANGE.max).toBe(38);
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
     const harness = fleet();
     await harness.service.start();

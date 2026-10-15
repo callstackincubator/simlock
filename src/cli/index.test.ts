@@ -6210,6 +6210,7 @@ async function startInMemoryDaemon(options: {
 
 function testConfig(): Config {
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },

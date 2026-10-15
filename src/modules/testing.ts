@@ -67,7 +67,7 @@ export function fakeModule(options: FakeModuleOptions): FakeModule {
             return {
               capability: {
                 name: options.capabilityName ?? options.name,
-                read: () => Promise.resolve({ state: options.state ?? "ready" }),
+                read: () => Promise.resolve({ state: options.state ?? "available" }),
               },
               ...(options.findings === undefined ? {} : { findings: options.findings }),
               ...(options.hooks === undefined ? {} : { hooks: options.hooks }),

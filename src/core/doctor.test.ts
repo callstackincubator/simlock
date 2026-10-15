@@ -3224,6 +3224,7 @@ function withAdvisories(
 
 function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },

@@ -840,6 +840,10 @@ export const configSchema = z.object({
    * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
    * agent-role answer to the same question. */
   mode: z.enum(["worker", "gateway"]),
+  capabilities: z.record(
+    capabilityNameSchema,
+    z.object({ enabled: z.boolean() }).catchall(z.unknown()),
+  ),
   capacity: capacityConfigSchema,
   downloads: z.object({
     policy: z.enum(["never", "on-request", "always"]),
@@ -1071,9 +1075,12 @@ export const capabilitySchema = z
   })
   .refine((entry) => (entry.state === "unavailable") === (entry.reason !== undefined));
 
+/** The most capabilities one daemon reports. */
+export const MAX_CAPABILITIES = 16;
+
 export const capabilityListSchema = z
   .array(capabilitySchema)
-  .max(16)
+  .max(MAX_CAPABILITIES)
   .refine((list) => new Set(list.map((entry) => entry.name)).size === list.length);
 
 export function capabilityReason(text: string): string {

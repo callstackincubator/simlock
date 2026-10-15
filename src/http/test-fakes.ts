@@ -31,6 +31,7 @@ export function testConfig(
   mode: Config["mode"] = "worker",
 ): Config {
   return {
+    capabilities: {},
     mode,
     agentDevice: { command: "agent-device", enabled: false },
     gateway: {

@@ -3579,6 +3579,7 @@ function testConfig(
   },
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     gateway: {

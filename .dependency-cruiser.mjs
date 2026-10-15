@@ -28,7 +28,7 @@ const pastIndex = components.map((component) => ({
   from: { pathNot: `^${escape(component)}/` },
   to: {
     path: `^${escape(component)}/`,
-    pathNot: `^${escape(component)}/(index|testing)\\.(ts|js)$`,
+    pathNot: `^${escape(component)}/(index|testing|definition)\\.(ts|js)$`,
   },
 }));
 
@@ -142,6 +142,38 @@ export default {
       "only the composition root, main.ts, knows a gateway exists",
       "^src/daemon/(?!main\\.ts$)",
       { path: "^src/gateway/" },
+    ),
+    {
+      name: "definition-is-light",
+      comment:
+        "a module's definition.ts imports its own module only for types or by dynamic import, so reading the registry loads no module code",
+      severity: "error",
+      from: { path: "^src/([^/]+)/definition\\.ts$" },
+      to: {
+        dependencyTypesNot: ["type-only", "dynamic-import"],
+        path: "^src/$1/",
+        pathNot: "^src/$1/definition\\.ts$",
+      },
+    },
+    {
+      name: "modules-imports-little",
+      comment: "src/modules imports only ports, contract and core, plus the bus for its types",
+      severity: "error",
+      from: { path: "^src/modules/", pathNot: linkTestFile },
+      to: { path: "^src/", pathNot: "^src/(modules|ports|contract|core|bus)/" },
+    },
+    {
+      name: "modules-imports-bus-types-only",
+      comment: "src/modules imports the bus for its types only",
+      severity: "error",
+      from: { path: "^src/modules/", pathNot: linkTestFile },
+      to: { path: "^src/bus/", dependencyTypesNot: ["type-only"] },
+    },
+    direction(
+      "not-modules",
+      "core, leasing, the drivers, the gateway and the contract import nothing from the optional-module host or its registry",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/(modules|module-registry)/" },
     ),
     direction(
       "contract-imports-nothing",

@@ -45,6 +45,7 @@ interface HarnessOptions {
 function config(options: HarnessOptions): Config {
   const quarantineBackoffMs = options.quarantineBackoffMs ?? 30_000;
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },

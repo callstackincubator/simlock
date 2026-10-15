@@ -30,6 +30,7 @@ import { WorkerRegistry } from "./worker-registry.js";
 
 const gatewayConfig = {
   agentDevice: { command: "agent-device", enabled: false },
+  capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
   diskPressure: { freeBytesThreshold: 1 },
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },

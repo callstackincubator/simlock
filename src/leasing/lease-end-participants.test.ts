@@ -111,6 +111,7 @@ interface EngineOptions {
 function config(options: EngineOptions): Config {
   const ios = options.ios ?? { maxDevices: 1, maxRunning: 1 };
   return {
+    capabilities: {},
     mode: "worker",
     agentDevice: { command: "agent-device", enabled: false },
     exec: { timeoutMs: 600_000 },
