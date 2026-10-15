@@ -1071,6 +1071,7 @@ describe("operation input/output round trips", () => {
 
   it("config.get: round-trips a representative config", () => {
     const config = {
+      capabilities: {},
       mode: "worker",
       gateway: {
         disconnectedRetentionMs: 86_400_000,
