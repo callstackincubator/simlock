@@ -27,7 +27,7 @@ changes in this repo:
 - [documentation.md](docs/internal/agent-rules/documentation.md) — end-user
   docs (`docs/`) vs. maintainer/agent docs (`docs/internal/`); no ADR links
   or internal-doc links from end-user docs; nothing the tool prints names a
-  file path in this repo.
+  file path in this repo; every module has a manual beside its code.
 - [delivery.md](docs/internal/agent-rules/delivery.md) — GitHub Issues as
   spec and queue: one `<kind>:<state>` label per issue, agents act only on
   `*:ready` and `bug:triage`, the body is the spec and comments are
@@ -73,6 +73,10 @@ End-user docs live directly under [docs/](docs/) and must stay self-contained
 - [CONSOLE.md](docs/CONSOLE.md) — the web console: turning it on, opening it, signing in
 - [EVENTS.md](docs/EVENTS.md) — catalog of business events, end-user cut
 
+Each module under `src/` has a manual, `src/<module>/README.md`: what it does,
+how, its state and timers, the rules a change must not break, its known gaps.
+Read it before changing the module; a change that makes it false fixes it.
+
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
 - [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
@@ -82,8 +86,10 @@ Maintainer/agent docs live under [docs/internal/](docs/internal/):
   (and the landing page): type, colour, status colours, spacing, voice
 - [DELIVERY.md](docs/internal/DELIVERY.md) — how work flows through GitHub
   Issues: the three walkthroughs, handoffs, what is automated, where ADRs fit
+- [flows/](docs/internal/flows/) — paths that run through several modules:
+  startup, device selection, `device.exec`
 - [templates/](docs/internal/templates/) — the feature and task spec bodies a
-  spec session writes
+  spec session writes, and the module manual template
 - [EVENTS.md](docs/internal/EVENTS.md) — the same catalog with rationale and ADR references
 - [IDEAS.md](docs/internal/IDEAS.md) — post-v1 ideas; don't implement these unless asked
 - [KNOWN-PITFALLS.md](docs/internal/KNOWN-PITFALLS.md) — accepted gaps and their planned fixes

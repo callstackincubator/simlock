@@ -13,7 +13,9 @@ spec says otherwise in its own words, the spec wins.
    (architecture rule 13). That covers the end-user docs — `README.md`,
    `docs/ABOUT.md`, `docs/CLI.md`, `docs/CLIENT.md`, `docs/CONFIGURATION.md`,
    `docs/HTTP-API.md`, `docs/CONSOLE.md`, `docs/EVENTS.md` (documentation
-   rule 2) — and the maintainer docs under `docs/internal/`.
+   rule 2) — the maintainer docs under `docs/internal/`, and the manual
+   (`src/<module>/README.md`) of every module the change touches
+   (documentation rule 7).
 2. **What the tool prints.** Help text, usage banners, error messages and
    HTTP error bodies the change makes false are fixed in the same change
    (architecture rule 13), and none of them names a file path in this repo
