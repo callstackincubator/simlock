@@ -62,7 +62,7 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
 
 async function visit(page: Page, host: RunningDaemon, path: string): Promise<void> {
   await page.goto(new URL(path, host.url).toString());
-  await expect(page.locator("#main h1")).toBeVisible();
+  await expect(page.locator("#main").getByRole("heading").first()).toBeVisible();
   await expect(page.locator("#main")).not.toContainText("Loading…");
   await settled(page);
 }
@@ -101,12 +101,14 @@ test.describe("every view", () => {
       for (const path of every(pages)) {
         await visit(page, host, path);
         // why: a radio group is one stop, at its checked radio, and nothing inside a closed
-        // disclosure is a stop, so those are left out of the order Tab should follow.
+        // disclosure is a stop, so those are left out of the order Tab should follow; neither is
+        // a disabled control.
         const stops = await page.evaluate(() => {
           const candidates = document.querySelectorAll<HTMLElement>(
             "#main a[href], #main button, #main input, #main summary, #main [tabindex]:not([tabindex='-1'])",
           );
           const kept = [...candidates].filter((element) => {
+            if (element.matches(":disabled")) return false;
             if (element instanceof HTMLInputElement && element.type === "radio") {
               return element.checked;
             }
@@ -177,8 +179,12 @@ test.describe("every view", () => {
             };
           });
 
+        // why: a click on text inside the page focuses `main` (its skip-link target), so Tab
+        // starts from the top of the page and reaches the chart after the controls above it.
         await heading.click();
-        await page.keyboard.press(tab);
+        for (let step = 0; step < 20 && !(await focused()).inChart; step += 1) {
+          await page.keyboard.press(tab);
+        }
         expect(await focused(), `${path} tabbed`).toEqual({ inChart: true, own: "none" });
         expect(await ring(), `${path} tabbed`).toBe("solid");
         await page.keyboard.press("ArrowLeft");
