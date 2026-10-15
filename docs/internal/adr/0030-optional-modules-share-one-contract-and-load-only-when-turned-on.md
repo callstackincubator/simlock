@@ -63,25 +63,27 @@ flowchart LR
 
 ### 1. A module is one definition in one registry
 
-A new component, `src/modules/`, owns the extension point. Its `index.ts`
-exports the types below. `src/modules/registry.ts` lists every module's
-definition, one line each. The daemon and the CLI read the registry. No
-other file names a module.
+A new component, `src/modules/`, owns the extension point: its
+`index.ts` exports the types below and the host. A second component,
+`src/module-registry/`, lists every module's definition, one line each.
+The daemon and the CLI read the registry. No other file names a module.
+The registry is its own component so that the registry, a module's
+definition and `src/modules` form no import cycle.
 
 ```ts
 export interface OptionalModuleDefinition<C> {
   readonly name: string;
   readonly config: ModuleConfig<C>;
-  load(): Promise<{
-    createWorker(ctx: WorkerContext<C>): WorkerModule;
-    createGateway?(ctx: GatewayContext<C>): GatewayModule;
-  }>;
+  loadWorker(): Promise<{ createWorker(ctx: WorkerContext<C>): WorkerModule }>;
+  loadGateway?(): Promise<{ createGateway(ctx: GatewayContext<C>): GatewayModule }>;
 }
 ```
 
 A module's directory has a small `definition.ts` that exports its
-definition. It imports only types and its config schema, so reading the
-registry loads no module code.
+definition. It imports its own module only as types, or through the
+dynamic `import()` inside a loader, so reading the registry loads no
+module code. A module with no `loadGateway` has no gateway side, and a
+gateway never loads it. Each side loads only its own code.
 
 `name` is the module's only name:
 
@@ -100,8 +102,11 @@ section is missing, the host calls
 nothing of the module and loads none of its code. It reports the module's
 capability as `off` itself.
 
-When it is `true`, the host awaits `load()`, a dynamic `import()` of the
-module's `index.ts`, and calls `createWorker` or `createGateway`.
+When it is `true`, the host awaits `loadWorker()` on a worker, or
+`loadGateway()` on a gateway, and calls `createWorker` or `createGateway`.
+Creating a module starts nothing; a module starts in its
+`afterSocketClaimed` hook. A start that fails after some modules were
+created leaves them created and not started, with nothing to stop.
 
 A module turned off runs nothing, so it cannot clean up after a crash. If
 simlock crashes while agent-device is on and starts again with it off, the
@@ -120,7 +125,7 @@ runs at.
 export interface WorkerModule {
   readonly capability: CapabilitySource;
   readonly relayTarget?: RelayTarget;
-  readonly mount?: (deps: MountDeps) => ModuleMount;
+  readonly mount?: (deps: MountDeps) => ModuleHandler;
   readonly findings?: () => readonly ModuleFinding[];
   readonly hooks?: WorkerHooks;
 }
@@ -133,7 +138,7 @@ export interface WorkerHooks {
 }
 
 export interface GatewayModule {
-  readonly mount?: (deps: MountDeps) => ModuleMount;
+  readonly mount?: (deps: MountDeps) => ModuleHandler;
   readonly hooks?: { readonly beforeDrain?: () => Promise<void> };
 }
 ```
@@ -149,7 +154,9 @@ Each hook's name is a promise the host keeps:
 
 The host keeps these rows in one table and runs every module's hooks
 through it. It is the one place that bounds them and logs a hook that runs
-out of time. Both stop hooks share one deadline of 30 s. It sits above
+out of time. For one step, every module's hook starts at once, and the step
+waits at most its deadline in total. Both stop steps share one deadline of
+30 s. It sits above
 agent-device's slowest stop: a start still in progress, then 10 s after
 SIGTERM and 2 s after SIGKILL.
 `beforeDeviceReclaim` reaches leasing through the lease-end port ADR 0024
@@ -157,6 +164,14 @@ already defines; leasing does not change.
 
 Hooks are function-valued properties, not methods, so the host can call
 them without binding `this`.
+
+A module's HTTP routes sit under its name. `mount` returns only a handler;
+the host serves it at `/v1/<name>` and `/v1/<name>/*`. A module cannot pick
+a route that clashes with another module's or with a core route.
+
+A module's `findings()` returns `{ message, remedy }`. The host adds the
+finding's kind and the module's name (§7), so the name in a finding cannot
+drift from the module's.
 
 ```mermaid
 sequenceDiagram
@@ -191,7 +206,9 @@ to watch them. A step that has to finish before the host goes on is a hook,
 never an event handler. Bus handlers are not awaited, and ADR 0024 already
 rejected an event handler for the lease-end step.
 
-`createGateway(ctx)` gets a fleet context bound to the module's name:
+`createGateway(ctx)` gets a fleet context bound to the module's name. It
+also carries the gateway's granted devices, which agent-device's fleet port
+reads:
 
 ```ts
 export interface GatewayContext<C> {
@@ -254,12 +271,17 @@ already checked each section with its module's validator.
 
 ### 6. Shared types live in `src/modules`
 
-`src/modules` declares `ModuleMount`, the shape the HTTP app mounts.
-`src/http` imports it from there, so a module never imports `src/http`.
+`src/modules` declares the handler shape a module's routes have. The host
+turns each handler into the mount the HTTP app already takes, so a module
+never imports `src/http`, and `src/http` does not change.
 
-`src/modules` imports only `src/ports`, `src/contract` and core types. A
-dependency-cruiser rule enforces it. The core, leasing, the drivers and the
-gateway import nothing from `src/modules` or from any module.
+`src/modules` imports only `src/ports`, `src/contract` and `src/core`. A
+dependency-cruiser rule enforces it. Types it needs from elsewhere (the
+capability source, the relay target, the lease-end participant, the bus's
+`subscribe`, the daemon's dispatch, the gateway's views and lease index)
+are declared by shape, and a test checks each copy against the original.
+The core, leasing, the drivers, the gateway and the contract import
+nothing from `src/modules` or from any module.
 
 ### 7. One doctor finding for every module
 
@@ -269,8 +291,9 @@ The doctor finding `agent-device-unavailable` becomes:
 { "kind": "module-unavailable", "module": "agent-device", "message": "…", "remedy": "…" }
 ```
 
-A module's `findings()` returns it. The core doctor, the contract and the
-CLI know the one kind, not any module. The protocol version moves up with
+The host builds it from what a module's `findings()` returns and the
+module's name. The core doctor, the contract and the CLI know the one kind,
+not any module. The protocol version moves up with
 no shim, and the changelog says so.
 
 ### 8. Tests swap modules, not module parts
@@ -281,8 +304,9 @@ module's `testing.ts` exports a definition backed by its fakes. A
 conformance suite runs over the registry with `describe.each`:
 
 - a module turned off is not loaded and reports `off`;
-- each hook's row in §3 holds;
-- the name passes §1's check.
+- creating a module starts nothing;
+- each hook it declares settles within its row's deadline in §3;
+- the name passes §1's check and no two modules share one.
 
 ## Consequences
 
@@ -340,5 +364,15 @@ conformance suite runs over the registry with `describe.each`:
   each module would still edit the core.
 - **A doctor finding kind per module.** Rejected: each module would edit
   the contract, the core doctor and the CLI.
+- **One `load()` for both sides.** Rejected: a gateway would have to load
+  a module to learn it has no gateway side, and would load its worker code.
+- **The registry inside `src/modules`.** Rejected: the registry imports
+  each definition and each definition imports `src/modules`, a cycle
+  between components.
+- **A module picks its own route prefix.** Rejected: a second name per
+  module, and a prefix could clash with a core route.
+- **Hooks for one step run one after another.** Rejected: a hanging module
+  either holds up every module after it or makes the stop grow by 30 s per
+  module.
 - **Always load every module.** Rejected: a module turned off should cost
   nothing, and streaming's capture code has no reason to load when off.
