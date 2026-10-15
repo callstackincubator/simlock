@@ -143,17 +143,7 @@ class ScrcpySession {
       const reader = await this.#connect(deadlineAt);
       const parser = new ScrcpyVideoParser();
       const mapper = new EnvelopeMapper(this.#settings.fps);
-      const pending: Uint8Array[] = [];
-      let sized = false;
-      while (!sized) {
-        const chunk = await reader.read();
-        if (chunk === undefined)
-          throw this.#startFailure("ended before it named the picture's size");
-        for (const event of parser.push(chunk)) {
-          if (event.kind === "session") sized = true;
-          pending.push(...mapper.map(event));
-        }
-      }
+      const pending = await this.#untilSized(reader, parser, mapper);
       return { body: this.#body(reader, parser, mapper, pending), close: () => this.close() };
     } catch (error) {
       await this.close();
@@ -164,6 +154,24 @@ class ScrcpySession {
       stopped.removeEventListener("abort", stop);
       if (timer !== undefined) this.#options.clock.cancel(timer);
     }
+  }
+
+  async #untilSized(
+    reader: ChunkReader,
+    parser: ScrcpyVideoParser,
+    mapper: EnvelopeMapper,
+  ): Promise<Uint8Array[]> {
+    const pending: Uint8Array[] = [];
+    let sized = false;
+    while (!sized) {
+      const chunk = await reader.read();
+      if (chunk === undefined) throw this.#startFailure("ended before it named the picture's size");
+      for (const event of parser.push(chunk)) {
+        if (event.kind === "session") sized = true;
+        pending.push(...mapper.map(event));
+      }
+    }
+    return pending;
   }
 
   close(): Promise<void> {
