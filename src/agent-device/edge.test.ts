@@ -1216,10 +1216,11 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     await granted(rig, 2);
     await command(rig, "close", 2);
+    await expect.poll(async () => leases(rig)).toEqual([]);
     const afterClose = await envelopeOf(await release(rig, 2));
 
     expect(afterClose.result).toMatchObject({ ok: true, released: false });
-    expect(heldAtDaemonRelease).toEqual([hex(2)]);
+    expect(heldAtDaemonRelease).toEqual([]);
     expect(await leases(rig)).toEqual([]);
     await expect
       .poll(async () => (await devices(rig)).map((device) => device.state))
