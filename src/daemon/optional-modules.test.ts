@@ -395,6 +395,29 @@ describe("optional modules: doctor findings", () => {
       recordsOf(sink, "Could not read optional module findings").map((record) => record.fields),
     ).toEqual([{ message: "boom", module: "bravo" }]);
   });
+
+  it("a module whose findings() throws, reads, then throws again is warned once per run of failures, not once per read", async () => {
+    const steps = ["throw", "throw", "read", "throw", "throw"];
+    const { daemon, sink } = await start({
+      modules: definitions(
+        fakeModule({
+          findings: () => {
+            if (steps.shift() === "throw") throw new Error("boom");
+            return [];
+          },
+          name: "alpha",
+        }),
+      ),
+      on: ["alpha"],
+    });
+    const startupWarnings = recordsOf(sink, "Could not read optional module findings").length;
+
+    for (let run = 0; run < 5 - startupWarnings; run += 1) {
+      await daemon.dispatch("doctor.run", {}, admin);
+    }
+
+    expect(recordsOf(sink, "Could not read optional module findings")).toHaveLength(2);
+  });
 });
 
 describe("optional modules: a start that cannot go on", () => {
