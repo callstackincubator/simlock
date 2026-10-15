@@ -16,12 +16,15 @@ import { setSearch, useSearch } from "./router";
 export function usePaging(options: {
   readonly name?: string;
   readonly sizes: PageSizes;
-  readonly total: number;
+  readonly total: number | undefined;
 }): Paging {
-  const { name, sizes, total } = options;
+  const { name, sizes } = options;
   const keys = pageKeys(name);
   const asked = readPage(useSearch(), keys, sizes);
-  const last = lastPage(total, asked.size);
+  // why: before its data arrives a list has no length; correcting the page against zero rows would
+  // throw away the page a reload or a shared link asked for.
+  const total = options.total ?? 0;
+  const last = options.total === undefined ? asked.page : lastPage(total, asked.size);
   const at = { page: Math.min(asked.page, last), size: asked.size };
   const moved = at.page !== asked.page;
   useEffect(() => {
