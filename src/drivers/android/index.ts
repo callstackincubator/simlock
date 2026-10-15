@@ -531,20 +531,7 @@ export class AndroidDriver implements Driver {
     this.#tcpProbe = options.tcpProbe;
     // System images land under the SDK root, so that is the volume an install is reserved on.
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
-    this.screenCapture =
-      options.scrcpyServerPath === undefined || options.tcpStreamConnector === undefined
-        ? undefined
-        : createAndroidScreenCapture({
-            adb: sdk.adb,
-            adbServerPort,
-            clock: options.clock,
-            env: () => this.#env(),
-            filesystem: options.filesystem,
-            processRunner: options.processRunner,
-            serialOf: (device) => this.#dataFor(device).serial,
-            serverPath: options.scrcpyServerPath,
-            tcp: options.tcpStreamConnector,
-          });
+    this.screenCapture = this.#screenCaptureFor(options, sdk.adb, adbServerPort);
     // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -562,6 +549,27 @@ export class AndroidDriver implements Driver {
       options.deviceProfileSources ??
         (defaults === undefined ? [] : [defaults.library, defaults.builtin, defaults.user]),
     );
+  }
+
+  #screenCaptureFor(
+    options: AndroidDriverOptions,
+    adb: string,
+    adbServerPort: number,
+  ): ScreenCapture | undefined {
+    if (options.scrcpyServerPath === undefined || options.tcpStreamConnector === undefined) {
+      return undefined;
+    }
+    return createAndroidScreenCapture({
+      adb,
+      adbServerPort,
+      clock: options.clock,
+      env: () => this.#env(),
+      filesystem: options.filesystem,
+      processRunner: options.processRunner,
+      serialOf: (device) => this.#dataFor(device).serial,
+      serverPath: options.scrcpyServerPath,
+      tcp: options.tcpStreamConnector,
+    });
   }
 
   /**

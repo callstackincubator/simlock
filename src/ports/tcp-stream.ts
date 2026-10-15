@@ -52,6 +52,7 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
   }
 }
 
+// fallow-ignore-next-line unused-export -- the public shape of FakeTcpStreamConnector.connections.
 export class FakeTcpPeer {
   readonly written: Uint8Array[] = [];
   closed = false;
@@ -100,17 +101,8 @@ export class FakeTcpPeer {
 
 export class FakeTcpStreamConnector implements TcpStreamConnector {
   readonly connections: { readonly port: number; readonly peer: FakeTcpPeer }[] = [];
-  #refuse = 0;
-
-  refuseNext(count = 1): void {
-    this.#refuse += count;
-  }
 
   async connect(port: number): Promise<TcpStream> {
-    if (this.#refuse > 0) {
-      this.#refuse -= 1;
-      throw new Error(`connect ECONNREFUSED 127.0.0.1:${String(port)}`);
-    }
     const peer = new FakeTcpPeer();
     this.connections.push({ peer, port });
     return peer.stream;

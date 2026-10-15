@@ -66,6 +66,7 @@ export interface FakeBytePipeStart {
   readonly env: NodeJS.ProcessEnv;
 }
 
+// fallow-ignore-next-line unused-export -- the public shape of FakeBytePipeLauncher.last and .processes.
 export class FakeBytePipeProcess implements BytePipeProcess {
   readonly stdout: ReadableStream<Uint8Array>;
   readonly exited: Promise<BytePipeExit>;
@@ -122,21 +123,11 @@ export class FakeBytePipeProcess implements BytePipeProcess {
 export class FakeBytePipeLauncher implements BytePipeLauncher {
   readonly starts: FakeBytePipeStart[] = [];
   readonly processes: FakeBytePipeProcess[] = [];
-  #failure: string | undefined;
-
-  failNextStart(error: string): void {
-    this.#failure = error;
-  }
 
   start(command: string, args: readonly string[], options: BytePipeOptions): FakeBytePipeProcess {
     this.starts.push({ args: [...args], command, env: options.env });
     const process = new FakeBytePipeProcess(options.onStderrLine);
     this.processes.push(process);
-    if (this.#failure !== undefined) {
-      const error = this.#failure;
-      this.#failure = undefined;
-      process.exit({ code: null, error, signal: null });
-    }
     return process;
   }
 

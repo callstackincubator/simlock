@@ -25,6 +25,7 @@ export class EnvelopeMapper {
     this.#fps = fps;
   }
 
+  // fallow-ignore-next-line complexity -- one branch per scrcpy event, each the frames it becomes.
   map(event: ScrcpyVideoEvent): Uint8Array[] {
     if (event.kind === "session") {
       this.#sessionSeen = true;

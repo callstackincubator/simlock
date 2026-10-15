@@ -57,6 +57,7 @@ export class ScrcpyVideoParser {
     }
   }
 
+  // fallow-ignore-next-line complexity -- one branch per packet kind scrcpy's video socket carries.
   #next(): ScrcpyVideoEvent | "codec" | undefined {
     if (!this.#codecRead) {
       if (this.#queue.length < CODEC_ID_BYTES) return undefined;

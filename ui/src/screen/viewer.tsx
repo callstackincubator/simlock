@@ -89,7 +89,6 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
 
   const live = phase === "live" || phase === "starting";
   const failure = stats.error ?? (phase === "stopped" ? note : undefined);
-  const tone: Tone = failure !== undefined ? "error" : phase === "live" ? "ok" : "idle";
   // why: the canvas is mounted as soon as a picture has been asked for rather than when the first frame
   // arrives — a frame can arrive before React has painted anything, and a pane that mounts its canvas
   // in reply to that frame has nothing to draw the first picture on. It goes away with the stream
@@ -130,44 +129,59 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
             : "Waiting for the first frame."}
         </p>
       ) : null}
-      <dl className="facts">
-        <div>
-          <dt>State</dt>
-          <dd>
-            <Status tone={tone}>{stateWord(phase, failure !== undefined)}</Status>
-          </dd>
-        </div>
-        <div>
-          <dt>Picture</dt>
-          <dd className="mono">{meta === undefined ? "—" : pictureOf(meta)}</dd>
-        </div>
-        <div>
-          <dt>Frames</dt>
-          <dd className="mono">{counted(stats, (frames) => `${frames}`)}</dd>
-        </div>
-        <div>
-          <dt>Rate</dt>
-          <dd className="mono">
-            {counted(stats, () => `${stats.framesPerSecond.toFixed(1)} fps`)}
-          </dd>
-        </div>
-        <div>
-          <dt>Bandwidth</dt>
-          <dd className="mono">
-            {counted(stats, () => `${Math.round(stats.kilobitsPerSecond)} kbit/s`)}
-          </dd>
-        </div>
-        <div>
-          <dt>Dropped</dt>
-          <dd className="mono">{counted(stats, () => `${stats.dropped}`)}</dd>
-        </div>
-      </dl>
+      <ScreenFacts failed={failure !== undefined} meta={meta} phase={phase} stats={stats} />
       {note === undefined ? null : (
         <p className="refusal" role="alert">
           {note}
         </p>
       )}
     </Panel>
+  );
+}
+
+function ScreenFacts({
+  failed,
+  meta,
+  phase,
+  stats,
+}: {
+  readonly failed: boolean;
+  readonly meta: StreamMeta | undefined;
+  readonly phase: Phase;
+  readonly stats: StreamStats;
+}) {
+  const tone: Tone = failed ? "error" : phase === "live" ? "ok" : "idle";
+  return (
+    <dl className="facts">
+      <div>
+        <dt>State</dt>
+        <dd>
+          <Status tone={tone}>{stateWord(phase, failed)}</Status>
+        </dd>
+      </div>
+      <div>
+        <dt>Picture</dt>
+        <dd className="mono">{meta === undefined ? "—" : pictureOf(meta)}</dd>
+      </div>
+      <div>
+        <dt>Frames</dt>
+        <dd className="mono">{counted(stats, (frames) => `${frames}`)}</dd>
+      </div>
+      <div>
+        <dt>Rate</dt>
+        <dd className="mono">{counted(stats, () => `${stats.framesPerSecond.toFixed(1)} fps`)}</dd>
+      </div>
+      <div>
+        <dt>Bandwidth</dt>
+        <dd className="mono">
+          {counted(stats, () => `${Math.round(stats.kilobitsPerSecond)} kbit/s`)}
+        </dd>
+      </div>
+      <div>
+        <dt>Dropped</dt>
+        <dd className="mono">{counted(stats, () => `${stats.dropped}`)}</dd>
+      </div>
+    </dl>
   );
 }
 

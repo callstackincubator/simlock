@@ -239,39 +239,41 @@ class ScrcpySession {
     let last = "no attempt finished";
     for (;;) {
       if (signal.aborted) throw this.#startFailure(`did not accept a connection (${last})`);
-      try {
-        const outcome = await openDeviceSocket({
-          adbServerPort: this.#options.adbServerPort,
-          serial: this.#serial,
-          signal,
-          socketName: `scrcpy_${this.#scidHex}`,
-          tcp: this.#options.tcp,
-          timeoutMs: Math.max(1, deadlineAt - this.#options.clock.now()),
-        });
-        if (outcome.kind === "no-transport") {
-          throw new ScreenUnavailableError(`adb cannot reach ${this.#serial}: ${outcome.reason}`);
-        }
-        if (outcome.kind === "open") {
-          this.#stream = outcome.stream;
-          if (signal.aborted) outcome.stream.close();
-          else signal.addEventListener("abort", () => outcome.stream.close(), { once: true });
-          // why: the server writes one zero byte the moment it accepts, so a connection that ends
-          // before it is one that reached nothing and is retried.
-          const dummy = await outcome.reader.readExactly(1);
-          if (dummy?.[0] === 0) return outcome.reader;
-          outcome.stream.close();
-          last =
-            dummy === undefined
-              ? "the socket closed before the server spoke"
-              : "the socket is not scrcpy's";
-        } else {
-          last = outcome.reason;
-        }
-      } catch (error) {
-        if (error instanceof ScreenUnavailableError) throw error;
-        last = errorMessage(error);
-      }
+      const attempt = await this.#attempt(deadlineAt, signal);
+      if (typeof attempt !== "string") return attempt;
+      last = attempt;
       await this.#sleep(CONNECT_RETRY_MS, signal);
+    }
+  }
+
+  async #attempt(deadlineAt: number, signal: AbortSignal): Promise<ChunkReader | string> {
+    try {
+      const outcome = await openDeviceSocket({
+        adbServerPort: this.#options.adbServerPort,
+        serial: this.#serial,
+        signal,
+        socketName: `scrcpy_${this.#scidHex}`,
+        tcp: this.#options.tcp,
+        timeoutMs: Math.max(1, deadlineAt - this.#options.clock.now()),
+      });
+      if (outcome.kind === "no-transport") {
+        throw new ScreenUnavailableError(`adb cannot reach ${this.#serial}: ${outcome.reason}`);
+      }
+      if (outcome.kind !== "open") return outcome.reason;
+      this.#stream = outcome.stream;
+      if (signal.aborted) outcome.stream.close();
+      else signal.addEventListener("abort", () => outcome.stream.close(), { once: true });
+      // why: the server writes one zero byte the moment it accepts, so a connection that ends
+      // before it is one that reached nothing and is retried.
+      const dummy = await outcome.reader.readExactly(1);
+      if (dummy?.[0] === 0) return outcome.reader;
+      outcome.stream.close();
+      return dummy === undefined
+        ? "the socket closed before the server spoke"
+        : "the socket is not scrcpy's";
+    } catch (error) {
+      if (error instanceof ScreenUnavailableError) throw error;
+      return errorMessage(error);
     }
   }
 
@@ -325,6 +327,7 @@ class ScrcpySession {
         // why: the socket is read only when the body's reader asks for a frame, so a viewer that
         // falls behind stops this read, TCP stops the adb transport, and the device's encoder
         // waits; nothing is dropped and nothing queues here beyond one socket read.
+        // fallow-ignore-next-line complexity -- one read: a frame, the quiet signal, or the end.
         pull: async (controller) => {
           try {
             while (pending.length === 0) {

@@ -213,6 +213,26 @@ export async function readStream(
     report();
   };
 
+  const handleFrame = async (tag: number | undefined, payload: Uint8Array): Promise<void> => {
+    if (tag === TAG.meta) {
+      const parsed = parseMeta(payload);
+      if (parsed.meta === undefined) {
+        fail(parsed.error);
+        return;
+      }
+      meta = parsed.meta;
+      sink.onMeta(meta);
+    } else if (tag === TAG.description) {
+      applyDescription(copy(payload));
+    } else if (tag === TAG.keyframe) {
+      decode(copy(payload), "key");
+    } else if (tag === TAG.delta && meta?.codec !== "mjpeg") {
+      decode(copy(payload), "delta");
+    } else if (tag === TAG.delta || tag === TAG.seed) {
+      await paintJpeg(copy(payload));
+    }
+  };
+
   // why: closing the reader is what closes the request, and closing the request is the only
   // off-command this surface has.
   signal.addEventListener("abort", () => void reader.cancel().catch(() => undefined), {
@@ -236,38 +256,15 @@ export async function readStream(
         // why: once a frame has failed, the frames that arrived beside it belong to a stream nobody is
         // reading, and feeding a closed decoder would fail again for a reason a viewer never hears.
         if (ended) return;
-        if (buffer.length < HEADER_BYTES) break;
-        const length = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0);
-        // why: the length covers the tag byte as well as the payload, so a frame is one byte shorter
-        // than its header claims.
-        const total = HEADER_BYTES + length - 1;
-        if (length < 1 || total > MAX_FRAME_BYTES) {
+        const next = splitFrame(buffer);
+        if (next === "incomplete") break;
+        if (next === "invalid") {
           fail("The stream is not a frame envelope");
           return;
         }
-        if (buffer.length < total) break;
-        const tag = buffer[4];
-        const payload = buffer.subarray(HEADER_BYTES, total);
-        buffer = buffer.slice(total);
+        buffer = next.rest;
         clock.startIfNeeded();
-        if (tag === TAG.meta) {
-          const parsed = parseMeta(payload);
-          if (parsed.meta === undefined) {
-            fail(parsed.error);
-            return;
-          }
-          meta = parsed.meta;
-          sink.onMeta(meta);
-        } else if (tag === TAG.description) {
-          applyDescription(copy(payload));
-        } else if (tag === TAG.keyframe) {
-          decode(copy(payload), "key");
-        } else if (tag === TAG.delta) {
-          if (meta?.codec === "mjpeg") await paintJpeg(copy(payload));
-          else decode(copy(payload), "delta");
-        } else if (tag === TAG.seed) {
-          await paintJpeg(copy(payload));
-        }
+        await handleFrame(next.tag, next.payload);
       }
       report();
     }
@@ -285,6 +282,26 @@ export async function readStream(
     }
     if (!ended) void reader.cancel().catch(() => undefined);
   }
+}
+
+function splitFrame(
+  buffer: Uint8Array,
+):
+  | "incomplete"
+  | "invalid"
+  | { readonly tag: number | undefined; readonly payload: Uint8Array; readonly rest: Uint8Array } {
+  if (buffer.length < HEADER_BYTES) return "incomplete";
+  const length = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0);
+  // why: the length covers the tag byte as well as the payload, so a frame is one byte shorter than
+  // its header claims.
+  const total = HEADER_BYTES + length - 1;
+  if (length < 1 || total > MAX_FRAME_BYTES) return "invalid";
+  if (buffer.length < total) return "incomplete";
+  return {
+    payload: buffer.subarray(HEADER_BYTES, total),
+    rest: buffer.slice(total),
+    tag: buffer[4],
+  };
 }
 
 export type ParsedMeta =

@@ -41,7 +41,7 @@ export class MetaFrameScanner {
   }
 }
 
-export function readScreenMeta(payload: Uint8Array): ScreenMeta {
+function readScreenMeta(payload: Uint8Array): ScreenMeta {
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder().decode(payload));

@@ -67,19 +67,15 @@ export type { ProcessSupervisor } from "./process-supervisor.js";
 export type { SignalRecord } from "./process-supervisor.js";
 export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
 export {
-  FakeTcpPeer,
   FakeTcpStreamConnector,
   NodeTcpStreamConnector,
   type TcpStream,
   type TcpStreamConnector,
 } from "./tcp-stream.js";
 export {
-  type BytePipeExit,
   type BytePipeLauncher,
-  type BytePipeOptions,
   type BytePipeProcess,
   FakeBytePipeLauncher,
-  FakeBytePipeProcess,
   NodeBytePipeLauncher,
 } from "./byte-pipe.js";
 // fallow-ignore-next-line unused-type -- public shape of FakeTcpProbe.sends.
