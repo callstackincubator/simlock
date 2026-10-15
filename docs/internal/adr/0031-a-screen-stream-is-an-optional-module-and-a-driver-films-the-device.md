@@ -197,13 +197,11 @@ stateDiagram-v2
   its last surface every 200 ms, so after a reboot the viewer can see the
   old picture until Stop and Show screen. That is a known gap, accepted
   for v1; the lease end stops the capture as usual.
-- **The daemon stopping.** The module has no stop hook of its own. An
-  iOS tool stops when the daemon's process ends and its stdin closes.
-  `simlock daemon stop` closes Android captures through the driver's
-  dispose. A daemon killed outright leaves its host-side `adb shell`
-  dead, but a device server on a still screen writes nothing and notices
-  only at the next screen change; the reclaim (snapshot load or wipe)
-  ends it. That is a known gap, accepted for v1.
+- **The daemon stopping.** The module has no stop hook of its own. The
+  daemon stops its HTTP front first, which ends every request, and each
+  viewer's abort releases its capture. An iOS tool also stops when the
+  daemon's process ends and its stdin closes; on Android the host-side
+  `adb shell` ends with the daemon, which ends the device server.
 - **A viewer that stops reading.** Nothing is dropped on the worker: the
   body is pulled, so a slow viewer slows its capture to its pace. Through
   a gateway, the byte channel resets after a write waits 60 s for credit
@@ -324,9 +322,8 @@ For each capture the client:
 starts a clean-up process, which survives the server and unlinks the jar
 as it starts. Killing the
 host-side `adb shell` ends the server on the device. So a closed capture
-leaves no jar and no server behind. When the daemon dies mid-capture, the
-server ends at its next failed write, which a still screen delays until
-the next change or the reclaim (§3).
+leaves no jar and no server behind, and so does a daemon that dies
+mid-capture, since its host-side `adb shell` dies with it.
 
 A physical Android device is refused in v1. It is reached through the
 host's default adb server (safety rule 9), and pushing and running a
@@ -468,8 +465,7 @@ a contract change, so the daemon protocol goes up by one.
   channels makes the next relay, a stream or an agent-device call, wait.
 - No event marks a stream, so `simlock events` cannot say who watched.
 - After a reboot under its lease, an iOS viewer can see a stale picture
-  until Stop and Show screen; an Android server outlives a killed daemon
-  on a still screen until the next change or the reclaim.
+  until Stop and Show screen.
 - If ADR 0030 is accepted, the module's wiring moves out of
   `daemon/main.ts` onto its contract.
 
