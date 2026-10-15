@@ -30,8 +30,9 @@ export function MinuteChart(props: {
   readonly title: string;
   readonly unit: string;
   readonly minutes: readonly MinuteCount[];
+  readonly height?: number;
 }) {
-  const { kind, minutes, title, unit } = props;
+  const { height = HEIGHT, kind, minutes, title, unit } = props;
   const data = [...minutes];
   const axes = (
     <>
@@ -47,7 +48,7 @@ export function MinuteChart(props: {
   );
   return (
     <div className={`chart chart-${kind}`}>
-      <ResponsiveContainer width="100%" height={HEIGHT}>
+      <ResponsiveContainer width="100%" height={height}>
         {kind === "area" ? (
           <AreaChart data={data} margin={MARGIN} title={title}>
             {axes}

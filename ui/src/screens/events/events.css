@@ -4,12 +4,6 @@
   min-width: 0;
 }
 
-/* why: the shared chart draws 240px tall, which is the whole list head here; the container takes its
- * height from an inline style, so only a stronger rule can make it a strip. */
-.events-chart .recharts-responsive-container {
-  height: 96px !important;
-}
-
 .events-chart .chart-summary {
   color: var(--text-muted);
   font-size: var(--text-xs);

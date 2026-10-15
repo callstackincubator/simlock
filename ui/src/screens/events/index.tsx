@@ -117,7 +117,13 @@ function EventList(props: {
 function PerMinute({ chart }: { readonly chart: EventsChart }) {
   return (
     <div className="events-chart">
-      <MinuteChart kind="columns" title="Events per minute" unit="events" minutes={chart.minutes} />
+      <MinuteChart
+        kind="columns"
+        title="Events per minute"
+        unit="events"
+        minutes={chart.minutes}
+        height={96}
+      />
       <p className="chart-summary">{chart.summary}</p>
       <MinuteTable minutes={chart.minutes} heading="Events" />
     </div>
