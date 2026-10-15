@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   filterLeaseRows,
+  holderOf,
   type LeaseDetails,
   type LeaseRecord,
   leaseInspection,
@@ -355,5 +356,20 @@ describe("a lease's inspection", () => {
       reason: "Streaming is off on mac-mini-1.",
     });
     expect(inspect().stream.offered).toBe(true);
+  });
+});
+
+describe("a lease's holder on a worker a gateway feeds", () => {
+  it("is the agent behind the gateway's prefix, matched to its token's label", () => {
+    const tokens = [
+      { createdAt: 0, id: "tok_9f2c", label: "ci-runner-3", role: "agent" },
+    ] as unknown as TokenRecord[];
+
+    expect(holderOf("gw:03787a13-4eac:tok_9f2c", tokens)).toEqual({
+      id: "tok_9f2c",
+      label: "ci-runner-3",
+    });
+    expect(holderOf("gw:03787a13-4eac:claude-ios-3", tokens)).toEqual({ id: "claude-ios-3" });
+    expect(holderOf("claude-ios-3", tokens)).toEqual({ id: "claude-ios-3" });
   });
 });

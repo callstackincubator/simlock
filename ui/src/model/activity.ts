@@ -1,4 +1,5 @@
 import { type ConsoleEvent, workerIdOf } from "./events";
+import { agentIdOf } from "./leases";
 import type { Tone } from "./tones";
 import { type WorkerView, workerName } from "./workers";
 
@@ -6,6 +7,11 @@ function field(payload: unknown, key: string): string | undefined {
   if (typeof payload !== "object" || payload === null) return undefined;
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function requesterIn(payload: unknown): string | undefined {
+  const requester = field(payload, "requester") ?? field(payload, "requesterId");
+  return requester === undefined ? undefined : agentIdOf(requester);
 }
 
 function deviceName(
@@ -27,7 +33,7 @@ export function eventSummary(event: ConsoleEvent, workers: readonly WorkerView[]
   const workerId = workerIdOf(event);
   const worker = workers.find((entry) => entry.id === workerId);
   const parts = [
-    field(payload, "requester") ?? field(payload, "requesterId"),
+    requesterIn(payload),
     deviceName(field(payload, "deviceId"), workers),
     field(payload, "component"),
     worker === undefined ? field(payload, "label") : workerName(worker),

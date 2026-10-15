@@ -171,7 +171,7 @@ function OverviewTab({ inspector }: { readonly inspector: WorkerInspectorView })
   }
   return (
     <>
-      <Grid label="Load and leases">
+      <Grid min="sm" label="Load and leases">
         {overview.figures.map((card) => (
           <FigureCardView key={card.label} card={card} />
         ))}
@@ -283,7 +283,9 @@ const DEVICE_COLUMNS: readonly Column<DeviceRow>[] = [
         device.status.word
       ) : (
         <span className="device-text">
-          <Link to={device.holder.to}>{device.holder.name}</Link>
+          <Link to={device.holder.to} title={device.holder.name}>
+            {device.holder.name}
+          </Link>
           {device.renewed === undefined ? null : (
             <span className="device-sub">renewed {device.renewed}</span>
           )}

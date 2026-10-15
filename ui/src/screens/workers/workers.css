@@ -66,3 +66,20 @@
   padding: 0;
   list-style: none;
 }
+
+.device-text,
+.device-name {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.device-text > *,
+.device-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-sub .id {
+  max-width: 100%;
+}

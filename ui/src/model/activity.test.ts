@@ -59,3 +59,11 @@ describe("an event's tone", () => {
     expect(eventTone("lease.granted")).toBeUndefined();
   });
 });
+
+describe("a requester a gateway relayed", () => {
+  it("is named by the agent behind the gateway's prefix", () => {
+    const relayed = event("lease.granted", { requester: "gw:03787a13-4eac:claude-ios-3" });
+
+    expect(eventSummary(relayed, [])).toBe("claude-ios-3");
+  });
+});

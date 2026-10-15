@@ -30,9 +30,12 @@
   color: var(--on-accent);
 }
 
-.button:disabled {
-  cursor: progress;
-  opacity: 0.6;
+.button:disabled,
+.button:disabled:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: not-allowed;
 }
 
 .button-secondary {

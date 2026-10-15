@@ -39,8 +39,18 @@ export interface Holder {
 // why: over HTTP a requester's id is its token's id, so a token with that id names it; a requester
 // no token matches, such as an agent on the local socket, is its id alone.
 export function holderOf(requesterId: string, tokens: readonly TokenRecord[]): Holder {
-  const label = tokens.find((token) => token.id === requesterId)?.label;
-  return label === undefined ? { id: requesterId } : { id: requesterId, label };
+  const id = agentIdOf(requesterId);
+  const label = tokens.find((token) => token.id === id)?.label;
+  return label === undefined ? { id } : { id, label };
+}
+
+const GATEWAY_REQUESTER = /^gw:[^:]+:(.+)$/;
+
+// why: a gateway hands a worker its agents' requests under `gw:<gateway instance>:<agent id>`, so a
+// worker's own view names the agent behind that prefix; the console shows the agent, as the
+// gateway's lease list does.
+export function agentIdOf(requesterId: string): string {
+  return GATEWAY_REQUESTER.exec(requesterId)?.[1] ?? requesterId;
 }
 
 // why: a holder's title is its token's label, or its id where no label names it.
