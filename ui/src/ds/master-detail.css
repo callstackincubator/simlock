@@ -230,3 +230,11 @@
     padding: var(--space-4) var(--space-4) var(--space-12);
   }
 }
+
+.crumb {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
