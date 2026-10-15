@@ -87,7 +87,7 @@ describe("module manuals, flow docs and the architecture map", () => {
 
   it("the architecture map links every manual", () => {
     const map = readFileSync(join(REPO_ROOT, MAP), "utf8");
-    const linked = [...map.matchAll(/\]\(\.\.\/\.\.\/(src\/[^)#\s]+\/README\.md)\)/g)].map(
+    const linked = [...map.matchAll(/\]\(\.\.\/\.\.\/(src\/[^)#\s]+\/AGENTS\.md)\)/g)].map(
       (match) => match[1],
     );
 

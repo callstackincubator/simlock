@@ -1,6 +1,6 @@
 # Architecture
 
-The map. Each module's manual (`src/<module>/README.md`) says how it works;
+The map. Each module's manual (`src/<module>/AGENTS.md`) says how it works;
 each flow doc under [flows/](flows/) follows one path across modules; the
 [ADRs](adr/) say why.
 
@@ -34,27 +34,27 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 
 | Module | Does | Manual |
 |---|---|---|
-| contract | Every operation, schema, role, error code, protocol range | [contract](../../src/contract/README.md) |
-| daemon | Composition root, socket server, `Dispatcher`, sessions, uplink dialler | [daemon](../../src/daemon/README.md) |
-| leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/README.md) |
-| core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/README.md) |
-| core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/README.md) |
-| core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/README.md) |
-| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/README.md) · [android](../../src/drivers/android/README.md) · [ios](../../src/drivers/ios/README.md) |
-| gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/README.md) · [routing](../../src/gateway/routing/README.md) |
-| link | Byte channels over the uplink | [link](../../src/link/README.md) |
-| agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/README.md) |
-| http | HTTP frontend: routes, tokens, SSE | [http](../../src/http/README.md) |
-| cli | Operator command surface | [cli](../../src/cli/README.md) |
-| mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/README.md) |
-| simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/README.md) · [client](../../src/client/README.md) · [admin](../../src/admin/README.md) |
-| lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/README.md) |
-| bus | Post-commit business events and the event file | [bus](../../src/bus/README.md) |
-| ports | Every external API behind an interface, with a fake | [ports](../../src/ports/README.md) |
-| host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/README.md) |
-| agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/README.md) |
-| daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/README.md) |
-| test-support | Shared test helpers | [test-support](../../src/test-support/README.md) |
+| contract | Every operation, schema, role, error code, protocol range | [contract](../../src/contract/AGENTS.md) |
+| daemon | Composition root, socket server, `Dispatcher`, sessions, uplink dialler | [daemon](../../src/daemon/AGENTS.md) |
+| leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/AGENTS.md) |
+| core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/AGENTS.md) |
+| core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
+| core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
+| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
+| gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
+| link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
+| agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
+| http | HTTP frontend: routes, tokens, SSE | [http](../../src/http/AGENTS.md) |
+| cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |
+| mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/AGENTS.md) |
+| simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
+| lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/AGENTS.md) |
+| bus | Post-commit business events and the event file | [bus](../../src/bus/AGENTS.md) |
+| ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
+| host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
+| agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
+| daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
+| test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
 | `ui/` | Web console, served by the daemon | [CONSOLE.md](../CONSOLE.md) |
 
 ## Dependencies
@@ -82,12 +82,12 @@ never import each other, directly or through a third.
 
 | Flow | Doc |
 |---|---|
-| A lease, from request to reclaim | [leasing](../../src/leasing/README.md) |
-| A lease through a gateway | [gateway](../../src/gateway/README.md) |
+| A lease, from request to reclaim | [leasing](../../src/leasing/AGENTS.md) |
+| A lease through a gateway | [gateway](../../src/gateway/AGENTS.md) |
 | Which device a request gets | [device-selection](flows/device-selection.md) |
 | Startup and stop | [startup](flows/startup.md) |
 | `device.exec`, local and through a gateway | [device-exec](flows/device-exec.md) |
-| agent-device through simlock | [agent-device](../../src/agent-device/README.md) |
+| agent-device through simlock | [agent-device](../../src/agent-device/AGENTS.md) |
 
 ## Rules that cut across modules
 
