@@ -57,8 +57,26 @@ describe("the capture registry", () => {
   it("a released capture counts as its lease's until it is closed", async () => {
     const captures = createCaptureRegistry();
     const slot = captures.begin("lse_1");
-    slot.attach(async () => undefined);
-    await slot.release();
+    let finish!: () => void;
+    slot.attach(() => new Promise<void>((resolve) => (finish = resolve)));
+    const releasing = slot.release();
+    await Promise.resolve();
+    expect(captures.leases()).toEqual(["lse_1"]);
+    finish();
+    await releasing;
+    expect(captures.leases()).toEqual([]);
+  });
+
+  it("a slot released before its capture attached closes that capture once it attaches", async () => {
+    const captures = createCaptureRegistry();
+    const slot = captures.begin("lse_1");
+    const releasing = slot.release();
+    let closes = 0;
+    slot.attach(async () => {
+      closes += 1;
+    });
+    await releasing;
+    expect(closes).toBe(1);
     expect(captures.leases()).toEqual([]);
   });
 });
@@ -85,8 +103,14 @@ describe("the stream's lease-end participant", () => {
     const captures = createCaptureRegistry();
     captures.begin("lse_1").attach(() => new Promise<void>(() => undefined));
     const abort = new AbortController();
-    const done = createStreamLeaseEnd(captures).leaseEnded(ended("lse_1"), abort.signal);
+    const done = createStreamLeaseEnd(captures)
+      .leaseEnded(ended("lse_1"), abort.signal)
+      .then(() => "returned");
     abort.abort();
-    await expect(done).resolves.toBeUndefined();
+    const outcome = await Promise.race([
+      done,
+      new Promise<string>((resolve) => setTimeout(() => resolve("still waiting"), 50)),
+    ]);
+    expect(outcome).toBe("returned");
   });
 });

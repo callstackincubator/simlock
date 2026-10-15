@@ -130,7 +130,7 @@ the tool's docs alone.
 
 | Tool | Version | Read it |
 | ---- | ------- | ------- |
-| agent-device | the commit `vendor/README.md` names | `git -C <checkout> show <commit>:<path>` in a clone of `callstackincubator/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstackincubator/agent-device/contents/<path>?ref=<commit>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
+| agent-device | the commit `vendor/README.md` names | `git -C <checkout> show <commit>:<path>` in a clone of `callstack/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstack/agent-device/contents/<path>?ref=<commit>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
 | Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
 | simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
 

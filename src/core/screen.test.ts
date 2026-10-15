@@ -33,11 +33,13 @@ describe("encodeScreenFrame", () => {
 });
 
 describe("DriverCatalog screens", () => {
-  it("opens a screen through the driver of the device's platform", async () => {
+  it("opens a screen through the driver of the device's platform, with the caller's settings and signal", async () => {
     const opened: string[] = [];
+    let passed: { settings: unknown; signal: AbortSignal } | undefined;
     const capture: ScreenCapture = {
-      open: async (target) => {
+      open: async (target, given, signal) => {
         opened.push(target.deviceId);
+        passed = { settings: given, signal };
         return { body: new ReadableStream(), close: async () => undefined };
       },
       unavailable: async () => undefined,
@@ -46,8 +48,11 @@ describe("DriverCatalog screens", () => {
       new FakeDriver({ clock: new FakeClock(), platform: "ios", screenCapture: capture }),
       new FakeDriver({ clock: new FakeClock(), platform: "android" }),
     ]);
-    await catalog.openScreen("ios", device, settings, new AbortController().signal);
+    const signal = new AbortController().signal;
+    await catalog.openScreen("ios", device, settings, signal);
     expect(opened).toEqual(["d"]);
+    expect(passed?.settings).toEqual(settings);
+    expect(passed?.signal).toBe(signal);
   });
 
   it("refuses a platform whose driver offers no screen as not supported", async () => {

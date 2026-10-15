@@ -18,7 +18,7 @@ export interface FeedBounds {
 // first frame, and a capture that never paints must still end; generous, but a bound.
 export const DEFAULT_START_MS = 30_000;
 // why: a screen that does not change still yields frames -- the iOS capture repaints at an idle floor
-// and scrcpy repeats its last frame -- so this long without a byte is a capture that died without
+// and the Android driver writes an `alive` frame when scrcpy has nothing new -- so this long without a byte is a capture that died without
 // saying so, and a viewer must not be left looking at a frozen picture it cannot tell from a live one.
 export const DEFAULT_SILENCE_MS = 30_000;
 

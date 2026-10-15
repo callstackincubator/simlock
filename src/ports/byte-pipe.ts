@@ -71,6 +71,7 @@ export class FakeBytePipeProcess implements BytePipeProcess {
   readonly stdout: ReadableStream<Uint8Array>;
   readonly exited: Promise<BytePipeExit>;
   stdinClosed = false;
+  stdinCloses = 0;
   readonly kills: string[] = [];
   exitOnStdinClose = true;
   readonly #onStderrLine: ((line: string) => void) | undefined;
@@ -111,6 +112,7 @@ export class FakeBytePipeProcess implements BytePipeProcess {
 
   closeStdin(): void {
     this.stdinClosed = true;
+    this.stdinCloses += 1;
     if (this.exitOnStdinClose) this.exit();
   }
 

@@ -37,6 +37,16 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<number[]> {
 }
 
 describe("iOS screen capture", () => {
+  it("an open whose signal was already stopped starts nothing", async () => {
+    const { capture, launcher } = await setup();
+    const stopped = new AbortController();
+    stopped.abort();
+    await expect(capture.open(simulator, settings, stopped.signal)).rejects.toBeInstanceOf(
+      ScreenUnavailableError,
+    );
+    expect(launcher.starts).toEqual([]);
+  });
+
   it("runs the capture program on the device's UDID, inside Simlock's device set, with the stream's settings", async () => {
     const { capture, launcher } = await setup();
     await capture.open(simulator, settings, new AbortController().signal);
@@ -113,7 +123,10 @@ describe("iOS screen capture", () => {
     launcher.last.exitOnStdinClose = false;
     const closed = feed.close();
     await Promise.resolve();
-    clock.advance(2_000);
+    clock.advance(1_999);
+    await Promise.resolve();
+    expect(launcher.last.kills).toEqual([]);
+    clock.advance(1);
     await closed;
     expect(launcher.last.kills).toEqual(["SIGKILL"]);
   });
@@ -123,7 +136,8 @@ describe("iOS screen capture", () => {
     const feed = await capture.open(simulator, settings, new AbortController().signal);
     await feed.body.cancel();
     await feed.close();
-    expect(launcher.last.stdinClosed).toBe(true);
+    expect(launcher.last.stdinCloses).toBe(1);
+    expect(launcher.last.kills).toEqual([]);
     expect(launcher.processes).toHaveLength(1);
   });
 });

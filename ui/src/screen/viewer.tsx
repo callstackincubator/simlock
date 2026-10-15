@@ -25,6 +25,12 @@ const EMPTY: StreamStats = {
   painted: 0,
 };
 
+// why: a worker answers a stream's headers only once its capture wrote its first frame, and it may
+// take up to 75 s to give up (an emulator's push 30 s, its server 15 s, the first frame 30 s); a
+// console that gave up at the API's usual 10 s would show its own timeout instead of the worker's
+// reason.
+const STREAM_HEAD_TIMEOUT_MS = 90_000;
+
 function useScreenStream(leaseId: string, canvas: RefObject<HTMLCanvasElement | null>) {
   const api = useApi();
   const controller = useRef<AbortController | undefined>(undefined);
@@ -56,6 +62,7 @@ function useScreenStream(leaseId: string, canvas: RefObject<HTMLCanvasElement | 
         const { body } = await api.stream(
           `/v1/stream/leases/${encodeURIComponent(leaseId)}`,
           abort.signal,
+          STREAM_HEAD_TIMEOUT_MS,
         );
         setPhase("live");
         await readStream(

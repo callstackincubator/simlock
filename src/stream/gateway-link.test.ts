@@ -89,6 +89,15 @@ describe("the gateway's stream link", () => {
     expect(stream.meta).toEqual({ codec: "h264", fps: 30, height: 720, width: 330 });
   });
 
+  it("answers a lease the fleet does not hold with 404 UNKNOWN_LEASE, relaying nothing", async () => {
+    const { port, relayed } = fleet(() => new Response("bytes", { headers: streamHeaders() }));
+    const refusal = await refusalOf(
+      createGatewayStreamLink({ fleet: port }).serve("w1.lse_ended", AGENT, signal()),
+    );
+    expect([refusal.status, refusal.code]).toEqual([404, "UNKNOWN_LEASE"]);
+    expect(relayed).toEqual([]);
+  });
+
   it("answers a caller who does not own the lease exactly as an unknown lease, relaying nothing", async () => {
     const { port, relayed } = fleet(() => new Response("bytes", { headers: streamHeaders() }));
     const refusal = await refusalOf(
@@ -141,6 +150,14 @@ describe("the gateway's stream link", () => {
 
   it("calls a 2xx answer without a picture the gateway's own failure, not the worker refusing", async () => {
     const { port } = fleet(() => new Response("ok", { status: 200 }));
+    const refusal = await refusalOf(
+      createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
+    );
+    expect([refusal.status, refusal.code]).toEqual([502, "STREAM_UNAVAILABLE"]);
+  });
+
+  it("calls a 2xx answer with a picture's headers but no body the gateway's own failure", async () => {
+    const { port } = fleet(() => new Response(null, { headers: streamHeaders(), status: 200 }));
     const refusal = await refusalOf(
       createGatewayStreamLink({ fleet: port }).serve("w1.lse_9", AGENT, signal()),
     );

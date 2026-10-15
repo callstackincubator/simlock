@@ -25,8 +25,9 @@
 // which the `device.exec` protocol cannot because its output chunks are strings.
 //
 // Lifecycle: capture runs until SIGTERM/SIGINT/SIGHUP or until stdin closes. The daemon stops a
-// stream by killing the process, so "the viewer pressed stop" and "the viewer went away" are the
-// same event here, and no capture can outlive the connection that asked for it.
+// stream by closing stdin, and kills the process only if it is still running 2 s later, so "the
+// viewer pressed stop" and "the viewer went away" are the same event here, and no capture can
+// outlive the connection that asked for it.
 import Foundation
 import CoreMedia
 import CoreVideo

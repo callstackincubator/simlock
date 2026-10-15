@@ -589,10 +589,14 @@ describe("Android screen capture: close", () => {
       expectations: [push(), shell({ ignoresSigterm: true }), remove()],
     });
     const feed = await opened(world);
-    const started = world.clock.now();
-    await drive(world.clock, feed.close());
-    expect(world.clock.now() - started).toBeGreaterThanOrEqual(1_000);
-    expect(await hasEnded(world.runner.handles[1]!)).toBe(true);
+    const closing = feed.close();
+    const server = world.runner.handles[1]!;
+    await hasEnded(server);
+    world.clock.advance(999);
+    expect(await hasEnded(server)).toBe(false);
+    world.clock.advance(1);
+    expect(await hasEnded(server)).toBe(true);
+    await drive(world.clock, closing);
   });
 
   it("resolves within its deadline even when removing the jar never returns", async () => {

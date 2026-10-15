@@ -463,14 +463,21 @@ describe("reading the envelope", () => {
     let at = 0;
     const chunks: Uint8Array[] = [meta({ codec: "mjpeg", fps: 30, height: 4, width: 4 })];
     const times: number[] = [0];
-    // why: one still, then a minute of nothing, then thirty stills a second apart by 1/30 s -- the
-    // lifetime average of that is under one frame a second, the rate a viewer sees now is thirty.
+    // why: one still, then a minute of nothing, then thirty stills within one second and one more
+    // 0.9 s later. The lifetime average is about half a frame a second; the last two seconds hold 31
+    // frames, 15.5 a second; a one- or a three-second window gives another figure.
     chunks.push(frame(TAG.delta, [0xff, 0xd8, 1]));
     times.push(0);
+    // why: a still is counted once it is painted, which is after the next read; an `alive` frame in
+    // the quiet minute is that next read, so the lone still lands well outside the window.
+    chunks.push(frame(TAG.alive, []));
+    times.push(30_000);
     for (let index = 0; index < 30; index += 1) {
       chunks.push(frame(TAG.delta, [0xff, 0xd8, index]));
       times.push(60_000 + (index * 1000) / 30);
     }
+    chunks.push(frame(TAG.delta, [0xff, 0xd8, 0xee]));
+    times.push(61_900);
     let next = 0;
     const body = new ReadableStream<Uint8Array>({
       pull: (controller) => {
@@ -486,8 +493,8 @@ describe("reading the envelope", () => {
     });
     const recorded = new Recorded();
     await readStream(body, recorded.sink(), new AbortController().signal, () => at);
-    expect(recorded.last.painted).toBe(31);
-    expect(recorded.last.framesPerSecond).toBeGreaterThan(14);
+    expect(recorded.last.painted).toBe(32);
+    expect(recorded.last.framesPerSecond).toBeCloseTo(15.5, 5);
   });
 
   it("reports the bytes read and the frames painted as rates", async () => {

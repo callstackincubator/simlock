@@ -12,10 +12,9 @@ export type ApiPath = `/v1/${string}`;
 
 export type Fetch = (input: string, init: RequestInit) => Promise<Response>;
 
-/** The daemon did not answer within {@link REQUEST_TIMEOUT_MS}. */
 export class RequestTimeoutError extends Error {
-  constructor(path: ApiPath) {
-    super(`The daemon did not answer ${path} within ${REQUEST_TIMEOUT_MS / 1000} seconds`);
+  constructor(path: ApiPath, timeoutMs: number = REQUEST_TIMEOUT_MS) {
+    super(`The daemon did not answer ${path} within ${String(timeoutMs / 1000)} seconds`);
     this.name = "RequestTimeoutError";
   }
 }
@@ -39,6 +38,7 @@ interface SendOptions {
   readonly token?: string;
   /** Aborts the request, and the body of a response already handed back. */
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }
 
 /**
@@ -56,10 +56,11 @@ export async function send<T>(
   if (!path.startsWith("/v1/")) throw new Error(`Not an API path: ${path}`);
   const controller = new AbortController();
   let timedOut = false;
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
   const abort = () => controller.abort();
   if (options.signal?.aborted === true) abort();
   options.signal?.addEventListener("abort", abort, { once: true });
@@ -72,7 +73,7 @@ export async function send<T>(
     });
     return await read(response);
   } catch (error: unknown) {
-    if (timedOut) throw new RequestTimeoutError(path);
+    if (timedOut) throw new RequestTimeoutError(path, timeoutMs);
     throw error;
   } finally {
     // The `abort` listener stays: a streamed body is still being read after this returns, and
@@ -93,11 +94,13 @@ export interface ApiClient {
   getJson<T>(path: ApiPath): Promise<T>;
   /** {@link getJson}, with the response's `Date` header. */
   get<T>(path: ApiPath): Promise<ApiResponse<T>>;
-  /**
-   * Opens a streaming route and hands back its body once the headers arrive. The 10-second
-   * bound covers the headers only; the body is open until it ends or `signal` aborts it.
-   */
-  stream(path: ApiPath, signal: AbortSignal): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
+  // why: a stream's bound, 10 seconds unless `headTimeoutMs` says otherwise, covers its headers
+  // only; the body stays open until it ends or `signal` aborts it.
+  stream(
+    path: ApiPath,
+    signal: AbortSignal,
+    headTimeoutMs?: number,
+  ): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
   /** `GET /v1/healthz`, with no token: whether the daemon answered with success. */
   healthz(): Promise<ApiResponse<boolean>>;
 }
@@ -111,12 +114,13 @@ export interface ApiClientOptions {
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
-  const authorized = (signal?: AbortSignal): SendOptions => {
+  const authorized = (signal?: AbortSignal, timeoutMs?: number): SendOptions => {
     const token = options.token();
     return {
       fetch: options.fetch,
       ...(token === undefined ? {} : { token }),
       ...(signal === undefined ? {} : { signal }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     };
   };
   const get = <T>(path: ApiPath) =>
@@ -127,8 +131,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   return {
     get,
     getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,
-    stream: (path, signal) =>
-      send(path, authorized(signal), async (response) => {
+    stream: (path, signal, headTimeoutMs) =>
+      send(path, authorized(signal, headTimeoutMs), async (response) => {
         await refuseError(response, options.signOut);
         if (response.body === null) throw new ApiError(response.status, undefined, "No body");
         return { body: response.body, date: response.headers.get("Date") };

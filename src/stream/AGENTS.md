@@ -42,12 +42,13 @@ ends or errors; no byte within the silence bound; the lease ends (`createStreamL
 Gateway — `gateway-link.ts`: the fleet lease index names owner, worker and the worker's lease
 id. Not the owner (agent) → 404. Relays `GET /stream/leases/<worker lease>` as target `stream`
 with tenant `<requesterPrefix><requesterId>` from the index, never from the caller. A refusal
-body is read to 16 KiB; its code is forwarded only if it matches `^[A-Z][A-Z0-9_]{0,63}$`,
-else 503 `STREAM_UNAVAILABLE`. A 2xx without a picture → 502. Headers go through `checkedMeta`.
+body is read to 16 KiB; its code and message are forwarded only if the code matches
+`^[A-Z][A-Z0-9_]{0,63}$`, else the code becomes `STREAM_UNAVAILABLE`. The worker's 4xx or 5xx
+status is kept either way; a 2xx without a picture → 502. Headers go through `checkedMeta`.
 The body is relayed unread; the gateway's relay bounds it by inactivity, not by a deadline.
 
-Capability `stream`: `available` when any driver can capture, with the others' reasons;
-`unavailable` when none can.
+Capability `stream`: `available`, with no reason, when any driver can capture (a platform that
+cannot says why in its 503); `unavailable` when none can, with each platform's reason.
 
 ## State and timers
 

@@ -226,9 +226,14 @@ its device — ends the picture with it rather than leaving a frame that looks
 live on the page. What you are looking at is either moving or gone.
 
 The panel is there wherever the worker it runs on has screen streaming turned on
-(see [`stream.enabled`](CONFIGURATION.md)). Where it is off, or where the lease is
-on a device a screen cannot be captured from — a physical iPhone or Android
-phone — the panel says so, in the worker's own words, and starts nothing.
+(see [`stream.enabled`](CONFIGURATION.md)). Where it is off, the panel says so in
+the worker's own words; where the lease is on a device a screen cannot be
+captured from — a physical iPhone or Android phone — it says that a live screen
+comes only from a simulator or an emulator. Either way it starts nothing.
+
+The first picture can take a while on a slow emulator. The panel waits up to 90
+seconds for it, longer than a worker takes to give up, so a capture that cannot
+start shows the worker's reason rather than a timeout.
 
 ### Who holds a lease
 

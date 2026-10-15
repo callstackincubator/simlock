@@ -40,7 +40,7 @@ Surface: [HTTP-API.md](../../docs/HTTP-API.md), [CONSOLE.md](../../docs/CONSOLE.
    adds `Retry-After: 5`. An unknown error answers `INTERNAL`, "Internal error", and is logged.
 
 `HttpMount` adds a prefix (`/v1/<prefix>`, `/v1/<prefix>/*`) behind the same auth. Today: the
-agent-device front.
+agent-device front and the stream (`/v1/stream`).
 
 ## Lease requests
 

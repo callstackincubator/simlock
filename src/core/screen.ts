@@ -1,8 +1,9 @@
 import type { PhysicalDriverDevice, VirtualDriverDevice } from "./driver.js";
 
-// why: one table for every producer and every reader of a capture's bytes. The iOS capture program
-// writes it from Swift, the Android driver writes it from TypeScript, and the stream module reads
-// it; two copies of the tags would drift silently and a viewer would decode garbage.
+// why: the one table in TypeScript for a capture's bytes: the Android driver writes it and the stream
+// module reads it. The Swift capture program, the console and the e2e tests keep their own copies;
+// the console's test pins its copy to this one, so a tag that drifts fails a test instead of a viewer
+// decoding garbage.
 export const SCREEN_FRAME_TAG = {
   description: 0x01,
   keyframe: 0x02,

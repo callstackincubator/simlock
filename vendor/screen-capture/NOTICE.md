@@ -141,6 +141,7 @@ sources:
 | selector    | `SimDeviceIOPort descriptor`                                          | `PrivateHeaders/CoreSimDeviceIO/SimDeviceIOPortInterface-Protocol.h`                              |
 | selector    | `framebufferSurface`                                                  | `PrivateHeaders/CoreSimDeviceIO/SimDisplayIOSurfaceRenderable-Protocol.h`, `SimScreen-Protocol.h` |
 | selector    | `unregisterScreenCallbacksWithUUID:`                                  | `PrivateHeaders/CoreSimDeviceIO/SimScreen-Protocol.h`                                             |
+| selector    | `registerScreenCallbacksWithUUID:…`, via an `@objc` protocol          | same                                                                                              |
 | selector    | `SimDeviceType mainScreenSize`                                        | `PrivateHeaders/CoreSimulator/SimDeviceType.h`                                                    |
 | selector    | `portIdentifier`                                                      | **not declared there**                                                                            |
 | KVC         | `SimDevice UDID`, `stateString`                                       | `PrivateHeaders/CoreSimulator/SimDevice.h`                                                        |
@@ -150,9 +151,9 @@ sources:
 | class       | `NSClassFromString("SimServiceContext")`                              | `PrivateHeaders/CoreSimulator/SimServiceContext.h`                                                |
 | file schema | `Contents/Resources/capabilities.plist` inside a device type's bundle | **not declared there**, and undocumented by Apple                                                 |
 
-That is nineteen distinct private members: eleven selectors, six key-value-coding
+That is twenty distinct private members: twelve selectors, six key-value-coding
 keys, one class name and one plist schema. `facebook/idb` is MIT-licensed, and
-fifteen of the nineteen are declared in its `PrivateHeaders/CoreSimulator/` and
+sixteen of the twenty are declared in its `PrivateHeaders/CoreSimulator/` and
 `PrivateHeaders/CoreSimDeviceIO/`.
 That cross-reference is the escape hatch: when Apple moves or removes one of
 them, idb is an independently maintained MIT source to re-read the declaration

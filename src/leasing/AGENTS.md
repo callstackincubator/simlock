@@ -55,7 +55,7 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    emits `lease.released` or `lease.expired`.
 8. **Lease-end participants** — called after that commit, outside the lock,
    with an `AbortSignal` bounded by `lease.endWaitMs`. Today: agent-device's
-   `AgentDeviceLeaseEnd`. Reclaim waits for them.
+   `AgentDeviceLeaseEnd` and the stream's `createStreamLeaseEnd`. Reclaim waits for them.
 9. **Reclaim** (background, `reclaim` claim) — core's `ReclaimCoordinator`
    wipes the device and commits the state the driver returns (iOS `shutdown`;
    Android `ready`, or `shutdown` after a full clean, a changed config or a

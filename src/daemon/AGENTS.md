@@ -120,7 +120,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
 - `relay.request` runs only on that connection; targets come from `relayTargets`
-  (today `agent-device`). See [gateway](../gateway/AGENTS.md).
+  (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
 
 ## Logging and event records
 

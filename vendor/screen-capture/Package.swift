@@ -16,9 +16,9 @@
 //     need it, and the daemon can then supervise the capture the same way it supervises every
 //     other tool it runs.
 //
-// The encoders are not serve-sim's: `H264Encoder.swift`, `VideoEncoder.swift`,
-// `PixelBufferUtils.swift` and `Xcode.swift` were rewritten here against public VideoToolbox,
-// CoreVideo, CoreMedia and ImageIO, and are under this project's MIT license.
+// The encoders are serve-sim's files rewritten here: `H264Encoder.swift`, `VideoEncoder.swift`,
+// `PixelBufferUtils.swift` and `Xcode.swift` now use public VideoToolbox, CoreVideo, CoreMedia and
+// ImageIO, and as modified files of serve-sim they stay under Apache-2.0 (see NOTICE.md).
 //
 // One target, so the copied types keep their internal visibility and need no `public` edits.
 import PackageDescription

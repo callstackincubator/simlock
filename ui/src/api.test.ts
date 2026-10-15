@@ -152,6 +152,26 @@ describe("createApiClient", () => {
     expect((await api.stream("/v1/events/stream", new AbortController().signal)).date).toBe(date);
   });
 
+  it("a stream given its own bound waits that long for its headers, and no longer", async () => {
+    vi.useFakeTimers();
+    const api = createApiClient({ fetch: hanging, signOut: () => {}, token: () => "slk_op" });
+
+    const outcome = api
+      .stream("/v1/stream/leases/lse_1", new AbortController().signal, 90_000)
+      .then(
+        () => "answered",
+        (error: unknown) => error,
+      );
+    await vi.advanceTimersByTimeAsync(89_999);
+    const before = await Promise.race([outcome, Promise.resolve("pending")]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(before).toBe("pending");
+    const error = await outcome;
+    expect(error).toBeInstanceOf(RequestTimeoutError);
+    expect((error as Error).message).toContain("within 90 seconds");
+  });
+
   it("aborting a stream's signal closes its body after the headers arrived", async () => {
     vi.useFakeTimers();
     let closedWith: unknown;

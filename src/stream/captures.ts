@@ -31,7 +31,6 @@ interface Slot {
   settle: () => void;
   close: (() => Promise<void>) | undefined;
   closing: Promise<void> | undefined;
-  released: boolean;
 }
 
 export function createCaptureRegistry(): CaptureRegistry {
@@ -64,7 +63,6 @@ export function createCaptureRegistry(): CaptureRegistry {
         close: undefined,
         closing: undefined,
         controller: new AbortController(),
-        released: false,
         settle,
         settled,
       };
@@ -72,12 +70,11 @@ export function createCaptureRegistry(): CaptureRegistry {
       forLease.add(slot);
       running.set(leaseId, forLease);
       return {
-        // why: a capture can finish opening after its viewer left or its lease ended; it is closed
-        // the moment it attaches, or it would run with nobody to stop it.
+        // why: a capture can finish opening after its viewer left or its lease ended; whoever let
+        // go of the slot is waiting on `settled`, and closes it the moment it attaches.
         attach: (close) => {
           slot.close = close;
           slot.settle();
-          if (slot.released || slot.controller.signal.aborted) void closeSlot(slot);
         },
         ended: slot.controller.signal,
         abandon: () => {
@@ -85,7 +82,6 @@ export function createCaptureRegistry(): CaptureRegistry {
           forget(leaseId, slot);
         },
         release: async () => {
-          slot.released = true;
           await closeSlot(slot);
           forget(leaseId, slot);
         },
