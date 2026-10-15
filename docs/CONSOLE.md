@@ -172,12 +172,14 @@ Select a worker to open its page. It adds:
   memory available of total, swap used, memory pressure (`normal`, `warn` or
   `critical`, left out where the system does not report it), and disk free of
   total. CPU, memory and disk each have a bar under the figure showing how full
-  it is, for scanning at a glance: the memory bar takes the colour of its
-  pressure, and is itself neutral where no pressure is reported. The other two
-  stay neutral because the worker sends no CPU or disk threshold for the console
-  to judge them against — a `(limit)` beside a figure is the worker's own limit
-  on that figure, not a level to be judged against. A part the worker could not
-  read says `Unavailable`, and has no bar. **Read** says how
+  it is, for scanning at a glance. A bar is neutral until the figure is
+  **85% full or more**, amber to 95%, red from there — the console's own rule,
+  read off the one figure it is drawn from and nothing else. Where memory
+  reports a pressure, that word wins instead: its bar is green, amber or red for
+  `normal`, `warn` or `critical` however full it is. Only the bar is coloured
+  this way: the figures themselves are printed as numbers, and `simlock status`
+  reports them without a verdict. A part the worker could not read says
+  `Unavailable`, and has no bar. **Read** says how
   long ago the reading was taken, and it ticks up until the next one. A
   worker that sent no load says "Not reported.", and a disconnected one "No
   reading while disconnected."

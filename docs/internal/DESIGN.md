@@ -189,12 +189,18 @@ scale; never a value between.
   the attribute. So a
   gauge is drawn by the console's own code and never by server-rendered output. A gauge
   is never the only place its number is, so it carries no accessible name and
-  takes no focus — the figure above it is the text. Colour is a second signal
-  here too: a gauge shades a level the console has a word for and nothing else,
-  so CPU and disk stay `--status-idle` until the worker sends a threshold they
-  can be judged against. A gauge belongs to this panel alone: the worker's card
-  prints the same load as one line of text, and charts are drawn by their own
-  rule above.
+  takes no focus — the figure above it is the text. Where the worker sends a
+  memory pressure, that word colours its bar, so there colour is a second signal
+  for a fact the panel prints as a word. Every figure without a word to echo —
+  CPU and disk always, memory on a worker that reports no pressure — takes
+  `LOAD_THRESHOLDS` from `ui/src/load-thresholds.ts`: amber at 85% full, red at
+  95%, neutral below, the current reading only, nothing remembered between them.
+  That is the one place in the console where a colour says something no word
+  does, so it is kept where a gauge is — beside the figure it judges — and
+  nowhere else: not in a status, not in a table, not in the card's one line of
+  text. A worker sends no thresholds, so these are the console's opinion alone
+  and `simlock status` reports the same figures without one. A gauge belongs to
+  this panel alone.
 
 ## Layout
 
