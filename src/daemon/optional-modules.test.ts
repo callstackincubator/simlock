@@ -181,10 +181,10 @@ describe("optional modules: turning on", () => {
   });
 
   it("a module turned on is loaded once and reports the state its capability source answers", async () => {
-    const module = fakeModule({ name: "alpha", state: "busy" });
+    const module = fakeModule({ name: "alpha", state: "available" });
     const { daemon } = await start({ modules: definitions(module), on: ["alpha"] });
 
-    expect(await capabilities(daemon)).toContainEqual({ name: "alpha", state: "busy" });
+    expect(await capabilities(daemon)).toContainEqual({ name: "alpha", state: "available" });
     expect({ loads: module.loads, creates: module.creates }).toEqual({ creates: 1, loads: 1 });
   });
 
