@@ -82,7 +82,8 @@ loaded it. A change that makes a manual false fixes it in the same change.
 
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
-- [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
+- [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — the map: topology, every module
+  and its manual, the enforced boundaries, the flows
 - [COMPONENTS.md](docs/internal/COMPONENTS.md) — the inventory: every component,
   what it owns, what it leaves to others
 - [DESIGN.md](docs/internal/DESIGN.md) — the design guide for the web console

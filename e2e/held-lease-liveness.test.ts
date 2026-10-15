@@ -122,8 +122,8 @@ describe("lease liveness & restart", () => {
     expect(lease.code).toBe(0);
     const grant = lease.json as { lease: { id: string; ttlDeadline: number } };
 
-    // The event ring buffer resets on restart (documented behaviour, ARCHITECTURE.md), so
-    // check "granted" happened before the restart wipes it.
+    // why: the event ring is memory only and starts empty after a restart, so "granted" is
+    // checked before the restart wipes it.
     await env.expectEvents(["lease.requested", "lease.granted"]);
 
     await runningAfterRestart(
