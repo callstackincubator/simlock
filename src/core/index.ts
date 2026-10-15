@@ -7,6 +7,7 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";

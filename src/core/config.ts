@@ -361,7 +361,16 @@ export interface LegacyCapacityOverrides {
 
 export type ConfigOverrides = DeepPartial<Config> & LegacyCapacityOverrides;
 
+export interface ModuleConfigEntry {
+  readonly name: string;
+  readonly validator: Validator;
+  readonly defaults: unknown;
+  readonly gatewayKeys: readonly string[];
+  readonly check?: (section: never, config: Config) => void;
+}
+
 export interface LoadConfigOptions {
+  readonly modules?: readonly ModuleConfigEntry[];
   readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
   readonly configPath?: string;

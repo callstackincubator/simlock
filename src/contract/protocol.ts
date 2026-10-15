@@ -77,3 +77,6 @@ export const helloReplySchema = z.object({
   role: z.enum(["agent", "admin"]),
   principal: z.string(),
 });
+
+/** The first path segment of every route the HTTP app registers itself; a module's name may not start with one. */
+export const CORE_ROUTE_SEGMENTS: readonly string[] = [];
