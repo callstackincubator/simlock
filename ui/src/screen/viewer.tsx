@@ -147,7 +147,9 @@ export function ScreenPane({ leaseId }: { readonly leaseId: string }) {
         </div>
         <div>
           <dt>Rate</dt>
-          <dd className="mono">{counted(stats, () => `${stats.framesPerSecond.toFixed(1)} fps`)}</dd>
+          <dd className="mono">
+            {counted(stats, () => `${stats.framesPerSecond.toFixed(1)} fps`)}
+          </dd>
         </div>
         <div>
           <dt>Bandwidth</dt>
@@ -200,7 +202,7 @@ export function refusalOf(error: unknown): string {
     return `${error.message} A stream is only offered where stream.enabled is on, and only for a lease that is still held.`;
   }
   if (error.status === 415) {
-    return "This device cannot be streamed. A live screen is captured from an iOS simulator only.";
+    return "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.";
   }
   return error.message;
 }

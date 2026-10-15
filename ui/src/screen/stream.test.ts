@@ -9,6 +9,7 @@ import {
   type StreamStats,
   TAG,
 } from "./stream";
+import { SCREEN_FRAME_TAG } from "../../../src/core/index";
 
 /**
  * why: the unit project has no browser, and the claims worth pinning here are what this reader hands
@@ -182,10 +183,7 @@ function concatAll(parts: readonly Uint8Array[]): Uint8Array {
   return out;
 }
 
-async function read(
-  chunks: readonly Uint8Array[],
-  recorded = new Recorded(),
-): Promise<Recorded> {
+async function read(chunks: readonly Uint8Array[], recorded = new Recorded()): Promise<Recorded> {
   await readStream(bodyOf(chunks), recorded.sink(), new AbortController().signal);
   return recorded;
 }
@@ -207,9 +205,12 @@ beforeEach(() => {
   created = [];
   bitmaps = [];
   vi.stubGlobal("VideoDecoder", FakeDecoder);
-  vi.stubGlobal("EncodedVideoChunk", class {
-    constructor(readonly init: { data: Uint8Array; type: string }) {}
-  });
+  vi.stubGlobal(
+    "EncodedVideoChunk",
+    class {
+      constructor(readonly init: { data: Uint8Array; type: string }) {}
+    },
+  );
   vi.stubGlobal("createImageBitmap", async (blob: Blob) => {
     bitmaps.push(blob);
     return { close: () => undefined, height: 6, width: 7 };
@@ -231,7 +232,10 @@ describe("reading the envelope", () => {
 
     expect(recorded.metas).toEqual([{ codec: "h264", fps: 30, height: 4, width: 4 }]);
     expect(decoder().configs).toEqual([{ codec: "avc1.64001e", description: avcC() }]);
-    expect(decoder().chunks.map((chunk) => [...chunk.data])).toEqual([[1, 2, 3], [4, 5]]);
+    expect(decoder().chunks.map((chunk) => [...chunk.data])).toEqual([
+      [1, 2, 3],
+      [4, 5],
+    ]);
     expect(decoder().chunks.map((chunk) => chunk.type)).toEqual(["key", "delta"]);
     expect(recorded.last.painted).toBe(2);
     expect(recorded.ends).toEqual([undefined]);
@@ -258,7 +262,12 @@ describe("reading the envelope", () => {
       frame(TAG.keyframe, [1, 2, 3]),
     ]);
 
-    const recorded = await read(split(whole, [...whole].map(() => 1)));
+    const recorded = await read(
+      split(
+        whole,
+        [...whole].map(() => 1),
+      ),
+    );
 
     expect(payloadOf(0)).toEqual([1, 2, 3]);
     expect(recorded.last.error).toBeUndefined();
@@ -274,7 +283,10 @@ describe("reading the envelope", () => {
 
     const recorded = await read([both]);
 
-    expect(decoder().chunks.map((chunk) => [...chunk.data])).toEqual([[1, 2, 3, 4], [5, 6, 7]]);
+    expect(decoder().chunks.map((chunk) => [...chunk.data])).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7],
+    ]);
     expect(decoder().chunks.map((chunk) => chunk.type)).toEqual(["key", "delta"]);
     expect(recorded.last.painted).toBe(2);
   });
@@ -346,10 +358,7 @@ describe("reading the envelope", () => {
       frame(TAG.keyframe, [2]),
     ]);
 
-    expect(decoder().configs.map((config) => config.codec)).toEqual([
-      "avc1.64001e",
-      "avc1.4d031f",
-    ]);
+    expect(decoder().configs.map((config) => config.codec)).toEqual(["avc1.64001e", "avc1.4d031f"]);
     expect([...(decoder().configs[1]?.description.slice(1, 4) ?? [])]).toEqual([0x4d, 0x03, 0x1f]);
     // why: a decoder still holding frames of the old parameter sets has to be emptied first, or the
     // first frame after the change is decoded against the wrong picture.
@@ -440,11 +449,7 @@ describe("reading the envelope", () => {
   });
 
   it("tells the viewer nothing more when the decoder fails after the stream is over", async () => {
-    const recorded = await read([
-      meta(),
-      frame(TAG.description, avcC()),
-      frame(TAG.keyframe, [1]),
-    ]);
+    const recorded = await read([meta(), frame(TAG.description, avcC()), frame(TAG.keyframe, [1])]);
 
     // why: a decoder returns the frame it was holding on its own time, which can be after the body
     // ended; a pane told twice shows a reason that was already replaced.
@@ -492,10 +497,7 @@ describe("a decoder that falls behind", () => {
     // behind it are the ones refused, and the picture only resumes at the next keyframe.
     expect(decoder().chunks.map((chunk) => [...chunk.data])).toEqual([[1], [4], [5]]);
     expect(decoder().resets).toBe(1);
-    expect(decoder().configs.map((config) => config.codec)).toEqual([
-      "avc1.64001e",
-      "avc1.64001e",
-    ]);
+    expect(decoder().configs.map((config) => config.codec)).toEqual(["avc1.64001e", "avc1.64001e"]);
     expect(recorded.last.dropped).toBe(3);
     expect(recorded.last.error).toBeUndefined();
   });
@@ -577,5 +579,11 @@ describe("what a meta frame claims", () => {
     expect(parseMeta(payload)).toEqual({
       meta: { codec: "h264", fps: 0, height: 0, width: 0 },
     });
+  });
+});
+
+describe("the envelope's tags", () => {
+  it("are the tags every capture writes, so a frame the daemon carries is the frame this reads", () => {
+    expect(TAG).toEqual(SCREEN_FRAME_TAG);
   });
 });

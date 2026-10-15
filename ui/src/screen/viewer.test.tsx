@@ -16,11 +16,11 @@ describe("what a refused stream says", () => {
     const refused = new ApiError(
       415,
       undefined,
-      "This lease is not on an iOS simulator, and the PoC captures a screen only from a simulator",
+      "A physical iPhone's screen cannot be streamed; only a simulator's can",
     );
 
     expect(refusalOf(refused)).toBe(
-      "This device cannot be streamed. A live screen is captured from an iOS simulator only.",
+      "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.",
     );
   });
 
