@@ -40,7 +40,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/AGENTS.md) |
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
-| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
+| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
 | gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
 | agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |

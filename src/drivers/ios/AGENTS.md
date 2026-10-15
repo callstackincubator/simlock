@@ -122,4 +122,8 @@ record of a device's mode; `driverData` holds the slim signature.
 - **Slim drift is invisible.** `launchctl disable` accepts labels that do not exist. Narrowing
   `ios.slim.categories` never re-enables a daemon: reclaim or destroy old devices first.
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
+- **A screen stream can freeze after a reboot under its lease.** The capture program checks the
+  simulator is booted only when it starts, then repaints its last surface every 200 ms, so after
+  the health monitor reboots a crashed simulator the viewer can see the old picture until they
+  press Stop and Show screen again. A lease ending stops it as usual.
 - **A cold slim lease takes ~160 s.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.

@@ -89,14 +89,12 @@ Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop ov
 The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
 missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view.
 
-**HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts`):
+**HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
 
-1. `openChannel` on the link, then `relay.request` (`relayId`, `target`, `method`, `url`, headers
-   minus credentials, `tenant`, `leaseId`, `hasBody`, `channel`).
+1. `openChannel`, then `relay.request` (ids, target, method, url, headers minus credentials, `tenant`, `channel`).
 2. Request body up and response body down on that byte channel; head from the `relay-head` push.
-3. Caller abort or cancel → `relay.cancel`. Deadline 330 s for the channel and the head; after the head,
-   330 s with no response bytes ends the body instead, so a live body runs as long as bytes come.
-   Either → `WORKER_UNREACHABLE`, `relay.cancel`, channel aborted.
+3. Caller abort or cancel → `relay.cancel`. Deadline for the channel and head, then an idle bound on
+   the body (a live body runs while bytes come), both on the Clock → `WORKER_UNREACHABLE`, `relay.cancel`.
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
@@ -115,8 +113,7 @@ views. `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.r
 | Forwarded `lease.request`              | 5 min                                    | `gateway.leaseRequestTimeoutMs`                       |
 | Forwarded `device.exec`                | 11 min                                   | `gateway.execTimeoutMs`                               |
 | Disconnected view kept                 | 24 h, held while a gateway lease is live | `gateway.disconnectedRetentionMs`                     |
-| Relay: channel wait + head             | 330 s                                    | `GatewayRelayOptions.deadlineMs`                      |
-| Relay: response body silent            | 330 s                                    | `GatewayRelayOptions.idleMs`                          |
+| Relay: channel + head / silent body    | 330 s / 330 s                            | `GatewayRelayOptions.deadlineMs` / `.idleMs`          |
 | Link: channels per side, accept, stall | 64, 30 s, 60 s                           | `../link/` constants                                  |
 | Request records                        | 10 000, 10 min                           | `lease.maxRequestRecords`, `lease.requestRetentionMs` |
 
