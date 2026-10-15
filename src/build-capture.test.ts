@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -34,7 +35,33 @@ function scratchRepo(server: string, digest: string): string {
     join(root, "vendor", "scrcpy", "SHA256SUMS.txt"),
     `${digest}  scrcpy-server-v5.0.1\n`,
   );
+  for (const [dir, license] of [
+    ["scrcpy", "scrcpy.APACHE-2.0.txt"],
+    ["screen-capture", "serve-sim.APACHE-2.0.txt"],
+  ] as const) {
+    mkdirSync(join(root, "vendor", dir, "LICENSES"), { recursive: true });
+    writeFileSync(join(root, "vendor", dir, "NOTICE.md"), `notice of ${dir}`);
+    writeFileSync(join(root, "vendor", dir, "LICENSES", license), `license of ${dir}`);
+  }
   return root;
+}
+
+// why: a `swift` that writes the program where `swift build` would, so the claim about what ships
+// beside the iOS program is checked without a Swift toolchain.
+function fakeSwift(repo: string): string {
+  const bin = join(repo, "fake-bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "swift"),
+    [
+      "#!/bin/sh",
+      'while [ "$1" != "--scratch-path" ]; do shift; done',
+      '/bin/mkdir -p "$2/release"',
+      'echo program > "$2/release/simlock-screen-capture"',
+    ].join("\n"),
+  );
+  chmodSync(join(bin, "swift"), 0o755);
+  return bin;
 }
 
 function sha256(text: string): string {
@@ -63,4 +90,41 @@ describe("scripts/build-capture.mjs", () => {
       readFileSync(join(repo, "dist", "vendor", "scrcpy", "scrcpy-server-v5.0.1"), "utf8"),
     ).toBe("the real server");
   });
+
+  it("ships the scrcpy server with its NOTICE.md and every license it needs", () => {
+    const repo = scratchRepo("the real server", sha256("the real server"));
+    execFileSync(process.execPath, [join(repo, "scripts", "build-capture.mjs")], {
+      env: { ...process.env, PATH: "" },
+      stdio: "pipe",
+    });
+    const shipped = join(repo, "dist", "vendor", "scrcpy");
+    expect(readFileSync(join(shipped, "NOTICE.md"), "utf8")).toBe("notice of scrcpy");
+    expect(readFileSync(join(shipped, "LICENSES", "scrcpy.APACHE-2.0.txt"), "utf8")).toBe(
+      "license of scrcpy",
+    );
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "ships the iOS capture program with serve-sim's NOTICE.md and license, and leaves them out when it is not built",
+    () => {
+      const repo = scratchRepo("the real server", sha256("the real server"));
+      const run = (path: string) =>
+        execFileSync(process.execPath, [join(repo, "scripts", "build-capture.mjs")], {
+          env: { ...process.env, PATH: path },
+          stdio: "pipe",
+        });
+      const shipped = join(repo, "dist", "vendor", "screen-capture");
+
+      run("");
+      expect(existsSync(join(repo, "dist", "bin", "simlock-screen-capture"))).toBe(false);
+      expect(existsSync(shipped)).toBe(false);
+
+      run(fakeSwift(repo));
+      expect(existsSync(join(repo, "dist", "bin", "simlock-screen-capture"))).toBe(true);
+      expect(readFileSync(join(shipped, "NOTICE.md"), "utf8")).toBe("notice of screen-capture");
+      expect(readFileSync(join(shipped, "LICENSES", "serve-sim.APACHE-2.0.txt"), "utf8")).toBe(
+        "license of screen-capture",
+      );
+    },
+  );
 });

@@ -79,6 +79,12 @@ this file is the rule that keeps the inventory true.
    in the artifact we distribute, so attribution reaches it, and the next
    reader cannot see it without unpacking the file.
 
+   Whatever the package ships from `vendor/<dir>/` — the artifact itself or a
+   program built from it — ships with that directory's `NOTICE.md` and
+   `LICENSES/`, copied into `dist/vendor/<dir>/` by `scripts/build-capture.mjs`
+   (tested in `src/build-capture.test.ts`). The package publishes `dist/`, and a
+   license kept only in the repository never reaches whoever installs it.
+
 9. **Nothing arrives over the network without the consent
    [safety.md](safety.md) rule 4 requires.** Vendoring is a commit: a person or
    an agent fetched the artifact once, checked it, and put it in the tree.

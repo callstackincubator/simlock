@@ -4,14 +4,23 @@
 // vendor/scrcpy/SHA256SUMS.txt; a mismatch fails the build. On macOS with a Swift toolchain the iOS
 // capture program in vendor/screen-capture/ is built and copied to dist/bin/simlock-screen-capture.
 // Anywhere else it is skipped with a note, and the daemon reports iOS streams as unavailable.
+// Each artifact ships with its upstream's NOTICE.md and LICENSES/ in dist/vendor/<dir>/, because the
+// package publishes dist/ and Apache-2.0 §4(a) asks that whoever gets a binary gets its license too.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
+
+function copyNotices(dir) {
+  const target = join(dist, "vendor", dir);
+  mkdirSync(target, { recursive: true });
+  copyFileSync(join(root, "vendor", dir, "NOTICE.md"), join(target, "NOTICE.md"));
+  cpSync(join(root, "vendor", dir, "LICENSES"), join(target, "LICENSES"), { recursive: true });
+}
 
 function copyScrcpyServer() {
   const sums = readFileSync(join(root, "vendor/scrcpy/SHA256SUMS.txt"), "utf8").trim().split("\n");
@@ -27,6 +36,7 @@ function copyScrcpyServer() {
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(source, target);
   }
+  copyNotices("scrcpy");
 }
 
 function buildIosCapture() {
@@ -52,6 +62,7 @@ function buildIosCapture() {
   mkdirSync(dirname(target), { recursive: true });
   copyFileSync(join(scratch, "release/simlock-screen-capture"), target);
   chmodSync(target, 0o755);
+  copyNotices("screen-capture");
 }
 
 copyScrcpyServer();
