@@ -25,10 +25,6 @@ export interface WaitingPage extends WaitingChoice {
   readonly named: boolean;
 }
 
-// why: until the queue has answered its size is unknown, and a page asked for in the URL must not
-// be corrected down to page 1 by a count of zero.
-const UNKNOWN_TOTAL = Number.MAX_SAFE_INTEGER;
-
 export function useWaiting(): LoadView<WaitingPage> {
   const requests = loadView(useLiveResource<WaitingList>("/v1/lease-requests"));
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers ?? [];
@@ -37,7 +33,7 @@ export function useWaiting(): LoadView<WaitingPage> {
   const table = mapView(requests, (list) => waitingTable(list.requests, workers, now.server));
   const paging = usePaging({
     sizes: TABLE_SIZES,
-    total: table.kind === "ready" ? table.data.rows.length : UNKNOWN_TOTAL,
+    total: table.kind === "ready" ? table.data.rows.length : undefined,
   });
   return mapView(table, (all) => {
     const rows = all.rows.slice((paging.page - 1) * paging.size, paging.page * paging.size);
