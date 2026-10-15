@@ -1,8 +1,8 @@
 import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
-import type { Stat } from "./stat";
-import { type WorkerDevice, type WorkerView, workerName } from "./workers";
+import { formatDuration } from "./time";
+import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
 export type LeaseRecord = z.infer<typeof statusLeaseSchema>;
 
@@ -41,6 +41,11 @@ export interface Holder {
 export function holderOf(requesterId: string, tokens: readonly TokenRecord[]): Holder {
   const label = tokens.find((token) => token.id === requesterId)?.label;
   return label === undefined ? { id: requesterId } : { id: requesterId, label };
+}
+
+// why: a holder's title is its token's label, or its id where no label names it.
+export function holderTitle(holder: Holder): string {
+  return holder.label ?? holder.id;
 }
 
 // why: a single host names no worker on its leases, and every lease there is on its one worker, the
@@ -102,28 +107,176 @@ export function leasePath(id: string): `/${string}` {
   return `/leases/${encodeURIComponent(id)}/`;
 }
 
-const EXPIRING_WITHIN_MS = 15 * 60_000;
+export type LeaseFilter = "all" | "expiring" | "ios" | "android";
 
-export function leasesStats(leases: readonly LeaseRecord[], now: number): readonly Stat[] {
-  const holders = new Set(leases.map((lease) => lease.requesterId));
-  const expiring = leases.filter((lease) => lease.ttlDeadline - now <= EXPIRING_WITHIN_MS);
-  return [
-    { caption: "held now", label: "Leases", value: String(leases.length) },
-    { caption: "holding at least one lease", label: "Holders", value: String(holders.size) },
-    {
-      caption: "expire within 15 minutes unless renewed",
-      label: "Expiring soon",
-      value: String(expiring.length),
-    },
-  ];
+export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly label: string }[] = [
+  { label: "All", value: "all" },
+  { label: "Expiring", value: "expiring" },
+  { label: "iOS", value: "ios" },
+  { label: "Android", value: "android" },
+];
+
+// why: a lease with under 15 minutes left has not been renewed for a while, so the list and the
+// inspector warn by the same rule.
+const EXPIRING_UNDER_MS = 15 * 60_000;
+
+export function isExpiring(deadline: number, now: number): boolean {
+  return deadline - now < EXPIRING_UNDER_MS;
 }
 
-export function leaseIdFrom(path: string): string | undefined {
-  const rest = path.replace(/^\/leases\/?/, "").replace(/\/$/, "");
-  if (rest === "") return undefined;
-  try {
-    return decodeURIComponent(rest);
-  } catch {
-    return rest;
+function percentLeft(deadline: number, now: number, ttlMs: number): number {
+  return ttlMs <= 0 ? 0 : Math.max(0, Math.min(100, ((deadline - now) / ttlMs) * 100));
+}
+
+// why: a local clock time, since an operator reads "granted" against their own day.
+function clockTime(at: number): string {
+  const date = new Date(at);
+  return [date.getHours(), date.getMinutes()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+}
+
+export interface LeaseRowView {
+  readonly key: string;
+  readonly id: string;
+  readonly to: string;
+  readonly holder: string;
+  readonly remaining: string;
+  readonly expiring: boolean;
+  readonly percent: number;
+  readonly sub: string;
+  readonly platform?: string;
+}
+
+export function leaseRows(input: {
+  readonly leases: readonly LeaseRecord[];
+  readonly tokens: readonly TokenRecord[];
+  readonly workers: readonly WorkerView[];
+  readonly now: number;
+}): readonly LeaseRowView[] {
+  const { leases, now, tokens, workers } = input;
+  return inGrantOrder(leases).map((lease) => {
+    const device = deviceOfLease(lease, workers);
+    const sub = [device?.spec.model ?? lease.deviceId, workerNameOfLease(lease, workers)]
+      .filter((part) => part !== undefined)
+      .join(" · ");
+    return {
+      expiring: isExpiring(lease.ttlDeadline, now),
+      holder: holderTitle(holderOf(lease.requesterId, tokens)),
+      id: lease.id,
+      key: `${lease.workerId ?? ""} ${lease.id}`,
+      percent: percentLeft(lease.ttlDeadline, now, lease.ttlMs),
+      remaining: formatDuration(lease.ttlDeadline - now),
+      sub,
+      to: leasePath(lease.id),
+      ...(device === undefined ? {} : { platform: device.spec.platform }),
+    };
+  });
+}
+
+export function filterLeaseRows(
+  rows: readonly LeaseRowView[],
+  filter: LeaseFilter,
+): readonly LeaseRowView[] {
+  if (filter === "all") return rows;
+  if (filter === "expiring") return rows.filter((row) => row.expiring);
+  return rows.filter((row) => row.platform === filter);
+}
+
+export interface StreamOffer {
+  readonly offered: boolean;
+  readonly reason?: string;
+}
+
+// why: a worker answers a stream request with a 404 when its `stream` capability is not on, so the
+// console says so before the click; a worker the console cannot see is left to the daemon's own
+// answer.
+export function streamOffer(worker: WorkerView | undefined): StreamOffer {
+  if (worker === undefined) return { offered: true };
+  const entry = worker.capabilities?.find((capability) => capability.name === "stream");
+  if (entry?.state === "available") return { offered: true };
+  const name = workerName(worker);
+  if (entry?.state === "unavailable") {
+    const reason = `Streaming is unavailable on ${name}. ${entry.reason ?? ""}`;
+    return { offered: false, reason: reason.trim() };
   }
+  return { offered: false, reason: `Streaming is off on ${name}.` };
+}
+
+export interface LeaseInspection {
+  readonly id: string;
+  readonly title: string;
+  readonly expiring: boolean;
+  readonly model: string;
+  readonly runtime?: string;
+  readonly worker?: { readonly name: string; readonly to?: string };
+  readonly remaining: string;
+  readonly percent?: number;
+  readonly heldFor: string;
+  readonly renewed: string;
+  readonly granted: string;
+  readonly device: {
+    readonly mode?: string;
+    readonly imageTag?: string;
+    readonly kind?: string;
+    readonly deviceId: string;
+    readonly udid: string;
+  };
+  readonly holder?: Holder;
+  readonly ownerId?: string;
+  readonly requestId?: string;
+  readonly stream: StreamOffer;
+}
+
+// why: `record` is the lease's entry in `GET /v1/leases`, which alone says who holds it and when it
+// was renewed; without it those facts show as missing and the rest still shows.
+export function leaseInspection(input: {
+  readonly lease: LeaseDetails;
+  readonly record: LeaseRecord | undefined;
+  readonly tokens: readonly TokenRecord[];
+  readonly workers: readonly WorkerView[];
+  readonly now: number;
+}): LeaseInspection {
+  const { lease, now, record, tokens, workers } = input;
+  const named = { worker: lease.worker, workerId: lease.workerId ?? record?.workerId };
+  const worker = workerOfLease(named, workers);
+  const workerLabel = workerNameOfLease(named, workers);
+  const device = worker?.devices?.find((candidate) => candidate.id === lease.deviceId);
+  const grantedAt = Date.parse(lease.createdAt);
+  const deadline = Date.parse(lease.expiresAt);
+  const holder = record === undefined ? undefined : holderOf(record.requesterId, tokens);
+  const imageTag = lease.imageTag ?? device?.spec.imageTag;
+  return {
+    device: {
+      deviceId: lease.deviceId,
+      udid: lease.udid,
+      ...(lease.mode === undefined ? {} : { mode: lease.mode }),
+      ...(imageTag === undefined ? {} : { imageTag }),
+      ...(device === undefined ? {} : { kind: device.physical ? "Physical" : "Virtual" }),
+    },
+    expiring: isExpiring(deadline, now),
+    granted: clockTime(grantedAt),
+    heldFor: formatDuration(now - grantedAt),
+    id: lease.id,
+    model: lease.device,
+    remaining: formatDuration(deadline - now),
+    renewed: record === undefined ? "—" : `${formatDuration(now - record.lastRenewedAt)} ago`,
+    stream: streamOffer(worker),
+    title: holder === undefined ? lease.id : holderTitle(holder),
+    ...(record === undefined ? {} : { percent: percentLeft(deadline, now, record.ttlMs) }),
+    ...(holder === undefined ? {} : { holder }),
+    ...(record !== undefined && record.ownerId !== record.requesterId
+      ? { ownerId: record.ownerId }
+      : {}),
+    ...(device === undefined ? {} : { runtime: device.spec.osVersion }),
+    ...(lease.requestId === undefined ? {} : { requestId: lease.requestId }),
+    ...(workerLabel === undefined
+      ? {}
+      : {
+          worker: {
+            name: workerLabel,
+            ...(worker === undefined ? {} : { to: workerPath(worker.id) }),
+          },
+        }),
+  };
 }
