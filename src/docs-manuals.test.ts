@@ -20,7 +20,7 @@ const trackedFiles = execFileSync(
   .split("\0")
   .filter((name) => name.length > 0 && existsSync(join(REPO_ROOT, name)));
 
-const manuals = trackedFiles.filter((name) => /^src\/(?:.+\/)?README\.md$/.test(name));
+const manuals = trackedFiles.filter((name) => /^src\/(?:.+\/)?AGENTS\.md$/.test(name));
 const flows = trackedFiles.filter((name) => /^docs\/internal\/flows\/[^/]+\.md$/.test(name));
 
 const PATH_TOKEN = /^[\w@.-]+(?:\/[\w@.-]+)*(?:\.(?:ts|tsx|mjs|js|md)|\/)$/;
@@ -54,14 +54,14 @@ function brokenLinks(doc: string): string[] {
 
 describe("module manuals and flow docs", () => {
   it("are found, the leasing manual and the startup flow among them", () => {
-    expect(manuals).toContain("src/leasing/README.md");
+    expect(manuals).toContain("src/leasing/AGENTS.md");
     expect(flows).toContain("docs/internal/flows/startup.md");
   });
 
   it("each manual sits beside a CLAUDE.md that only imports it", () => {
     const offenders = manuals.filter((manual) => {
       const claude = join(REPO_ROOT, dirname(manual), "CLAUDE.md");
-      return !existsSync(claude) || readFileSync(claude, "utf8") !== "@README.md\n";
+      return !existsSync(claude) || readFileSync(claude, "utf8") !== "@AGENTS.md\n";
     });
 
     expect(offenders).toEqual([]);

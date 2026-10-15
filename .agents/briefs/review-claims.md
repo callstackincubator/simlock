@@ -22,7 +22,7 @@ file: `path: 12 34-40 true, 56 F3`:
 4. In each file the diff touches: every comment within 20 lines of a hunk,
    and the doc comment of every declaration the diff changes.
 5. For each module the diff touches (`src/<module>/`): every line of its
-   manual, `src/<module>/README.md`, and of each flow doc under
+   manual, `src/<module>/AGENTS.md`, and of each flow doc under
    `docs/internal/flows/` the manual links to.
 
 Find them all now: a false claim this round misses costs a later round.

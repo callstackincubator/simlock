@@ -14,7 +14,7 @@ spec says otherwise in its own words, the spec wins.
    `docs/ABOUT.md`, `docs/CLI.md`, `docs/CLIENT.md`, `docs/CONFIGURATION.md`,
    `docs/HTTP-API.md`, `docs/CONSOLE.md`, `docs/EVENTS.md` (documentation
    rule 2) — the maintainer docs under `docs/internal/`, and the manual
-   (`src/<module>/README.md`) of every module the change touches
+   (`src/<module>/AGENTS.md`) of every module the change touches
    (documentation rule 7).
 2. **What the tool prints.** Help text, usage banners, error messages and
    HTTP error bodies the change makes false are fixed in the same change

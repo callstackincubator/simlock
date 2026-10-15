@@ -4,7 +4,7 @@ Does: how many virtual devices may exist and run at once — limits, RAM budget,
 Entry: `index.ts` → `CapacityCoordinator` over `createCapacityStrategy(config.capacity, systemStats)`,
 built by `createCore` as `core.capacity`; read side `core.capacityReader`.
 Uses: ports (`SystemStats`), bus, `core/validation.ts`. Knows nothing of queues, the registry or drivers.
-Callers: leasing's `AcquisitionPlanner`, the warm pool, `status.get`. Parent: [core](../README.md).
+Callers: leasing's `AcquisitionPlanner`, the warm pool, `status.get`. Parent: [core](../AGENTS.md).
 
 ## Files
 

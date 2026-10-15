@@ -6,7 +6,7 @@ Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http,
 Never imports: gateway outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
-Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs/internal/flows/device-exec.md), [gateway](../gateway/README.md).
+Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs/internal/flows/device-exec.md), [gateway](../gateway/AGENTS.md).
 
 ## Files
 
@@ -120,7 +120,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
 - `relay.request` runs only on that connection; targets come from `relayTargets`
-  (today `agent-device`). See [gateway](../gateway/README.md).
+  (today `agent-device`). See [gateway](../gateway/AGENTS.md).
 
 ## Logging and event records
 

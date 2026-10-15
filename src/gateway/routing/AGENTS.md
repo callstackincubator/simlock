@@ -4,7 +4,7 @@ Does: picks the worker for one fleet request, or says it cannot be served. Pure,
 Entry: `index.ts`; composed in `../routing.ts` → `createRoutingPolicy(gateway.routing)` →
 `{ assess, select }`. Only policy: `warm-then-free`.
 Uses: contract, core (catalog match only). Called by: `../fleet-coordinator.ts`.
-Flows: [device selection](../../../docs/internal/flows/device-selection.md), [gateway](../README.md).
+Flows: [device selection](../../../docs/internal/flows/device-selection.md), [gateway](../AGENTS.md).
 
 ## Files
 

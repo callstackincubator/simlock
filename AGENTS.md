@@ -73,9 +73,12 @@ End-user docs live directly under [docs/](docs/) and must stay self-contained
 - [CONSOLE.md](docs/CONSOLE.md) — the web console: turning it on, opening it, signing in
 - [EVENTS.md](docs/EVENTS.md) — catalog of business events, end-user cut
 
-Each module under `src/` has a manual, `src/<module>/README.md`: what it does,
+**Module manuals.** Each module under `src/` has its own `AGENTS.md` in its root
+(`src/leasing/AGENTS.md`, `src/drivers/android/AGENTS.md`, …): what it does,
 how, its state and timers, the rules a change must not break, its known gaps.
-Read it before changing the module; a change that makes it false fixes it.
+Before you read, change or review code under `src/`, load the `AGENTS.md` of
+every module directory on the path to that file, unless your tool has already
+loaded it. A change that makes a manual false fixes it in the same change.
 
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 

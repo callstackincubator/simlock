@@ -3,7 +3,7 @@
 Does: simulators in an owned `simctl` device set, slimmed on request, and USB iPhones and iPads through `devicectl`.
 Entry: `index.ts` → `IosSimctlDriver.create(options)` (built on macOS only); also `iosPrerequisites`, `IOS_PASSTHROUGH_TOOLS`.
 Uses: core, ports, `../installer-process.ts`. Never imports: bus, leasing, daemon.
-Parent: [drivers](../README.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
+Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
 
 ## Files
 

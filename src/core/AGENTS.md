@@ -5,7 +5,7 @@ Entry: `index.ts` → `createCore(options)`, then `core.connect(ports)` once, be
 Uses: bus, ports, contract. Never imports: leasing, drivers, daemon, gateway, agent-device.
 Imported by: daemon, leasing, cli, http, agent-device, drivers (`Driver`, `ensureOwnedRoot`), gateway (catalog match, `fits`).
 Flows: [startup](../../docs/internal/flows/startup.md), [device selection](../../docs/internal/flows/device-selection.md).
-See also: [leasing](../leasing/README.md) (lease flow, when reclaim runs), [warm pool](warm-pool/README.md), [capacity](capacity/README.md).
+See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm pool](warm-pool/AGENTS.md), [capacity](capacity/AGENTS.md).
 
 ## Files
 

@@ -3,7 +3,7 @@
 Does: emulators in an owned AVD home behind Simlock's own adb server, and USB phones on the default adb server.
 Entry: `index.ts` → `AndroidDriver.create(options)`; also `androidPrerequisites`, `hostAbiFor`, `ANDROID_PASSTHROUGH_TOOLS`.
 Uses: core, ports, `../installer-process.ts`. Never imports: bus, leasing, daemon.
-Parent: [drivers](../README.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
+Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/internal/flows/device-selection.md).
 
 ## Files
 

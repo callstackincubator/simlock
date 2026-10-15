@@ -1,8 +1,9 @@
 # Module manual template
 
-A module manual is `src/<module>/README.md`, beside a one-line
-`src/<module>/CLAUDE.md` that holds `@README.md`, so an agent that reads a
-file in the module loads its manual. It says what the module does today,
+A module manual is `src/<module>/AGENTS.md`, beside a one-line
+`src/<module>/CLAUDE.md` that holds `@AGENTS.md`. Claude Code and OpenCode
+load it when they read a file in the module; Codex and others load it by the
+rule in the root `AGENTS.md`. It says what the module does today,
 how, and what a change must not break. Rationale lives in ADRs; history in
 git. Budget: 150 lines.
 

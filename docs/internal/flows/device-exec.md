@@ -1,6 +1,6 @@
 # device.exec
 
-Modules: [daemon](../../../src/daemon/README.md), [gateway](../../../src/gateway/README.md).
+Modules: [daemon](../../../src/daemon/AGENTS.md), [gateway](../../../src/gateway/AGENTS.md).
 Contract: `src/contract/operations.ts` `deviceExec` — role `agent`, effect `write`.
 Input (strict): `{ leaseId, tool, args, stdin?, requesterId? }`. Output: `{ exitCode }`.
 Runs the command on the machine that owns the device and streams its output back.

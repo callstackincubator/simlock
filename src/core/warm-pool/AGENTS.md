@@ -4,7 +4,7 @@ Does: decides which idle virtual devices stay booted, and keeps `warmPool.target
 Entry: `index.ts` → `WarmPool`, built by `createCore`; `start()` runs at the end of `core.converge`.
 Uses: core (capacity, lifecycle, provisioner, claims, registry, lock), bus, ports, contract.
 Leasing reaches it only through `CorePorts.warmPoolDemand` and `core.passWarmPool()`.
-Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../README.md).
+Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGENTS.md).
 
 ## Files
 

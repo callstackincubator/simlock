@@ -49,11 +49,12 @@ grounds for rejecting a change even if the prose reads well.
    `docs/internal/` out to `docs/` (e.g. `../CLIENT.md`) is fine — a
    maintainer doc pointing at the user-facing reference for the same
    feature. From `docs/` into `docs/internal/` is never fine (see rule 2).
-7. **Every module has a manual, beside its code.** `src/<module>/README.md`
+7. **Every module has a manual, beside its code.** `src/<module>/AGENTS.md`
    says what the module does today, how, and what a change must not break,
    in the shape of [../templates/manual.md](../templates/manual.md), in at
-   most 150 lines. A `CLAUDE.md` beside it holds only `@README.md`, so an
-   agent that reads a file in the module loads the manual. A path that runs
+   most 150 lines. A `CLAUDE.md` beside it holds only `@AGENTS.md`, so Claude
+   Code loads the manual when it reads a file in the module; other agents load
+   it by the rule in the root `AGENTS.md`. A path that runs
    through several modules (startup, device selection, `device.exec`) is a
    flow doc under `docs/internal/flows/`, linked from each module's manual.
    A manual and a flow doc hold no rationale (the ADR does) and no history

@@ -8,7 +8,7 @@ core and leasing only the names `.oxlintrc.json` allows (request book, in-memory
 Never imports: drivers, the rest of daemon, core's registry, capacity or lifecycle.
 Imported by: `../daemon/main.ts`. This manual also covers the worker's end of the uplink.
 Flows: [device selection](../../docs/internal/flows/device-selection.md),
-[device.exec](../../docs/internal/flows/device-exec.md), [leasing](../leasing/README.md).
+[device.exec](../../docs/internal/flows/device-exec.md), [leasing](../leasing/AGENTS.md).
 
 ## Files
 
@@ -60,7 +60,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md),
    trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.granted`) is dropped.
 
 **Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's
-`assess` and nine stages are in [routing](routing/README.md)):
+`assess` and nine stages are in [routing](routing/AGENTS.md)):
 
 1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs`
    from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.

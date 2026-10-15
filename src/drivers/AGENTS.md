@@ -3,7 +3,7 @@
 Does: the platform half of every device verb — one driver per platform, serving its virtual and physical devices.
 Entry: `daemon/main.ts` `discoverDrivers` → `IosSimctlDriver.create` (macOS only), `AndroidDriver.create`. `SIMLOCK_DRIVERS_MODULE` replaces both.
 Uses: core, ports. Never imports: bus, contract, leasing, gateway, daemon. Imported by: daemon only.
-Manuals: [Android](android/README.md), [iOS](ios/README.md). Flows: [device selection](../../docs/internal/flows/device-selection.md).
+Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device selection](../../docs/internal/flows/device-selection.md).
 
 ## The interface core speaks (`core/driver.ts` `Driver`)
 

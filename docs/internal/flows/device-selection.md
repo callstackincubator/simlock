@@ -1,8 +1,8 @@
 # Device selection
 
-Modules: contract, daemon, [leasing](../../../src/leasing/README.md), [core](../../../src/core/README.md),
-[drivers](../../../src/drivers/README.md) ([Android](../../../src/drivers/android/README.md),
-[iOS](../../../src/drivers/ios/README.md)).
+Modules: contract, daemon, [leasing](../../../src/leasing/AGENTS.md), [core](../../../src/core/AGENTS.md),
+[drivers](../../../src/drivers/AGENTS.md) ([Android](../../../src/drivers/android/AGENTS.md),
+[iOS](../../../src/drivers/ios/AGENTS.md)).
 
 How one lease request becomes one concrete device, virtual or physical.
 

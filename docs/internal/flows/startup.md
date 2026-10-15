@@ -1,6 +1,6 @@
 # Startup and stop
 
-Modules: [daemon](../../../src/daemon/README.md), [leasing](../../../src/leasing/README.md), [core](../../../src/core/README.md).
+Modules: [daemon](../../../src/daemon/AGENTS.md), [leasing](../../../src/leasing/AGENTS.md), [core](../../../src/core/AGENTS.md).
 Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/server.ts`).
 
 ## Both modes, before the branch
