@@ -13,7 +13,6 @@ import { usePath, useSearch } from "./router";
 export type {
   AttentionDetail,
   AttentionEvent,
-  AttentionFact,
   AttentionPage,
   AttentionRow,
 } from "../model/attention";

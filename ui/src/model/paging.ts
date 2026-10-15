@@ -2,8 +2,6 @@ export type PageSizes = readonly [number, ...number[]];
 
 export const TABLE_SIZES: PageSizes = [25, 50, 100];
 
-export const CARD_SIZES: PageSizes = [24, 48, 96];
-
 export interface PageKeys {
   readonly page: string;
   readonly size: string;

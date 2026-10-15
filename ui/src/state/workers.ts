@@ -22,15 +22,11 @@ import { usePath, useSearch } from "./router";
 
 export type {
   CapabilityRow,
-  CatalogRow,
   DeviceRow,
   FigureCard,
   InstallRow,
-  LoadDetail,
-  OverviewTab,
   PlatformCard,
   WarmRow,
-  WarmTab,
   WorkerFilter,
   WorkerInspector,
   WorkerRow,

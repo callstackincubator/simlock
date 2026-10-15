@@ -54,13 +54,13 @@ export function agentIdOf(requesterId: string): string {
 }
 
 // why: a holder's title is its token's label, or its id where no label names it.
-export function holderTitle(holder: Holder): string {
+function holderTitle(holder: Holder): string {
   return holder.label ?? holder.id;
 }
 
 // why: a single host names no worker on its leases, and every lease there is on its one worker, the
 // host itself.
-export function workerOfLease(
+function workerOfLease(
   lease: { readonly workerId?: string | undefined },
   workers: readonly WorkerView[],
 ): WorkerView | undefined {
@@ -78,7 +78,7 @@ export function leasesOnWorker(
 
 // why: `GET /v1/leases` promises no order, so the console sets its own from facts a lease keeps for
 // life, and a refresh moves no lease to another page.
-export function inGrantOrder(leases: readonly LeaseRecord[]): readonly LeaseRecord[] {
+function inGrantOrder(leases: readonly LeaseRecord[]): readonly LeaseRecord[] {
   return [...leases].sort(
     (a, b) =>
       a.grantedAt - b.grantedAt ||
@@ -92,14 +92,14 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-export function deviceOfLease(
+function deviceOfLease(
   lease: LeaseRecord,
   workers: readonly WorkerView[],
 ): WorkerDevice | undefined {
   return workerOfLease(lease, workers)?.devices?.find((device) => device.id === lease.deviceId);
 }
 
-export function workerNameOfLease(
+function workerNameOfLease(
   lease: {
     readonly workerId?: string | undefined;
     readonly worker?: { readonly label?: string | undefined } | undefined;
@@ -130,7 +130,7 @@ export const LEASE_FILTERS: readonly { readonly value: LeaseFilter; readonly lab
 // inspector warn by the same rule.
 const EXPIRING_UNDER_MS = 15 * 60_000;
 
-export function isExpiring(deadline: number, now: number): boolean {
+function isExpiring(deadline: number, now: number): boolean {
   return deadline - now < EXPIRING_UNDER_MS;
 }
 

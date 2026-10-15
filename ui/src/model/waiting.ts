@@ -28,7 +28,7 @@ export function requestedDevice(spec: WaitingRequest["spec"]): string {
 // why: a single host names no worker on its requests, so the request is found in the host's view by
 // its id and requester. A gateway's own request never matches a worker's: its id comes from the
 // gateway, and a worker lists the copy the gateway sent it under the gateway's requester id.
-export function waitingOn(
+function waitingOn(
   request: WaitingRequest,
   workers: readonly WorkerView[],
 ): WorkerView | undefined {
@@ -85,7 +85,7 @@ function queueKey(request: WaitingRequest, workers: readonly WorkerView[]): stri
 }
 
 // why: UTC and ISO-shaped, so the same instant reads the same on every operator's machine.
-export function createdAtOf(timestamp: number): string {
+function createdAtOf(timestamp: number): string {
   return `${new Date(timestamp).toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
 

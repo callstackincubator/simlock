@@ -39,7 +39,7 @@ export function readReplay(body: unknown): readonly ConsoleEvent[] {
 
 // why: identity is the `id` alone, so an event seen twice, by the stream and by the `since` window,
 // is shown once.
-export function keyOf(event: ConsoleEvent): string {
+function keyOf(event: ConsoleEvent): string {
   return event.id;
 }
 

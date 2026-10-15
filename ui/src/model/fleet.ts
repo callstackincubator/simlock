@@ -58,7 +58,7 @@ const SLOT_OF_STATE: Readonly<Partial<Record<string, SlotKind>>> = {
   reclaiming: "busy",
 };
 
-export function slotOf(device: WorkerDevice): DeviceSlot | undefined {
+function slotOf(device: WorkerDevice): DeviceSlot | undefined {
   const kind = SLOT_OF_STATE[device.state];
   if (kind === undefined) return undefined;
   return { kind, label: `${device.spec.model} ${device.spec.osVersion}, ${device.state}` };

@@ -28,7 +28,6 @@ export {
   type LeaseInspection,
   type LeaseRowView,
 } from "../model/leases";
-export type { Readout } from "../model/screen";
 
 export interface LeasesPage {
   readonly rows: readonly LeaseRowView[];

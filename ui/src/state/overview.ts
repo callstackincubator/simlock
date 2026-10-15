@@ -10,7 +10,6 @@ export type {
   Overview,
   OverviewActivity,
   OverviewItem,
-  OverviewTile,
   OverviewWorker,
   Gauge,
   PlatformUse,
