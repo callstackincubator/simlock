@@ -173,8 +173,10 @@ Select a worker to open its page. It adds:
   `critical`, left out where the system does not report it), and disk free of
   total. CPU, memory and disk each have a bar under the figure showing how full
   it is, for scanning at a glance: the memory bar takes the colour of its
-  pressure, and the other two stay neutral because the worker reports no CPU or
-  disk limit for the console to judge them against. A part the worker could not
+  pressure, and is itself neutral where no pressure is reported. The other two
+  stay neutral because the worker sends no CPU or disk threshold for the console
+  to judge them against — a `(limit)` beside a figure is the worker's own limit
+  on that figure, not a level to be judged against. A part the worker could not
   read says `Unavailable`, and has no bar. **Read** says how
   long ago the reading was taken, and it ticks up until the next one. A
   worker that sent no load says "Not reported.", and a disconnected one "No
