@@ -1,6 +1,6 @@
 # 0021. A gateway dispatch is a probe, and the gateway records every fleet request's outcome
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — partly implemented: §5 (usage figures) is not built
 - **Date:** 2026-10-08
 - **Issue:** [#329](https://github.com/callstackincubator/simlock/issues/329)
 - **Supersedes:** [ADR

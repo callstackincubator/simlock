@@ -1,6 +1,6 @@
 # 0015. A lease request is a set of constraints, and the catalog says which class each model is
 
-- **Status:** Accepted — not yet implemented. §3 is narrowed by [ADR
+- **Status:** Accepted. §3 is narrowed by [ADR
   0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md):
   a physical device's class is recorded at enrollment. §3 to §5 are
   narrowed by [ADR

@@ -1,6 +1,6 @@
 # 0019. Startup ends every lease whose device is not running
 
-- **Status:** Accepted — not yet implemented. §1–2 are narrowed by [ADR
+- **Status:** Accepted. §1–2 are narrowed by [ADR
   0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md):
   a restart alone never ends a physical device's lease.
 - **Date:** 2026-10-05

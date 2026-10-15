@@ -1,6 +1,6 @@
 # 0029. Host load is an optional module whose readings ride on status
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-13
 - **Issue:** [#527](https://github.com/callstackincubator/simlock/issues/527)
 - **Supersedes:** nothing. Adds to [ADR

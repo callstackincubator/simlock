@@ -1,6 +1,6 @@
 # 0024. Leasing calls lease-end participants before it reclaims a device
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-12
 - **Issue:** [#466](https://github.com/callstackincubator/simlock/issues/466)
 - **Supersedes:** nothing.
