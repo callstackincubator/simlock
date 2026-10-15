@@ -16,7 +16,7 @@ function idsIn(holder: unknown): string[] {
 }
 
 // why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure; a JSON-RPC error may nest `details` under `data`.
-export function endedLeaseIds(text: string): string[] {
+function endedLeaseIds(text: string): string[] {
   let body: unknown;
   try {
     body = JSON.parse(text);
