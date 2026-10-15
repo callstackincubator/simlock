@@ -1,5 +1,3 @@
-import type { Stat } from "./stat";
-
 export interface ConsoleEvent {
   // why: names the event for good: survives a daemon restart.
   readonly id: string;
@@ -106,26 +104,6 @@ export function payloadPairs(
 function valueText(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value) ?? String(value);
-}
-
-export function eventsStats(
-  shown: readonly ConsoleEvent[],
-  held: number,
-  unfiltered: boolean,
-): readonly Stat[] {
-  const newest = shown[0];
-  return [
-    {
-      caption: unfiltered ? "in the list" : `of ${held} in the list`,
-      label: "Events shown",
-      value: String(shown.length),
-    },
-    {
-      caption: newest === undefined ? "no event to show" : newest.event,
-      label: "Newest",
-      value: newest === undefined ? "—" : timeOfDay(newest.timestamp),
-    },
-  ];
 }
 
 export function timeOfDay(timestamp: number): string {
