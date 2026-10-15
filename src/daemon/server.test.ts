@@ -205,6 +205,7 @@ describe("DaemonServer", () => {
     [33, "cannot send relay.request's channel, or read a relayed body from its byte channel"],
     [34, "cannot read status.get's load block"],
     [35, "cannot read a worker view's load"],
+    [36, "cannot read the module-unavailable finding in doctor.run"],
   ])(
     "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 37, to a client on protocol %i, which %s",
     async (version) => {

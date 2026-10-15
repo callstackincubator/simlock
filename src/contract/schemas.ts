@@ -682,9 +682,9 @@ const driverDeviceSchema = z.object({
   mode: deviceModeSchema.optional(),
 });
 
-/** Mirrors the `DoctorFinding` discriminated union (src/core/doctor.ts) field for field. */
 export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 
+// why: mirrors the `DoctorFinding` union (src/core/doctor.ts) field for field, so a new member lands in both.
 const doctorFindingSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("registry-device-missing"),
