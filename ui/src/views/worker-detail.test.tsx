@@ -619,8 +619,8 @@ describe("the Load gauges", () => {
 
   it("a worker's detail falls back to the console's threshold for memory the worker gives no word for", () => {
     const { pressure: _pressure, ...noPressure } = LOAD.memory;
-    // why: 97% of a 32 GiB worker is the figure the spec names; 1.5 GiB available lands on the
-    // error threshold itself, and a full disk on the one step under it.
+    // why: 97% of a 32 GiB worker is the figure the spec names, over the edge; 1.5 GiB available is
+    // 95% used, the error threshold itself. The one step under it is the CPU and disk test's job.
     const almostGone = { ...noPressure, availableBytes: 0.96 * GIB };
     const atTheEdge = { ...noPressure, availableBytes: 1.5 * GIB };
     const plenty = { ...noPressure, availableBytes: 30 * GIB };
