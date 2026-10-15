@@ -58,7 +58,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
-| `ui/` | Web console, served by the daemon | [CONSOLE.md](../CONSOLE.md) |
+| `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [CONSOLE.md](../CONSOLE.md) |
 
 ## Dependencies
 
