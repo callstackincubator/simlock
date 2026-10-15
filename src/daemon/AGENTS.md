@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http, host-load, agent-device; gateway from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, link, core, leasing, drivers, http, host-load, agent-device, modules, module-registry; gateway from `main.ts` only.
 Never imports: gateway outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -82,7 +82,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 ## Readiness
 
 `DaemonServer.start`: claim → host load start → `admin.token` write → converge
-starts → `onSocketClaimed` (HTTP, agent-device, uplink) → await converge → arm.
+starts → `onSocketClaimed` (HTTP, agent-device, module `afterSocketClaimed`, uplink) → await converge → arm.
 Health: `starting` → `running`, or `failed`.
 
 - `hello` and `status.get` answer at once; `status.get` while `starting` carries
