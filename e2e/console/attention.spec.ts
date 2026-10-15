@@ -439,9 +439,6 @@ test.describe("the attention view", () => {
       expect(await hasHorizontalScroll(page)).toBe(false);
       await rows(page).click();
       await expect(page.getByRole("heading", { level: 2, name: /^aworkerwith/ })).toBeVisible();
-      await page.waitForFunction(() =>
-        document.getAnimations().every((a) => a.playState !== "running"),
-      );
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       hangUp();

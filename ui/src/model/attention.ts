@@ -1,5 +1,5 @@
 import { eventSummary, eventTone } from "./activity";
-import { type ConsoleEvent, workerIdOf } from "./events";
+import { type ConsoleEvent, timeOfDay, workerIdOf } from "./events";
 import { itemPath } from "./paths";
 import { formatDuration } from "./time";
 import type { Tone } from "./tones";
@@ -128,13 +128,6 @@ function protocolText(versions: { readonly min: number; readonly max: number }):
   return versions.min === versions.max
     ? String(versions.min)
     : `${versions.min}\u2013${versions.max}`;
-}
-
-function timeOfDay(timestamp: number): string {
-  const date = new Date(timestamp);
-  return [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map((part) => String(part).padStart(2, "0"))
-    .join(":");
 }
 
 function subjectOf(item: AttentionItem): string {
