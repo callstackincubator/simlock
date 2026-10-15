@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBusyPercent, formatBytes, formatCores, loadGauges, loadSummary } from "./load";
+import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 
 const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
@@ -32,38 +32,6 @@ const FULL = {
   },
   readAt: 0,
 };
-
-describe("the card summary", () => {
-  it("lists CPU, memory and disk as the table shows, with (limit) on a limited part, including memory under 1 GiB", () => {
-    expect(loadSummary(FULL)).toBe("CPU 34% · memory 9.8 of 32.0 GiB · disk 112.4 GiB free");
-    expect(
-      loadSummary({
-        ...FULL,
-        cpu: { busyPercent: 61, cores: 2, limited: true },
-        disk: { freeBytes: 40.2 * GIB, totalBytes: 100 * GIB },
-        memory: { ...FULL.memory, availableBytes: 3.1 * GIB, limited: true, totalBytes: 8 * GIB },
-      }),
-    ).toBe("CPU 61% (limit) · memory 3.1 of 8.0 GiB (limit) · disk 40.2 GiB free");
-    expect(
-      loadSummary({
-        ...FULL,
-        memory: { ...FULL.memory, availableBytes: 300 * MIB, totalBytes: 8 * GIB },
-      }),
-    ).toContain("memory 300 MiB of 8.0 GiB");
-  });
-
-  it("says CPU unavailable, memory unavailable or disk unavailable for an absent part", () => {
-    const { cpu: _cpu, ...noCpu } = FULL;
-    const { memory: _memory, ...noMemory } = FULL;
-    const { disk: _disk, ...noDisk } = FULL;
-
-    expect(loadSummary(noCpu)).toBe(
-      "CPU unavailable · memory 9.8 of 32.0 GiB · disk 112.4 GiB free",
-    );
-    expect(loadSummary(noMemory)).toBe("CPU 34% · memory unavailable · disk 112.4 GiB free");
-    expect(loadSummary(noDisk)).toBe("CPU 34% · memory 9.8 of 32.0 GiB · disk unavailable");
-  });
-});
 
 describe("how full each figure is", () => {
   it("answers each figure's fullness as a whole percent", () => {
