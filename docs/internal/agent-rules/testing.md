@@ -27,10 +27,11 @@ prove the behaviour, each at the cheapest level that can prove it
    timing out pins the schedule rather than the behaviour, and will keep
    passing when the behaviour is wrong but fast. This is the single most
    repeated defect in this repo's review history: assertions that hold
-   equally against the correct and the broken implementation. An assertion
-   on an exact count of things the test does not own (pending timers, calls,
-   events) fails the day unrelated code adds one, and fails only under some
-   schedules: assert on what the title names. A test that some input is refused
+   equally against the correct and the broken implementation; rule 10 lists
+   the shapes it takes. An assertion on an exact count of things the test
+   does not own (pending timers, calls, events) fails the day unrelated code
+   adds one, and fails only under some schedules: assert on what the title
+   names. A count on a fake or clock that only this test drives is owned. A test that some input is refused
    starts from an input that is accepted, asserts that, then changes one
    thing: otherwise it stays green when the input is refused for another
    reason.
@@ -75,15 +76,21 @@ prove the behaviour, each at the cheapest level that can prove it
    what its entry point exports, or through a host surface above it (a
    command, an HTTP route, a tool call). A test of an internal file earns
    its place only for pure logic with many cases (a planner, a parser) or
-   for an ordering the surface cannot force. A change that keeps behaviour
-   and only moves code edits no test; one that has to shows the tests pin
-   structure, not behaviour.
+   for an ordering the surface cannot force. What the module does to a port
+   (a driver call, a download, a write) is output, and a fake port's record
+   of it is a fair assertion; the exact sequence of those calls is not,
+   unless the order is the claim. Internal state (a claim, a reservation, a
+   private field or method) is proven by what happens next: "the slot is
+   freed" is "a later request at the limit is granted". A change that keeps
+   behaviour and only moves code edits no test; one that has to shows the
+   tests pin structure, not behaviour.
 
 7. **Prove each claim once, at the cheapest level that can prove it.**
    Before you add a test, search for one that already proves the claim or
    the behaviour next to it, and extend that one (a case, an assertion);
-   write a new test only when none does. A claim proved at one level is not
-   proved again at another:
+   write a new test only when none does. A contract several
+   implementations share is one suite run over each of them. A claim proved
+   at one level is not proved again at another:
 
    | Claim                                                      | Level                                               |
    | ---------------------------------------------------------- | --------------------------------------------------- |
@@ -103,3 +110,28 @@ prove the behaviour, each at the cheapest level that can prove it
    finds in a pull request is fixed and proven as rule 7 says: by extending
    the test that proves the behaviour next to it, and by a new test only
    when none does.
+
+10. **The usual ways an assertion cannot fail.** Each of these passes
+    against a broken implementation; check every test you write or change
+    against the list:
+
+    - **A clause of the title has no assertion.** "Grants X and reserves
+      capacity" checks the grant only. Every clause gets its own assertion.
+    - **"Every", "any" or "whatever" proved by one case.** Two cases at
+      least, one of them the edge. A claim about a choice ("the least
+      recently used", "the id breaks the tie") needs a fixture with something
+      else to choose.
+    - **Order, one write, or a state on the way, read from the end state.**
+      Two writes, or the wrong order, end in the same state. Observe the
+      order (events in sequence, a step held and its state asserted) or
+      inject a fault between the writes.
+    - **An assertion that a failure also satisfies.** `not.toBe(pending)`
+      passes on a rejection; `toBeInstanceOf(Error)` passes on a
+      `TypeError`; `x?.()` passes when nothing was recorded. Assert the
+      exact value, or the named error and its code.
+    - **State read from a copy taken before the act.** Read it again from
+      the system after.
+    - **A time boundary not straddled.** One advance past both the old and
+      the new deadline proves neither; assert just before and just after.
+      Let pending work finish before asserting. To prove something never
+      happens, advance past the moment it would.
