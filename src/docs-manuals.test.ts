@@ -53,8 +53,9 @@ function brokenLinks(doc: string): string[] {
 }
 
 describe("module manuals and flow docs", () => {
-  it("are found, the leasing manual among them", () => {
+  it("are found, the leasing manual and the startup flow among them", () => {
     expect(manuals).toContain("src/leasing/README.md");
+    expect(flows).toContain("docs/internal/flows/startup.md");
   });
 
   it("each manual sits beside a CLAUDE.md that only imports it", () => {
@@ -75,7 +76,7 @@ describe("module manuals and flow docs", () => {
     expect(over).toEqual([]);
   });
 
-  it("name only files and directories that exist", () => {
+  it("name only .ts, .tsx, .mjs, .js and .md files, and directories, that exist", () => {
     expect([...manuals, ...flows].flatMap(missingPaths)).toEqual([]);
   });
 

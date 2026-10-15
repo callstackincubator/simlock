@@ -62,13 +62,13 @@ reaches its settle step, the steps after the read are skipped.
     3. Spent deletes: `shutdown` devices that may not be granted again are deleted
        inline. A failed delete is logged; the device stays `shutdown`.
     4. Warm pool and capacity observer start.
-22. `queue.changed` with the first depth.
+22. `queue.changed` with the first depth. Converge done → health `running`.
 
 Arm (skipped when a stop already ran):
 
 23. Owner-routed push subscription.
 24. `daemon.started` (redacted config), then one event per driver rejection.
-25. Health monitor and physical device watcher start. Health `running`.
+25. Health monitor and physical device watcher start.
 
 Converge throws → health `failed`; parked requests get `DAEMON_STARTUP_FAILED`;
 stop `convergence-failed`; the start rejects.

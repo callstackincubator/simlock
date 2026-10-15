@@ -1,7 +1,6 @@
 # Core
 
-Does: device management on a worker — registry, state machine, device verbs, reclaim,
-quarantine, warm pool, capacity, cleanup, components, doctor.
+Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, doctor.
 Entry: `index.ts` → `createCore(options)`, then `core.connect(ports)` once, before any request.
 Uses: bus, ports, contract. Never imports: leasing, drivers, daemon, gateway, agent-device.
 Imported by: daemon, leasing, cli, http, agent-device, drivers (`Driver`, `ensureOwnedRoot`), gateway (catalog match, `fits`).
@@ -45,7 +44,8 @@ See also: [leasing](../leasing/README.md) (lease flow, when reclaim runs), [warm
    `createCore`, then `CleanupReaper`, `Nuke`, `HostFactsReader`. `createCore` builds the rest.
 2. `createLeasing` builds `corePorts`; the daemon calls `core.connect`. A port used before that
    throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor),
-   `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue), `physicalDeviceReady`.
+   `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue);
+   `physicalDeviceReady` is optional, a no-op before `connect`.
 3. Lock: `SerializedDecision.run`, shared by core, leasing and the installer. No driver I/O inside.
 4. Claims: one per device, memory only. Kinds: `boot`, `eviction`, `cleanup`, `nuke`, `recovery`,
    `reclaim`, `enrollment`, `grant`; optional `owner`.
