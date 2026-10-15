@@ -41,8 +41,8 @@ grounds for rejecting a change even if it works.
    `ProcessRunner`, `Clock`, `SystemStats`, …) injected at startup — never
    import `fs`/`child_process` or call `Date.now()`/`setTimeout` directly in
    application code. Tests use the in-memory/fake implementations; if a new
-   external dependency appears, define its port first. See "External APIs
-   behind interfaces" in [../ARCHITECTURE.md](../ARCHITECTURE.md).
+   external dependency appears, define its port first. The ports are listed
+   in [the ports manual](../../../src/ports/README.md).
 10. **A rule is enforced in exactly one place.** Never implement the same
     decision twice — not in two modules, not on two code paths through one
     module, not "once for the fast path and once for the general path". If

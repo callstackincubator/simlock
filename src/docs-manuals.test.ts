@@ -22,6 +22,7 @@ const trackedFiles = execFileSync(
 
 const manuals = trackedFiles.filter((name) => /^src\/(?:.+\/)?README\.md$/.test(name));
 const flows = trackedFiles.filter((name) => /^docs\/internal\/flows\/[^/]+\.md$/.test(name));
+const MAP = "docs/internal/ARCHITECTURE.md";
 
 const PATH_TOKEN = /^[\w@.-]+(?:\/[\w@.-]+)*(?:\.(?:ts|tsx|mjs|js|md)|\/)$/;
 
@@ -52,7 +53,7 @@ function brokenLinks(doc: string): string[] {
   );
 }
 
-describe("module manuals and flow docs", () => {
+describe("module manuals, flow docs and the architecture map", () => {
   it("are found, the leasing manual and the startup flow among them", () => {
     expect(manuals).toContain("src/leasing/README.md");
     expect(flows).toContain("docs/internal/flows/startup.md");
@@ -77,10 +78,19 @@ describe("module manuals and flow docs", () => {
   });
 
   it("name only .ts, .tsx, .mjs, .js and .md files, and directories, that exist", () => {
-    expect([...manuals, ...flows].flatMap(missingPaths)).toEqual([]);
+    expect([...manuals, ...flows, MAP].flatMap(missingPaths)).toEqual([]);
   });
 
   it("link only to files that exist", () => {
-    expect([...manuals, ...flows].flatMap(brokenLinks)).toEqual([]);
+    expect([...manuals, ...flows, MAP].flatMap(brokenLinks)).toEqual([]);
+  });
+
+  it("the architecture map links every manual", () => {
+    const map = readFileSync(join(REPO_ROOT, MAP), "utf8");
+    const linked = [...map.matchAll(/\]\(\.\.\/\.\.\/(src\/[^)#\s]+\/README\.md)\)/g)].map(
+      (match) => match[1],
+    );
+
+    expect(manuals.filter((manual) => !linked.includes(manual))).toEqual([]);
   });
 });
