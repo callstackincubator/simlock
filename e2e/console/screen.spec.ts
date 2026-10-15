@@ -76,14 +76,16 @@ async function averageColour(page: Page): Promise<string> {
     const image = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height);
     if (image === undefined) throw new Error("the screen canvas has no 2d context");
     const data = image.data;
-    const totals = [0, 0, 0];
+    let red = 0;
+    let green = 0;
+    let blue = 0;
     for (let i = 0; i < data.length; i += 4) {
-      totals[0] += data[i];
-      totals[1] += data[i + 1];
-      totals[2] += data[i + 2];
+      red += data[i] ?? 0;
+      green += data[i + 1] ?? 0;
+      blue += data[i + 2] ?? 0;
     }
     const count = data.length / 4;
-    return totals.map((total) => Math.round(total / count));
+    return [red, green, blue].map((total) => Math.round(total / count));
   });
   return rgb.join(",");
 }
