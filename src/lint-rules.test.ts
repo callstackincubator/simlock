@@ -601,6 +601,12 @@ describe("main.ts loads optional modules lazily", () => {
     expect(
       mainViolations('export const load = () => import("../agent-device/index.js");\n'),
     ).not.toContain("main-loads-modules-lazily");
+    expect(mainViolations('export { value } from "../agent-device/index.js";\n')).toContain(
+      "main-loads-modules-lazily",
+    );
+    expect(mainViolations('import "../agent-device/index.js";\nexport {};\n')).toContain(
+      "main-loads-modules-lazily",
+    );
     expect(
       mainViolations(
         'import type { Shape } from "../agent-device/index.js";\nexport type S = Shape;\n',
