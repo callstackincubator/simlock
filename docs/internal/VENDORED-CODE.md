@@ -1,0 +1,77 @@
+# Vendored code
+
+Every piece of third-party code this repository carries, and how to re-verify
+each one. The rules that decide what goes in this list are in
+[agent-rules/vendor-and-third-party-code.md](agent-rules/vendor-and-third-party-code.md);
+this page is the inventory, one row per dependency. A change under `vendor/`
+updates the affected row here, its directory's `NOTICE.md`, and
+[`vendor/README.md`](../../vendor/README.md)'s index, in the same change.
+
+The convention, in one line: `vendor/<upstream>/` holds the artifact(s), the
+license text(s) they require under `LICENSES/`, and a `NOTICE.md`.
+
+## The inventory
+
+| What | Upstream | Version / commit | License | Where it lives | Consumed by | Re-verify with |
+|---|---|---|---|---|---|---|
+| `@agent-device/proxy` — the transport proxy in front of an agent-device daemon, packed from a branch of agent-device that is not on npm | `callstack/agent-device`, `simlock-integration` branch | commit `253dca023edf13410f7928c76e9e604e5e5871a0` | MIT (Callstack) | `vendor/agent-device-proxy-0.21.28-dev-253dca0.tgz`; license inside the archive at `package/LICENSE` | `package.json`'s `"@agent-device/proxy": "file:vendor/…tgz"`, which `src/agent-device/host/` imports | `tar -tzf vendor/agent-device-proxy-*.tgz \| grep LICENSE`; the commit is what `scripts/slow-e2e.sh` checks a local checkout against, so keep it the first 40-char hash in `vendor/README.md` |
+| serve-sim's capture and encode pipeline — CoreSimulator framebuffer capture and the H.264 encode path, patched by us | `EvanBacon/serve-sim` | commit `6d009686ed08f7d8bd19bca9f9f67a9237931f44` | Apache-2.0 | `vendor/screen-capture/Sources/simlock-screen-capture/`, license at `vendor/screen-capture/LICENSES/serve-sim.APACHE-2.0.txt` | the `simlock-screen-capture` program `stream.command` points at, run by `src/stream/capture.ts` | the `curl … \| diff -u -` command in [`vendor/screen-capture/NOTICE.md`](../../vendor/screen-capture/NOTICE.md), per file |
+| `scrcpy-server` — the Android screen-streaming server artifact, byte-identical to upstream's release asset | `Genymobile/scrcpy` | release `v5.0.1`; revision built `dc8a55a24c27ae78ae202b5a3288da681d0f141a` | Apache-2.0 | `vendor/scrcpy/scrcpy-server-v5.0.1`, license at `vendor/scrcpy/LICENSES/scrcpy.APACHE-2.0.txt`, digest in `vendor/scrcpy/SHA256SUMS.txt` | **nothing yet** — the planned Android streaming PoC will be its first consumer | `cd vendor/scrcpy && shasum -a 256 -c SHA256SUMS.txt`, and the same against upstream's own release `SHA256SUMS.txt` |
+
+`vendor/scrcpy/NOTICE.md` names what is *inside* that artifact besides scrcpy's
+own classes — the Kotlin standard library and the JetBrains/IntelliJ annotation
+classes, all Apache-2.0 — because they are in the file we distribute even though
+we did not choose them one by one.
+
+## What is third-party but not vendored
+
+These are third-party code the repo depends on and ships or installs through
+their own distribution, so `vendor/` is the wrong place for them and this is the
+reason they are not above.
+
+| What | Upstream | Version | License | Where it is | Why it is not vendored |
+|---|---|---|---|---|---|
+| React, React DOM, Hono, `ws`, Zod, the MCP SDK, TanStack table/virtual, Recharts | npm | as `pnpm-lock.yaml` pins | per package | `node_modules/`, resolved from the lockfile | A registry gives us these, with their licenses; vendoring a tree we never patch only loses upstream's fixes |
+| The Geist and Geist Mono variable fonts | `vercel/geist-font`, repackaged as `@fontsource-variable/geist` | `^5.3.0` | OFL-1.1 | `ui/src/main.tsx` imports them; the built console serves the `.woff2` files out of `dist/ui/assets/` | Installed from npm and bundled at build time. **Known gap:** the font license travels with the npm package but Vite does not copy it beside the emitted `.woff2`, and OFL-1.1 wants the license to accompany the font; the fix is to ship the license with the console build, not to vendor the fonts |
+| The agent-device CLI itself | `callstack/agent-device` | the commit above | MIT | a separate checkout, at the absolute path `SIMLOCK_E2E_AGENT_DEVICE` gives, on machines that run the slow lane | It is a tool we invoke, not code we carry; only its proxy is vendored, and `toolchain.md` says how to read its source at that commit |
+
+The license question for the first row is answered by npm, which ships each
+package's own license text next to it; nothing in that row is a file in this
+repo, which is what separates it from the three rows above.
+
+## External tools are not vendored
+
+`simctl` and the rest of Xcode's command-line tools, the Android SDK's
+`emulator`, `avdmanager` and `sdkmanager`, and `adb` are **prerequisites this
+project invokes and does not carry**. They arrive with the user's Xcode or Android
+SDK installation, at whatever version that installation happens to be, and
+simlock never downloads, bundles, or pins one. `docs/CONFIGURATION.md` and the
+driver prerequisite checks are where their absence is reported.
+
+Worth keeping the two ideas apart, because the confusion is cheap to make: a
+vendored artifact is a byte we distribute and are therefore obliged to license
+correctly, while an external tool is something we shell out to and can only ask
+for. That is why the scrcpy *server* is vendored and `adb` — which is how it
+reaches the device — is not; and why the capture program's Swift source is
+vendored while the Xcode that compiles it is not.
+
+## How a new vendored thing gets here
+
+1. Decide it cannot stay an upstream dependency: a registry does not carry the
+   line we need, or we must patch it.
+2. Make `vendor/<upstream>/`, put the artifact(s) in it, upstream's verbatim
+   license text in `LICENSES/<upstream>.<SPDX-id>.txt`, and `NOTICE.md` written
+   to the list in rule 4 of
+   [agent-rules/vendor-and-third-party-code.md](agent-rules/vendor-and-third-party-code.md).
+   A binary also gets `SHA256SUMS.txt` in `shasum -c` format.
+3. Add the row here and the directory to `vendor/README.md`'s index. Keep the
+   agent-device commit the first 40-character hash in that file — the slow lane
+   reads the first one it finds.
+4. `pnpm exec vitest run --project unit src/source-hygiene.test.ts` checks the
+   shape (license text, `NOTICE.md`, the digest, and that a vendored binary is
+   excluded from the text scan for a reason it can prove).
+
+Nothing here is fetched at install, at build or at run time: an artifact is in
+the tree because a person or an agent fetched it once, checked it, and committed
+it, which is what safety rule 4's consent requirement looks like for vendored
+code.

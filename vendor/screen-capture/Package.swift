@@ -1,8 +1,11 @@
 // swift-tools-version:6.0
 //
 // simlock-screen-capture — a standalone Swift CLI that streams the framebuffer of a booted
-// iOS Simulator to stdout. The capture and encode pipeline is serve-sim's (Apache-2.0), copied
-// from Sources/SimNative and Sources/SimNativeSupport with two changes:
+// iOS Simulator to stdout.
+//
+// Origin: see NOTICE.md for the per-file record, and LICENSES/ for the license text of the parts
+// that are not ours. The private-API capture path is serve-sim's (Apache-2.0), copied from
+// Sources/SimNative and Sources/SimNativeSupport with two changes:
 //
 //  1. `FrameCapture.findSimDevice` also searches the device set named by
 //     SIMLOCK_IOS_DEVICE_SET. serve-sim searches only CoreSimulator's default set, and simlock
@@ -12,6 +15,10 @@
 //     that package that needs NodeAPI; a process that writes frames to stdout instead does not
 //     need it, and the daemon can then supervise the capture the same way it supervises every
 //     other tool it runs.
+//
+// The encoders are not serve-sim's: `H264Encoder.swift`, `VideoEncoder.swift`,
+// `PixelBufferUtils.swift` and `Xcode.swift` were rewritten here against public VideoToolbox,
+// CoreVideo, CoreMedia and ImageIO, and are under this project's MIT license.
 //
 // One target, so the copied types keep their internal visibility and need no `public` edits.
 import PackageDescription

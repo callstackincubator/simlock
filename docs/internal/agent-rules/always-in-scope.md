@@ -51,6 +51,14 @@ spec says otherwise in its own words, the spec wins.
 11. **Comments say why.** Every comment the change adds or edits starts with
    `why:` and says why, or is deleted; the commit hook and CI reject the
    rest (architecture rule 17).
+12. **A vendored artifact's notice and row.** A change under `vendor/` updates
+   that directory's `NOTICE.md`, its row in `docs/internal/VENDORED-CODE.md`
+   and `vendor/README.md`'s index in the same change
+   (vendor-and-third-party-code rule 11). A new first-level `vendor/`
+   directory carries its license text under `LICENSES/` and a `NOTICE.md`;
+   `src/source-hygiene.test.ts` enforces that shape, and counts a vendored
+   binary as excluded from the text scan only where a `SHA256SUMS.txt` pins
+   its digest (vendor-and-third-party-code rules 2, 3, 7).
 
 **CI proves the suite.** CI runs the checks [toolchain.md](toolchain.md)
 lists on every push, and the merge gate refuses a PR whose checks are not

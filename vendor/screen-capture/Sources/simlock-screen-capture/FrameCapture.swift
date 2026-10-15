@@ -1,3 +1,9 @@
+// MODIFIED FILE — this file is copied from serve-sim (Copyright 2026 Evan Bacon, Apache-2.0;
+// see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's change
+// is `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
+// simlock-owned `simctl --set` root can be found at all; everything else here is upstream's.
+// `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
+// we took it from. Read that notice before editing this file.
 import Foundation
 import CoreVideo
 import CoreMedia

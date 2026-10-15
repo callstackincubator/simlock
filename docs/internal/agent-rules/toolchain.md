@@ -63,11 +63,11 @@ that goes through the reviews its diff's kind gets and the merge gate:
 ## The screen capture program
 
 `stream.command` names a program this repo does not ship. The one it is written
-against lives in `tools/screen-capture/` — a Swift package, so nothing in
+against lives in `vendor/screen-capture/` — a Swift package, so nothing in
 `pnpm build` or `pnpm test` builds or runs it:
 
 ```sh
-cd tools/screen-capture && swift build -c release --scratch-path .build/out
+cd vendor/screen-capture && swift build -c release --scratch-path .build/out
 # the binary: .build/out/Products/Release/simlock-screen-capture
 ```
 
@@ -80,7 +80,7 @@ is everything this repo writes — the envelope reader, the refusal paths, the
 lifecycle — against a program that writes the same envelope from stills
 (`e2e/console/screen-capture.ts`). A change to the Swift program is checked the
 way the slow lane checks anything else: by hand, on a machine with a simulator,
-where `node tools/screen-capture/scripts/unframe.mjs <capture> out.264` says
+where `node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` says
 whether the bytes it wrote decode.
 
 ## Slow lane
