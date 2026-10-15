@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../core/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { FakeSystemStats, MemoryFilesystem, NoopLogger } from "../ports/index.js";
-import { createModuleHost, type ModuleEndedLease, type OptionalModuleDefinition } from "./index.js";
+import {
+  createModuleHost,
+  type ModuleEndedLease,
+  type OptionalModuleDefinition,
+  type WorkerView,
+} from "./index.js";
 import { fakeGatewayContext, fakeModule, fakeWorkerContext } from "./testing.js";
 
 const HOOK_DEADLINE_MS = 30_000;
@@ -155,6 +160,29 @@ describe("every optional module's gateway side", () => {
       expect(settled).toBe(true);
     },
   );
+});
+
+describe("a gateway module's serving()", () => {
+  it("keeps a connected worker whose capability is available even when its catalog is unread, and drops one that is not connected", async () => {
+    const mine = fakeModule({ gateway: { module: {} }, name: "mine" });
+    const definition = mine.definition as OptionalModuleDefinition<unknown>;
+    const available = [{ name: "mine", state: "available" }];
+    const views = [
+      { capabilities: available, connection: "connected", id: "unread" },
+      { capabilities: available, connection: "disconnected", id: "gone" },
+    ] as never as readonly WorkerView[];
+    const { ctx } = await fakeGatewayContext("mine", definition.config.defaults);
+
+    await createModuleHost({
+      config: await configFor(definition, true),
+      definitions: [definition],
+      logger: new NoopLogger(),
+      parts: { ...ctx, worker: () => undefined, workers: () => views } as never,
+      role: "gateway",
+    });
+
+    expect(mine.gatewayContexts[0]?.serving().map((view) => view.id)).toEqual(["unread"]);
+  });
 });
 
 describe("the registry", () => {

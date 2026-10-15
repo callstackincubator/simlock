@@ -306,7 +306,14 @@ describe("a gateway's optional modules", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(stopped).toBe(false);
 
-    gateway.clock.advance(30_000);
+    gateway.clock.advance(29_999);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(stopped).toBe(false);
+    expect(
+      gateway.sink.records.some((r) => r.message === "Optional module hook ran out of time"),
+    ).toBe(false);
+
+    gateway.clock.advance(1);
     await stopping;
 
     expect(gateway.sink.records).toContainEqual(
