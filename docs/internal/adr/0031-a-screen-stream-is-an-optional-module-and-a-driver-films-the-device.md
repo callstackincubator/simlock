@@ -168,7 +168,9 @@ stateDiagram-v2
 - **The lease end waits for the device to be left alone.** The module's
   lease-end participant (ADR 0024) aborts every open of the ended lease,
   waits for each open in progress to settle, then closes what attached
-  and waits for those closes. The wait is bounded by each driver's own
+  and waits for those closes. A capture whose viewer already left stays
+  registered until its open settles and what it attached is closed, so
+  the lease end waits for it too. The wait is bounded by each driver's own
   bounds and by leasing's signal (ADR 0024 §2), which fires at
   `lease.endWaitMs` (default 10 minutes). Within that the reclaim starts on
   a device nothing films. Past it the wipe starts anyway, and an Android
@@ -188,14 +190,20 @@ stateDiagram-v2
   with nothing new, once its first key frame is out; an encoder that never
   paints meets the silence bound. The bounds nest: 5 s alive < 30 s
   silence < 330 s relay idle (§7).
-- **A device rebooted under a lease.** The stream ends when the device
-  socket closes or at the silence bound; Android's close runs its cleanup
-  against the serial it stored at open.
+- **A device rebooted under a lease.** On Android the stream ends when
+  the device socket closes or at the silence bound, and close runs its
+  cleanup against the serial it stored at open. On iOS the capture
+  program checks that the simulator is booted only at start, then repaints
+  its last surface every 200 ms, so after a reboot the viewer can see the
+  old picture until Stop and Show screen. That is a known gap, accepted
+  for v1; the lease end stops the capture as usual.
 - **The daemon stopping.** The module has no stop hook of its own. An
-  iOS tool stops when the daemon's process ends and its stdin closes. An
-  Android server ends at its next failed write once the daemon's socket or
-  host-side `adb shell` is gone, which the driver's dispose (stopping
-  Simlock's adb server) or the daemon's death causes.
+  iOS tool stops when the daemon's process ends and its stdin closes.
+  `simlock daemon stop` closes Android captures through the driver's
+  dispose. A daemon killed outright leaves its host-side `adb shell`
+  dead, but a device server on a still screen writes nothing and notices
+  only at the next screen change; the reclaim (snapshot load or wipe)
+  ends it. That is a known gap, accepted for v1.
 - **A viewer that stops reading.** Nothing is dropped on the worker: the
   body is pulled, so a slow viewer slows its capture to its pace. Through
   a gateway, the byte channel resets after a write waits 60 s for credit
@@ -316,8 +324,9 @@ For each capture the client:
 starts a clean-up process, which survives the server and unlinks the jar
 as it starts. Killing the
 host-side `adb shell` ends the server on the device. So a closed capture
-leaves no jar and no server behind. When the daemon dies mid-capture, its
-socket closes and the server ends at its next failed write.
+leaves no jar and no server behind. When the daemon dies mid-capture, the
+server ends at its next failed write, which a still screen delays until
+the next change or the reclaim (§3).
 
 A physical Android device is refused in v1. It is reached through the
 host's default adb server (safety rule 9), and pushing and running a
@@ -348,8 +357,8 @@ channels:
   head. Once the head is in, an idle timer bounds the body: it restarts on
   every chunk, and when 330 s pass with no response bytes it ends the
   exchange as a dead worker does (`WORKER_UNREACHABLE`, `relay.cancel`,
-  the channel aborted). It runs on the daemon's Clock port;
-  `GatewayRelayOptions.idleMs` sets it. The relay
+  the channel aborted). Both timers run on the daemon's Clock port;
+  `GatewayRelayOptions.idleMs` sets the idle one. The relay
   still names no target (architecture rule 21). 330 s, not less, because
   an agent-device `/rpc` body may sit silent between progress lines, and
   agent-device's proxy already aborts every exchange 300 s after it starts
@@ -458,6 +467,9 @@ a contract change, so the daemon protocol goes up by one.
 - A stream holds one byte channel for its life. A worker with 64 open
   channels makes the next relay, a stream or an agent-device call, wait.
 - No event marks a stream, so `simlock events` cannot say who watched.
+- After a reboot under its lease, an iOS viewer can see a stale picture
+  until Stop and Show screen; an Android server outlives a killed daemon
+  on a still screen until the next change or the reclaim.
 - If ADR 0030 is accepted, the module's wiring moves out of
   `daemon/main.ts` onto its contract.
 
