@@ -1,6 +1,6 @@
 # 0032. The event history is a SQLite database, with projections beside it
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-16
 - **Issue:** [#623](https://github.com/callstackincubator/simlock/issues/623)
 - **Supersedes:** [ADR
