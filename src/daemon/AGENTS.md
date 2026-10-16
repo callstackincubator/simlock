@@ -104,8 +104,9 @@ Credential resolution (`createCredentialRoleResolver`), at `hello`:
 4. Anything else → `ADMIN_AUTHENTICATION_FAILED`, connection closed.
 
 Admin secret: fresh each start, hash kept in memory. Written to `admin.token`
-(0600, atomic) only after the claim; removed on stop. A daemon that lost the
-claim never touches it.
+(0600, atomic) only after the claim; removed on stop before releasing the
+endpoint, so old shutdown cannot remove a replacement's credential. A daemon
+that lost the claim never touches it.
 
 Security model: cooperative identity, not a hostile-process boundary.
 
