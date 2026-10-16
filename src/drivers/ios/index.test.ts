@@ -916,10 +916,11 @@ describe("IosSimctlDriver", () => {
     );
   });
 
-  it("boots then waits for bootstatus with the documented timeout", async () => {
+  it("boots then checks bootstatus and installer readiness with bounded commands", async () => {
     const runner = new ScriptedProcessRunner([
       { match: simctl("boot", driverData.udid) },
       { match: simctl("bootstatus", driverData.udid, "-b") },
+      { match: simctl("listapps", driverData.udid) },
     ]);
     const driver = await createDriver(runner);
 
@@ -938,6 +939,94 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
       { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
+    ]);
+  });
+
+  it("keeps makeReady pending until a failed installer probe succeeds", async () => {
+    const clock = new FakeClock();
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("boot", driverData.udid) },
+      { match: simctl("bootstatus", driverData.udid, "-b") },
+      {
+        match: simctl("listapps", driverData.udid),
+        result: { code: 2, stderr: "installer starting", stdout: "" },
+      },
+      { match: simctl("listapps", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, clock);
+    const ready = driver.makeReady(
+      { address: driverData.udid, deviceId: driverData.udid, driverData },
+      prepareFull,
+    );
+    const state = promiseState(ready);
+    await flushMicrotasks221();
+    expect(state.state).toBe("pending");
+    expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("listapps", driverData.udid));
+    clock.advance(1_000);
+    await flushMicrotasks221();
+    expect(state.state).toBe("fulfilled");
+    expect((await ready).deviceId).toBe(driverData.udid);
+  });
+
+  it.each([false, true])(
+    "shares the bootstatus deadline with a %s-hanging installer probe and shuts down on expiry",
+    async (hangs) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        {
+          match: simctl("bootstatus", driverData.udid, "-b"),
+          onSpawn: () => clock.advance(119_500),
+        },
+        {
+          match: simctl("listapps", driverData.udid),
+          hangs,
+          result: { code: 2, stderr: "installer starting", stdout: "" },
+        },
+        { match: simctl("shutdown", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      const ready = driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      );
+      const state = promiseState(ready);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      expect(runner.calls.at(-1)).toEqual({
+        ...simctl("listapps", driverData.udid),
+        options: { timeoutMs: 500 },
+      });
+      clock.advance(499);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      clock.advance(1);
+      await flushMicrotasks221();
+      expect(state.state).toBe("rejected");
+      await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
+      expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("shutdown", driverData.udid));
+    },
+  );
+
+  it("does not probe the installer when bootstatus has consumed the readiness budget", async () => {
+    const clock = new FakeClock();
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("boot", driverData.udid) },
+      { match: simctl("bootstatus", driverData.udid, "-b"), onSpawn: () => clock.advance(120_000) },
+      { match: simctl("shutdown", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, clock);
+    await expect(
+      driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      ),
+    ).rejects.toBeInstanceOf(BootTimeoutError);
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("boot", driverData.udid),
+      simctlArgs("bootstatus", driverData.udid, "-b"),
+      simctlArgs("shutdown", driverData.udid),
     ]);
   });
 
