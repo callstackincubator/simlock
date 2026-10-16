@@ -149,7 +149,6 @@ a:hover {
   white-space: nowrap;
 }
 
-
 /* Inputs: a grey fill and a 1px border. */
 
 label {
@@ -211,7 +210,6 @@ input[aria-invalid="true"] {
   font-weight: 500;
 }
 
-
 .skip-link {
   position: absolute;
   left: var(--space-2);
@@ -225,7 +223,6 @@ input[aria-invalid="true"] {
 .skip-link:focus {
   top: var(--space-2);
 }
-
 
 /* A label: mono, uppercase, letter-spaced. The capitals are CSS, so the text stays as written. */
 .ds-label {
