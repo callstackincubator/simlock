@@ -41,28 +41,46 @@ function copyScrcpyServer() {
 
 function buildIosCapture() {
   if (process.platform !== "darwin") {
-    console.log("build-capture: not macOS, skipping the iOS screen-capture program");
+    console.log("build-capture: not macOS, skipping the iOS screen-capture programs");
     return;
   }
   const packagePath = join(root, "vendor/screen-capture");
   const scratch = join(packagePath, ".build/out");
-  const built = spawnSync(
-    "swift",
-    ["build", "-c", "release", "--package-path", packagePath, "--scratch-path", scratch],
-    { stdio: "inherit" },
-  );
-  if (built.error !== undefined || built.status !== 0) {
-    console.warn(
-      "build-capture: could not build the iOS screen-capture program (is Xcode installed and selected?); " +
-        "iOS screen streams will be unavailable",
+  // why: each program builds on its own -- the device program links a private framework the
+  // simulator program never needs, so one failing must not take the other's streams with it.
+  let copiedAny = false;
+  for (const [product, what] of [
+    ["simlock-screen-capture", "iOS screen streams"],
+    ["simlock-device-capture", "physical iPhone streams"],
+  ]) {
+    const result = spawnSync(
+      "swift",
+      [
+        "build",
+        "-c",
+        "release",
+        "--product",
+        product,
+        "--package-path",
+        packagePath,
+        "--scratch-path",
+        scratch,
+      ],
+      { stdio: "inherit" },
     );
-    return;
+    if (result.error !== undefined || result.status !== 0) {
+      console.warn(
+        `build-capture: could not build ${product} (is Xcode installed and selected?); ${what} will be unavailable`,
+      );
+      continue;
+    }
+    const target = join(dist, "bin", product);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(scratch, "release", product), target);
+    chmodSync(target, 0o755);
+    copiedAny = true;
   }
-  const target = join(dist, "bin/simlock-screen-capture");
-  mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(scratch, "release/simlock-screen-capture"), target);
-  chmodSync(target, 0o755);
-  copyNotices("screen-capture");
+  if (copiedAny) copyNotices("screen-capture");
 }
 
 copyScrcpyServer();
