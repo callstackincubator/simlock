@@ -915,10 +915,13 @@ test.describe("the workers page", () => {
   }) => {
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const name = found((await workerList(daemon))[0], "the host's worker").id;
-    const follow = async (link: Locator) => {
+    // why: Firefox does not wrap focus from the page's last control to its first, so a link that
+    // comes before the focused control is reached going backward.
+    const follow = async (link: Locator, direction: "forward" | "backward" = "forward") => {
+      const key = direction === "forward" ? tab : `Shift+${tab}`;
       for (let step = 0; step < 30; step += 1) {
         if (await link.evaluate((element) => element === document.activeElement)) break;
-        await page.keyboard.press(tab);
+        await page.keyboard.press(key);
       }
       await expect(link).toBeFocused();
       await page.keyboard.press("Enter");
@@ -945,6 +948,7 @@ test.describe("the workers page", () => {
 
     await follow(
       page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Workers" }),
+      "backward",
     );
     await expect(page).toHaveURL(/\/workers$/);
   });

@@ -332,7 +332,9 @@ export const NAV_LABELS = NAV.map((entry) => entry.label);
 // why: pages slide and fade in; an audit or a measurement taken mid-way reads a half-faded colour.
 export async function settled(page: Page): Promise<void> {
   await page.evaluate(() =>
-    Promise.all(document.getAnimations().map((animation) => animation.finished)),
+    Promise.all(
+      document.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+    ),
   );
 }
 

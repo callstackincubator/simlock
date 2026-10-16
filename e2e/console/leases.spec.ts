@@ -461,7 +461,6 @@ test.describe("the leases page", () => {
       await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(granted.id);
       await follow(
         page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Leases" }),
-        "backward",
       );
       expect(new URL(page.url()).pathname).toBe("/leases");
     } finally {
