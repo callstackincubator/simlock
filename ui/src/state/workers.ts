@@ -88,6 +88,13 @@ export function useWorkers(): LoadView<WorkersPage> {
   });
 }
 
+function inspectorTotals(chosen: WorkerView | undefined): { devices: number; warm: number } {
+  return {
+    devices: chosen?.devices?.length ?? 0,
+    warm: chosen?.warmPool?.targets.length ?? 0,
+  };
+}
+
 // why: the holders' labels come from the token records and their lease links from the lease list;
 // while either has not arrived or was refused, a holder shows its id and the devices still show.
 function useInspector(
@@ -97,16 +104,9 @@ function useInspector(
   const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
   const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
   const now = useNow();
-  const devicesPaging = usePaging({
-    name: "devices",
-    sizes: TABLE_SIZES,
-    total: ready ? (chosen?.devices?.length ?? 0) : undefined,
-  });
-  const warmPaging = usePaging({
-    name: "warm-pool",
-    sizes: TABLE_SIZES,
-    total: ready ? (chosen?.warmPool?.targets.length ?? 0) : undefined,
-  });
+  const totals = ready ? inspectorTotals(chosen) : undefined;
+  const devicesPaging = usePaging({ name: "devices", sizes: TABLE_SIZES, total: totals?.devices });
+  const warmPaging = usePaging({ name: "warm-pool", sizes: TABLE_SIZES, total: totals?.warm });
   if (chosen === undefined) return undefined;
   const leaseIds = leases.map((lease) => lease.id);
   return {

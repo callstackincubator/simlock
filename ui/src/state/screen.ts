@@ -10,7 +10,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 
 import { ApiError } from "../data/api";
 import { readStream, type StreamMeta, type StreamStats } from "../data/stream";
-import { type Readout, readout, type ScreenPhase } from "../model/screen";
+import { type Readout, type ScreenPhase, screenView } from "../model/screen";
 import { useApi } from "./services";
 
 export type { Readout } from "../model/screen";
@@ -81,27 +81,7 @@ export function useScreen(leaseId: string): Screen {
     });
   }, [api, leaseId]);
 
-  // why: the canvas is mounted as soon as a picture has been asked for rather than when the first frame
-  // arrives — a frame can arrive before React has painted anything, and a pane that mounts its canvas
-  // in reply to that frame has nothing to draw the first picture on. It goes away with the stream
-  // rather than staying: a last frame kept on the page after Stop looks like a live device and shows a
-  // screen its viewer has already asked not to see.
-  const live = phase === "live" || phase === "starting";
-  const failure = stats.error ?? (phase === "stopped" ? note : undefined);
-  const waiting = live && stats.painted === 0;
-  const waitingNote =
-    phase === "starting" ? "Starting the capture on the worker." : "Waiting for the first frame.";
-  return {
-    canvas,
-    height: meta?.height ?? 0,
-    live,
-    note,
-    readout: readout({ failed: failure !== undefined, meta, phase, stats }),
-    start,
-    stop,
-    waiting: waiting ? waitingNote : undefined,
-    width: meta?.width ?? 0,
-  };
+  return { canvas, start, stop, ...screenView({ meta, note, phase, stats }) };
 }
 
 /**
