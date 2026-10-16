@@ -458,6 +458,12 @@ is why `ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
 especially on slower CI runners. The `ios.slim.*` keys apply to every slim
 device the worker makes, whatever its default mode.
 
+An iOS simulator is ready after boot completes and `simctl listapps` succeeds.
+Boot completion and installer polling share a 120-second deadline for a full
+device, or `ios.slim.bootTimeoutMs` for each boot of a supported slim device.
+If the deadline expires, readiness fails and Simlock attempts to shut the
+simulator down.
+
 **`full` is a guarantee; `slim` is best effort.** A `full` request never
 receives a slim device. A `slim` request on a runtime that cannot be slimmed
 -- an iOS runtime older than 18.5, or any Android device -- is granted a full

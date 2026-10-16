@@ -64,6 +64,7 @@ const COMMAND_TIMEOUT_MS = 30_000;
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const INSTALLER_POLL_MS = 1_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
 // being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
@@ -780,14 +781,35 @@ export class IosSimctlDriver implements Driver {
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
+    const deadline = this.#clock.now() + bootstatusTimeoutMs;
     const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs);
 
-    if (outcome.kind === "timed-out") {
-      await this.#bestEffortShutdown(udid);
-      throw new BootTimeoutError(deviceId);
+    if (outcome.kind === "finished") {
+      this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
+      if (await this.#waitForInstaller(udid, deadline)) return;
     }
 
-    this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
+    await this.#bestEffortShutdown(udid);
+    throw new BootTimeoutError(deviceId);
+  }
+
+  async #waitForInstaller(udid: string, deadline: number): Promise<boolean> {
+    // why: bootstatus can finish before the installer accepts requests after an erase (#547).
+    while (this.#clock.now() < deadline) {
+      const outcome = await this.#invokeSimctl(
+        ["listapps", udid],
+        Math.min(COMMAND_TIMEOUT_MS, deadline - this.#clock.now()),
+      );
+      if (outcome.kind === "finished" && outcome.result.code === 0) {
+        return this.#clock.now() < deadline;
+      }
+      const remainingMs = deadline - this.#clock.now();
+      if (remainingMs <= 0) break;
+      await new Promise<void>((resolve) => {
+        this.#clock.setTimer(Math.min(INSTALLER_POLL_MS, remainingMs), resolve);
+      });
+    }
+    return false;
   }
 
   async #applySlimAndReboot(

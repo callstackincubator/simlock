@@ -73,7 +73,7 @@ is enabled, the driver:
 
 1. applies the disable list through `simctl spawn <udid> launchctl disable`,
 2. shuts the device down,
-3. boots it again and waits for `bootstatus -b`,
+3. boots it again and waits for `bootstatus -b` and a successful `simctl listapps` installer probe,
 4. records what it did in `driverData` (see 3),
 5. emits `device.slimmed` after the registry commit.
 
@@ -155,7 +155,7 @@ worse than no slim pass.
 ### 8. The boot deadline accounts for the second boot
 
 `ios.slim.bootTimeoutMs` (default ten minutes, matching simslim on CI
-runners) replaces the ordinary `bootstatus` deadline, but only for a boot
+runners) replaces the ordinary combined `bootstatus` and installer-probe deadline, but only for a boot
 that will actually slim: a `--full` device, a runtime below the floor, or a
 recovery boot keeps the normal deadline. `Driver.estimate` quotes the
 double-boot cost for the same boots so `doctor` does not read a slim boot
@@ -165,7 +165,7 @@ as a stalled transition.
 
 `device.slimmed` is bridged from the driver's `onSlimmed` callback in the
 daemon, exactly like `component.install-*`, and fires only once the
-post-slim `bootstatus` has passed. The fact it reports is committed to the
+post-slim `bootstatus` and installer probe have passed. The fact it reports is committed to the
 simulator's launchd database, not the registry, which is why the bridge
 does not wait on a registry write. A skipped or failed slim is a warning
 log line, not an event.

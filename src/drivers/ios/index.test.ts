@@ -943,31 +943,40 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("keeps makeReady pending until a failed installer probe succeeds", async () => {
-    const clock = new FakeClock();
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("boot", driverData.udid) },
-      { match: simctl("bootstatus", driverData.udid, "-b") },
-      {
-        match: simctl("listapps", driverData.udid),
-        result: { code: 2, stderr: "installer starting", stdout: "" },
-      },
-      { match: simctl("listapps", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner, clock);
-    const ready = driver.makeReady(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      prepareFull,
-    );
-    const state = promiseState(ready);
-    await flushMicrotasks221();
-    expect(state.state).toBe("pending");
-    expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("listapps", driverData.udid));
-    clock.advance(1_000);
-    await flushMicrotasks221();
-    expect(state.state).toBe("fulfilled");
-    expect((await ready).deviceId).toBe(driverData.udid);
-  });
+  it.each([false, true])(
+    "keeps makeReady pending until an installer probe succeeds after a failure (hung: %s)",
+    async (hangs) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        { match: simctl("bootstatus", driverData.udid, "-b") },
+        {
+          match: simctl("listapps", driverData.udid),
+          result: { code: 2, stderr: "installer starting", stdout: "" },
+          hangs,
+        },
+        { match: simctl("listapps", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      const ready = driver.makeReady(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        prepareFull,
+      );
+      const state = promiseState(ready);
+      await flushMicrotasks221();
+      expect(state.state).toBe("pending");
+      expect(runner.calls.at(-1)?.args).toEqual(simctlArgs("listapps", driverData.udid));
+      if (hangs) {
+        clock.advance(30_000);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+      }
+      clock.advance(1_000);
+      await flushMicrotasks221();
+      expect(state.state).toBe("fulfilled");
+      expect((await ready).deviceId).toBe(driverData.udid);
+    },
+  );
 
   it.each([false, true])(
     "shares the bootstatus deadline with a %s-hanging installer probe and shuts down on expiry",
@@ -1009,26 +1018,38 @@ describe("IosSimctlDriver", () => {
     },
   );
 
-  it("does not probe the installer when bootstatus has consumed the readiness budget", async () => {
-    const clock = new FakeClock();
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("boot", driverData.udid) },
-      { match: simctl("bootstatus", driverData.udid, "-b"), onSpawn: () => clock.advance(120_000) },
-      { match: simctl("shutdown", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner, clock);
-    await expect(
-      driver.makeReady(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        prepareFull,
-      ),
-    ).rejects.toBeInstanceOf(BootTimeoutError);
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("boot", driverData.udid),
-      simctlArgs("bootstatus", driverData.udid, "-b"),
-      simctlArgs("shutdown", driverData.udid),
-    ]);
-  });
+  it.each(["bootstatus", "listapps"])(
+    "rejects readiness when a successful %s consumes the remaining budget",
+    async (slowCommand) => {
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", driverData.udid) },
+        {
+          match: simctl("bootstatus", driverData.udid, "-b"),
+          onSpawn: () => {
+            if (slowCommand === "bootstatus") clock.advance(120_000);
+          },
+        },
+        ...(slowCommand === "listapps"
+          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(120_000) }]
+          : []),
+        { match: simctl("shutdown", driverData.udid) },
+      ]);
+      const driver = await createDriver(runner, clock);
+      await expect(
+        driver.makeReady(
+          { address: driverData.udid, deviceId: driverData.udid, driverData },
+          prepareFull,
+        ),
+      ).rejects.toBeInstanceOf(BootTimeoutError);
+      expect(runner.calls.map((call) => call.args)).toEqual([
+        simctlArgs("boot", driverData.udid),
+        simctlArgs("bootstatus", driverData.udid, "-b"),
+        ...(slowCommand === "listapps" ? [simctlArgs("listapps", driverData.udid)] : []),
+        simctlArgs("shutdown", driverData.udid),
+      ]);
+    },
+  );
 
   it("times out bootstatus and issues a best-effort shutdown", async () => {
     const clock = new FakeClock();
@@ -1917,10 +1938,11 @@ describe("IosSimctlDriver", () => {
       });
     });
 
-    it("leaves the command sequence unchanged when the slim option is omitted (regression guard)", async () => {
+    it("checks installer readiness without slimming when the slim option is omitted", async () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", driverData.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", driverData.udid, "-b") } },
+        { match: simctl("listapps", driverData.udid) },
       ]);
 
       // `driverData` has no `slimSignature`/`slimMarkToken`, exactly what a registry written
@@ -1940,6 +1962,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", driverData.udid),
         simctlArgs("bootstatus", driverData.udid, "-b"),
+        simctlArgs("listapps", driverData.udid),
       ]);
     });
 
@@ -1953,6 +1976,7 @@ describe("IosSimctlDriver", () => {
           {
             match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
           },
+          { match: simctl("listapps", slim18_5.udid) },
           {
             match: {
               args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -1964,6 +1988,7 @@ describe("IosSimctlDriver", () => {
           {
             match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
           },
+          { match: simctl("listapps", slim18_5.udid) },
         ]);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
@@ -1994,14 +2019,16 @@ describe("IosSimctlDriver", () => {
         expect(runner.calls.map((call) => call.args)).toEqual([
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
+          simctlArgs("listapps", slim18_5.udid),
           simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
           simctlArgs("shutdown", slim18_5.udid),
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
+          simctlArgs("listapps", slim18_5.udid),
         ]);
         // Both boots use the widened slim deadline, not the default 120s.
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
-        expect(runner.calls[5]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
           address: slim18_5.udid,
@@ -2033,6 +2060,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2047,6 +2075,7 @@ describe("IosSimctlDriver", () => {
         // already-booted device either way.
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2073,10 +2102,12 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2095,6 +2126,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2107,6 +2139,7 @@ describe("IosSimctlDriver", () => {
         },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2128,7 +2161,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 4);
+      await waitForCalls(runner, 5);
       clock.advance(30_000); // COMMAND_TIMEOUT_MS, the `#shutdown` call's own timeout
 
       const result = await ready;
@@ -2142,10 +2175,12 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2163,6 +2198,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2198,7 +2234,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(300_000); // slim.bootTimeoutMs -- the widened deadline applies to this reboot too
 
       await expect(ready).rejects.toThrow(BootTimeoutError);
@@ -2215,6 +2251,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2265,6 +2302,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2287,6 +2325,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
     });
@@ -2303,6 +2342,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2312,6 +2352,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2341,6 +2382,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2350,6 +2392,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2373,6 +2416,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_4.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_4.udid, "-b") } },
+        { match: simctl("listapps", slim18_4.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2394,7 +2438,7 @@ describe("IosSimctlDriver", () => {
         driverData: slim18_4,
         mode: "full",
       });
-      expect(runner.calls).toHaveLength(2);
+      expect(runner.calls).toHaveLength(3);
       expect(onSlimSkipped).toHaveBeenCalledWith(
         expect.objectContaining({ deviceId: slim18_4.udid, reason: "runtime-too-old" }),
       );
@@ -2406,6 +2450,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim17_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim17_5.udid, "-b") } },
+        { match: simctl("listapps", slim17_5.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2435,6 +2480,7 @@ describe("IosSimctlDriver", () => {
             args: simctlArgs("bootstatus", slimGarbageRuntime.udid, "-b"),
           },
         },
+        { match: simctl("listapps", slimGarbageRuntime.udid) },
       ]);
       const onSlimSkipped = vi.fn();
       const driver = await createSlimDriver(
@@ -2465,6 +2511,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
+        { match: simctl("listapps", slim26_0.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim26_0.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2474,6 +2521,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
+        { match: simctl("listapps", slim26_0.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2504,6 +2552,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2520,6 +2569,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2547,10 +2597,12 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).toHaveBeenCalledTimes(1);
       expect(onSlimmed).toHaveBeenCalledWith({
@@ -2580,6 +2632,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
@@ -2602,6 +2655,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
     });
@@ -2639,6 +2693,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         ...chunks.slice(0, 3).map((labelChunk) => ({
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk)),
@@ -2655,6 +2710,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2678,7 +2734,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
 
       const result = await ready;
@@ -2694,6 +2750,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[0] ?? [])),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[1] ?? [])),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[2] ?? [])),
@@ -2701,6 +2758,7 @@ describe("IosSimctlDriver", () => {
         simctlArgs("shutdown", slim18_5.udid),
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2714,6 +2772,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2747,6 +2806,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
         simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
@@ -2772,6 +2832,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         // Three different exits before the timeout, so a detail that kept any but the last
         // failure would name one of them instead.
         ...["first", "second", "third"].map((stderr, index) => ({
@@ -2797,7 +2858,7 @@ describe("IosSimctlDriver", () => {
         { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
         prepareSlim,
       );
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
 
       expect((await ready).mode).toBe("full");
@@ -2815,6 +2876,7 @@ describe("IosSimctlDriver", () => {
         const runner = new ScriptedProcessRunner([
           { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
           { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+          { match: simctl("listapps", slim18_5.udid) },
         ]);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
@@ -2842,7 +2904,7 @@ describe("IosSimctlDriver", () => {
           driverData: slim18_5,
           mode: "full",
         });
-        expect(runner.calls).toHaveLength(2);
+        expect(runner.calls).toHaveLength(3);
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).not.toHaveBeenCalled();
         expect(onSlimSkipped).not.toHaveBeenCalled();
@@ -2856,6 +2918,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
+        { match: simctl("listapps", stamped.udid) },
         {
           match: {
             args: simctlArgs("spawn", stamped.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2865,6 +2928,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
+        { match: simctl("listapps", stamped.udid) },
       ]);
       const driver = await createSlimDriver(runner, filesystem, slimOptions());
 
@@ -2890,6 +2954,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2915,6 +2980,7 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
+        simctlArgs("listapps", slim18_5.udid),
       ]);
       // The ordinary, un-widened boot deadline -- not `slim.bootTimeoutMs` -- since this boot
       // never considers applying anything.
@@ -2930,6 +2996,7 @@ describe("IosSimctlDriver", () => {
       const runner = new ScriptedProcessRunner([
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        { match: simctl("listapps", slim18_5.udid) },
         {
           match: {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
@@ -2960,7 +3027,7 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 6);
+      await waitForCalls(runner, 7);
       const readyState = promiseState(ready);
 
       // Just past the default 120s: a reboot timed against it would have given up by now.
@@ -2970,7 +3037,7 @@ describe("IosSimctlDriver", () => {
 
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      expect(runner.calls[5]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
     it("estimates the boot cost with the slim reboot+apply budget for a slim spec", async () => {

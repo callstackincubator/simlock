@@ -37,12 +37,14 @@ Provision — `simctl create simlock-<id> <devicetype> <runtime>` → UDID, then
 
 Boot — `makeReady`:
 
-1. `simctl boot`, then `simctl bootstatus -b`. Timeout → shut down, `BootTimeoutError`.
+1. `simctl boot`, then `simctl bootstatus -b`, then poll `simctl listapps` until it succeeds.
+   Bootstatus and installer polling share one deadline; each probe is capped at 30 s and
+   failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`.
 2. Slim pass only for `prepare` + mode `slim` + runtime 18.5+. Too old → skipped, returned `full`.
 3. Already slim: `driverData.slimSignature` and `slimMarkToken` match the categories and the
    current mark → return `slim`, no work.
 4. Else `simctl spawn <udid> /bin/sh -c` running `launchctl disable system/<label>`, 50 labels a
-   chunk. Then shut down and boot again.
+   chunk. Then shut down and boot again, including the installer check.
 5. Commit `slimSignature` + `slimMarkToken` into `driverData`; `onSlimmed` → `device.slimmed`.
    A failed pass → `onSlimSkipped` (logged only); the device keeps the mode it really has.
 6. `purpose: "recover"`: boot only, no slim pass.
@@ -90,16 +92,16 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 
 ## State and timers
 
-| What                         | Default                     | Key                      |
-| ---------------------------- | --------------------------- | ------------------------ |
-| Device root                  | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
-| Default mode                 | `full`                      | `ios.defaultMode`        |
-| Slim categories              | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
-| Slim boot deadline           | 10 min                      | `ios.slim.bootTimeoutMs` |
-| `bootstatus` (full)          | 120 s                       | none                     |
-| Any other `simctl` call      | 30 s                        | none                     |
-| Slim chunk                   | 60 s                        | none                     |
-| `devicectl` read / uninstall | 30 s / 60 s                 | none                     |
+| What                          | Default                     | Key                      |
+| ----------------------------- | --------------------------- | ------------------------ |
+| Device root                   | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
+| Default mode                  | `full`                      | `ios.defaultMode`        |
+| Slim categories               | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
+| Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
+| Bootstatus + installer (full) | 120 s                       | none                     |
+| Any other `simctl` call       | 30 s                        | none                     |
+| Slim chunk                    | 60 s                        | none                     |
+| `devicectl` read / uninstall  | 30 s / 60 s                 | none                     |
 
 Writes: the device set (by `simctl`), the two mark files per device. The registry is the only
 record of a device's mode; `driverData` holds the slim signature.
