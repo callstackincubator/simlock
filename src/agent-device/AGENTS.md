@@ -72,7 +72,7 @@ Front (`createFront`, prefix `agent-device`):
    reply "ended by simlock".
 7. Release → forwarded; on success `lease.release`; map marks it ended by `agent`.
 8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
-   capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, or a
+   capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, a streamed `type: "response"` line, or a
    batch's `data`) → `front/ended.ts` ends each simlock lease this token holds, as a release does.
 
 Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request,

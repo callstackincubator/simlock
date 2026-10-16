@@ -15,9 +15,10 @@ function idsIn(holder: unknown): string[] {
   return ids;
 }
 
-// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure, which the JSON-RPC error carries as `error.data.details`; a streamed reply is one JSON frame per line, and any frame may carry it.
+// why: agent-device names a lease it ended (a `close`) in `data` on success, in `error.details` on failure, which the JSON-RPC error carries as `error.data.details`; a streamed reply is one JSON frame per line, and any frame may carry it, and without `--json` the CLI wraps the JSON-RPC answer as the `response` of a `type: "response"` line.
 function idsInFrame(body: unknown): string[] {
-  const root = asRecord(body);
+  const line = asRecord(body);
+  const root = line?.["type"] === "response" ? asRecord(line["response"]) : line;
   const error = asRecord(root?.["error"]);
   return [
     ...idsIn(asRecord(asRecord(root?.["result"])?.["data"])),
