@@ -8,38 +8,46 @@ const RANK: Readonly<Record<Tone, number>> = { error: 3, idle: 0, ok: 1, warn: 2
 // why: a list row has room for one square, so of everything wrong with a worker the worst is
 // shown and its word goes in the square's name; a worker with nothing wrong reads "connected".
 export function workerHealth(worker: WorkerView): Toned {
+  return [...stateFindings(worker), ...loadFindings(worker)].reduce<Toned>(
+    (worst, finding) => (RANK[finding.tone] > RANK[worst.tone] ? finding : worst),
+    { tone: "ok", word: "connected" },
+  );
+}
+
+function stateFindings(worker: WorkerView): Toned[] {
   const findings: Toned[] = [];
-  if (worker.connection !== "connected") {
-    findings.push({ tone: "error", word: worker.connection });
-  }
+  if (worker.connection !== "connected") findings.push({ tone: "error", word: worker.connection });
   if (worker.health === "failed") findings.push({ tone: "error", word: "failed" });
   if (worker.drained) findings.push({ tone: "warn", word: "drained" });
   if (worker.health === "starting") findings.push({ tone: "warn", word: "starting" });
   if (worker.capacity?.ramBudget?.overLimit === true) {
     findings.push({ tone: "warn", word: "over RAM budget" });
   }
-  if (worker.connection === "connected" && worker.load !== undefined) {
-    const pressure = worker.load.memory?.pressure;
-    if (pressure === "warn" || pressure === "critical") {
-      findings.push({
-        tone: pressure === "critical" ? "error" : "warn",
-        word: `memory pressure ${pressure}`,
-      });
-    }
-    const gauges = loadGauges(worker.load);
-    for (const [name, percent] of [
-      ["CPU", gauges.cpu],
-      ["memory", pressure === undefined ? gauges.memory : undefined],
-      ["disk", gauges.disk],
-    ] as const) {
-      const tone = levelOf(percent);
-      if (tone !== "idle") findings.push({ tone, word: `${name} ${percent}%` });
-    }
+  return findings;
+}
+
+// why: a reading from a worker that is not connected is stale, so it says nothing about the worker
+// now; where memory reports a pressure, that word judges memory instead of its fill.
+function loadFindings(worker: WorkerView): Toned[] {
+  if (worker.connection !== "connected" || worker.load === undefined) return [];
+  const pressure = worker.load.memory?.pressure;
+  const gauges = loadGauges(worker.load);
+  const figures = [
+    ["CPU", gauges.cpu],
+    ["memory", pressure === undefined ? gauges.memory : undefined],
+    ["disk", gauges.disk],
+  ] as const;
+  const findings: Toned[] = figures.flatMap(([name, percent]) => {
+    const tone = levelOf(percent);
+    return tone === "idle" ? [] : [{ tone, word: `${name} ${percent}%` }];
+  });
+  if (pressure === "warn" || pressure === "critical") {
+    findings.push({
+      tone: pressure === "critical" ? "error" : "warn",
+      word: `memory pressure ${pressure}`,
+    });
   }
-  return findings.reduce<Toned>(
-    (worst, finding) => (RANK[finding.tone] > RANK[worst.tone] ? finding : worst),
-    { tone: "ok", word: "connected" },
-  );
+  return findings;
 }
 
 export type SlotKind = "leased" | "ready" | "busy" | "broken" | "absent" | "free";

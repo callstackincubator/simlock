@@ -28,7 +28,6 @@ export function LeaseInspector({ id }: { readonly id: string }) {
 }
 
 export function LeaseDetail({ lease }: { readonly lease: LeaseInspection }) {
-  const { device, worker } = lease;
   return (
     <Inspector
       crumbs={[{ label: "Leases", to: "/leases" }, { label: lease.id }]}
@@ -39,80 +38,13 @@ export function LeaseDetail({ lease }: { readonly lease: LeaseInspection }) {
         </span>
       }
       mono
-      line={
-        <>
-          {lease.model}
-          {lease.runtime === undefined ? "" : ` ${lease.runtime}`}
-          {worker === undefined ? null : (
-            <>
-              {" on "}
-              <WorkerName worker={worker} />
-            </>
-          )}
-        </>
-      }
+      line={<LeaseLine lease={lease} />}
     >
       <div className="lease-body">
         <div className="lease-cards">
-          <LeaseCard title="Expires in">
-            <p className={lease.expiring ? "lease-countdown lease-warn" : "lease-countdown"}>
-              <span role="timer">{lease.remaining}</span>
-            </p>
-            {lease.percent === undefined ? null : (
-              <Meter percent={lease.percent} tone={lease.expiring ? "warn" : "neutral"} />
-            )}
-            <dl className="lease-figures">
-              <Figure label="Held for" value={lease.heldFor} />
-              <Figure label="Renewed" value={lease.renewed} />
-              <Figure label="Granted" value={lease.granted} />
-            </dl>
-          </LeaseCard>
-          <LeaseCard title="Device">
-            <Facts
-              facts={[
-                { label: "Model", value: lease.model },
-                { label: "Runtime", value: lease.runtime ?? "—" },
-                { label: "Mode", value: device.mode ?? "—" },
-                {
-                  label: "Image tag",
-                  value: <span className="mono">{device.imageTag ?? "—"}</span>,
-                },
-                { label: "Kind", value: device.kind ?? "—" },
-                {
-                  label: "Worker",
-                  value: worker === undefined ? "—" : <WorkerName worker={worker} />,
-                },
-                { label: "Device id", value: <Id>{device.deviceId}</Id> },
-                { label: "UDID", value: <span className="mono">{device.udid}</span> },
-              ]}
-            />
-          </LeaseCard>
-          <LeaseCard title="Lease">
-            <Facts
-              facts={[
-                { label: "Lease id", value: <Id>{lease.id}</Id> },
-                ...(lease.requestId === undefined
-                  ? []
-                  : [{ label: "Request", value: <span className="mono">{lease.requestId}</span> }]),
-                {
-                  label: "Holder",
-                  value:
-                    lease.holder === undefined ? (
-                      "—"
-                    ) : lease.holder.label === undefined ? (
-                      <span className="mono">{lease.holder.id}</span>
-                    ) : (
-                      <>
-                        {lease.holder.label} <span className="muted mono">{lease.holder.id}</span>
-                      </>
-                    ),
-                },
-                ...(lease.ownerId === undefined
-                  ? []
-                  : [{ label: "Owner", value: <span className="mono">{lease.ownerId}</span> }]),
-              ]}
-            />
-          </LeaseCard>
+          <ExpiryCard lease={lease} />
+          <DeviceCard lease={lease} />
+          <LeaseFactsCard lease={lease} />
         </div>
         <ScreenPanel
           leaseId={lease.id}
@@ -121,6 +53,89 @@ export function LeaseDetail({ lease }: { readonly lease: LeaseInspection }) {
         />
       </div>
     </Inspector>
+  );
+}
+
+function LeaseLine({ lease }: { readonly lease: LeaseInspection }) {
+  const { worker } = lease;
+  return (
+    <>
+      {lease.model}
+      {lease.runtime === undefined ? "" : ` ${lease.runtime}`}
+      {worker === undefined ? null : (
+        <>
+          {" on "}
+          <WorkerName worker={worker} />
+        </>
+      )}
+    </>
+  );
+}
+
+function ExpiryCard({ lease }: { readonly lease: LeaseInspection }) {
+  return (
+    <LeaseCard title="Expires in">
+      <p className={lease.expiring ? "lease-countdown lease-warn" : "lease-countdown"}>
+        <span role="timer">{lease.remaining}</span>
+      </p>
+      {lease.percent === undefined ? null : (
+        <Meter percent={lease.percent} tone={lease.expiring ? "warn" : "neutral"} />
+      )}
+      <dl className="lease-figures">
+        <Figure label="Held for" value={lease.heldFor} />
+        <Figure label="Renewed" value={lease.renewed} />
+        <Figure label="Granted" value={lease.granted} />
+      </dl>
+    </LeaseCard>
+  );
+}
+
+function DeviceCard({ lease }: { readonly lease: LeaseInspection }) {
+  const { device, worker } = lease;
+  return (
+    <LeaseCard title="Device">
+      <Facts
+        facts={[
+          { label: "Model", value: lease.model },
+          { label: "Runtime", value: lease.runtime ?? "—" },
+          { label: "Mode", value: device.mode ?? "—" },
+          { label: "Image tag", value: <span className="mono">{device.imageTag ?? "—"}</span> },
+          { label: "Kind", value: device.kind ?? "—" },
+          { label: "Worker", value: worker === undefined ? "—" : <WorkerName worker={worker} /> },
+          { label: "Device id", value: <Id>{device.deviceId}</Id> },
+          { label: "UDID", value: <span className="mono">{device.udid}</span> },
+        ]}
+      />
+    </LeaseCard>
+  );
+}
+
+function LeaseFactsCard({ lease }: { readonly lease: LeaseInspection }) {
+  return (
+    <LeaseCard title="Lease">
+      <Facts
+        facts={[
+          { label: "Lease id", value: <Id>{lease.id}</Id> },
+          ...(lease.requestId === undefined
+            ? []
+            : [{ label: "Request", value: <span className="mono">{lease.requestId}</span> }]),
+          { label: "Holder", value: <HolderName holder={lease.holder} /> },
+          ...(lease.ownerId === undefined
+            ? []
+            : [{ label: "Owner", value: <span className="mono">{lease.ownerId}</span> }]),
+        ]}
+      />
+    </LeaseCard>
+  );
+}
+
+function HolderName({ holder }: { readonly holder: LeaseInspection["holder"] }) {
+  if (holder === undefined) return <>—</>;
+  if (holder.label === undefined) return <span className="mono">{holder.id}</span>;
+  return (
+    <>
+      {holder.label} <span className="muted mono">{holder.id}</span>
+    </>
   );
 }
 

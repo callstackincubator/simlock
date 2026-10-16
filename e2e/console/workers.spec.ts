@@ -299,6 +299,29 @@ async function expectSquareColours(
   }
 }
 
+function found<T>(value: T | undefined, what: string): T {
+  if (value === undefined) throw new Error(`${what} is missing`);
+  return value;
+}
+
+function runningOverLimit(view: WorkerView): string {
+  const ios = view.capacity?.ios ?? { limit: 0, running: 0 };
+  const android = view.capacity?.android ?? { limit: 0, running: 0 };
+  return `${ios.running + android.running} / ${ios.limit + android.limit}`;
+}
+
+async function incompatibleWorker(gateway: RunningDaemon, id: string): Promise<WorkerView> {
+  let view: WorkerView | undefined;
+  await waitFor(
+    async () => {
+      view = (await workerList(gateway)).find((candidate) => candidate.id === id);
+      return view?.connection === "incompatible";
+    },
+    { label: "the gateway lists the old worker as incompatible" },
+  );
+  return found(view, id);
+}
+
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -315,7 +338,8 @@ test.describe("the workers page", () => {
     ]);
     try {
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
-      expect((await fleet.gateway.cli(["worker", "drain", b?.id ?? ""])).code).toBe(0);
+      const drained = found(b, "worker-b").id;
+      expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
       await lease(fleet.workers[0] as RunningDaemon, "console-e2e");
       await waitFor(
         async () => (await workerList(fleet.gateway)).some((view) => view.leases.length === 1),
@@ -332,18 +356,18 @@ test.describe("the workers page", () => {
       await expect(page.locator(".list-meta")).toHaveText(`${listed.length} / ${listed.length} up`);
       for (const view of listed) {
         const shown = row(page, view.label ?? view.id);
-        const capacity = view.capacity;
-        const limit = (capacity?.ios.limit ?? 0) + (capacity?.android.limit ?? 0);
-        const running = (capacity?.ios.running ?? 0) + (capacity?.android.running ?? 0);
-        await expect(shown, view.label).toHaveText(`${view.label}${running} / ${limit}`);
+        await expect(shown, view.label).toHaveText(`${view.label}${runningOverLimit(view)}`);
         await expect(
           shown.getByRole("img", { name: view.drained ? "drained" : "connected" }),
         ).toBeVisible();
       }
 
       await row(page, "worker-a").getByRole("link").click();
-      const a = listed.find((view) => view.label === "worker-a");
-      await expect(page).toHaveURL(new RegExp(`/workers/${a?.id}$`));
+      const a = found(
+        listed.find((view) => view.label === "worker-a"),
+        "worker-a",
+      );
+      await expect(page).toHaveURL(new RegExp(`/workers/${a.id}$`));
       await expect(title(page, "worker-a")).toBeVisible();
       await expect(fact(page.locator("#main"), "Leases").or(figure(page, "Leases"))).toContainText(
         "1",
@@ -359,16 +383,9 @@ test.describe("the workers page", () => {
     let hangUp = () => {};
     try {
       hangUp = await joinOldWorker(gateway, { id: "wrk_old", label: "old-worker" });
-      let view: WorkerView | undefined;
-      await waitFor(
-        async () => {
-          view = (await workerList(gateway)).find((candidate) => candidate.id === "wrk_old");
-          return view?.connection === "incompatible";
-        },
-        { label: "the gateway lists the old worker as incompatible" },
-      );
-      const gatewayRange = view?.protocol?.gateway;
-      expect(view?.protocol?.worker).toEqual(OLD_PROTOCOL);
+      const view = await incompatibleWorker(gateway, "wrk_old");
+      const gatewayRange = found(view.protocol?.gateway, "the gateway's protocol range");
+      expect(view.protocol?.worker).toEqual(OLD_PROTOCOL);
 
       await openConsole(page, gateway);
       await expect(
@@ -377,7 +394,7 @@ test.describe("the workers page", () => {
       await row(page, "old-worker").getByRole("link").click();
 
       const expected =
-        `incompatible gateway ${gatewayRange?.min}–${gatewayRange?.max}, ` +
+        `incompatible gateway ${gatewayRange.min}–${gatewayRange.max}, ` +
         `worker ${OLD_PROTOCOL.min}–${OLD_PROTOCOL.max}`;
       await expect(page.getByRole("tabpanel")).toContainText(expected);
       await openTab(page, "Host");
@@ -393,8 +410,7 @@ test.describe("the workers page", () => {
     daemon,
     page,
   }) => {
-    const [host] = await workerList(daemon);
-    expect(host).toBeDefined();
+    const host = found((await workerList(daemon))[0], "the host's worker");
 
     await answerWithoutLoad(page);
     await openConsole(page, daemon);
@@ -403,15 +419,11 @@ test.describe("the workers page", () => {
       page.getByRole("list", { name: "Workers", exact: true }).getByRole("listitem"),
     ).toHaveCount(1);
     await expect(page).toHaveURL(/\/workers$/);
-    await expect(title(page, host?.id ?? "")).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(
-      host?.id ?? "",
-    );
-    await row(page, host?.id ?? "")
-      .getByRole("link")
-      .click();
-    await expect(page).toHaveURL(new RegExp(`/workers/${encodeURIComponent(host?.id ?? "")}$`));
-    await expect(page.locator(".inspector-line")).toContainText(host?.version ?? "");
+    await expect(title(page, host.id)).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(host.id);
+    await row(page, host.id).getByRole("link").click();
+    await expect(page).toHaveURL(new RegExp(`/workers/${encodeURIComponent(host.id)}$`));
+    await expect(page.locator(".inspector-line")).toContainText(host.version ?? "");
     await expect(page.locator(".inspector-line")).toContainText("connected");
   });
 
@@ -433,7 +445,8 @@ test.describe("the workers page", () => {
     ]);
     try {
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
-      expect((await fleet.gateway.cli(["worker", "drain", b?.id ?? ""])).code).toBe(0);
+      const drained = found(b, "worker-b").id;
+      expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
       await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
       await expect(row(page, "worker-a")).toBeVisible();
@@ -826,7 +839,8 @@ test.describe("the workers page", () => {
     try {
       hangUp = await joinOldWorker(fleet.gateway, { id: "wrk_old", label: "old-worker" });
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
-      expect((await fleet.gateway.cli(["worker", "drain", b?.id ?? ""])).code).toBe(0);
+      const drained = found(b, "worker-b").id;
+      expect((await fleet.gateway.cli(["worker", "drain", drained])).code).toBe(0);
       await lease(fleet.workers[0] as RunningDaemon, "console-e2e");
       await answerWithoutLoad(page);
       await openConsole(page, fleet.gateway);
@@ -901,7 +915,7 @@ test.describe("the workers page", () => {
   }) => {
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const [host] = await workerList(daemon);
-    const name = host?.id ?? "";
+    const name = host.id;
     const follow = async (link: Locator) => {
       for (let step = 0; step < 30; step += 1) {
         if (await link.evaluate((element) => element === document.activeElement)) break;

@@ -1,3 +1,4 @@
+import { defined } from "./defined";
 import { type DeviceSlot, platformSlots, slotsLabel, workerHealth } from "./fleet";
 import { formatBusyPercent, formatBytes, formatCores, loadGauges } from "./load";
 import { levelOf } from "./load-thresholds";
@@ -234,13 +235,10 @@ function deviceRow(
   tokens: readonly TokenRecord[],
   leaseIds: ReadonlySet<string>,
 ): DeviceRow {
-  const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
   const entered = stateEnteredAt(device, worker);
-  const holder = lease === undefined ? undefined : holderOf(lease.requesterId, tokens);
   // why: a virtual device shows its mode only where it is not the one the worker serves by default,
   // and a physical device has neither a mode nor an image.
-  const mode = !device.physical && !device.servesDefaultMode ? device.mode : undefined;
-  const imageTag = device.physical ? undefined : device.spec.imageTag;
+  const virtual = !device.physical;
   return {
     id: device.id,
     model: device.spec.model,
@@ -248,20 +246,33 @@ function deviceRow(
     platform: platformName(device.spec.platform),
     runtime: device.spec.osVersion,
     status: deviceStateStatus(device.state),
-    ...(lease === undefined || holder === undefined
-      ? {}
-      : {
-          expires: formatDuration(lease.ttlDeadline - now),
-          holder: {
-            id: holder.id,
-            name: holder.label ?? holder.id,
-            to: leasePath(leaseIdOnPage(worker, lease.id, leaseIds)),
-          },
-          renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
-        }),
-    ...(entered === undefined ? {} : { since: formatDuration(now - entered) }),
-    ...(mode === undefined ? {} : { mode }),
-    ...(imageTag === undefined ? {} : { imageTag }),
+    ...leaseFacts(device, worker, now, tokens, leaseIds),
+    ...defined({
+      imageTag: virtual ? device.spec.imageTag : undefined,
+      mode: virtual && !device.servesDefaultMode ? device.mode : undefined,
+      since: entered === undefined ? undefined : formatDuration(now - entered),
+    }),
+  };
+}
+
+function leaseFacts(
+  device: WorkerDevice,
+  worker: WorkerView,
+  now: number,
+  tokens: readonly TokenRecord[],
+  leaseIds: ReadonlySet<string>,
+): Pick<DeviceRow, "expires" | "holder" | "renewed"> {
+  const lease = worker.leases?.find((candidate) => candidate.deviceId === device.id);
+  if (lease === undefined) return {};
+  const holder = holderOf(lease.requesterId, tokens);
+  return {
+    expires: formatDuration(lease.ttlDeadline - now),
+    holder: {
+      id: holder.id,
+      name: holder.label ?? holder.id,
+      to: leasePath(leaseIdOnPage(worker, lease.id, leaseIds)),
+    },
+    renewed: `${formatDuration(now - lease.lastRenewedAt)} ago`,
   };
 }
 

@@ -1,6 +1,7 @@
 import type { z } from "zod";
 
 import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
+import { defined } from "./defined";
 import { formatDuration } from "./time";
 import { type WorkerDevice, type WorkerView, workerName, workerPath } from "./workers";
 
@@ -250,43 +251,68 @@ export function leaseInspection(input: {
   const { lease, now, record, tokens, workers } = input;
   const named = { worker: lease.worker, workerId: lease.workerId ?? record?.workerId };
   const worker = workerOfLease(named, workers);
-  const workerLabel = workerNameOfLease(named, workers);
   const device = worker?.devices?.find((candidate) => candidate.id === lease.deviceId);
   const grantedAt = Date.parse(lease.createdAt);
   const deadline = Date.parse(lease.expiresAt);
-  const holder = record === undefined ? undefined : holderOf(record.requesterId, tokens);
-  const imageTag = lease.imageTag ?? device?.spec.imageTag;
   return {
-    device: {
-      deviceId: lease.deviceId,
-      udid: lease.udid,
-      ...(lease.mode === undefined ? {} : { mode: lease.mode }),
-      ...(imageTag === undefined ? {} : { imageTag }),
-      ...(device === undefined ? {} : { kind: device.physical ? "Physical" : "Virtual" }),
-    },
+    device: leaseDevice(lease, device),
     expiring: isExpiring(deadline, now),
     granted: clockTime(grantedAt),
     heldFor: formatDuration(now - grantedAt),
     id: lease.id,
     model: lease.device,
     remaining: formatDuration(deadline - now),
-    renewed: record === undefined ? "—" : `${formatDuration(now - record.lastRenewedAt)} ago`,
     stream: streamOffer(worker),
-    title: holder === undefined ? lease.id : holderTitle(holder),
-    ...(record === undefined ? {} : { percent: percentLeft(deadline, now, record.ttlMs) }),
-    ...(holder === undefined ? {} : { holder }),
-    ...(record !== undefined && record.ownerId !== record.requesterId
-      ? { ownerId: record.ownerId }
-      : {}),
-    ...(device === undefined ? {} : { runtime: device.spec.osVersion }),
-    ...(lease.requestId === undefined ? {} : { requestId: lease.requestId }),
-    ...(workerLabel === undefined
-      ? {}
-      : {
-          worker: {
-            name: workerLabel,
-            ...(worker === undefined ? {} : { to: workerPath(worker.id) }),
-          },
-        }),
+    ...recordFacts(record, tokens, deadline, now, lease.id),
+    ...defined({
+      requestId: lease.requestId,
+      runtime: device?.spec.osVersion,
+      worker: leaseWorker(named, worker, workers),
+    }),
   };
+}
+
+function leaseDevice(
+  lease: LeaseDetails,
+  device: WorkerDevice | undefined,
+): LeaseInspection["device"] {
+  return {
+    deviceId: lease.deviceId,
+    udid: lease.udid,
+    ...defined({
+      imageTag: lease.imageTag ?? device?.spec.imageTag,
+      kind: device === undefined ? undefined : device.physical ? "Physical" : "Virtual",
+      mode: lease.mode,
+    }),
+  };
+}
+
+// why: who holds a lease, when it was renewed and how much of its time is left are only in its
+// entry in `GET /v1/leases`; without that entry they show as missing.
+function recordFacts(
+  record: LeaseRecord | undefined,
+  tokens: readonly TokenRecord[],
+  deadline: number,
+  now: number,
+  id: string,
+): Pick<LeaseInspection, "renewed" | "title" | "percent" | "holder" | "ownerId"> {
+  if (record === undefined) return { renewed: "—", title: id };
+  const holder = holderOf(record.requesterId, tokens);
+  return {
+    holder,
+    percent: percentLeft(deadline, now, record.ttlMs),
+    renewed: `${formatDuration(now - record.lastRenewedAt)} ago`,
+    title: holderTitle(holder),
+    ...(record.ownerId === record.requesterId ? {} : { ownerId: record.ownerId }),
+  };
+}
+
+function leaseWorker(
+  named: Parameters<typeof workerNameOfLease>[0],
+  worker: WorkerView | undefined,
+  workers: readonly WorkerView[],
+): LeaseInspection["worker"] | undefined {
+  const name = workerNameOfLease(named, workers);
+  if (name === undefined) return undefined;
+  return worker === undefined ? { name } : { name, to: workerPath(worker.id) };
 }

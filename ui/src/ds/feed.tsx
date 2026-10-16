@@ -28,12 +28,7 @@ export function Feed(props: {
   const { count, keyAt, label, listLabel, newText, renderRow, rowHeight, startAt = 0 } = props;
   const box = useRef<HTMLDivElement>(null);
   const [atTop, setAtTop] = useState(true);
-  const newest = count === 0 ? undefined : keyAt(0);
-  // why: the newest row the reader saw at the top of the box: every row above it is new to them.
-  const [seen, setSeen] = useState(newest);
-  useEffect(() => {
-    if (atTop) setSeen(newest);
-  }, [atTop, newest]);
+  const unseen = useUnseen(count, keyAt, atTop);
   const virtualizer = useVirtualizer({
     anchorTo: atTop ? "start" : "end",
     count,
@@ -43,20 +38,7 @@ export function Feed(props: {
     initialRect: { height: BOX_HEIGHT_PX, width: 0 },
     overscan: OVERSCAN,
   });
-  // why: once, when the box opens: a row chosen by a link is brought into view, and later choices
-  // are the reader's own scrolling to keep.
-  const opened = useRef(false);
-  useEffect(() => {
-    if (opened.current) return;
-    opened.current = true;
-    if (startAt > 0) virtualizer.scrollToIndex(startAt, { align: "center" });
-  }, [startAt, virtualizer]);
-  let unseen = 0;
-  if (!atTop) {
-    while (unseen < count && keyAt(unseen) !== seen) unseen += 1;
-    // why: a row the reader saw that is no longer held (past the cap) leaves nothing to count from.
-    if (unseen === count) unseen = 0;
-  }
+  useOpenAt(startAt, virtualizer);
   const toTop = () => {
     virtualizer.scrollToOffset(0);
     box.current?.focus();
@@ -91,4 +73,32 @@ export function Feed(props: {
       </div>
     </div>
   );
+}
+
+function useUnseen(count: number, keyAt: (index: number) => string, atTop: boolean): number {
+  const newest = count === 0 ? undefined : keyAt(0);
+  // why: the newest row the reader saw at the top of the box: every row above it is new to them.
+  const [seen, setSeen] = useState(newest);
+  useEffect(() => {
+    if (atTop) setSeen(newest);
+  }, [atTop, newest]);
+  if (atTop) return 0;
+  let unseen = 0;
+  while (unseen < count && keyAt(unseen) !== seen) unseen += 1;
+  // why: a row the reader saw that is no longer held (past the cap) leaves nothing to count from.
+  return unseen === count ? 0 : unseen;
+}
+
+// why: once, when the box opens: a row chosen by a link is brought into view, and later choices
+// are the reader's own scrolling to keep.
+function useOpenAt(
+  startAt: number,
+  virtualizer: { readonly scrollToIndex: (index: number, options: { align: "center" }) => void },
+): void {
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    if (startAt > 0) virtualizer.scrollToIndex(startAt, { align: "center" });
+  }, [startAt, virtualizer]);
 }

@@ -14,7 +14,7 @@ import {
   workerInspectorOf,
   workerRow,
 } from "../model/worker-page";
-import type { WorkerList } from "../model/workers";
+import type { WorkerList, WorkerView } from "../model/workers";
 import { useLiveResource, useNow } from "./live";
 import { usePaging } from "./paging";
 import { loadView, mapView } from "./resource";
@@ -58,24 +58,45 @@ export interface WorkersPage {
 
 export function useWorkers(): LoadView<WorkersPage> {
   const workers = loadView(useLiveResource<WorkerList>("/v1/workers"));
-  // why: the holders' labels come from the token records; while they have not arrived or were
-  // refused, a holder shows its id alone and the devices still show.
-  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
-  const leaseIds = (useLiveResource<LeaseList>("/v1/leases").data?.leases ?? []).map(
-    (lease) => lease.id,
-  );
-  const now = useNow();
   const search = useSearch();
   const named = itemIdFrom("/workers", usePath());
   const [filter, setFilter] = useState<WorkerFilter>("all");
 
-  const all = workers.kind === "ready" ? workers.data.workers : [];
-  const shown = filterWorkers(all, filter);
   const ready = workers.kind === "ready";
+  const all = ready ? workers.data.workers : [];
+  const shown = filterWorkers(all, filter);
   const paging = usePaging({ sizes: TABLE_SIZES, total: ready ? shown.length : undefined });
-  const first = shown[0];
-  const chosenId = named ?? first?.id;
+  const chosenId = named ?? shown[0]?.id;
   const chosen = all.find((worker) => worker.id === chosenId);
+  const inspector = useInspector(chosen, ready);
+  const keep = listSearch(search);
+
+  return mapView(workers, (list) => {
+    const start = (paging.page - 1) * paging.size;
+    return {
+      chosen: chosenId,
+      empty: list.workers.length === 0,
+      filter,
+      focus: named === undefined ? "list" : "detail",
+      inspector,
+      meta: upMeta(list.workers),
+      missing: named !== undefined && chosen === undefined ? named : undefined,
+      paging,
+      rows: shown.slice(start, start + paging.size).map((worker) => workerRow(worker, keep)),
+      setFilter,
+    };
+  });
+}
+
+// why: the holders' labels come from the token records and their lease links from the lease list;
+// while either has not arrived or was refused, a holder shows its id and the devices still show.
+function useInspector(
+  chosen: WorkerView | undefined,
+  ready: boolean,
+): WorkerInspectorView | undefined {
+  const tokens = useLiveResource<TokenList>("/v1/tokens").data?.tokens ?? [];
+  const leases = useLiveResource<LeaseList>("/v1/leases").data?.leases ?? [];
+  const now = useNow();
   const devicesPaging = usePaging({
     name: "devices",
     sizes: TABLE_SIZES,
@@ -86,28 +107,11 @@ export function useWorkers(): LoadView<WorkersPage> {
     sizes: TABLE_SIZES,
     total: ready ? (chosen?.warmPool?.targets.length ?? 0) : undefined,
   });
-  const keep = listSearch(search);
-
-  return mapView(workers, (list) => {
-    const start = (paging.page - 1) * paging.size;
-    return {
-      chosen: chosenId,
-      empty: list.workers.length === 0,
-      filter,
-      focus: named === undefined ? "list" : "detail",
-      inspector:
-        chosen === undefined
-          ? undefined
-          : {
-              ...workerInspectorOf({ leaseIds, now: now.server, tokens, worker: chosen }),
-              devicesPaging,
-              warmPaging,
-            },
-      meta: upMeta(list.workers),
-      missing: named !== undefined && chosen === undefined ? named : undefined,
-      paging,
-      rows: shown.slice(start, start + paging.size).map((worker) => workerRow(worker, keep)),
-      setFilter,
-    };
-  });
+  if (chosen === undefined) return undefined;
+  const leaseIds = leases.map((lease) => lease.id);
+  return {
+    ...workerInspectorOf({ leaseIds, now: now.server, tokens, worker: chosen }),
+    devicesPaging,
+    warmPaging,
+  };
 }

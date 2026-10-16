@@ -69,40 +69,16 @@ export function useScreen(leaseId: string): Screen {
     setMeta(undefined);
     setStats(EMPTY);
     setPhase("starting");
-    void (async () => {
-      try {
-        const { body } = await api.stream(
-          `/v1/stream/leases/${encodeURIComponent(leaseId)}`,
-          abort.signal,
-          STREAM_HEAD_TIMEOUT_MS,
-        );
-        setPhase("live");
-        await readStream(
-          body,
-          {
-            onEnd: (reason) => {
-              // why: a stream that ended because this pane asked it to says nothing — the operator
-              // pressed Stop, and telling them the stream they stopped has stopped is noise.
-              if (abort.signal.aborted) return;
-              setNote(reason ?? "The stream ended.");
-              setPhase("stopped");
-            },
-            onFrame: (frame) => {
-              paint(canvas.current, frame.displayWidth, frame.displayHeight, frame);
-              frame.close();
-            },
-            onImage: (image) => paint(canvas.current, image.width, image.height, image),
-            onMeta: setMeta,
-            onStats: setStats,
-          },
-          abort.signal,
-        );
-      } catch (error) {
-        if (abort.signal.aborted) return;
-        setNote(refusalOf(error));
+    void capture(api, leaseId, abort.signal, {
+      canvas,
+      ended: (reason) => {
+        setNote(reason);
         setPhase("stopped");
-      }
-    })();
+      },
+      live: () => setPhase("live"),
+      setMeta,
+      setStats,
+    });
   }, [api, leaseId]);
 
   // why: the canvas is mounted as soon as a picture has been asked for rather than when the first frame
@@ -147,6 +123,50 @@ export function refusalOf(error: unknown): string {
     return "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.";
   }
   return error.message;
+}
+
+interface CaptureSinks {
+  readonly canvas: RefObject<HTMLCanvasElement | null>;
+  readonly live: () => void;
+  readonly ended: (reason: string) => void;
+  readonly setMeta: (meta: StreamMeta) => void;
+  readonly setStats: (stats: StreamStats) => void;
+}
+
+// why: a stream that ended because this pane asked it to says nothing — the operator pressed Stop,
+// and telling them the stream they stopped has stopped is noise.
+async function capture(
+  api: ReturnType<typeof useApi>,
+  leaseId: string,
+  signal: AbortSignal,
+  sinks: CaptureSinks,
+): Promise<void> {
+  try {
+    const { body } = await api.stream(
+      `/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+      signal,
+      STREAM_HEAD_TIMEOUT_MS,
+    );
+    sinks.live();
+    await readStream(
+      body,
+      {
+        onEnd: (reason) => {
+          if (!signal.aborted) sinks.ended(reason ?? "The stream ended.");
+        },
+        onFrame: (frame) => {
+          paint(sinks.canvas.current, frame.displayWidth, frame.displayHeight, frame);
+          frame.close();
+        },
+        onImage: (image) => paint(sinks.canvas.current, image.width, image.height, image),
+        onMeta: sinks.setMeta,
+        onStats: sinks.setStats,
+      },
+      signal,
+    );
+  } catch (error) {
+    if (!signal.aborted) sinks.ended(refusalOf(error));
+  }
 }
 
 function paint(

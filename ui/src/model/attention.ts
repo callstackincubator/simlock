@@ -137,36 +137,47 @@ function subjectOf(item: AttentionItem): string {
 }
 
 function factsOf(item: AttentionItem, now: number): readonly AttentionFact[] {
+  return "device" in item ? deviceFacts(item, now) : workerFacts(item, now);
+}
+
+function deviceFacts(
+  item: Extract<AttentionItem, { readonly device: unknown }>,
+  now: number,
+): readonly AttentionFact[] {
+  const since = stateEnteredAt(item.device, item.worker);
+  return [
+    { label: "Device", value: item.device.id },
+    { label: "State", value: item.device.state },
+    ...(since === undefined
+      ? []
+      : [{ label: "In this state for", value: formatDuration(now - since) }]),
+  ];
+}
+
+function workerFacts(
+  item: Exclude<AttentionItem, { readonly device: unknown }>,
+  now: number,
+): readonly AttentionFact[] {
   const { worker } = item;
-  switch (item.condition) {
-    case "disconnected":
-      return [{ label: "Last seen", value: `${formatDuration(now - worker.lastSeenAt)} ago` }];
-    case "incompatible":
-      return worker.protocol === undefined
-        ? []
-        : [
-            { label: "Gateway protocol", value: protocolText(worker.protocol.gateway) },
-            { label: "Worker protocol", value: protocolText(worker.protocol.worker) },
-          ];
-    case "drained":
-      return [{ label: "Leases still held", value: String(worker.leases?.length ?? 0) }];
-    case "over RAM budget":
-      return [
-        { label: "Used", value: gibibytes(item.usedBytes) },
-        { label: "Limit", value: gibibytes(item.limitBytes) },
-      ];
-    case "quarantined":
-    case "stalled": {
-      const since = stateEnteredAt(item.device, worker);
-      return [
-        { label: "Device", value: item.device.id },
-        { label: "State", value: item.device.state },
-        ...(since === undefined
-          ? []
-          : [{ label: "In this state for", value: formatDuration(now - since) }]),
-      ];
-    }
+  if (item.condition === "over RAM budget") {
+    return [
+      { label: "Used", value: gibibytes(item.usedBytes) },
+      { label: "Limit", value: gibibytes(item.limitBytes) },
+    ];
   }
+  if (item.condition === "disconnected") {
+    return [{ label: "Last seen", value: `${formatDuration(now - worker.lastSeenAt)} ago` }];
+  }
+  if (item.condition === "drained") {
+    return [{ label: "Leases still held", value: String(worker.leases?.length ?? 0) }];
+  }
+  const { protocol } = worker;
+  return protocol === undefined
+    ? []
+    : [
+        { label: "Gateway protocol", value: protocolText(protocol.gateway) },
+        { label: "Worker protocol", value: protocolText(protocol.worker) },
+      ];
 }
 
 function namesItem(event: ConsoleEvent, item: AttentionItem): boolean {
