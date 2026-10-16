@@ -44,6 +44,7 @@ import {
 import {
   type DeviceClass,
   deviceClassSchema,
+  parseDurationMs,
   requestedClass,
   type Role,
   waitingRequestSchema,
@@ -58,7 +59,6 @@ import {
 import { followLog, type Signals } from "./follow-log.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
-import { parseDurationMs } from "../contract/duration.js";
 
 type WaitingRequestEntry = z.infer<typeof waitingRequestSchema>;
 

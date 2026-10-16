@@ -3,7 +3,7 @@ import {
   type OsConstraint as RequestedOs,
   parseOsConstraint,
   satisfies,
-} from "../contract/os-range.js";
+} from "../contract/index.js";
 import type { DeviceRequest } from "./driver.js";
 
 export type Platform = "ios" | "android";

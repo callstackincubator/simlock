@@ -1,10 +1,10 @@
-import { requestedClass } from "../../contract/index.js";
 import {
   compareVersions,
   type OsConstraint,
   parseOsConstraint,
+  requestedClass,
   satisfies,
-} from "../../contract/os-range.js";
+} from "../../contract/index.js";
 import {
   findCatalogModel,
   modelClass,

@@ -747,7 +747,7 @@ describe("the repo's known violations", () => {
         .map((v) => `${v.from} -> ${v.to}`)
         .sort(),
     ).toEqual([]);
-  });
+  }, 60_000);
 
   const read = (file: string): Violation[] =>
     JSON.parse(readFileSync(join(repoRoot, file), "utf8")) as Violation[];

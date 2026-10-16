@@ -1,11 +1,11 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import { requestedClass } from "../contract/index.js";
 import {
   compareVersions,
   type OsRange,
   parseOsConstraint,
+  requestedClass,
   satisfies,
-} from "../contract/os-range.js";
+} from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import {
   type CapacityReservation,

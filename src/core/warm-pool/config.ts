@@ -1,4 +1,4 @@
-import { parseOsConstraint } from "../../contract/os-range.js";
+import { parseOsConstraint } from "../../contract/index.js";
 import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/schemas.js";
 import {
   booleanValue,

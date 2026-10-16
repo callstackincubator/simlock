@@ -1,8 +1,8 @@
 # Contract
 
 Does: the one typed daemon contract — operations, schemas, roles, errors, pushes, protocol range.
-Entry: `index.ts` → `OPERATIONS`, `PUSH_SCHEMAS`, `ERROR_TABLE`, `PROTOCOL_VERSION_RANGE`.
-Not in the index: `os-range.ts`, `duration.ts` — import the file.
+Entry: `index.ts` → `OPERATIONS`, `PUSH_SCHEMAS`, `ERROR_TABLE`, `PROTOCOL_VERSION_RANGE`,
+OS range helpers and `parseDurationMs`.
 Uses: zod only. Never imports: anything outside `src/contract/` (`.dependency-cruiser.mjs`,
 rule `contract-imports-nothing`).
 Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, bus.

@@ -10,8 +10,8 @@ import {
   deviceClassSchema,
   leaseIdSchema,
   imageTagSchema,
+  parseDurationMs,
 } from "../contract/index.js";
-import { parseDurationMs } from "../contract/duration.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";

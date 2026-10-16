@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import { parseOsConstraint } from "../contract/os-range.js";
+import { parseOsConstraint } from "../contract/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
