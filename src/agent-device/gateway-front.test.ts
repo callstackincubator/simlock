@@ -988,7 +988,11 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     const rig = await setUp();
     const member = first(rig);
     await granted(rig, 1);
-    const chunks = ['{"progress":1}\n', '{"progress":2}\n', '{"done":true}\n'];
+    const chunks = [
+      '{"type":"progress","event":{"kind":"command","message":"one"}}\n',
+      '{"type":"progress","event":{"kind":"command","message":"two"}}\n',
+      '{"type":"response","response":{"jsonrpc":"2.0","id":"x","result":{"ok":true,"data":{}}}}\n',
+    ];
     member.fake.streamNextCommand(chunks);
 
     const streamed = await command(rig, "snapshot", 1);
