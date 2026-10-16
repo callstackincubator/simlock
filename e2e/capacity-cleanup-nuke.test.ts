@@ -184,6 +184,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await waitForCleanupToReach(env, grantX.device.driverDeviceId, "shutdown");
 
     // cleanup --dry-run must report proposals without acting on them.
+    await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
     await releaseAndForget(env, "dryrun-z");
     const rowsAfterZ = await deviceRows(env);
     const readyDevice = rowsAfterZ.find((row) => row.state === "ready");
