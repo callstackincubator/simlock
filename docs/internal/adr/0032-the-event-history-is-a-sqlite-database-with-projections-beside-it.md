@@ -78,12 +78,22 @@ event envelopes, by one function.
 
 - **One row per lease request:** when it was requested, granted or
   rejected, and ended; its outcome and reason; the grant source; platform,
-  model, worker and requester. A wait, a held time and a turnaround are
-  read from one row.
-- **One row per minute,** per worker and platform: leases held, device
-  slots used and their maximum, RAM used when the strategy keeps a budget,
-  queue depth and requests waiting. Each value is kept as its peak in the
-  minute and its value at the minute's end.
+  model, worker and requester; whether it was refused at admission or was
+  a gateway's probe. A wait, a held time and a turnaround are read from one
+  row. On a gateway, held time is measured on the worker's clock (ADR 0021
+  §5).
+- **One row per minute,** per worker and platform, plus one row per worker
+  for all its platforms and, on a gateway, one for the whole fleet. Each
+  row holds leases held, device slots used and their maximum, RAM used and
+  its limit when the strategy keeps a budget, queue depth and requests
+  waiting. Each value is kept three ways: its peak in the minute, its
+  value at the minute's end, and its integral over the minute (value ×
+  milliseconds). The all-platforms and fleet rows are updated on every
+  step, so their peak is the highest the total reached at once, not a sum
+  of separate peaks. The integral gives an exact time-weighted mean.
+- **One row per device fact:** provisioning and boot durations, incidents
+  (quarantined, recovered, lost) and declined probes, with time, platform
+  and worker.
 
 The bus subscriber that writes events writes each event and its projection
 changes in one transaction, synchronously, as the event file is written
@@ -119,12 +129,14 @@ sequenceDiagram
 | Record | Kept for | Key | Default |
 |---|---|---|---|
 | `events` rows | by timestamp | `eventLog.retention` | 7 days |
-| all of `history.db` | by size, oldest events first | `eventLog.maxBytes` | 256 MiB |
+| all of `history.db` | by size on disk, `history.db` and its `-wal` file, oldest events first | `eventLog.maxBytes` | 256 MiB, at least 16 MiB |
 | projection rows | by timestamp | `metrics.retention` | 90 days |
 
-Pruning runs at daemon start and every hour. It deletes rows, not files, so
-an event older than `retention` never stays because a newer one shares its
-file. `eventLog.rotateBytes` is removed: there is no file left to rotate.
+Pruning runs at daemon start, once the daemon holds its socket, and every
+hour. It deletes rows, not files, then returns the freed pages to the disk
+(`auto_vacuum=INCREMENTAL`, set when the file is created), so the size on
+disk follows the cap down as well as up. Because it deletes rows, an event
+older than `retention` never stays just because a newer one shares its file. `eventLog.rotateBytes` is removed: there is no file left to rotate.
 A config that still sets it gets the usual unknown-key warning.
 
 Projection rows outlive the events they came from. A row older than the
@@ -145,7 +157,9 @@ stateDiagram-v2
   Ready --> [*]
 ```
 
-- At start the daemon runs `PRAGMA quick_check`. A file that fails it, or
+- At start, once it holds its socket, the daemon runs `PRAGMA quick_check`.
+  A lock held by another process waits up to 5 s and is never taken for
+  damage. A file that fails it, or
   will not open, is renamed to `history.db.damaged-<time>` and never
   deleted. A fresh file takes its place. Leasing carries on. The log and
   `status.get` say so.
