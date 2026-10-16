@@ -1,10 +1,9 @@
 <!--
 Feature spec. A spec session writes this; nobody edits it by hand.
 Sections up to "Open questions" are the business spec and never contain
-implementation detail unless the detail is itself a requirement.
-"Decisions" and "Technical spec" are added in a later session. A feature
-that is split into tasks gets sub-issues, "Shared values" and "Tasks"
-instead of a Technical spec.
+implementation detail unless the detail is itself a requirement. The same
+session adds "Decisions", "Shared values" and "Tasks", and writes the
+technical half in the task sub-issues, one or more.
 -->
 
 Request: #NNN <!-- or "none" when the maintainer originated it -->
@@ -69,94 +68,36 @@ an end-to-end test can verify against main. -->
 
 ## Decisions
 
-<!-- One line per ADR this feature depends on. Added during planning. -->
+<!-- One line per ADR this feature depends on. -->
 
 - ADR NNNN — <title>: <one line on what it fixes for this feature>
 
 ## Shared values
 
-<!-- Added when the feature is split. Every value more than one task uses
-(a format, limit, name or key, the protocol bump), one row each, with the
-source of its Facts row. Tasks link here and never restate a value. -->
+<!-- Written before any task. Every value or state more than one task
+uses, one row each: a format, limit, name or key, the protocol bump, a
+record or file two tasks write or read, an error code and its exact
+message. Which task writes it, which tasks read it, and which wins when two
+act on it. The source is its Facts row. Tasks link here and never restate
+a row. "none" for a one-task feature. -->
 
-| Value | Rule | Source |
-| ----- | ---- | ------ |
-| ...   | ...  | ...    |
+| Value or state | Rule | Written by | Read by | Source |
+| -------------- | ---- | ---------- | ------- | ------ |
+| ...            | ...  | ...        | ...     | ...    |
 
 ## Tasks
 
-<!-- Added when the feature is split; replaces the Technical spec. First a
-Mermaid flowchart of the tasks in the order they depend on each other. Then
-one entry per task, in that order:
+<!-- First a Mermaid flowchart of the tasks in the order they depend on
+each other (none for a one-task feature). Then one entry per task, in that
+order:
 
 - #NNN <title> — <one plain sentence: what the user can do after it>.
   Risk: <what a user would notice if it goes wrong>.
 
+Then each Completion condition and the task whose Done when line delivers
+it. Then the open work in the same area (other features' tasks, open PRs):
+each one, what it shares with this feature, and the Depends on it got or
+why none.
+
 Do not write task states here: GitHub's sub-issue list shows them and
 stays current. -->
-
-## Technical spec
-
-<!-- Only for a feature delivered as one PR. Delete this section when the
-feature is split into tasks. -->
-
-### Facts
-
-<!-- Every fact this spec rests on, one row each: what existing code,
-another tool or this machine does today. Source: where it was read, a
-`path:line` in this repo, a `path:line` in another tool's source at the
-commit toolchain.md names, or a command and the output line it printed. A
-value this change sends to another module, process or tool (an id, name,
-key, header, path, flag, JSON shape) is a row: its source is the line that
-parses or validates it, and the row shows the value passes. A fake of
-another tool cites the real reply it copies. A sentence below about today's
-behaviour names its row (F1). A fact with no source is an open question,
-not a row. -->
-
-| #  | Fact | Source |
-| -- | ---- | ------ |
-| F1 | ...  | ...    |
-
-### Modules touched
-
-<!-- A Mermaid flowchart of the modules this changes and the ones they call,
-changed ones marked, arrows pointing from caller to callee. When the change
-crosses a process or a network hop (CLI, daemon, driver, gateway, worker,
-HTTP or MCP client), add a Mermaid sequence diagram of one request through
-it, including the failure reply. Skip a diagram that would show one box. -->
-
-### Surface and extension points
-
-<!-- For each module this adds or whose `index.ts` it grows: the factory
-and the handle it returns (architecture rule 18). If the change adds a
-second implementation of something simlock already does, or an accepted
-ADR or this spec names one: what varies, the definition type and the
-registry (architecture rules 19, 20). Delete this section when neither
-applies. -->
-
-### Contract and event changes
-
-<!-- Every new or changed event needs its EVENTS.md entry named here. -->
-
-### Other code on the same state
-
-<!-- Every existing component that reads or changes the state this change
-touches (the same records, files, processes, timers or locks), found by
-searching the code. For each: what happens when both act, in either order
-or at once, and which one wins. "None" only after the search. -->
-
-### Rules in play
-
-<!-- Which files in docs/internal/agent-rules/ the implementer must reread, and why. -->
-
-### Tests
-
-<!-- First, one line: the seam the tests drive (the highest existing entry
-point that can see the behaviour; one if possible) and an existing test
-file to model them on. Then one line per test title: a claim the body must
-prove. Every behaviour the body states, including what stays "as today",
-has a line here: one line per behaviour, its cases listed in the line, not
-one line per case. A claim an existing test already proves names that test
-to extend instead (testing rule 7). -->
-
-- ...

@@ -17,7 +17,7 @@ session fixes what you report.
 
 Arguments: an issue number, and a scope:
 
-- `task`: one task (or a feature delivered as one PR), read with its parent.
+- `task`: one task, read with its parent.
   Every category except overlap and shared-values.
 - `feature`: a feature with sub-issues, read with every open sub-issue.
   Only contradiction between tasks, overlap, shared values, and whether the
@@ -125,7 +125,7 @@ what goes wrong because of it.
    new rule would reject or reinterpret.
 10. **size.** A task over about 30 Tests lines or about 20 modules in
     Modules touched, with no line under Scope saying why it cannot split
-    (spec-session's split mode sizes tasks so). Every stage of delivery
+    (spec-session sizes tasks so). Every stage of delivery
     grows with the task, and a big one costs review rounds and parks.
 11. **fact.** Each Facts row, and each sentence that says what existing
     code, another tool or the machine does today ("`settle` rejects

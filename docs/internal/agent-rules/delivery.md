@@ -20,9 +20,8 @@ it before anything else happens to it.
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
 | `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
 | `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
-| `feature:spec`     | spec session, on creation           | Business or technical spec in progress.                   |
-| `feature:ready`    | maintainer                          | Business sections and ADRs accepted; agents do the rest.  |
-| `feature:planned`  | spec session, on split              | Split into tasks. Never picked up itself.                 |
+| `feature:spec`     | spec session, on creation           | Spec in progress, business and technical together.        |
+| `feature:planned`  | spec session, with its tasks ready  | Split into tasks. Never picked up itself.                 |
 | `feature:blocked`  | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `task:draft`       | spec session, on creation           | Scope written; technical spec or its spec check missing.  |
 | `task:ready`       | spec session, after the spec check  | An agent may implement it once its Depends on allow.      |
@@ -39,8 +38,8 @@ Transitions per kind:
   a comment naming the feature it became.
 - **bug**: `new` → `triage` → `ready`, with `needs-info` as a side-trip that
   returns to `triage` when the reporter answers.
-- **feature**: `spec` → `ready` or `planned`, and `ready` → `planned` when
-  the delivering agent splits it. Both end at closed.
+- **feature**: `spec` → `planned` when the spec session has set its tasks
+  ready, then closed.
 - **task**: `draft` → `ready` when its spec check passes, and back to
   `draft` if the technical spec is emptied or the maintainer moves it.
 - **any kind**: `triage` or `ready` → `blocked` when an agent stops on a
@@ -53,20 +52,16 @@ is open, done means closed as completed.
 
 ## Rules
 
-1. **An agent acts only on `bug:triage`, `bug:ready`, `feature:ready`, and
-   `task:ready`.** Nothing else is work. Agents never label their way into
+1. **An agent acts only on `bug:triage`, `bug:ready` and `task:ready`.**
+   Nothing else is work. Agents never label their way into
    work: only a maintainer, automation a maintainer configured, or the spec
    session that wrote a task and saw its spec check pass (rule 7) moves an
    issue to a state an agent may act on. The maintainer's say on a task is
-   the split interview; they can move a task back to `task:draft` at any
-   time. A `task:ready` task runs once every issue under its Depends on is
-   closed, or is a task of the same feature whose PR passed review.
-   `feature:ready` delegates one thing: the maintainer accepted the business
-   sections and every ADR the feature links, and that approves the rest. An
-   agent delivering it may write the task specs, split the feature, set
-   each checked task `task:ready`, and deliver the tasks in their Depends
-   on order. A new decision that needs an ADR, or a comment that would
-   change the spec, is not covered: the agent stops and hands off.
+   the spec session, which they sit through; they can move a task back to
+   `task:draft` at any time. A `task:ready` task runs once every issue
+   under its Depends on is closed, or is a task of the same feature whose
+   PR passed review. Delivering a `feature:planned` feature means
+   delivering its `task:ready` tasks in their Depends on order.
 
 2. **The assignee is the claim, and a handoff is how a claim is released.**
    Before doing anything on an issue an agent assigns itself, and it never
@@ -106,9 +101,12 @@ is open, done means closed as completed.
    the issue itself and on its linked request if it has one, and lists what
    those comments change about the spec. The maintainer accepts or rejects
    each item. Only then does the session write the section it was started
-   for. It ends by editing the body and leaving one short comment saying
-   which sections moved, so a reader of the thread can see where the spec
-   last caught up.
+   for. Before its first question, it maps what exists today (the code, the
+   docs and ADRs, open work in the same area, other tools) with read-only
+   explorer agents, and puts every contradiction and conflict they find to
+   the maintainer first. It ends by editing the body and leaving one short
+   comment saying which sections moved, so a reader of the thread can see
+   where the spec last caught up.
 
 5. **A reporter's issue is never rewritten.** Bug reports and feature requests
    arrive through the issue forms and stay in the reporter's words. Triage
@@ -121,7 +119,8 @@ is open, done means closed as completed.
    that they could not before, and how anyone would check it. An
    implementation detail belongs there only when it *is* a requirement — "no
    inbound port on the worker" is an outcome; "use a WebSocket" is not.
-   Implementation lives in the technical section, in an ADR, or in a task.
+   Implementation lives in an ADR or in a task. The same spec session
+   writes both halves: the business sections and the tasks.
 
 7. **A task carries both halves.** A task's Scope is the slice of the parent's
    outcome it delivers; its Technical spec is what a delivery agent needs to
@@ -133,10 +132,9 @@ is open, done means closed as completed.
    what `always-in-scope.md` lists, and a small gap it leaves is an
    assumption, not a question (rule 3). A task with an empty technical
    section is `task:draft` no matter what anyone says in a comment. Before
-   a task gets `task:ready`, or a feature delivered as one PR gets
-   `feature:ready`, the spec session has the `check-spec` skill read the
-   body as posted, with a fresh context, and fixes in the body what it
-   reports.
+   a task gets `task:ready`, the spec session has the `check-spec` skill
+   read the body as posted, with a fresh context, and fixes in the body
+   what it reports.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
    reproduces the bug as a failing test whose title states the claim the
@@ -156,9 +154,9 @@ is open, done means closed as completed.
 
 9. **Done is defined per kind.** A task or bug is done when the pull request
    that closes it is merged; for a bug the failing test from triage is the
-   regression test and must be in that PR. A `feature:ready` issue is done
-   when its PR is merged and the PR body walks every completion condition.
-   A `feature:planned` issue is done when every sub-issue is closed. The
+   regression test and must be in that PR. A `feature:planned` issue is
+   done when every sub-issue is closed and the PR that closed the last one
+   walks every completion condition. The
    delivering agent merges its own PR, but only through the gate in rule
    15.
    Verification is part of delivery, not a step after it ([coding.md](coding.md)
@@ -326,7 +324,7 @@ is open, done means closed as completed.
 closes the issue:
 
 ```bash
-gh issue list --search 'label:bug:ready,feature:ready,task:ready no:assignee'
+gh issue list --search 'label:bug:ready,task:ready no:assignee'
 gh issue view <n> --json body -q .body    # a task: every Depends on allows it (rule 1)
 gh issue edit <n> --add-assignee @me
 .agents/scripts/worktree.sh task/<n>    # or bug/<n>, feature/<n>; resumes origin/<branch>
@@ -352,8 +350,9 @@ The repo's own skills encode these procedures; use them rather than
 retyping the steps. `deliver` is the orchestrator: it claims, then hands
 each stage to a background agent — `implementer`, `reviewer`,
 `hardware-verifier` — that runs on the model its frontmatter pins and returns a fixed report.
-`spec-session` and `triage-bug` cover the rest; `spec-session` ends its
-technical and split modes with the `spec-checker` agent (rule 7).
+`spec-session` and `triage-bug` cover the rest; `spec-session` starts with
+`spec-explorer` agents (rule 4) and ends with the `spec-checker` agent
+(rule 7).
 
 ## Automation
 
@@ -380,6 +379,5 @@ rules mechanically, so nobody has to remember them:
   closes `#<n>` and closes nothing else.
 
 The judgment calls stay manual by design: `bug:new` → `bug:triage`,
-`bug:triage` → `bug:ready`, and `feature:spec` → `feature:ready`. A task
-needs none: the spec session sets `task:ready` once its check passes
-(rule 1).
+and `bug:triage` → `bug:ready`. A task needs none: the spec session the
+maintainer sits through sets `task:ready` once its check passes (rule 1).

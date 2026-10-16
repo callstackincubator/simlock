@@ -9,8 +9,8 @@ explains how they fit together in practice.
 ## The model in five sentences
 
 Every issue carries exactly one `<kind>:<state>` label, and the prefix is the
-kind. Agents act only on `bug:triage`, `bug:ready`, `feature:ready` and
-`task:ready`; everything else is either an unread claim from outside or an
+kind. Agents act only on `bug:triage`, `bug:ready` and `task:ready`;
+everything else is either an unread claim from outside or an
 unfinished spec. The body is the spec and comments are discussion, so a
 comment changes nothing until a spec session folds it into the body. A
 reporter's issue is never rewritten: bugs are triaged in a comment, and a
@@ -27,8 +27,7 @@ request, closed — not from a label. The branch for issue `<n>` is always
 | `bug:needs-info`  | Could not reproduce. Waiting on the reporter.            |
 | `bug:ready`       | An agent may fix it.                                     |
 | `bug:blocked`     | Waiting on the maintainer to clear a blocker.            |
-| `feature:spec`    | Business or technical spec in progress.                  |
-| `feature:ready`   | Business sections and ADRs accepted; agents do the rest. |
+| `feature:spec`    | Spec in progress, business and technical together.      |
 | `feature:planned` | Split into tasks. Never picked up itself.                |
 | `feature:blocked` | Waiting on the maintainer to clear a blocker.            |
 | `task:draft`      | Scope written; technical spec or its spec check missing. |
@@ -60,83 +59,83 @@ request, closed — not from a label. The branch for issue `<n>` is always
    The change is reviewed and merged through the gate (below). The triage
    test is now the regression test. Merge closes the bug.
 
-## A feature, delivered as one PR
+## A feature, from request to tasks
+
+One spec session takes a feature from the request to ready tasks. You sit
+through it. It maps the code, docs and open work before its first
+question, so a conflict with today's code comes up while the design can
+still change.
 
 1. The maintainer creates a `feature:spec` issue, or an outside request
    arrives as `request:new` and the maintainer decides to take it up. Nothing
-   happens to a request by default.
-2. First spec session. The agent interviews the maintainer and writes the
-   business half of [templates/feature.md](templates/feature.md): Problem,
-   Who it is for, Outcome, Non-goals, Completion conditions, Open questions.
-   It says what a user can do afterwards, never how. If the feature came from
-   a request, the session creates the feature issue, links it to the request,
-   and comments on the request so the reporter knows where to look. The
-   request stays open until the feature ships.
-3. Discussion happens, on the feature or on the request, in comments. Nobody
-   edits the body by hand.
-4. Second spec session. The agent first lists every comment posted since the
-   body was last edited, on both threads, as a set of proposed changes; the
-   maintainer accepts or rejects each. Then it interviews for the Technical
-   spec section. Any decision that constrains more than one future change or
-   would be expensive to reverse becomes an ADR at _Proposed_, listed under
-   Decisions. The session edits the body and leaves a one-line "Spec
-   updated" comment. It ends with `check-spec`: a fresh agent reads the
-   body as posted against the rules, the ADRs and the code. It first plans
-   the change file by file and runs a pre-mortem, then gives every category
-   a status: contradictions, lines nobody could check, behaviour no test
-   pins, failure modes no line answers, existing code on the same state no
-   line names, lists the code contradicts, and undefined terms. You and the
-   session fix those in the body.
-5. Once Open questions is empty, every linked ADR is accepted and the spec
-   check has nothing open, the maintainer adds `feature:ready`. The ADRs
-   move to _Accepted — not yet implemented_.
-6. An agent running `deliver` claims it, works on `feature/<n>`, has the
-   change reviewed and merged through the gate (below), and the PR body
-   walks every completion condition. Merge closes the feature, and its ADRs
-   flip to _Accepted_.
+   happens to a request by default. The session can start from either: from
+   a request it creates the feature issue, links it to the request, and
+   comments on the request so the reporter knows where to look. The request
+   stays open until the feature ships.
+2. **Reconcile.** The session lists every comment posted since the body was
+   last edited, on both threads, as proposed changes; you accept or reject
+   each.
+3. **Explore.** Before the first question, `spec-explorer` agents (a small,
+   fast model, read-only) map what exists today, one per area: the code,
+   the docs and ADRs, open issues and PRs in the same area, and any other
+   tool involved. Each returns facts as `path:line` lines, plus the
+   contradictions and conflicts it found. The session opens every cited
+   line itself and keeps only what the line bears out.
+4. **Interview.** The session opens with today's flow as a diagram, the
+   contradictions and conflicts it kept, and its one-line read of what you
+   want, with a confidence. Then it asks in rounds: each round is every
+   decision whose prerequisites are settled, business and technical alike,
+   each with its recommended answer first and an `Explain` option: pick it
+   and the session shows the problem and what each option brings, with
+   diagrams or snippets, then asks again. It looks up facts itself and
+   never asks you one. Any decision that constrains more than one task or
+   would be expensive to reverse becomes an ADR at _Proposed_, which you
+   accept in a later round. It ends when no decision is left open.
+5. **Play back.** Who, today, outcome, how it is checked, the decisions,
+   what is out of scope, and the task list. Nothing is written before you
+   say yes.
+6. **Write.** The feature gets its business sections from
+   [templates/feature.md](templates/feature.md), Decisions, Shared values
+   and Tasks. Each task is a native sub-issue, labelled `task:draft`, with
+   a body from [templates/task.md](templates/task.md): Scope, Technical
+   spec, Facts, Done when, Out of scope and Depends on. A small feature is
+   one task. Every fact cites the line or command output it was read from.
+7. **Check.** `check-spec` reads the bodies as posted, one checker per task
+   and one for the feature as a whole. It first plans the change file by
+   file and runs a pre-mortem, then gives every category a status:
+   contradictions, lines nobody could check, behaviour no test pins,
+   failure modes no line answers, existing code on the same state no line
+   names, lists the code contradicts, overlapping tasks without a Depends
+   on, and undefined terms. The session fixes what they find with you.
+   After the second check, a closure check confirms each fix closed its
+   finding; one that did not goes to you.
+8. **Ready.** Once the check passes and every linked ADR is accepted, the
+   session sets every task `task:ready` and the feature `feature:planned`.
+   The ADRs move to _Accepted — not yet implemented_. Your say is the
+   session; move a task back to `task:draft` to hold it. Depends on sets
+   only the order: `deliver` starts a task once each dependency is closed
+   or is a task of the same feature whose PR passed review.
 
-## A feature, split into tasks
+A session can stop part way. It writes what is settled and lists the rest
+under Open questions; the feature stays `feature:spec`, and the next session
+starts there.
 
-Steps 1 to 4 are the same, but the second session ends differently: instead
-of a Technical spec section on the feature, it produces sub-issues. There
-are two ways in. Attended, you sit through the split and agree the task
-list and test seams (steps 5 and 6). Unattended, the second session settles only
-the decisions that need ADRs; you accept those, add `feature:ready`, and
-run `/deliver <feature>`. The run writes each task's technical spec, has
-`check-spec` read the tasks as posted and fixes what it finds, marks them
-ready, and then delivers the tasks in dependency order, two at a
-time, merging each through the gate. A small gap a task leaves open it
-closes the conservative way and lists as an `Assumption:` line in the PR,
-for you to see. It stops and hands back to you only for a new ADR, a
-comment that would change the spec, a choice a user would notice that
-nobody made, a blocking review finding it could not settle, or a
-real-device check it could not run. It ends with one comment on the
-feature listing what merged, what parked and why, and what is still
-waiting.
+Then `/deliver <feature>` delivers the tasks in dependency order, two at a
+time, merging the feature's PRs together at the end. A small gap a task
+leaves open it closes the conservative way and lists as an `Assumption:`
+line in the PR, for you to see. It stops and hands back to you only for a
+contradiction with a rule or an accepted ADR, a blocking review finding it
+could not settle, or a real-device check it could not run. It ends with one
+comment on the feature listing what merged, what parked and why, and what
+is still waiting.
 
-5. Each task is a native sub-issue of the feature, labelled `task:draft`, with
-   a body from [templates/task.md](templates/task.md): Scope, Technical spec,
-   Facts, Done when, Out of scope and Depends on. Every fact cites the line
-   or command output it was read from. Once the tasks exist, `check-spec` reads them as posted, one checker per task and
-   one for the feature as a whole, and the session fixes what they find,
-   including tasks that overlap without a Depends on, in this feature or
-   another. After the second check, a closure check confirms each fix closed
-   its finding; one that did not goes to you. The feature
-   becomes `feature:planned` and keeps only its business spec, Decisions and
-   the task list.
-6. When the check passes, the session sets every task `task:ready`. Your
-   say is the split interview; move a task back to `task:draft` to hold it.
-   Depends on sets only the order: `deliver` starts a task once each
-   dependency is closed or is a task of the same feature whose PR passed
-   review.
-7. Agents claim `task:ready` issues one PR each, on `task/<n>`, each PR
-   reviewed before it leaves draft (below).
-8. Verification is part of delivery. Every task PR walks its Done when, and
-   the PR that closes the last open sub-issue also walks the feature's
-   Completion conditions. When that last sub-issue closes, the automation
-   comments on the feature, and the maintainer closes it. If the feature
-   came from a request, the request closes on its own with a pointer to the
-   feature.
+Each task is one PR, on `task/<n>`, reviewed before it leaves draft
+(below). Verification is part of delivery. Every task PR walks its Done
+when, and the PR that closes the last open sub-issue also walks the
+feature's Completion conditions. When that last sub-issue closes, the
+automation comments on the feature, and the maintainer closes it. If the
+feature came from a request, the request closes on its own with a pointer
+to the feature.
 
 ## Review, verification and merge
 
@@ -319,10 +318,10 @@ and nothing else. The repo's skills — `spec-session`, `triage-bug`,
 `deliver`, `review` — handle the transitions an agent makes as part of its
 own procedure, and the reviews are the delivering agent's job, not CI's.
 
-Three transitions are judgments and stay manual on purpose: `bug:new` to
-`bug:triage`, `bug:triage` to `bug:ready`, and `feature:spec` to
-`feature:ready`. Each is one click. Tasks need no click: the spec session
-marks them ready once their check passes.
+Two transitions are judgments and stay manual on purpose: `bug:new` to
+`bug:triage`, and `bug:triage` to `bug:ready`. Each is one click. Tasks
+need no click: the spec session you sit through marks them ready once
+their check passes.
 
 ## Watching the pipeline
 
@@ -353,8 +352,8 @@ same feature as done. When every task has joined, `merge-pr.sh` on the top
 PR checks each PR's gates and `gh stack merge` merges them all at once, or
 none. So `main` never holds half a feature, and a task never waits for the
 CI run and merge of the one below it (2 to 6 minutes per task in the #466
-run). A single task, a bug, or a feature delivered as one PR merges on its
-own, as before, unless its feature has an open ADR PR to stack on.
+run). A bug merges on its own, and so does a feature's only task unless
+the feature has an open ADR PR to stack on.
 
 ## `main` and releases
 
@@ -434,8 +433,9 @@ To move it: copy the agents, skills, briefs, scripts, workflow, labels,
   `.claude/skills/audit-tests`, `.claude/skills/garden-comments` and
   `.claude/skills/calibrate-reviews`
 - Agents: `.claude/agents/` — `implementer`, `reviewer`,
-  `hardware-verifier`, `spec-checker`, `bug-triager` (the stage
-  instructions), and `spec-reviewer`, `code-reviewer`, `claims-reviewer`
+  `hardware-verifier`, `spec-explorer`, `spec-checker`, `bug-triager`
+  (the stage instructions), and `spec-reviewer`, `code-reviewer`,
+  `claims-reviewer`
 - Briefs: `.agents/briefs/` — `implement-<mode>.md`, `review-spec.md`,
   `review-code.md`, `review-claims.md`, `review-later-round.md`,
   `audit-tests-<stage>.md`, `calibration.md`

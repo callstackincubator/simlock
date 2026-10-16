@@ -155,7 +155,6 @@ jobs:
       github.event_name == 'issues' && github.event.action == 'closed' &&
       github.event.issue.state_reason == 'completed' &&
       (contains(github.event.issue.labels.*.name, 'feature:planned') ||
-       contains(github.event.issue.labels.*.name, 'feature:ready') ||
        contains(github.event.issue.labels.*.name, 'feature:spec'))
     runs-on: ubuntu-24.04
     permissions:
@@ -223,7 +222,7 @@ jobs:
           script: |
             const days = 3;
             const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open -no:assignee label:bug:ready,feature:ready,task:ready`;
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open -no:assignee label:bug:ready,task:ready`;
             const found = await github.paginate(github.rest.search.issuesAndPullRequests, { q, per_page: 100 });
             for (const issue of found) {
               let last = new Date(issue.updated_at).getTime();
