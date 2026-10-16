@@ -13,7 +13,7 @@ import { dirname } from "node:path";
 import type { Filesystem, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
-/** Owner-only, like every other file the daemon keeps under `SIMLOCK_HOME` (`tokens.json`,
+/** why: Owner-only, like the other files that hold secrets or state (`tokens.json`,
  * `admin.token`, `state.json`): the trust boundary is the OS user. */
 const WORKERS_FILE_MODE = 0o600;
 

@@ -129,7 +129,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 
 ## Rules
 
-- Only `Registry` writes `state.json`, inside `SerializedDecision.run`. Events after the commit.
+- Only `Registry` writes `state.json`, inside `SerializedDecision.run`, mode `0600`. Events after the commit.
 - Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in.
 - Nothing in core acts on a leased device, except `recoverLeased`, under the lease.
 - Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out.

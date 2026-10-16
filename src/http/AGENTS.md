@@ -89,7 +89,7 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink
   upgrades on the same listener (`onServerCreated`).
 - `tokens.json` (data directory): `{ id: "tok_…", hash, role, label?, createdAt }`, written
-  atomically. The dispatcher's `token.*` handlers write it through the same `TokenStore`.
+  atomically, mode `0600`. The dispatcher's `token.*` handlers write it through the same `TokenStore`.
   `verify` reads the file on every call. The secret is shown once, by `token.create`.
 - `LeaseNoticeBuffer` is memory only. `HttpGateway.stop` closes the server and destroys
   every open socket.
