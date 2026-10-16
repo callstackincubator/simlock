@@ -144,7 +144,9 @@ export class TokenStore {
 
   async #writeAll(records: readonly TokenRecord[]): Promise<void> {
     await this.#filesystem.mkdirp(dirname(this.#path));
-    await this.#filesystem.writeFileAtomic(this.#path, `${JSON.stringify(records, null, 2)}\n`);
+    await this.#filesystem.writeFileAtomic(this.#path, `${JSON.stringify(records, null, 2)}\n`, {
+      mode: 0o600,
+    });
   }
 }
 

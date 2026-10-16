@@ -23,9 +23,13 @@ const spec: VirtualSpec = {
 class ObservingFilesystem extends MemoryFilesystem {
   readonly operations: string[] = [];
 
-  override async writeFileAtomic(path: string, contents: string): Promise<void> {
+  override async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: { mode?: number },
+  ): Promise<void> {
     this.operations.push("save");
-    await super.writeFileAtomic(path, contents);
+    await super.writeFileAtomic(path, contents, options);
   }
 }
 

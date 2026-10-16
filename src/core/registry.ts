@@ -968,6 +968,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
         })),
         components,
       }),
+      { mode: 0o600 },
     );
     this.#devices = devices;
     this.#leases = leases;
