@@ -114,7 +114,7 @@ platform runs the deferred reclaim (step 21.2).
    watcher and background reclaims; core drains the warm pool.
 6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
    stop, every driver's `dispose` (all tried; failures logged).
-7. Close connections, remove `admin.token`, release the socket.
+7. Close connections, remove `admin.token`, release the socket (released even when the removal fails).
 
 A gateway's stop: agent-device edge and HTTP, then `FleetLeaseCoordinator` and
 `GatewayService` are disposed.

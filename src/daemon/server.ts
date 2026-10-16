@@ -654,8 +654,12 @@ export class DaemonServer {
       await connection.socket.close();
     }
     // why: releasing the endpoint lets a replacement write its credential, so removal must happen while this daemon still owns it.
-    await this.options.adminSecret?.remove();
-    await this.options.host.stop();
+    // why: a failed removal must still release the endpoint, or the stopping daemon keeps listening and blocks its replacement.
+    try {
+      await this.options.adminSecret?.remove();
+    } finally {
+      await this.options.host.stop();
+    }
     this.#logger.info("Daemon stopped", { reason });
   }
 

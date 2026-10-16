@@ -940,47 +940,63 @@ describe("DaemonServer", () => {
     await client.close();
   });
 
-  it("preserves the replacement daemon's admin credential when it starts as the old endpoint is released", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
-    temporaryDirectories.push(directory);
-    const socketPath = join(directory, "daemon.sock");
-    const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
-    const oldSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
-    const replacementSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
-    const replacement = await createHarness({
-      adminSecret: replacementSecret,
-      socketPath,
-      start: false,
-    });
-    const host = new DaemonEndpointHost({
-      connector: new NodeIpcTransport(),
-      endpoint: socketPath,
-      filesystem: new NodeFilesystem(),
-      listenerFactory: new NodeIpcTransport(),
-    });
-    let replacementToken: string | undefined;
-    const old = await createHarness({
-      adminSecret: oldSecret,
-      host: {
+  it.each([false, true])(
+    "preserves the replacement daemon's admin credential and still releases the endpoint when it starts as the old endpoint is released (credential removal fails: %s)",
+    async (removalFails) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      const filesystem = new MemoryFilesystem();
+      const secrets = new CryptoTokenSecrets();
+      const oldSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
+      const replacementSecret = new AdminSecretManager({
+        filesystem,
+        path: "/admin.token",
+        secrets,
+      });
+      const replacement = await createHarness({
+        adminSecret: replacementSecret,
+        socketPath,
+        start: false,
+      });
+      const host = new DaemonEndpointHost({
+        connector: new NodeIpcTransport(),
         endpoint: socketPath,
-        start: (accept) => host.start(accept),
-        async stop() {
-          await host.stop();
-          // why: endpoint release lets a new process start before the old stop resumes.
-          await replacement.daemon.start();
-          replacementToken = await filesystem.readFile("/admin.token");
-          expect(replacementSecret.verify(replacementToken.trim())).toBe(true);
+        filesystem: new NodeFilesystem(),
+        listenerFactory: new NodeIpcTransport(),
+      });
+      let replacementToken: string | undefined;
+      const old = await createHarness({
+        adminSecret: oldSecret,
+        host: {
+          endpoint: socketPath,
+          start: (accept) => host.start(accept),
+          async stop() {
+            await host.stop();
+            // why: endpoint release lets a new process start before the old stop resumes.
+            await replacement.daemon.start();
+            replacementToken = await filesystem.readFile("/admin.token");
+            expect(replacementSecret.verify(replacementToken.trim())).toBe(true);
+          },
         },
-      },
-      socketPath,
-    });
-    expect(oldSecret.verify((await filesystem.readFile("/admin.token")).trim())).toBe(true);
+        socketPath,
+      });
+      expect(oldSecret.verify((await filesystem.readFile("/admin.token")).trim())).toBe(true);
 
-    await old.daemon.stop("restart");
+      if (removalFails) {
+        vi.spyOn(filesystem, "rm").mockRejectedValueOnce(new Error("EACCES"));
+        await expect(old.daemon.stop("restart")).rejects.toThrow("EACCES");
+        // why: the failed stop is settled; teardown must not stop it again.
+        runningDaemons.splice(runningDaemons.indexOf(old.daemon), 1);
+      } else {
+        await old.daemon.stop("restart");
+      }
 
-    await expect(filesystem.readFile("/admin.token")).resolves.toBe(replacementToken);
-  });
+      // why: the replacement could only start because the old stop released the endpoint.
+      expect(replacementToken).toBeDefined();
+      await expect(filesystem.readFile("/admin.token")).resolves.toBe(replacementToken);
+    },
+  );
 
   it("gracefully stops without touching leases, persisting them with their deadlines", async () => {
     const harness = await createHarness();
