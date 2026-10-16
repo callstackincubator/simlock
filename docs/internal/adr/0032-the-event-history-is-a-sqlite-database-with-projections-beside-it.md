@@ -90,7 +90,11 @@ event envelopes, by one function.
   value at the minute's end, and its integral over the minute (value ×
   milliseconds). The all-platforms and fleet rows are updated on every
   step, so their peak is the highest the total reached at once, not a sum
-  of separate peaks. The integral gives an exact time-weighted mean.
+  of separate peaks. The integral gives an exact time-weighted mean. A
+  minute row is written only for a minute in which a value changed. A
+  reader carries the last value forward through minutes with no row. A
+  daemon stop, a daemon start and, on a gateway, a worker's disconnect
+  write a gap marker, and nothing is carried across one.
 - **One row per device fact:** provisioning and boot durations, incidents
   (quarantined, recovered, lost) and declined probes, with time, platform
   and worker.
@@ -129,13 +133,16 @@ sequenceDiagram
 | Record | Kept for | Key | Default |
 |---|---|---|---|
 | `events` rows | by timestamp | `eventLog.retention` | 7 days |
-| all of `history.db` | by size on disk, `history.db` and its `-wal` file, oldest events first | `eventLog.maxBytes` | 256 MiB, at least 16 MiB |
+| `events` rows | by their stored size, oldest first | `eventLog.maxBytes` | 256 MiB, at least 16 MiB |
 | projection rows | by timestamp | `metrics.retention` | 90 days |
 
 Pruning runs at daemon start, once the daemon holds its socket, and every
-hour. It deletes rows, not files, then returns the freed pages to the disk
-(`auto_vacuum=INCREMENTAL`, set when the file is created), so the size on
-disk follows the cap down as well as up. Because it deletes rows, an event
+hour. It deletes rows, not files. Then it returns the freed pages to the disk
+(`auto_vacuum=INCREMENTAL`, set when the file is created, and a WAL
+checkpoint that truncates the `-wal` file), so the file shrinks as well as grows.
+The size cap counts events only. Projection rows are bounded by their
+retention alone, so figures never push events out. The file on disk is the
+events' share plus the projection rows, tens of MiB on a busy host. Because it deletes rows, an event
 older than `retention` never stays just because a newer one shares its file. `eventLog.rotateBytes` is removed: there is no file left to rotate.
 A config that still sets it gets the usual unknown-key warning.
 
@@ -152,7 +159,8 @@ stateDiagram-v2
   Check --> Migrate: ok
   Fresh --> Migrate
   Migrate --> Ready: migrations applied
-  Migrate --> Rebuild: a migration or projection check fails
+  Migrate --> Refuse: migration fails or version newer
+  Migrate --> Rebuild: projection check fails
   Rebuild --> Ready: drop projection rows the events cover, replay events
   Ready --> [*]
 ```
@@ -165,14 +173,22 @@ stateDiagram-v2
   `status.get` say so.
 - The projections' shape has a version. An upgrade that changes it ships a
   SQL migration, so 90 days of rows survive it.
-- When a migration or a projection check fails at start, the daemon drops
-  the projection rows the retained events cover and rebuilds them by
-  replaying those events through the same function. Rows older than the
-  oldest event are kept.
+- A migration that fails, or a stored version newer than the code's (a
+  downgrade), stops the daemon from starting. The error names the
+  projection and the version. Figures are never dropped to get past an
+  upgrade.
+- When the projection check finds tables at the right version but broken,
+  the daemon drops the projection rows the retained events cover and
+  rebuilds them by replaying those events through the same function, in
+  batches that let other work run between them. Rows older than the oldest
+  event are kept.
 
 ### 5. Every reader goes through the database
 
-- `usage.get` answers from the projections. Wait percentiles come from the
+- `usage.get` answers from the projections. Reads run on a worker thread
+  with its own read-only connection (WAL lets readers run beside the
+  writer), so a wide read never holds up a lease. While one read for a
+  window is in flight, a request for the same window waits for it. Wait percentiles come from the
   request rows by nearest rank, over every request in the window. ADR 0016
   §5 (`coversFrom`, `partial`, `HISTORY_NOT_KEPT`) is judged against the
   oldest projection row.
