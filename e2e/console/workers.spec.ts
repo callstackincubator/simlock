@@ -914,8 +914,7 @@ test.describe("the workers page", () => {
     page,
   }) => {
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
-    const [host] = await workerList(daemon);
-    const name = host.id;
+    const name = found((await workerList(daemon))[0], "the host's worker").id;
     const follow = async (link: Locator) => {
       for (let step = 0; step < 30; step += 1) {
         if (await link.evaluate((element) => element === document.activeElement)) break;
