@@ -2,7 +2,12 @@
 // channel wait and the wait for the head, and an idle bound covers the response body, which may be a live stream that
 // runs as long as someone reads it; the link bounds the channels open to a worker (ADR 0028).
 
-import { isSimlockError, relayHeaderPairs, type AnySimlockError } from "../contract/index.js";
+import {
+  isRelayFramingHeader,
+  isSimlockError,
+  relayHeaderPairs,
+  type AnySimlockError,
+} from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
 import { type Clock, SystemClock, type TimerHandle } from "../ports/index.js";
@@ -204,7 +209,11 @@ class Exchange {
     }
     const responseHeaders = new Headers();
     try {
-      for (const [name, value] of headers) responseHeaders.append(name, value);
+      for (const [name, value] of headers) {
+        // why: the gateway frames its own response, so a worker'"'"'s framing headers must not reach the caller.
+        if (isRelayFramingHeader(name)) continue;
+        responseHeaders.append(name, value);
+      }
     } catch {
       // why: `Headers` refuses a value above U+00FF that the push schema lets through.
       this.#invalid();
