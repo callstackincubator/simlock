@@ -135,10 +135,12 @@ calls into them, it reads CoreDevice's `CFBundleShortVersionString`.
   iPhone streams need Xcode 27 (CoreDevice 642.x) and names the version it
   found. The viewer gets that line in a 503.
 
-`pnpm build` builds `simlock-device-capture` only on a Mac whose CoreDevice
-major is 642. Elsewhere it is skipped, and a physical iPhone's stream
-answers 503 saying so. Moving to a new major means checking the stubs on
-it and changing the pin, in one change.
+The program is the one place that enforces the pin. `pnpm build` tries to
+build `simlock-device-capture` on every Mac and copies it when it builds.
+When it does not build, the build warns and goes on, and a physical
+iPhone's stream answers 503 saying the program is missing. A program built
+on a Mac with another major refuses at run time, as above. Moving to a new
+major means checking the stubs on it and changing the pin, in one change.
 
 ### 5. HEVC is decoded and re-encoded as H.264
 
