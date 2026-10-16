@@ -210,7 +210,7 @@ class Exchange {
     const responseHeaders = new Headers();
     try {
       for (const [name, value] of headers) {
-        // why: the gateway frames its own response, so a worker'"'"'s framing headers must not reach the caller.
+        // why: the gateway frames its own response, so a worker's framing headers must not reach the caller.
         if (isRelayFramingHeader(name)) continue;
         responseHeaders.append(name, value);
       }
