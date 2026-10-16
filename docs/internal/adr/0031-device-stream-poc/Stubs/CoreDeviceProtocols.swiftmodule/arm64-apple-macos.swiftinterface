@@ -1,0 +1,23 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDeviceProtocols
+// Hand-written stub for the CoreDeviceProtocols module (symbols live in CoreDevice.framework).
+import Swift
+import Foundation
+import CoreDeviceTypes
+
+public enum DeviceType {
+  public var description: Swift.String { get }
+  public var rawValue: Swift.String { get }
+}
+
+public struct DeviceInfo {
+  public var name: Swift.String? { get }
+  public var udid: Swift.String? { get }
+  public var identifier: Foundation.UUID { get }
+  public var deviceType: CoreDeviceProtocols.DeviceType? { get }
+  public var transportType: CoreDeviceTypes.TransportType? { get }
+  public var productType: Swift.String? { get }
+  public var marketingName: Swift.String? { get }
+  public var tunnelIPAddressString: Swift.String? { get }
+}
