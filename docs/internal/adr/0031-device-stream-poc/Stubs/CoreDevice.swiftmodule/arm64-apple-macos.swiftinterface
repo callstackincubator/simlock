@@ -1,0 +1,149 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDevice
+// Hand-written stub for /Library/Developer/PrivateFrameworks/CoreDevice.framework (client side of coredeviced).
+import Swift
+import Foundation
+import Dispatch
+import CoreDeviceTypes
+import CoreDeviceProtocols
+
+public protocol CoreDeviceServiceConnection {
+}
+
+public struct CoreDeviceService {
+  public static var sharedConnection: any CoreDevice.CoreDeviceServiceConnection { get }
+}
+
+public class DeviceManager {
+  public init(serviceConnection: any CoreDevice.CoreDeviceServiceConnection)
+  final public func allDevices() -> [CoreDevice.RemoteDevice]
+}
+
+public class RemoteDevice {
+  final public var id: Foundation.UUID { get }
+  final public var description: Swift.String { get }
+  public var deviceInfo: CoreDeviceProtocols.DeviceInfo { get }
+  final public var displayInfo: CoreDeviceTypes.DisplayInfo { get async throws }
+  final public func getDisplayInfo(completingOn: Dispatch.DispatchQueue?, completion: @escaping (Swift.Result<CoreDeviceTypes.DisplayInfo, any Swift.Error>) -> Swift.Void)
+  public func supports<Cap>(_ member: CoreDevice.CapabilityStaticMember<Cap>) -> Swift.Bool where Cap : CoreDevice.DeviceCapability
+  public func getImplementation<Cap>(for member: CoreDevice.CapabilityStaticMember<Cap>) async throws -> Cap.ProtocolType where Cap : CoreDevice.DeviceCapability
+  public func supportsFeature(identifiedBy: Swift.String) -> Swift.Bool
+}
+
+// ---- Capability system + legacy remote HID digitizer (com.apple.coredevice.feature.remote.hid.digitizer) ----
+
+public struct Capability : Swift.Hashable {
+  public static func == (lhs: CoreDevice.Capability, rhs: CoreDevice.Capability) -> Swift.Bool
+  public func hash(into hasher: inout Swift.Hasher)
+  public var hashValue: Swift.Int { get }
+}
+
+public protocol DeviceCapability {
+  associatedtype ProtocolType
+  associatedtype ImplType
+  static var capability: CoreDevice.Capability { get }
+}
+
+public struct CapabilityStaticMember<A> {
+  public init()
+}
+
+public struct DigitizerPoint {
+  public init(x: Swift.Double, y: Swift.Double)
+  public var x: Swift.Double { get }
+  public var y: Swift.Double { get }
+}
+
+public enum DigitizerEventType {
+  case start
+  case position
+  case end
+}
+
+public enum DigitizerEdge {
+  case none
+  case top
+  case left
+  case right
+  case bottom
+}
+
+public enum DigitizerTarget {
+  case mainScreen
+  case display1
+  case display2
+  case display3
+  case display4
+  case display5
+  case display6
+  case display7
+  case display8
+  case display9
+  case display10
+}
+
+public protocol HIDDigitizer {
+  func send(pointOne: CoreDevice.DigitizerPoint, pointTwo: CoreDevice.DigitizerPoint?, eventType: CoreDevice.DigitizerEventType, edge: CoreDevice.DigitizerEdge, target: CoreDevice.DigitizerTarget) throws
+  func sendBarrier()
+}
+
+public struct DigitizerHIDCapability : CoreDevice.DeviceCapability {
+  public typealias ProtocolType = any CoreDevice.HIDDigitizer
+  public typealias ImplType = Swift.Never
+  public static var capability: CoreDevice.Capability { get }
+}
+
+public enum CodableValue { public init?(_ value: Any) }
+public struct MediaStreamHelper { public static func getNegotiatorOptions(for: CoreDeviceProtocols.DeviceInfo) -> [String: Any] }
+public struct DeviceMediaStream {
+ public static var kAVCMediaStreamOptionClientName: String { get }
+ public static var kAVCMediaStreamOptionClientSessionID: String { get }
+ public enum StreamType { case audio; case video }
+ public enum Direction { case input; case output }
+ public struct SupportInfo { public var supportedFeatures: UInt64 { get }; public var description: String { get } }
+ public struct SupportInfoResponse { public var client: SupportInfo { get }; public var device: SupportInfo { get }; public var common: SupportInfo { get } }
+ public struct StartRequest {
+ public init(timeout: UInt, type: StreamType, direction: Direction, negotiatorOffer: Foundation.Data, clientSupportedFeatures: UInt64, receiverIP: String?, receiverPort: UInt16?, options: [String: CodableValue])
+ }
+ public struct StartResponse : Encodable { public var connection: ConnectionInfo { get }; public var negotiatorAnswer: Foundation.Data { get }; public func encode(to: any Encoder) throws }
+ public struct ConnectionInfo : Encodable { public var receiver: NetworkInfo { get }; public var sender: NetworkInfo { get }; public var streamConfig: MediaStreamConfig { get }; public func encode(to: any Encoder) throws }
+ public struct NetworkInfo { public var ipv6Address: String { get }; public var port: UInt16 { get } }
+ public struct MediaStreamConfig { public var StreamInputID: Int { get } }
+ public struct StopRequest { public init(stopAll: Bool, identifiers: [UInt32]?) }
+ public struct StopResponse : Encodable { public func encode(to: any Encoder) throws }
+}
+extension RemoteDevice {
+ public var mediaStreamSupportInfo: DeviceMediaStream.SupportInfoResponse { get async throws }
+ public func startMediaStream(with: DeviceMediaStream.StartRequest) async throws -> DeviceMediaStream.StartResponse
+ public func stopMediaStream(with: DeviceMediaStream.StopRequest) async throws -> DeviceMediaStream.StopResponse
+}
+
+import Network
+import XPC
+public struct NetworkUtils {
+ public static func withSharedSocketDictionary<A>(sourceAddress: Network.IPv6Address, port: UInt16, remoteAddress: Network.IPv6Address, remotePort: UInt16, body: (XPC.xpc_object_t) throws -> A) throws -> A
+}
+
+// DeviceKit's device interaction model acquires these states before media/HID use.
+// Signatures verified against the installed CoreDevice 642.x binary and DeviceKit imports.
+public struct AssertableDeviceState : Swift.Hashable {
+  public static var developerModeEnabledIfRequired: CoreDevice.AssertableDeviceState { get }
+  public static var coreDeviceServicesLoaded: CoreDevice.AssertableDeviceState { get }
+  public static var extendedDeviceInfoLoaded: CoreDevice.AssertableDeviceState { get }
+  public static var remoteServiceDiscoveryTrustedConnectivityAvailable: CoreDevice.AssertableDeviceState { get }
+  public static var secureNetworkingAvailable: CoreDevice.AssertableDeviceState { get }
+  public static func == (lhs: CoreDevice.AssertableDeviceState, rhs: CoreDevice.AssertableDeviceState) -> Swift.Bool
+  public func hash(into hasher: inout Swift.Hasher)
+  public var hashValue: Swift.Int { get }
+}
+public struct UsageAssertionRequirements {
+  public init(deviceStates: Swift.Set<CoreDevice.AssertableDeviceState>, capabilities: Swift.Set<CoreDevice.Capability>)
+}
+public class DeviceUsageAssertion {
+  public func releaseAssertion()
+  public func registerInvalidationHandler(invokingOnQueue: Dispatch.DispatchQueue?, handler: @escaping (Swift.Error?) -> Swift.Void)
+}
+extension RemoteDevice {
+  public func acquireDeviceUsageAssertion(withReason: Swift.String, requirements: CoreDevice.UsageAssertionRequirements) async throws -> CoreDevice.DeviceUsageAssertion
+}

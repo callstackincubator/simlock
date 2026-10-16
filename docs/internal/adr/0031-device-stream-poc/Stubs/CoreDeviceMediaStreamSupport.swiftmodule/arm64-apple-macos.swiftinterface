@@ -1,0 +1,72 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDeviceMediaStreamSupport
+// Hand-written stub for CoreDevice.framework/Frameworks/CoreDeviceMediaStreamSupport.framework.
+import Swift
+import Foundation
+import CoreGraphics
+import QuartzCore
+import _Concurrency
+import CoreDevice
+
+public enum MediaStreamDirection {
+  case send
+  case receive
+}
+
+public protocol MediaStreamConfiguration {
+  var direction: CoreDeviceMediaStreamSupport.MediaStreamDirection { get }
+}
+
+public struct VideoStreamReceiveConfiguration {
+  public var direction: CoreDeviceMediaStreamSupport.MediaStreamDirection { get }
+  public var resolution: CoreGraphics.CGSize { get }
+}
+
+public struct VideoStreamSendConfiguration {
+  public var direction: CoreDeviceMediaStreamSupport.MediaStreamDirection { get }
+  public var resolution: CoreGraphics.CGSize { get }
+}
+
+public enum VideoStreamConfiguration {
+  case send(CoreDeviceMediaStreamSupport.VideoStreamSendConfiguration)
+  case receive(CoreDeviceMediaStreamSupport.VideoStreamReceiveConfiguration)
+  public static func receiveMirroredPrimary(layer: QuartzCore.CALayer, timeout: Swift.UInt) -> CoreDeviceMediaStreamSupport.VideoStreamConfiguration
+  public static func receiveMirroredDisplayByIdentifier(_ displayID: Swift.UInt32, layer: QuartzCore.CALayer, timeout: Swift.UInt) -> CoreDeviceMediaStreamSupport.VideoStreamConfiguration
+  public static func receiveVirtualExternal(layer: QuartzCore.CALayer, resolution: CoreGraphics.CGSize, timeout: Swift.UInt) -> CoreDeviceMediaStreamSupport.VideoStreamConfiguration
+  public var direction: CoreDeviceMediaStreamSupport.MediaStreamDirection { get }
+}
+
+public struct VideoStreamAttributes {
+  public var contentsRect: CoreGraphics.CGRect { get }
+  public var ratio: CoreGraphics.CGSize { get }
+  public var scaleFactor: Swift.Float { get }
+}
+
+public enum VideoStreamEvent {
+  case receivedFirstFrame
+  case receivedLastDecodedFrame(Foundation.Data)
+  case remoteVideoAttributesChanged(CoreDeviceMediaStreamSupport.VideoStreamAttributes)
+}
+
+public protocol MediaStreamProtocol : _Concurrency.Actor {
+  associatedtype Event
+  associatedtype Configuration
+  var configuration: Self.Configuration { get }
+  func activate() async throws -> _Concurrency.AsyncThrowingStream<Self.Event, any Swift.Error>
+  func invalidate() async
+}
+
+public protocol VideoStream : CoreDeviceMediaStreamSupport.MediaStreamProtocol where Self.Event == CoreDeviceMediaStreamSupport.VideoStreamEvent, Self.Configuration == CoreDeviceMediaStreamSupport.VideoStreamConfiguration {
+  func requestLastDecodedFrame() async
+}
+
+public actor MediaStreamSession {
+  public init(clientSessionID: Foundation.UUID)
+  public var clientSessionID: Foundation.UUID { get }
+}
+
+// Declared in an extension upstream (no dispatch thunk is exported for it).
+extension CoreDeviceMediaStreamSupport.MediaStreamSession {
+  public func makeVideoStream(withConfiguration: CoreDeviceMediaStreamSupport.VideoStreamConfiguration, fromRemoteDevice: CoreDevice.RemoteDevice) async throws -> any CoreDeviceMediaStreamSupport.VideoStream
+}
