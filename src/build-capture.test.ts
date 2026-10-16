@@ -52,7 +52,7 @@ function scratchRepo(server: string, digest: string): string {
 // program build and the other not.
 function fakeSwift(repo: string): string {
   const bin = join(repo, "fake-bin");
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   writeFileSync(
     join(bin, "swift"),
     [
@@ -64,7 +64,7 @@ function fakeSwift(repo: string): string {
       '  if [ "$1" = "--scratch-path" ]; then shift; scratch="$1"; fi',
       "  shift",
       "done",
-      'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in",$product,*) exit 1 ;; esac',
+      'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in *",$product,"*) exit 1 ;; esac',
       '/bin/mkdir -p "$scratch/release"',
       'echo program > "$scratch/release/$product"',
     ].join("\n"),

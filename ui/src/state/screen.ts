@@ -100,7 +100,7 @@ export function refusalOf(error: unknown): string {
     return `${error.message} A stream is only offered where capabilities.stream.enabled is on, and only for a lease that is still held.`;
   }
   if (error.status === 415) {
-    return "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.";
+    return "This device cannot be streamed.";
   }
   return error.message;
 }
