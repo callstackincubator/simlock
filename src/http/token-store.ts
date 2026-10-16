@@ -46,12 +46,6 @@ export class TokenStoreError extends Error {
   }
 }
 
-/**
- * Bearer-token store backed by a JSON file (`tokens.json` under the daemon
- * data directory). Holds only SHA-256 hashes of secrets, never plaintext --
- * `create` is the one call that ever sees a secret, and it hands it back to
- * the caller without persisting it.
- */
 export class TokenStore {
   readonly #filesystem: Filesystem;
   readonly #clock: Clock;
