@@ -2,7 +2,8 @@ import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import { stableError } from "./stable-error.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import type { ComponentInstaller } from "./component-installer.js";
-import type { DeviceRecord, DeviceSpec, LeaseProgress } from "./domain.js";
+import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
+import type { LeaseProgress, VirtualDevice, VirtualSpec } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
@@ -16,14 +17,15 @@ export type ProvisionProgress = Extract<
 export interface DeviceProvisionerRegistry {
   registerDevice(input: {
     readonly driverDeviceId: string;
-    readonly spec: DeviceSpec;
+    readonly spec: VirtualSpec;
     readonly driverData: unknown;
     readonly provisionDuration: number;
-  }): Promise<DeviceRecord>;
+  }): Promise<VirtualDevice>;
 }
 
 export interface DeviceProvisionerOptions {
   readonly catalog: DriverCatalog;
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
   /**
    * The one installer (ADR 0010 §8). Every device record is created here, so this is where a
@@ -37,6 +39,11 @@ export interface DeviceProvisionerOptions {
 }
 
 export interface ProvisionDeviceOptions {
+  /**
+   * A boot claim taken on the new device in the section that registers it and held until the
+   * handoff, so a request planning in between sees a device that is on its way, and whose.
+   */
+  readonly claim?: { readonly kind: "boot"; readonly owner?: string };
   readonly onProgress?: (progress: ProvisionProgress) => void;
   readonly reservation: CapacityReservation;
 }
@@ -49,7 +56,7 @@ export class DeviceProvisioner {
     this.#logger = options.logger?.child("device-provisioner") ?? new NoopLogger();
   }
 
-  async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
+  async provision(spec: VirtualSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
     const driver = this.options.catalog.get(spec.platform);
     // Claimed inside the gate, so a removal's own count in the gate sees this device before the
     // driver creates it, or this claim sees the removal's mark and refuses.
@@ -76,18 +83,27 @@ export class DeviceProvisioner {
       throw error;
     }
 
-    let device: DeviceRecord;
+    let device: VirtualDevice;
+    let bootClaim: DeviceOperationClaim | undefined;
     try {
       // The claim ends in the section that commits the record, so the device is counted by one
-      // of the two at every moment.
+      // of the two at every moment; the boot claim begins in that same section.
       device = await this.options.decisions.run(async () => {
         try {
-          return await this.options.registry.registerDevice({
+          const registered = await this.options.registry.registerDevice({
             driverData: driverDevice.driverData,
             driverDeviceId: driverDevice.deviceId,
             provisionDuration: this.options.clock.now() - startedAt,
             spec,
           });
+          if (options.claim !== undefined) {
+            bootClaim = this.options.claims.tryClaim(
+              registered.id,
+              options.claim.kind,
+              options.claim.owner,
+            );
+          }
+          return registered;
         } finally {
           releaseClaim();
         }
@@ -102,7 +118,7 @@ export class DeviceProvisioner {
         stage: "booting",
         etaMs: driver.estimate({ operation: "boot" }, spec),
       });
-      const ready = await this.options.lifecycle.readyProvisionedForLease(device);
+      const ready = await this.options.lifecycle.readyProvisionedForLease(device, bootClaim);
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);
       return ready;
@@ -114,7 +130,7 @@ export class DeviceProvisioner {
         error: stableError(error),
       });
       try {
-        await this.options.lifecycle.destroy(device, "lease-engine", "boot");
+        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         // The registered record remains for reconcile when the driver cannot destroy it.
         this.#logger.warn("destroying a device that failed to boot failed", {

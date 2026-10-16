@@ -10,7 +10,11 @@ import {
   UnknownLeaseError,
   UnknownModelError,
 } from "../core/index.js";
-import { NoCapacityError, RequesterAlreadyLeasedError } from "../leasing/index.js";
+import {
+  LeaseIdTakenError,
+  NoCapacityError,
+  RequesterAlreadyLeasedError,
+} from "../leasing/index.js";
 import { classifyError, StartupFailedError } from "../daemon/error-code.js";
 import {
   DispatchError,
@@ -45,6 +49,21 @@ describe("mapError", () => {
 
     const withoutLease = mapError(new RequesterAlreadyLeasedError("agent-1"));
     expect(withoutLease.extra).toBeUndefined();
+  });
+
+  it("maps LeaseIdTakenError and a DispatchError of LEASE_ID_TAKEN to 409, the DispatchError naming the ID in extra", () => {
+    expect(mapError(new LeaseIdTakenError("ad-7f3a"))).toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      status: 409,
+    });
+    expect(mapError(new DispatchError("LEASE_ID_TAKEN", "in use", { leaseId: "ad-7f3a" }))).toEqual(
+      {
+        code: "LEASE_ID_TAKEN",
+        extra: { leaseId: "ad-7f3a" },
+        message: "in use",
+        status: 409,
+      },
+    );
   });
 
   it("maps NoCapacityError to 503", () => {

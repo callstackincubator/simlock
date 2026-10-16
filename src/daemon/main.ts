@@ -1,9 +1,10 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad } from "../contract/index.js";
+import { HostLoadSampler } from "../host-load/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -21,6 +22,7 @@ import {
   HostFactsReader,
   createCore,
   loadConfig,
+  latestPresence,
   loadInstanceId,
   OwnedRootError,
   Registry,
@@ -31,19 +33,20 @@ import { createLeasing } from "../leasing/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
-  ANDROID_PASSTHROUGH_TOOL,
+  ANDROID_PASSTHROUGH_TOOLS,
   hostAbiFor,
   SdkMissingError,
   type AndroidEmulatorLaunchOptions,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
-  IOS_PASSTHROUGH_TOOL,
+  IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
   type SlimmedFact,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
+import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
 import {
@@ -55,6 +58,8 @@ import {
   type Clock,
   type Filesystem,
   type HostInfo,
+  type HostLoadProbe,
+  productionHostLoadProbe,
   type HostSystem,
   type IdGenerator,
   type IpcConnector,
@@ -67,8 +72,11 @@ import {
   NodeProcessRunner,
   NodeProcessSupervisor,
   NodeSystemStats,
+  NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpStreamConnector,
   resolveDaemonSocketPath,
+  readPackageVersion,
   resolveSimlockHome,
   SystemClock,
   type SystemStats,
@@ -83,6 +91,7 @@ import {
   FleetLeaseIndex,
   GatewayDispatcher,
   GatewayOwnerRoutedFacts,
+  GatewayRelay,
   GatewayService,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
@@ -91,11 +100,15 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
+import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
+import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
+import type { RelayTargets } from "./relay.js";
 import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
@@ -105,10 +118,16 @@ export interface StartDaemonOptions {
   readonly dataDirectory?: string;
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
-  /** With `drivers`: the prerequisite checks `doctor` runs in place of discovery's. None if omitted. */
+  readonly gatewayRelay?: (relay: GatewayRelay) => void;
+  /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
+  readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
+  /** why: test-only, replaces the registry of optional modules. */
+  readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
+  readonly relayTargets?: RelayTargets;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
+  readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
@@ -124,6 +143,7 @@ export interface StartDaemonOptions {
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
+  const version = options.version ?? readPackageVersion();
   const dataDirectory = options.dataDirectory ?? resolveSimlockHome();
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
@@ -136,11 +156,18 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
+  const configWarnings: string[] = [];
+  const moduleDefinitions = options.optionalModules ?? optionalModules;
   const config = await loadConfig({
     configPath,
     filesystem,
+    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+      name,
+      ...moduleConfig,
+    })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     systemStats,
+    warn: (message) => configWarnings.push(message),
   });
   const logger =
     options.logger ??
@@ -152,6 +179,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         path: join(dataDirectory, "daemon.log"),
       }),
     });
+  // why: the logger needs the config's log level, so what the config load found to warn about is told once the logger exists.
+  for (const message of configWarnings) logger.warn(message);
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
   // ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
   // missing `sw_vers` costs a fallback value, not the daemon.
@@ -184,12 +213,16 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       eventBus,
       eventHistory,
       filesystem,
+      ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
+      ...(options.gatewayUplinks === undefined ? {} : { gatewayUplinks: options.gatewayUplinks }),
       hostSystem,
+      ...(options.hostLoadProbe === undefined ? {} : { hostLoadProbe: options.hostLoadProbe }),
       idGenerator,
       ipc,
       logger,
+      optionalModules: moduleDefinitions,
       socketPath,
-      version: options.version ?? "1.0.0",
+      version: version,
     });
   }
   // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
@@ -250,6 +283,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
+  const hostLoadProbe =
+    options.hostLoadProbe === undefined
+      ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
+      : options.hostLoadProbe;
+  const hostLoad =
+    hostLoadProbe === null
+      ? undefined
+      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
   // One gate for every registry write: leasing's, core's and the installer's records.
   const decisions = new SerializedDecision();
   // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
@@ -276,9 +317,44 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
     modelPreferences,
+    optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
     registry,
     systemStats,
+  });
+  const leaseEnvironment: Record<string, string> = Object.assign(
+    {},
+    ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
+  );
+  // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
+  let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
+  const moduleHost = await createModuleHost({
+    config,
+    context: {
+      cancelPending: (requesterId) => {
+        if (cancelPendingRequest === undefined) {
+          throw new Error("leasing is not ready yet");
+        }
+        return cancelPendingRequest(requesterId);
+      },
+      clock,
+      dataDirectory,
+      environment: process.env,
+      events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
+      filesystem,
+      leaseEnvironment,
+      nodePath: process.execPath,
+      nodeVersion: process.versions.node,
+      platforms: drivers.map((driver) => driver.platform),
+      processRunner,
+      processSupervisor,
+      registry,
+      screens: new DriverCatalog(drivers),
+      tcpProbe,
+    },
+    definitions: moduleDefinitions,
+    logger,
+    role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
   const leasing = createLeasing({
@@ -290,9 +366,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
+    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
+  cancelPendingRequest = (requesterId) => leasing.cancelPending(requesterId);
   // Core declared ports only leasing can implement; this is the one place they are handed over,
   // before any request is admitted (ADR 0018 §2).
   core.connect(leasing.corePorts);
@@ -305,6 +383,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger,
     registry,
     diskPath: dataDirectory,
+    targetedDevices: () => core.targetedDevices(),
   });
   const nuke = new Nuke({ executor: core.nuke, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
@@ -373,15 +452,36 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         rejectGatewayStarted = reject;
       })
     : Promise.resolve();
-  // Startup in this order: leasing's steps (settle open requests, restore expiry timers), then
-  // core's device steps, then the queue's first depth, which every run begins with.
+  // ADR 0019 §1, in this order: settle the open requests, read each platform once, doctor's
+  // startup pass on that read, end every lease whose device is not running and restore the
+  // timers of the rest, then core's device convergence, then the queue's first depth, which every
+  // run begins with. One after another: the reconciler needs the read, and convergence must not
+  // pick a device the reconciler is about to release.
+  // Set once a stop begins. A `daemon.stop` is accepted while startup runs, and the read takes up
+  // to a minute: every step after it would arm timers (expiry, quarantine retry, warm pool tick)
+  // on a daemon whose disposal has already run, and nothing would cancel them.
+  let stopping = false;
   const convergeStartup = async (): Promise<void> => {
-    await leasing.startup();
-    await core.converge();
+    await leasing.settleRequests();
+    const read = await core.readStartup();
+    const steps = [
+      () => core.doctor.reconcile({ read }),
+      () => leasing.reconcile(read),
+      () => core.converge(read),
+    ];
+    for (const step of steps) {
+      if (stopping) return;
+      await step();
+    }
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
+    // Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
+    beginStop: () => core.closeWarmPool(),
+    // why: the source's name is the config key's; the core names no module, so the composition supplies it.
+    capabilitySources: [...moduleHost.capabilitySources],
     capacity: core.capacityReader,
+    warmPool: core.warmPoolReader,
     catalog: core.catalog,
     deviceModes: leasing,
     clock,
@@ -394,8 +494,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     eventHistory,
     healthMonitor: leasing.healthMonitor,
+    physicalDeviceWatcher: leasing.physicalDeviceWatcher,
     hostFacts: () => fitHostFacts(hostFacts.current()),
-    // ADR 0012 §1: `worker.list` answers with this host under the id it presents to a gateway.
+    ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
     instanceId,
     host: new DaemonEndpointHost({
       connector: ipc,
@@ -407,55 +508,37 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     leases: leasing,
     logger: logger.child("server"),
     passthrough: core.catalog,
-    // ADR 0005 §19a: `device.exec` runs its command here, on the machine that owns the device.
-    // The runner is the same port every driver already shells out through, and `execEnv` is the
-    // daemon's own environment -- read here, in the composition root, because that is the only
-    // place allowed to touch process state (architecture rule 9); the driver's scoping keys are
-    // layered over it per command.
     processRunner,
     execEnv: process.env,
     queue: leasing,
+    presence: latestPresence,
     reaper,
+    relayTargets: {
+      ...moduleHost.relayTargets,
+      ...options.relayTargets,
+    },
+    enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
     nuke,
     registry,
-    // `status.get` and `list.get` flag a stalled device by the rule `doctor` reports, so they
-    // need what `doctor` has: the drivers, and the claims that keep a live reclaim from reading
-    // as a stall.
     stalls: { claims: core.claimReader, drivers },
     resolveRole,
     adminSecret,
     tokens,
-    version: options.version ?? "1.0.0",
-    // Runs after the socket is claimed (see DaemonServer#start): reachability no
-    // longer depends on doctor reconciliation or running-capacity convergence.
-    // Requests other than hello/status.get park until this resolves, so the two are
-    // run concurrently rather than doctor-then-capacity: doctor.reconcile() is pure
-    // reconnaissance (it shells out per driver/device, then at most flags drift --
-    // see doctor.ts) that already runs interleaved with live lease/reclaim activity
-    // whenever a client issues `doctor.run` mid-session, so running it alongside
-    // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeStartup() releases no leases at all any more (ADR 0004 removed the
-    // orphan sweep), so the only device work left on this path is interrupted-reclaim
-    // recovery -- and a reclaim a previous daemon left in flight is finished off in the
-    // background, off this critical path (#43).
-    converge: async () => {
-      await Promise.all([core.doctor.reconcile(), convergeStartup()]);
-    },
+    version: version,
+    converge: convergeStartup,
     settle: async () => {
+      stopping = true;
       await leasing.settle();
-      await core.settle();
+      await core.drain();
     },
-    // Drivers are disposed after the lease subsystem, and every one of them is tried even
-    // when another throws: Android's disposal is the only thing that can stop the adb
-    // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a
-    // shutdown that abandoned it would leave a server nothing can reap holding the port
-    // the next daemon needs.
+    // Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
       core.dispose();
       leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
+      await moduleHost.beforeDriversDispose();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
         if (disposal.status === "rejected") {
@@ -476,6 +559,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
     // here.
     stopAuxiliary: async () => {
+      await moduleHost.beforeDrain();
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
       // Stopped with the other auxiliary frontends, and for the same reason: the uplink is a
@@ -492,38 +576,44 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // rather than acted on immediately here -- see the bottom of this function for why: calling
     // `daemon.stop()` right away, while `daemon.start()` may still be awaiting convergence, is
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
-    ...(config.http.enabled
-      ? {
-          onSocketClaimed: () => {
-            socketClaimed = true;
-            void startHttpGateway().then(
-              () => resolveGatewayStarted?.(),
-              (error: unknown) => {
-                logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
-                rejectGatewayStarted?.(error);
-              },
-            );
-          },
-        }
-      : {}),
+    onSocketClaimed: () => {
+      socketClaimed = true;
+      moduleHost.afterSocketClaimed();
+      // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
+      // `status.get` never parks (it still answers `starting` during convergence), but its
+      // `events.subscribe` does park on startup readiness, so the refresh that follows the
+      // subscribe reads `running` instead of keeping `starting`. A daemon that fails its
+      // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
+      // uplink: a worker whose gateway is down must still come up and serve its local agents
+      // (`GatewayUplink` retries on its own backoff). The dial waits for the first host load reading,
+      // because the gateway reads `status.get` once on connect and next on its 30 s beat, so a dial that beats the first host load reading leaves the worker without a Load for that long.
+      if (gatewayUplink !== undefined) {
+        void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
+      }
+      if (!config.http.enabled) return;
+      void startHttpGateway().then(
+        () => resolveGatewayStarted?.(),
+        (error: unknown) => {
+          logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
+          rejectGatewayStarted?.(error);
+        },
+      );
+    },
   });
-
-  // Dialled once the socket is claimed and the dispatcher can answer -- the gateway's first
-  // `status.get` then parks on startup readiness exactly like any other request, instead of
-  // racing convergence. Nothing awaits it: a worker whose gateway is down must still come up
-  // and serve its local agents (`GatewayUplink` retries on its own backoff).
-  gatewayUplink?.start();
 
   async function startHttpGateway(): Promise<void> {
     const httpLogger = logger.child("http");
+    const dispatch: HttpDispatch = (operation, input, session) =>
+      daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
       config,
-      dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
+      dispatch,
       eventBus,
       idGenerator,
       leaseRequests: leasing.requests,
       logger: httpLogger,
+      mounts: [...moduleHost.mounts({ dispatch })],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
       tokens,
@@ -581,11 +671,15 @@ interface GatewayDaemonOptions {
   readonly eventBus: EventBus;
   readonly eventHistory: EventHistory;
   readonly filesystem: Filesystem;
+  readonly gatewayRelay?: (relay: GatewayRelay) => void;
+  readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
   /** The gateway's own machine. It runs no drivers, so its host facts carry no tools. */
   readonly hostSystem: HostSystem;
+  readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
   readonly version: string;
 }
@@ -642,6 +736,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const routing = createRoutingPolicy(config.gateway.routing);
 
   const uplinks = new WebSocketUplinkListenerFactory();
+  options.gatewayUplinks?.(uplinks);
   const gatewayService = new GatewayService({
     // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
     // real and simply has no authority here (403); anything else is unauthenticated (401).
@@ -691,6 +786,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       retentionMs: config.lease.requestRetentionMs,
     },
     logger: logger.child("gateway"),
+    maxPerRequester: config.lease.maxPerRequester,
     routing,
     views: gatewayService.workers,
   });
@@ -698,6 +794,27 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // `GatewayOwnerRoutedFacts`'s own doc comment for why the fleet's lease index, not a worker's
   // relayed payload, is what a fleet lease's push has to be routed by.
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
+  const gatewayRelay = new GatewayRelay({ clock, directory: gatewayService });
+  // why: a test reaches the gateway's relay through this callback.
+  options.gatewayRelay?.(gatewayRelay);
+  const moduleHost = await createModuleHost({
+    config,
+    definitions: options.optionalModules,
+    logger,
+    parts: {
+      cancelPending: (requesterId) => fleetCoordinator.cancelPending(requesterId),
+      clock,
+      grantedDevices: () => gatewayService.workers.grantedDevices(),
+      instanceId,
+      leases: leaseIndex,
+      relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+      requesterPrefix: gatewayRequesterPrefix,
+      startedAt: clock.now(),
+      worker: (id) => gatewayService.workers.view(id),
+      workers: () => gatewayService.workers.views(),
+    },
+    role: "gateway",
+  });
 
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;
@@ -708,11 +825,21 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     rejectHttpStarted = rejectStarted;
   });
 
+  const hostLoadProbe =
+    options.hostLoadProbe === undefined
+      ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
+      : options.hostLoadProbe;
+  const hostLoad =
+    hostLoadProbe === null
+      ? undefined
+      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
+
   const daemon = new DaemonServer({
     adminSecret,
     clock,
     config,
     defaultRequesterId: process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
+    ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: new GatewayDispatcher({
       awaitReady: () => Promise.resolve(),
@@ -727,6 +854,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       eventHistory,
       health: () => daemon.health,
       host: fitHostFacts({ ...options.hostSystem, tools: [] }),
+      ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
       leaseIndex,
       logger: logger.child("gateway"),
       tokens,
@@ -763,6 +891,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {
+      await moduleHost.beforeDrain();
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
     },
@@ -780,15 +909,19 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
   async function startHttpFrontend(): Promise<void> {
     const httpLogger = logger.child("http");
+    // why: looked up at each call, so a wrapper placed on the daemon's dispatch sits between the front and leasing.
+    const dispatch: HttpDispatch = (operation, input, session) =>
+      daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
       config,
-      dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
+      dispatch,
       eventBus,
       idGenerator,
       // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
+      mounts: [...moduleHost.mounts({ dispatch })],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
       ownerRoutedFacts: daemon.ownerRoutedFacts,
@@ -835,6 +968,17 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
 }
+
+// why: `pnpm build` puts both capture artifacts beside the compiled daemon (scripts/build-capture.mjs),
+// so a checkout that built finds them without configuration; `drivers.ios.screenCaptureCommand`
+// names another iOS program.
+const PACKAGED_SCREEN_CAPTURE = fileURLToPath(
+  new URL("../bin/simlock-screen-capture", import.meta.url),
+);
+const PACKAGED_SCRCPY_SERVER = fileURLToPath(
+  // fallow-ignore-next-line unresolved-import -- a file pnpm build copies into dist, not a module.
+  new URL("../vendor/scrcpy/scrcpy-server-v5.0.1", import.meta.url),
+);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -974,6 +1118,12 @@ async function discoverIosDriver(
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       onSlimmed: emitSlimDiagnostic(options.eventBus),
+      screenCapture: {
+        baseEnvironment: process.env,
+        command: PACKAGED_SCREEN_CAPTURE,
+        launcher: new NodeBytePipeLauncher(),
+        onLog: (line) => logger.debug("Screen capture", { line }),
+      },
       onSlimSkipped: (fact) => {
         logger.warn("Skipped iOS device slim", {
           deviceId: fact.deviceId,
@@ -1001,7 +1151,7 @@ async function discoverIosDriver(
       root: error.path,
       summary: error.message,
     });
-    return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOL) };
+    return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOLS) };
   }
 }
 
@@ -1029,8 +1179,10 @@ async function discoverAndroidDriver(
       instanceId: options.instanceId,
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
+      scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
       tcpProbe: options.tcpProbe,
+      tcpStreamConnector: new NodeTcpStreamConnector(),
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
@@ -1048,7 +1200,7 @@ async function discoverAndroidDriver(
         root: error.path,
         summary: error.message,
       });
-      return { rejection: rootRejection(error, ANDROID_PASSTHROUGH_TOOL) };
+      return { rejection: rootRejection(error, ANDROID_PASSTHROUGH_TOOLS) };
     }
     if (error instanceof AdbServerUnavailableError) {
       logger.error("Skipped Android driver: adb server unavailable", {
@@ -1066,7 +1218,7 @@ async function discoverAndroidDriver(
 function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
   return {
     event: "driver.adb-server-rejected",
-    passthroughTool: ANDROID_PASSTHROUGH_TOOL,
+    passthroughTools: ANDROID_PASSTHROUGH_TOOLS,
     payload: { port: error.port, reason: error.reason },
     platform: "android",
     reason: error.reason,
@@ -1075,14 +1227,17 @@ function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
 }
 
 /**
- * The tool name is passed in rather than derived from `error.platform`: which wrapper a
+ * why: the tool names are passed in rather than derived from `error.platform`: which wrapper a
  * platform answers to is the driver module's business, and this file is the composition
  * root that already knows both driver classes (architecture rule 2).
  */
-function rootRejection(error: OwnedRootError, passthroughTool: string): DriverRejection {
+function rootRejection(
+  error: OwnedRootError,
+  passthroughTools: readonly string[],
+): DriverRejection {
   return {
     event: "driver.root-rejected",
-    passthroughTool,
+    passthroughTools,
     payload: { platform: error.platform, reason: error.reason, root: error.path },
     platform: error.platform,
     reason: error.reason,

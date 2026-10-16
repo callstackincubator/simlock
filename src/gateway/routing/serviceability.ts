@@ -4,13 +4,25 @@
  * it and acts on the answer, and the stages never see a request this table has rejected.
  */
 import type { Platform } from "../../contract/index.js";
-import type { DeviceClass } from "../../core/index.js";
+import { type DeviceClass, noPhysicalMatch } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
-import { hasPlatform, listsModel, matchRequest, wantedClass } from "./request-match.js";
+import {
+  hasPlatform,
+  listsModel,
+  matchRequest,
+  physicalMatch,
+  wantedClass,
+} from "./request-match.js";
+import { hasCapabilities } from "./stages/has-capabilities.js";
 import { takesRequests } from "./stages/takes-requests.js";
 
-export type RejectionCode = "NO_CAPACITY" | "NO_DRIVER" | "UNKNOWN_MODEL" | "RUNTIME_MISSING";
+export type RejectionCode =
+  | "NO_CAPACITY"
+  | "NO_DRIVER"
+  | "UNKNOWN_MODEL"
+  | "RUNTIME_MISSING"
+  | "CAPABILITY_MISSING";
 
 /** What a request the fleet cannot serve is told: the code and details a worker gives the same
  * request, and the `lease.rejected` reason the gateway records it under. */
@@ -18,28 +30,36 @@ export interface Rejection {
   readonly kind: "reject";
   readonly code: RejectionCode;
   readonly message: string;
-  readonly details?: {
-    readonly platform: Platform;
-    readonly model?: string;
-    readonly class?: DeviceClass;
-    readonly osVersion?: string;
-    readonly downloadable?: false;
-  };
+  readonly details?:
+    | {
+        readonly platform: Platform;
+        readonly model?: string;
+        readonly class?: DeviceClass;
+        readonly osVersion?: string;
+        readonly downloadable?: false;
+      }
+    | { readonly capabilities: readonly string[] };
   readonly reason: "no-worker" | "unresolvable-spec";
 }
 
 export type Assessment = { readonly kind: "route-or-wait" } | Rejection;
 
-/**
- * Walks the table of ADR 0009 §4 in order over every view, busy or not: a worker that is merely
- * busy still makes a request servable, so it never reaches a rejection here.
- *
- * Two terms. A worker *takes requests* when it passes `takes-requests`. The gateway *knows* a
- * worker when it holds a catalog read from it and the worker is not `incompatible`; the view
- * keeps its last catalog across a lost uplink, so a disconnected worker stays known until
- * retention removes it. A worker connecting for the first time, with no catalog yet, is neither.
- */
 export function assess(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
+  const answer = assessTable(request, views);
+  const requires = request.requires;
+  if (answer.kind === "reject" || requires === undefined || requires.length === 0) return answer;
+  const capable = views.filter((worker) => hasCapabilities.keeps(worker, request));
+  if (assessTable(request, capable).kind === "route-or-wait") return answer;
+  return {
+    code: "CAPABILITY_MISSING",
+    details: { capabilities: requires },
+    kind: "reject",
+    message: `No worker connected to this gateway can serve ${requires.join(", ")} for this request`,
+    reason: "unresolvable-spec",
+  };
+}
+
+function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
   const takers = views.filter((worker) => takesRequests.keeps(worker, request));
   if (takers.length === 0) return noWorker();
 
@@ -54,6 +74,7 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
       reason: "unresolvable-spec",
     };
   }
+  if (request.physical === true) return assessPhysical(request, known, takers);
   if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
     const osVersion = request.osVersion ?? "default";
@@ -69,13 +90,28 @@ export function assess(request: RoutableRequest, views: readonly WorkerView[]): 
   return { kind: "route-or-wait" };
 }
 
-/** A worker whose catalog was never read holds an empty one, which says nothing about any
- * platform or model, so only `incompatible` needs ruling out here. */
+// why: `presence` plays no part in the table: a device last read not present makes the request wait, not fail.
+function assessPhysical(
+  request: RoutableRequest,
+  known: readonly WorkerView[],
+  takers: readonly WorkerView[],
+): Assessment {
+  if (!known.some((worker) => physicalMatch(worker, request, "enrolled"))) {
+    return {
+      ...noPhysicalMatch(request),
+      code: "UNKNOWN_MODEL",
+      kind: "reject",
+      reason: "unresolvable-spec",
+    };
+  }
+  if (!takers.some((worker) => physicalMatch(worker, request, "enrolled"))) return noWorker();
+  return { kind: "route-or-wait" };
+}
+
 function isKnown(worker: WorkerView): boolean {
   return worker.connection !== "incompatible";
 }
 
-/** A model no worker lists, or, for a class request, a class none lists a model of. */
 function unknownModel(request: RoutableRequest): Rejection {
   const { platform } = request;
   if (request.model === undefined) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ComponentInstallerClosedError, UnsupportedRequestOptionError } from "../core/index.js";
-import { NoCapacityError, ReplayedLeaseRequestError } from "../leasing/index.js";
+import { LeaseIdTakenError, NoCapacityError, ReplayedLeaseRequestError } from "../leasing/index.js";
 import { classifyError, describeLeaseRequestFailure } from "./error-code.js";
 
 describe("describeLeaseRequestFailure", () => {
@@ -47,5 +47,11 @@ describe("classifyError on a request option the driver does not have", () => {
       code: "BAD_REQUEST",
       message: "ios lease requests do not take imageTag",
     });
+  });
+});
+
+describe("classifyError on a lease ID that is in use", () => {
+  it("answers LEASE_ID_TAKEN for LeaseIdTakenError", () => {
+    expect(classifyError(new LeaseIdTakenError("ad-7f3a"))).toBe("LEASE_ID_TAKEN");
   });
 });

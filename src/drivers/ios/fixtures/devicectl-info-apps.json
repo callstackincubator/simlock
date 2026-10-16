@@ -1,0 +1,55 @@
+{
+  "info": {
+    "arguments": ["devicectl", "device", "info", "apps", "--json-output", "devicectl.json"],
+    "commandType": "devicectl.device.info.apps",
+    "environment": {
+      "CLICOLOR": "1",
+      "TERM": "xterm-256color"
+    },
+    "jsonVersion": 2,
+    "outcome": "success",
+    "version": "642.16"
+  },
+  "result": {
+    "appCount": 3,
+    "apps": [
+      {
+        "appClip": false,
+        "builtByDeveloper": true,
+        "bundleIdentifier": "com.example.MyApp",
+        "defaultApp": false,
+        "hidden": false,
+        "internalApp": false,
+        "name": "MyApp",
+        "removable": true,
+        "url": "file:///private/var/containers/Bundle/Application/MyApp.app/",
+        "version": "1.0"
+      },
+      {
+        "appClip": false,
+        "builtByDeveloper": true,
+        "bundleIdentifier": "com.example.Notes",
+        "defaultApp": false,
+        "hidden": false,
+        "internalApp": false,
+        "name": "Notes",
+        "removable": true,
+        "url": "file:///private/var/containers/Bundle/Application/Notes.app/",
+        "version": "1.0"
+      },
+      {
+        "appClip": false,
+        "builtByDeveloper": true,
+        "bundleIdentifier": "com.example.kept",
+        "defaultApp": false,
+        "hidden": false,
+        "internalApp": false,
+        "name": "Kept",
+        "removable": true,
+        "url": "file:///private/var/containers/Bundle/Application/Kept.app/",
+        "version": "1.0"
+      }
+    ],
+    "matchingBundleIdentifier": null
+  }
+}

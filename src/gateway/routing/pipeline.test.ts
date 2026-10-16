@@ -22,11 +22,21 @@ function view(id: string): WorkerView {
 
 /** A rank that scores each worker from a table, so a test can state every score outright. */
 function rank(name: string, scores: Record<string, number>, settles = false): RankStage {
-  return { kind: "rank", name, score: (worker) => scores[worker.id] ?? 0, settles };
+  return {
+    appliesToPhysical: true,
+    kind: "rank",
+    name,
+    score: (worker) => scores[worker.id] ?? 0,
+    settles,
+  };
 }
 
 function only(...ids: string[]): FilterStage {
-  return { keeps: (worker) => ids.includes(worker.id), kind: "filter" };
+  return {
+    appliesToPhysical: true,
+    keeps: (worker) => ids.includes(worker.id),
+    kind: "filter",
+  };
 }
 
 describe("routing pipeline", () => {
@@ -143,5 +153,53 @@ describe("routing pipeline", () => {
     expect(added).toEqual({ stage: "prefers-b", workerId: "wrk_b" });
     expect(addedFilter).toEqual({ stage: "decides", workerId: "wrk_a" });
     expect(removed).toEqual({ stage: "decides", workerId: "wrk_a" });
+  });
+  it("runStages never calls a stage whose appliesToPhysical is false for a physical request, and calls it for a virtual one", () => {
+    const calls: string[] = [];
+    const skippedFilter = {
+      appliesToPhysical: false,
+      keeps: () => {
+        calls.push("skipped-filter");
+        return true;
+      },
+      kind: "filter",
+    } as FilterStage;
+    const skippedRank = {
+      appliesToPhysical: false,
+      kind: "rank",
+      name: "skipped-rank",
+      score: () => {
+        calls.push("skipped-rank");
+        return 9;
+      },
+      settles: false,
+    } as RankStage;
+    const kept = {
+      appliesToPhysical: true,
+      kind: "rank",
+      name: "kept",
+      score: () => {
+        calls.push("kept");
+        return 1;
+      },
+      settles: false,
+    } as RankStage;
+
+    const physical = runStages(
+      [skippedFilter, skippedRank, kept],
+      { ...REQUEST, physical: true },
+      workers,
+    );
+
+    expect(calls).toContain("kept");
+    expect(calls).not.toContain("skipped-filter");
+    expect(calls).not.toContain("skipped-rank");
+    expect(physical).toEqual({ stage: "kept", workerId: "wrk_a" });
+
+    calls.length = 0;
+    runStages([skippedFilter, skippedRank, kept], { ...REQUEST, physical: false }, workers);
+
+    expect(calls).toContain("skipped-filter");
+    expect(calls).toContain("skipped-rank");
   });
 });

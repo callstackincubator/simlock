@@ -11,6 +11,8 @@
 # gitignored. A plain name gets branch worktree-<name>, as Claude Code's own default does. A
 # name with a slash is a branch itself (task/118, bug/79): its directory is task-118, and an
 # existing origin/<branch> is checked out instead of base, so delivery resumes where it stopped.
+# A branch a worktree already holds gets that worktree back, fast-forwarded to origin/<branch>:
+# every stage of a task (red, green, audit, fix) works in it, one after another.
 #
 # node_modules of the main checkout is cloned with APFS clonefile(2): no data copied, blocks
 # shared copy-on-write. pnpm then relinks offline, which takes about a second. Without
@@ -70,8 +72,19 @@ case $name in
 esac
 dir="$main_root/.claude/worktrees/$(echo "$name" | tr / -)"
 
+holder=$(git -C "$main_root" worktree list --porcelain \
+  | awk -v want="branch refs/heads/$branch" '/^worktree /{w=substr($0,10)} $0==want{print w; exit}')
+if [ -n "$holder" ] && [ "$holder" != "$main_root" ]; then
+  git -C "$main_root" fetch -q origin
+  if git -C "$main_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    git -C "$holder" merge -q --ff-only "origin/$branch" >&2 \
+      || echo "$holder: $branch was not fast-forwarded to origin/$branch" >&2
+  fi
+  echo "$holder"
+  exit 0
+fi
 if [ -e "$dir" ]; then
-  echo "$dir already exists" >&2
+  echo "$dir already exists, on another branch" >&2
   exit 1
 fi
 

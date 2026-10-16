@@ -57,14 +57,18 @@ function leaseHolder(
 async function releaseAndForget(
   env: Awaited<ReturnType<typeof withDaemon>>,
   agentId: string,
-): Promise<void> {
+): Promise<string> {
   const holder = leaseHolder(env, agentId);
-  const grant = JSON.parse(await holder.firstStdoutLine()) as { lease: { id: string } };
+  const grant = JSON.parse(await holder.firstStdoutLine()) as {
+    lease: { id: string };
+    device: { driverDeviceId: string };
+  };
   // Released explicitly, before the process is killed: a SIGKILLed holder frees nothing
   // (ADR 0004 §3), so the release has to be its own step for the device to come back.
   await env.cli(["release", grant.lease.id]);
   holder.kill("SIGKILL");
   await holder.waitForExit(15_000).catch(() => undefined);
+  return grant.device.driverDeviceId;
 }
 
 /**
@@ -112,10 +116,6 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       label: "second requester queues on the managed-device limit, not the running limit",
     });
 
-    // Release the held device with a deliberately slow reclaim so its transient
-    // `reclaiming` state is observable. The release RPC itself waits for reclaim to
-    // finish before responding, so the poll for "reclaiming" must run concurrently
-    // with the release call, not after it.
     await env.driverScript.merge({ ios: { latencyMs: { reclaim: 1_500 } } });
     const releasePromise = env.cli(["release", grantA.lease.id]);
 
@@ -184,9 +184,13 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await waitForCleanupToReach(env, grantX.device.driverDeviceId, "shutdown");
 
     // cleanup --dry-run must report proposals without acting on them.
-    await releaseAndForget(env, "dryrun-z");
+    await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
+    const dryRunDeviceId = await releaseAndForget(env, "dryrun-z");
+    await waitForDeviceState(env, dryRunDeviceId, "ready");
     const rowsAfterZ = await deviceRows(env);
-    const readyDevice = rowsAfterZ.find((row) => row.state === "ready");
+    const readyDevice = rowsAfterZ.find(
+      (row) => row.driverDeviceId === dryRunDeviceId && row.state === "ready",
+    );
     expect(readyDevice, "expected a ready (warm) device for the dry-run preview").toBeDefined();
 
     await waitFor(

@@ -169,7 +169,9 @@ export interface Fleet {
 
 /**
  * Starts a gateway and one worker per entry of `workers`, each joined to it with its label, and
- * waits until the gateway lists every one of them as connected.
+ * waits until the gateway lists every one of them as connected and has read it: a worker that is
+ * still `starting`, or not yet read, has no capacity or catalog in its view, and a test that
+ * leases through the gateway or reads a card's capacity right away would see that gap.
  */
 export async function startFleet(
   workers: readonly { readonly label: string; readonly driverScript?: FakeDriverScript }[],
@@ -194,12 +196,22 @@ export async function startFleet(
     await waitFor(
       async () => {
         const listed = await gateway.cli(["worker", "list", "--json"]);
-        const views = (listed.json as { workers?: readonly { connection: string }[] }).workers;
+        const views = (
+          listed.json as {
+            workers?: readonly { capacity?: unknown; connection: string; health?: string }[];
+          }
+        ).workers;
         return (
-          views?.length === workers.length && views.every((view) => view.connection === "connected")
+          views?.length === workers.length &&
+          views.every(
+            (view) =>
+              view.connection === "connected" &&
+              view.health !== "starting" &&
+              view.capacity !== undefined,
+          )
         );
       },
-      { label: "every worker connected to the gateway" },
+      { label: "every worker connected to the gateway and read by it" },
     );
     return { gateway, workers: started };
   } catch (error: unknown) {
@@ -306,5 +318,31 @@ export async function signIn(page: Page, token: string): Promise<void> {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-/** Every navigation entry the shell has, in order. */
-export const NAV_LABELS = ["Workers", "Leases", "Waiting", "Attention", "Events"] as const;
+export const NAV = [
+  { label: "Overview", path: "/" },
+  { label: "Workers", path: "/workers" },
+  { label: "Leases", path: "/leases" },
+  { label: "Waiting", path: "/waiting" },
+  { label: "Attention", path: "/attention" },
+  { label: "Events", path: "/events" },
+] as const;
+
+export const NAV_LABELS = NAV.map((entry) => entry.label);
+
+// why: pages slide and fade in; an audit or a measurement taken mid-way reads a half-faded colour.
+export async function settled(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+// why: on a phone the sidebar folds into a menu, which has to be opened before its links show.
+export async function openFromNav(page: Page, label: string): Promise<void> {
+  const nav = page.getByRole("navigation", { name: "Console" });
+  if ((page.viewportSize()?.width ?? Infinity) < 768) {
+    await nav.getByRole("button", { name: "Open menu" }).click();
+  }
+  await nav.getByRole("link", { name: label, exact: true }).click();
+}

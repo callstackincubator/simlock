@@ -22,10 +22,12 @@ import {
   WORKER_VIEW_CATALOG_EVENTS,
   workerViewFields,
 } from "../contract/index.js";
-import type { SimlockAdminClient } from "../admin/index.js";
-import { connectSimlockAdmin } from "../admin/index.js";
-import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
+import type { StatusGetOutput } from "../admin/index.js";
+import { connectSimlockClient } from "../simlock-client/client.js";
+import type { LinkConnection } from "../link/index.js";
+import type { AcceptedUplink, Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
 
 /**
@@ -77,12 +79,12 @@ class WorkerCallTimeoutError extends Error {
 /** How the gateway turns an accepted uplink into a driven session. Injected so a test can
  * script a worker without a `DaemonServer` behind it. */
 export type WorkerClientFactory = (
-  connection: IpcConnection,
+  connection: LinkConnection,
   principal: string,
-) => Promise<SimlockAdminClient>;
+) => Promise<GatewayWorkerClient>;
 
 export interface WorkerLinkOptions {
-  readonly uplink: AcceptedUplink;
+  readonly uplink: Omit<AcceptedUplink, "connection"> & { readonly connection: LinkConnection };
   readonly registry: WorkerRegistry;
   readonly eventBus: EventBus;
   readonly clock: Clock;
@@ -121,7 +123,7 @@ function grantedDevices(devices: readonly unknown[]): WorkerGrantedDevice[] {
 export class WorkerLink {
   readonly workerId: string;
   readonly #logger: Logger;
-  #client: SimlockAdminClient | undefined;
+  #client: GatewayWorkerClient | undefined;
   #unsubscribeEvents: (() => Promise<void>) | undefined;
   #closed = false;
   #refreshing = false;
@@ -160,7 +162,7 @@ export class WorkerLink {
    * `start()` has assigned it or after `close()`/`#handleClosed` has run -- neither clears
    * `#client` itself, so this mirrors `reachable` rather than checking it separately. */
   // fallow-ignore-next-line unused-class-member -- reached only through the `WorkerDispatchTarget` interface (FleetLeaseCoordinator); the audit cannot follow a member access through that.
-  client(): SimlockAdminClient | undefined {
+  client(): GatewayWorkerClient | undefined {
     return this.#closed ? undefined : this.#client;
   }
 
@@ -172,7 +174,7 @@ export class WorkerLink {
   async start(): Promise<void> {
     this.options.uplink.connection.onClose(() => this.#handleClosed());
     const connect = this.options.connect ?? defaultConnect;
-    let client: SimlockAdminClient;
+    let client: GatewayWorkerClient;
     try {
       // C3: bounded like every other call this class makes (see `WORKER_CALL_TIMEOUT_MS`) --
       // `hello` is a round trip too, and a peer that completes the WebSocket upgrade with a
@@ -250,24 +252,35 @@ export class WorkerLink {
     // refresh is in flight then queues another one, instead of falling in a gap between the
     // two calls. It costs one extra `status.get` per connect, which is the cheapest call the
     // worker has.
+    const subscription = client.subscribeEvents((push) => {
+      this.#onWorkerEvent(push.event);
+    });
     try {
-      this.#unsubscribeEvents = await this.#withTimeout(
-        client.subscribeEvents((push) => {
-          this.#onWorkerEvent(push.event);
-        }),
-        "events.subscribe",
-      );
+      this.#unsubscribeEvents = await this.#withTimeout(subscription, "events.subscribe");
     } catch (error: unknown) {
       // H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
       // said no, its answer just did not arrive within `WORKER_CALL_TIMEOUT_MS`. Logging it as
       // "refused" asserts something this code cannot know: the RPC may yet land, or may already
       // have subscribed the worker on its end with no unsubscribe handle this link ever
       // receives -- there is no way to unsubscribe that short of closing the whole link.
-      // Distinguishing the two in the log is this method's job even though neither path can (or
-      // needs to, for `refresh` below) retry the subscription itself; the tick still covers it.
+      // Distinguishing the two in the log is this method's job even though neither path retries
+      // the subscription itself; a refused one is covered by the tick, a late one by below.
       if (error instanceof WorkerCallTimeoutError) {
+        // #414: a worker still `starting` parks `events.subscribe` until its startup ends, and
+        // sends `daemon.started` before that parked call subscribes, so nothing else tells this
+        // link the worker is ready. The late answer is that signal: keep the handle it carries
+        // and read the worker in full, instead of leaving the `starting` view until a lease,
+        // device or install event or the tick. `refresh` drops itself on a closed or replaced
+        // link, so the late answer needs no guard of its own.
+        void subscription.then(
+          (unsubscribe) => {
+            this.#unsubscribeEvents = unsubscribe;
+            void this.refresh();
+          },
+          () => undefined,
+        );
         this.#logger.warn(
-          "Worker did not answer an event subscription in time; falling back to the tick",
+          "Worker did not answer an event subscription in time; reading it again when it answers",
           { workerId: this.workerId },
         );
       } else {
@@ -353,10 +366,31 @@ export class WorkerLink {
    * parks behind the worker's startup-readiness gate, so it answering is proof the transport is
    * alive even while the other three are genuinely, harmlessly queued behind a slow `converge`
    * -- application latency, not transport death, and P1's counter must not confuse the two. */
-  async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
+  async #rebuildView(client: GatewayWorkerClient, includeCatalog: boolean): Promise<void> {
     const status = await this.#withTimeout(client.getStatus(), "status.get");
+    // why: taken the moment status answers, so a slow read beside it cannot make the load look fresher.
+    const receivedAt = this.options.clock.now();
     this.#consecutiveRefreshTimeouts = 0;
+    // why: a starting worker answers `status.get` with its health, host and load only, and the rest
+    // is unchecked, so its view is built from those facts; the next refresh reads it in full.
+    if (status.daemon.health === "starting") {
+      this.#refreshStarting(client, status, receivedAt);
+      return;
+    }
+    // A starting answer dropped the view's catalog, and a refresh that does not read one would
+    // leave the worker without it (and so not taking requests) until the next periodic read.
+    const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
+    await this.#refreshRunning(client, status, receivedAt, includeCatalog || !catalogKnown);
+  }
 
+  /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
+   * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
+  async #refreshRunning(
+    client: GatewayWorkerClient,
+    status: StatusGetOutput,
+    receivedAt: number,
+    includeCatalog: boolean,
+  ): Promise<void> {
     const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
@@ -372,7 +406,7 @@ export class WorkerLink {
     // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
-    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
+    if (this.#superseded()) return;
     // The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
@@ -383,11 +417,28 @@ export class WorkerLink {
     this.options.registry.refresh(this.workerId, {
       ...workerViewFields({
         devices,
+        receivedAt,
         status,
         ...(catalog === undefined ? {} : { catalog }),
         ...(config === undefined ? {} : { config }),
       }),
       grantedDevices: grantedDevices(devices),
+      version: client.daemonVersion,
+    });
+  }
+
+  /** Whether this link has been closed or replaced by a newer one for the same worker, so what
+   * it read must not be written (H2). The one place that asks. */
+  #superseded(): boolean {
+    return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
+  }
+
+  /** why: a link a reconnect or `stop()` has replaced must not write, so a stale answer never
+   * overwrites the view the current link owns. */
+  #refreshStarting(client: GatewayWorkerClient, status: StatusGetOutput, receivedAt: number): void {
+    if (this.#superseded()) return;
+    this.options.registry.refresh(this.workerId, {
+      ...workerViewFields({ receivedAt, status }),
       version: client.daemonVersion,
     });
   }
@@ -455,21 +506,14 @@ export class WorkerLink {
   }
 
   /**
-   * ADR 0005 §22: a worker's business events are republished on the gateway's bus with
-   * `workerId` added, so they land in its ring buffer and `simlock events --follow` against a
-   * gateway shows the fleet. The name, the emitting module, the `id` and the `timestamp` travel
-   * unchanged (ADR 0014 §2: one fact, one id, and the time it happened) -- the fact came
-   * from that worker's reaper or its leasing module, and rewriting either would make the audit trail
-   * lie about where it happened; `workerId` is what says which machine.
-   *
-   * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
-   * -- a client of this same admin protocol, on a machine this gateway does not otherwise
-   * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
-   * taken on faith. Refusing the six subjects `docs/internal/EVENTS.md` calls "the gateway's own"
-   * (`GATEWAY_OWN_EVENTS`) keeps a worker from forging `worker.drain-ended`, `worker.removed`,
-   * etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
-   * author of. Every other name still forwards unchanged, including ones this gateway's own
-   * `EventMap` has never heard of (a newer worker's own vocabulary).
+   * why: a push names its own event with a plain string nothing proves the worker owns, while
+   * `workerId` is merged in here and cannot be spoofed -- so the names only a gateway authors
+   * (`GATEWAY_OWN_EVENTS`) are refused by name, or a worker would write `worker.removed` or
+   * `request.granted` straight into the operator's audit trail. Any other name is forwarded
+   * unchanged: a newer worker's vocabulary is a fact its consumers need, and a gateway that
+   * dropped it would lose it from `events.replay`. The name, module, `id` and `timestamp` travel
+   * as they arrived -- the fact happened on that machine at that time, and rewriting either would
+   * make the audit trail lie about where it happened; `workerId` is what says which machine.
    */
   #onWorkerEvent(envelope: {
     readonly id: string;
@@ -510,10 +554,10 @@ export class WorkerLink {
 }
 
 /**
- * ADR 0005 §22 / `docs/internal/EVENTS.md`: the six facts only a gateway itself ever emits, about the
- * workers connected to it. Never forwarded from a worker's own event stream (see
- * `#onWorkerEvent`) -- a worker is a client of the same admin protocol, and nothing about
- * `events.subscribe` proves the name it pushes is genuinely its own.
+ * why: a worker's `events.subscribe` push carries an event name it simply claims, and the uplink
+ * proves only that it holds a worker credential -- so the names whose facts a gateway is the sole
+ * author of have to be dropped rather than forwarded, or a worker would put a dispatch or a grant
+ * it never served into the operator's audit trail, beside the gateway's genuine ones.
  */
 const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
   "worker.connected",
@@ -522,6 +566,8 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
   "worker.removed",
   "worker.drain-started",
   "worker.drain-ended",
+  "request.dispatched",
+  "request.granted",
 ]);
 
 /**
@@ -569,8 +615,9 @@ function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): 
   return { done, options, resolve };
 }
 
-const defaultConnect: WorkerClientFactory = (connection, principal) =>
-  connectSimlockAdmin({ connection, principal });
+const defaultConnect: WorkerClientFactory = async (connection, principal) =>
+  // why: the gateway's session is the one client that also makes relay calls, which `simlock/admin` does not export.
+  (await connectSimlockClient({ connection, principal }, true)) as GatewayWorkerClient;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

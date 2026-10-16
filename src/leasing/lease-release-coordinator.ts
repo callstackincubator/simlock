@@ -1,11 +1,13 @@
-import { type Logger, NoopLogger } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
 import {
+  type AbsentReason,
   type DeviceOperationClaims,
   type LeaseRecord,
   type ReleasedLease,
   type SerializedDecision,
   type ReclaimCoordinator,
 } from "../core/index.js";
+import type { EndedLease, LeaseEndParticipant } from "./lease-ports.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
@@ -19,15 +21,31 @@ export interface LeaseExpirationAdmin {
   expire(leaseId: string, expectedDeadline?: number): Promise<void>;
 }
 
-/** Administrative boundary that fences release/reclaim work during reset. */
 export interface LeaseReleaseMaintenance {
   beginMaintenance(): Promise<void>;
   releaseAllDuringMaintenance(reason: "killed"): Promise<readonly string[]>;
   endMaintenance(): Promise<void>;
 }
 
+export type StartupDeviceOutcome = "reclaim" | "wait" | "missing";
+
+export interface StartupEnding {
+  readonly device: StartupDeviceOutcome;
+  readonly reason: "device-lost" | "expired";
+}
+
+export interface StartupLeaseEnder {
+  endAtStartup(leaseId: string, ending: StartupEnding): Promise<void>;
+}
+
 export interface LeaseReleaseLifecycle {
-  beginRelease(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    reason: LeaseReleaseReason | "expired",
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
+  endForMissingDevice(leaseId: string, reason: "expired" | "device-lost"): Promise<ReleasedLease>;
+  endForAbsentDevice(leaseId: string, absentReason: AbsentReason): Promise<ReleasedLease>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
 }
 
@@ -36,57 +54,43 @@ export interface LeaseReleaseRegistry {
 }
 
 export interface LeaseReleaseCoordinatorOptions {
-  /** Claims the reclaiming device for the duration of a backgrounded reclaim. */
+  /** why: absent when no participant is registered, so that path runs exactly as before. */
+  readonly leaseEnd?: {
+    readonly clock: Clock;
+    readonly endWaitMs: number;
+    readonly participants: readonly LeaseEndParticipant[];
+  };
   readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly lifecycle: LeaseReleaseLifecycle;
   readonly logger?: Logger;
-  /**
-   * Re-kicks acquisition once a backgrounded reclaim has fully settled *and* given
-   * up its claim. Load-bearing rather than belt-and-braces: see `#reclaimInBackground`.
-   */
   readonly notifyAvailability: () => void;
   readonly registry: LeaseReleaseRegistry;
-  readonly reclaim: Pick<ReclaimCoordinator, "reclaim">;
+  readonly reclaim: Pick<ReclaimCoordinator, "reclaim" | "reclaimReturned">;
+}
+
+type ReclaimMode = "await" | "background" | "none";
+
+interface ParticipantCalls {
+  readonly done: Promise<void>;
+  readonly cutShort: () => void;
 }
 
 /**
- * How a release sequences its driver-side reclaim against its own caller.
- *
- * `background` is the default for every release a client or a timer can reach:
- * the registry-only half (lease gone, device `reclaiming`) is what the caller
- * actually needs, and the purge behind it is the slow part. `await` exists for
- * the one caller that needs the device settled before it continues -- the
- * maintenance-authorized release an operator reset runs (see
- * `releaseAllDuringMaintenance`).
- */
-type ReclaimMode = "await" | "background";
-
-/**
- * Coordinates lease-side commands. Lease commits happen in the serialized
- * decision section; reclaiming is intentionally outside it, and -- except under
- * maintenance -- outside the caller's await as well (see `ReclaimMode`).
- *
- * releaseAll preserves the snapshot-and-parallel behavior it always had. Concurrent
- * calls are not idempotent: overlapping snapshots can yield UnknownLeaseError.
+ * why: lease commits happen in the serialized decision section; reclaiming is deliberately outside it.
+ * Concurrent `releaseAll` calls are not idempotent: overlapping snapshots can yield UnknownLeaseError.
  */
 export class LeaseReleaseCoordinator
-  implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance
+  implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance, StartupLeaseEnder
 {
   readonly #activeWorkflows = new Set<Promise<void>>();
-  /**
-   * Every reclaim `#release` handed off instead of awaiting. Ordinary release
-   * callers never wait on this set -- that is the point of it -- but two callers
-   * that cannot proceed against a half-reclaimed device do: `beginMaintenance`
-   * (an operator reset must see settled devices) and `settleBackgroundReclaims`
-   * (graceful daemon shutdown). A daemon that dies without that drain leaves its
-   * in-flight reclaims for `StartupConverger#recoverInterruptedReclaims` to
-   * finish on the next start.
-   */
   readonly #backgroundReclaims = new Set<Promise<void>>();
   readonly #logger: Logger;
   readonly #maintenanceWaiters: (() => void)[] = [];
+  readonly #participantCalls = new Set<ParticipantCalls>();
+  #disposed = false;
   #maintenanceDepth = 0;
+  #stopping = false;
 
   constructor(private readonly options: LeaseReleaseCoordinatorOptions) {
     this.#logger = options.logger?.child("lease-release-coordinator") ?? new NoopLogger();
@@ -120,16 +124,94 @@ export class LeaseReleaseCoordinator
   }
 
   /**
-   * Awaits every reclaim currently running in the background. Nothing on a
-   * client's path calls this -- a graceful daemon shutdown does, so a `simlock
-   * daemon stop` still leaves the pool in the same settled shape an inline
-   * reclaim used to. An ungraceful death instead leaves those devices
-   * `reclaiming` for `StartupConverger#recoverInterruptedReclaims`.
+   * Ends a lease at daemon start, because its device is not running. An ordinary release in every
+   * way but the device: `reclaim` starts the usual background reclaim, `wait` starts none and
+   * takes no claim (a driver that just failed or hung on its listing would likely hang the
+   * reclaim too, and a hung reclaim holds its claim with no end), and `missing` removes the lease
+   * and marks the device missing in one write, with nothing to wipe.
    */
+  async endAtStartup(leaseId: string, ending: StartupEnding): Promise<void> {
+    await this.#runNormal(async () => {
+      switch (ending.device) {
+        case "missing":
+          this.#callParticipants(
+            await this.options.decisions.run(() =>
+              this.options.lifecycle.endForMissingDevice(leaseId, ending.reason),
+            ),
+            ending.reason,
+            false,
+          );
+          return;
+        case "reclaim":
+          await this.#release(leaseId, ending.reason, { reclaim: "background" });
+          return;
+        case "wait":
+          await this.#release(leaseId, ending.reason, { reclaim: "none" });
+          return;
+        default:
+          throw new Error(`Unknown startup ending for ${leaseId}: ${String(ending.device)}`);
+      }
+    });
+  }
+
+  /** why: a lease already gone is not an error: the release that took it came first. */
+  async endForAbsentDevice(
+    leaseId: string,
+    absentReason: AbsentReason,
+    proceed: () => boolean = () => true,
+  ): Promise<boolean> {
+    return this.#runNormal(async () => {
+      const ended = await this.options.decisions.run(async () => {
+        if (
+          !proceed() ||
+          !this.options.registry.snapshot.leases.some((lease) => lease.id === leaseId)
+        ) {
+          return undefined;
+        }
+        return this.options.lifecycle.endForAbsentDevice(leaseId, absentReason);
+      });
+      if (ended === undefined) return false;
+      this.#callParticipants(ended, "device-lost", false);
+      return true;
+    });
+  }
+
+  /** why: under the maintenance admission every release takes, so no watcher write lands while an operator reset walks the devices. */
+  // fallow-ignore-next-line unused-class-member -- called through PhysicalDeviceWatcher's releaser port.
+  async admit<Result>(work: () => Promise<Result>): Promise<Result> {
+    return this.#runNormal(work);
+  }
+
+  /** why: the reclaim joins the background reclaims, so nuke's `beginMaintenance` and a graceful stop wait for it. */
+  // fallow-ignore-next-line unused-class-member -- called through PhysicalDeviceWatcher's releaser port.
+  async reclaimReturned(
+    deviceId: string,
+    osVersion?: string,
+    proceed: () => boolean = () => true,
+  ): Promise<boolean> {
+    return this.#runNormal(async () => {
+      const started = await this.options.reclaim.reclaimReturned(deviceId, osVersion, proceed);
+      if (started === undefined) return false;
+      const tracked = started.settled.then(() => undefined);
+      this.#backgroundReclaims.add(tracked);
+      void tracked.finally(() => this.#backgroundReclaims.delete(tracked));
+      return true;
+    });
+  }
+
+  /** why: a graceful stop waits only for wipes; the participants' wait is cut short and later endings do not wait. */
   async settleBackgroundReclaims(): Promise<void> {
+    this.#stopping = true;
+    this.#cutShortWaits();
     while (this.#backgroundReclaims.size > 0) {
       await Promise.allSettled(this.#backgroundReclaims);
     }
+  }
+
+  /** why: a disposed engine runs no more driver work; a participant that returns late starts no reclaim. */
+  dispose(): void {
+    this.#disposed = true;
+    this.#cutShortWaits();
   }
 
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
@@ -147,6 +229,7 @@ export class LeaseReleaseCoordinator
     // a device still `reclaiming` is neither `ready` nor `shutdown`, so an operator
     // reset would silently skip it (`NukeService#canOperate`) and leave a device
     // running that the reset was supposed to take down.
+    this.#cutShortWaits();
     while (this.#activeWorkflows.size > 0 || this.#backgroundReclaims.size > 0) {
       await Promise.allSettled([...this.#activeWorkflows, ...this.#backgroundReclaims]);
     }
@@ -185,9 +268,21 @@ export class LeaseReleaseCoordinator
         const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
         if (current?.ttlDeadline !== expectedDeadline) return undefined;
       }
-      return this.options.lifecycle.beginRelease(leaseId, reason);
+      // `none` is a wipe put off, not one given up: the device records it, so a later start
+      // that can read its platform runs the full reclaim (ADR 0019 §2).
+      return this.options.lifecycle.beginRelease(
+        leaseId,
+        reason,
+        options.reclaim === "none" || (options.reclaim === "background" && this.#hasParticipants)
+          ? { deferReclaim: true }
+          : {},
+      );
     });
     if (released === undefined) return;
+    if (options.reclaim === "none") {
+      this.#callParticipants(released, reason, false);
+      return;
+    }
     if (options.reclaim === "background") {
       // The registry-only half committed above is the whole of what a releasing
       // caller needs: the lease record is gone, `lease.released` has been emitted,
@@ -199,57 +294,158 @@ export class LeaseReleaseCoordinator
       // releasing through MCP or the CLI, which would otherwise sit on a tool call
       // waiting for a device it has already given up, and for an operator's
       // `release --all` or `nuke`, where N leases would otherwise cost N serial
-      // erases before the command answers (#43). Startup used to be the third such
-      // caller, through an orphan sweep ADR 0004 deleted.
+      // erases before the command answers (#43). Startup is the third such caller, for a
+      // lease it ends because its device is not running (`endAtStartup`, ADR 0019).
       //
       // Kicked off here rather than queued, so every device's reclaim starts
       // immediately (not one-after-another): queuing would let a healthy reclaim sit
       // idle in `reclaiming` waiting its turn, which is exactly the state age a
       // stalled-transition detector would misread as a stall.
-      this.#reclaimInBackground(released);
+      this.#reclaimInBackground(released, reason);
       return;
     }
+    // why: under maintenance the call gets an aborted signal and nothing waits for it, so a
+    // participant that ignores the signal cannot hang `nuke`.
+    this.#callParticipants(released, reason, false);
     await this.options.reclaim.reclaim(released);
   }
 
-  /**
-   * Claims the device for the reclaim's duration. Two readers depend on that claim
-   * to tell a live in-process reclaim apart from an abandoned one: `StartupConverger
-   * #recoverInterruptedReclaims`, which must not mistake a reclaim this process just
-   * started for one orphaned by a *previous* crash, and `simlock doctor`'s
-   * stalled-transition finding, which must not read a legitimately long erase as a
-   * driver call that never returned. Both exclude claimed devices for exactly this
-   * reason; a reclaim orphaned by a crash carries no claim in the new process, so
-   * neither check loses the case it exists for.
-   *
-   * The claim is released, and the failure logged rather than thrown, once the
-   * reclaim settles -- no caller is awaiting this promise, so a rejection here would
-   * otherwise be unhandled. A purge that fails at the driver is not that case: it is
-   * handled inside `ReclaimCoordinator#reclaim`, which quarantines the device
-   * instead of rejecting, and stays visible in `simlock status` and
-   * `device.purge-failed`.
-   */
-  #reclaimInBackground(released: ReleasedLease): void {
+  /** why: the claim lasts as long as the reclaim, so startup recovery and doctor's stalled-transition check take a live reclaim for neither orphaned nor stalled. */
+  #reclaimInBackground(released: ReleasedLease, reason: EndedLease["reason"]): void {
     const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
-    const reclaim = this.options.reclaim
-      .reclaim(released)
-      .catch((error: unknown) => {
-        this.#logger.error("background reclaim failed", {
-          deviceId: released.device.id,
-          error: error instanceof Error ? error.message : String(error),
-          leaseId: released.lease.id,
+    const calls = this.#callParticipants(released, reason, true);
+    const run = (): Promise<void> =>
+      this.options.reclaim
+        .reclaim(released)
+        .catch((error: unknown) => {
+          this.#logger.error("background reclaim failed", {
+            deviceId: released.device.id,
+            error: error instanceof Error ? error.message : String(error),
+            leaseId: released.lease.id,
+          });
+        })
+        .finally(() => {
+          claim?.release();
+          // why: `ReclaimCoordinator` already wakes the queue on every path that frees a
+          // device, and it does so before this claim is released, so the wake-up here is a
+          // safety net, not the one that serves a waiter: it runs after the claim is gone,
+          // so matching sees the device even if an earlier wake-up raced the release.
+          this.options.notifyAvailability();
         });
-      })
-      .finally(() => {
-        claim?.release();
-        // `ReclaimCoordinator` already wakes the queue on every path that frees a
-        // device, and it does so before this claim is released, so the wake-up here is a
-        // safety net, not the one that serves a waiter: it runs after the claim is gone,
-        // so matching sees the device even if an earlier wake-up raced the release.
-        this.options.notifyAvailability();
-      });
+    // why: the reclaim's own promise chain is not wrapped, so the claim is released in as few
+    // steps as without a participant; the queue's wake-up races that release.
+    const reclaim =
+      calls === undefined
+        ? run()
+        : new Promise<void>((resolve) => {
+            void calls.done.then(() => {
+              if (this.#disposed) {
+                claim?.release();
+                resolve();
+                return;
+              }
+              void run().finally(resolve);
+            });
+          });
     this.#backgroundReclaims.add(reclaim);
     void reclaim.finally(() => this.#backgroundReclaims.delete(reclaim));
+  }
+
+  get #hasParticipants(): boolean {
+    return this.options.leaseEnd !== undefined;
+  }
+
+  #cutShortWaits(): void {
+    for (const calls of this.#participantCalls) calls.cutShort();
+  }
+
+  /**
+   * why: participants are called after the commit and outside the serialized decision section: one
+   * may take minutes. One budget per ended lease covers all of them and never restarts. Leasing
+   * attaches its handlers here, so a rejection after it stopped waiting is logged, never unhandled.
+   * Returns calls to wait for, or `undefined` when there is nothing to wait for.
+   */
+  #callParticipants(
+    released: ReleasedLease,
+    reason: EndedLease["reason"],
+    waitable: boolean,
+  ): ParticipantCalls | undefined {
+    const { leaseEnd } = this.options;
+    if (leaseEnd === undefined) return undefined;
+    const { clock, endWaitMs, participants } = leaseEnd;
+    const ended: EndedLease = {
+      deviceId: released.device.id,
+      leaseId: released.lease.id,
+      ownerId: released.lease.ownerId,
+      platform: released.device.spec.platform,
+      reason,
+    };
+    const context = { deviceId: ended.deviceId, leaseId: ended.leaseId };
+    const controller = new AbortController();
+    const aborted = this.#maintenanceDepth > 0 || this.#stopping || this.#disposed;
+    if (aborted) controller.abort();
+    const settled = participants.map(async (participant) =>
+      this.#callOne(participant, ended, controller.signal),
+    );
+    // why: aborted before the call: nothing waits and no ceiling is armed.
+    if (aborted) return undefined;
+    const calls = this.#armCeiling(clock, endWaitMs, controller, context, settled);
+    return waitable ? calls : undefined;
+  }
+
+  async #callOne(
+    participant: LeaseEndParticipant,
+    ended: EndedLease,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      await participant.leaseEnded(ended, signal);
+    } catch (error: unknown) {
+      this.#logger.error("lease-end participant failed", {
+        deviceId: ended.deviceId,
+        error: error instanceof Error ? error.message : String(error),
+        leaseId: ended.leaseId,
+      });
+    }
+  }
+
+  #armCeiling(
+    clock: Clock,
+    endWaitMs: number,
+    controller: AbortController,
+    context: { readonly deviceId: string; readonly leaseId: string },
+    settled: readonly Promise<void>[],
+  ): ParticipantCalls {
+    let timer: TimerHandle | undefined;
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const calls: ParticipantCalls = {
+      cutShort: () => {
+        stop();
+        controller.abort();
+      },
+      done,
+    };
+    const stop = (): void => {
+      if (timer !== undefined) clock.cancel(timer);
+      timer = undefined;
+      this.#participantCalls.delete(calls);
+      finish();
+    };
+    this.#participantCalls.add(calls);
+    timer = clock.setTimer(endWaitMs, () => {
+      timer = undefined;
+      this.#logger.warn("lease-end participants passed the wait ceiling", {
+        ...context,
+        endWaitMs,
+      });
+      controller.abort();
+      stop();
+    });
+    void Promise.all(settled).then(stop);
+    return calls;
   }
 
   async #releaseAll(

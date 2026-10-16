@@ -15,8 +15,9 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
-`getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`),
-`createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`). The split exists so
+`getConfig` (its `capabilities` block holds each optional module's section), `stopDaemon`, `replayEvents`/`subscribeEvents` (each event carries an `id`),
+`createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`,
+`addDevice`, `removeDevice`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from
 calling one — this is a discoverability choice, not the
@@ -66,10 +67,25 @@ that cannot be slimmed (an iOS runtime older than 18.5, or any Android
 device) is granted `"full"`, and a `"full"` request is never granted
 `"slim"`. A slim device lacks some system features — push notifications,
 Spotlight, StoreKit sheets, universal links, system pickers — so check it
-before treating such a failure as a bug. Every device in `getStatus()` and in
+before treating such a failure as a bug. Every virtual device in `getStatus()` and in
 an admin's `list({ kind: "devices" })` carries the same `mode`, and
 `servesDefaultMode`: `true` when a request with no `mode` would draw from the
-device's pool on that daemon (the default mode of the device's platform).
+device's pool on that daemon (the default mode of the device's platform). Every
+device also carries `physical`: `false` for a simulator or emulator, `true` for a
+real phone or tablet. A physical device has a `class` (`"phone"` or `"tablet"`)
+and no `mode`, and a lease on one has no `mode` either.
+
+`requestLease` also takes an optional `physical: true`, which asks for an
+enrolled physical phone or tablet instead of a simulator or emulator. It
+matches an enrolled device of the platform by `model` (ignoring letter case),
+`class` and `osVersion`; `osVersion` is exact, so `"18"` matches no device on
+`18.4.1` and "any 18.x" is `">=18 <19"`, and on Android it is the API level
+(`"34"`). A request no enrolled device could match fails at once with
+`UNKNOWN_MODEL`. `physical` with `mode`, `imageTag` or `allowDownload: true` is a
+`BAD_REQUEST` naming the field. A request without `physical` never gets a
+physical device. A physical request waits in a line of its own, and the
+`queueDepth` of `getStatus()` counts the simulator and emulator line, with
+`physicalQueueDepth` counting the physical one.
 
 On Android, `requestLease` also takes an optional `imageTag`: the system image
 type to create the device from, such as `"google_apis_playstore"`, as
@@ -129,6 +145,25 @@ installer printed one. A request that joins a download already running hears
 that download's latest progress at once. A request that needs no download
 never hears this stage.
 
+**Choosing the lease ID.** Pass `leaseId` when you already have your own ID
+for the lease and want Simlock to use it, so there is nothing to map:
+
+```ts
+const grant = await client.requestLease({ platform: "ios", leaseId: "ad-7f3a" });
+grant.lease.id; // "ad-7f3a"
+grant.lease.idChosenByRequester; // true
+```
+
+The ID is 1 to 64 ASCII letters, digits, `-` and `_`, starts with a letter or
+digit, and is case-sensitive; anything else is a `BAD_REQUEST`. `renewLease`,
+`releaseLease` and the lease lists then name the lease by that ID, against a
+gateway too, where it comes back with no worker in front of it. You keep the
+ID unique for all time: it names one lease, and you do not send it again once
+that lease has ended. Simlock refuses one an active lease or a waiting request
+holds with `LEASE_ID_TAKEN` (`details.leaseId`), after the
+`REQUESTER_ALREADY_LEASED` check, and keeps no record of IDs already used.
+Without `leaseId` a request gets an ID from Simlock, as before.
+
 **Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
@@ -141,6 +176,18 @@ third of the lease's TTL and release on exit, and that is ordinary frontend
 code, not something this client does for you. There is no heartbeat
 to declare and no connection-liveness mode to opt into: a renew arriving
 before the deadline is the whole mechanism.
+
+**Requiring a capability.** `requestLease` also takes `requires`: up to 8
+lowercase capability names, none twice, such as `["agent-device"]`. Simlock
+places the lease only on a worker whose status lists every one of them as
+`available`. Through a gateway, a request that no connected worker able to
+serve it can take fails at once with `CAPABILITY_MISSING`, and so does one
+already waiting when the last such worker loses the capability or restarts. If
+no worker stays connected, it fails with `NO_CAPACITY` instead. Direct to a worker that lacks one it fails the same way.
+The error's
+`details.capabilities` names the missing capabilities. `requires` cannot be
+combined with `idempotencyKey` (`BAD_REQUEST`). The CLI, the MCP tool and the
+HTTP lease body do not take it.
 
 **Getting an answer back after a disconnect.** Pass `idempotencyKey` to
 make a request repeatable:
@@ -160,7 +207,8 @@ the request is still waiting you join that wait, and once it has a result
 you get that result. Either way it never grants you a second lease. A result
 is never worked out again: a request that failed stays failed under its key,
 so use a new key to try again. Keys last for `lease.requestRetentionMs` after
-the request finishes. The same key with a different device is
+the request finishes. The same key with a different device, or a different
+`leaseId` (sent on one call and not the other counts as different), is
 `IDEMPOTENCY_CONFLICT`. Keys belong to a requester id, and a repeat must come
 from the same connection principal that sent the request: the same key and
 requester id from a different principal is `FORBIDDEN`. A request still waiting when the daemon restarts
@@ -214,7 +262,7 @@ driver builds (the scoping flags for its own device root, `simctl --set` or
 the adb port it names exist where you are.
 
 `exec` runs it. The daemon resolves the same command through the same
-driver — the same scoping, and the same refusal list, so a verb the driver
+driver — the same scoping, and the same refusal rules, so a verb the driver
 will not proxy comes back as `PASSTHROUGH_REFUSED` from either method, and a
 `tool` no driver on that machine wraps as `UNKNOWN_PASSTHROUGH_TOOL` — spawns
 it on its own machine, and streams the output to `onOutput` as it arrives.
@@ -223,8 +271,9 @@ the command wrote, decoded as UTF-8 and forwarded unsplit, so a caller that
 wants lines assembles them itself. Nothing is buffered daemon-side and there is
 no size cap. The promise resolves with the command's own `exitCode`.
 
-`leaseId` is an ownership proof and nothing more: the *device* is named by the
-command's own arguments, which the daemon does not parse. An agent-role client
+`leaseId` is an ownership proof: for `simctl` and `adb` the *device* is named
+by the command's own arguments, which the daemon does not parse, and for
+`devicectl` the driver adds the lease's `--device` unless the arguments name one. An agent-role client
 is authorized against the lease it owns, exactly as for `renewLease` — a lease
 it does not own is `FORBIDDEN`, and an id that names no lease is
 `UNKNOWN_LEASE`.
@@ -467,6 +516,41 @@ try {
 }
 ```
 
+## Enrolling a physical device: `addDevice` and `removeDevice`
+
+`addDevice({ platform, id })` on the admin client enrols a phone or tablet
+plugged into the machine the daemon runs on, the call behind
+`simlock device add`. `removeDevice({ id })` forgets it, the call behind
+`simlock device remove`. Neither asks for confirmation, and `removeDevice`
+sends nothing to the device.
+
+```ts
+const device = await admin.addDevice({ platform: "ios", id: "00008110-001A2B3C4D5E" });
+// { id: "dev_8f2a", driverDeviceId: "00008110-001A2B3C4D5E", platform: "ios",
+//   model: "iPhone 15 Pro", osVersion: "18.4", class: "phone", appCount: 12,
+//   reenrolled: false }
+await admin.removeDevice({ id: device.driverDeviceId });
+// { id: "dev_8f2a", driverDeviceId: "00008110-001A2B3C4D5E" }
+```
+
+- `id` in `addDevice`'s result is the registry id; `driverDeviceId` is the
+  canonical ID that `removeDevice` takes, and that `getStatus()` shows on a
+  physical device's entry. An `id` you pass may be any ID the device answers
+  to. Enrolling an enrolled device again keeps its registry id and reads
+  `reenrolled: true`.
+- `addDevice` rejects, writing nothing, with `DEVICE_NOT_ENROLLABLE`
+  (`details` carries `id`, `platform`, `reason` and, when known,
+  `canonicalId`; `reason` is `not-connected`, `network-only`, `untrusted`,
+  `developer-mode-off`, `os-too-old`, `unsupported-kind`, `locked`,
+  `unreadable`, `virtual-device` or `enrolled-on-other-platform`), with
+  `DEVICE_BUSY` (`details.reason` is `leased`, `reclaiming` or `busy`) and
+  with `NO_DRIVER`.
+- `removeDevice` rejects with `UNKNOWN_DEVICE` for an ID that is not
+  enrolled, and with `DEVICE_BUSY`.
+- Both reject with `FORBIDDEN` for an agent session and with
+  `UNSUPPORTED_IN_GATEWAY_MODE` from a gateway: connect to the worker the
+  device is plugged into.
+
 ## What machine answered: `getStatus().host`
 
 `getStatus()` carries a `host` block beside `daemon`: the machine the daemon
@@ -487,6 +571,25 @@ const { host } = await client.getStatus();
 - A gateway reports its own machine with no tools, since it runs no
   drivers. Each worker's `host` is on its entry in `workers`, and on
   `listWorkers()` from the admin client.
+
+## A daemon that is still starting: `getStatus()`
+
+While a daemon is starting (`daemon.health` is `"starting"`), `getStatus()`
+returns `daemon` and `host` and nothing else. `devices`, `leases`, `capacity`,
+`warmPool`, `queueDepth`, `physicalQueueDepth`, `installs`, `waiting` and `workers` are `undefined`, not empty,
+because the daemon has not yet checked what it holds. The same is true of a
+worker's entry in `workers` and in `listWorkers()`: a worker that is starting has
+`health` and `host` and none of `devices`, `leases`, `capacity`, `warmPool`, `queueDepth`, `physicalQueueDepth`,
+`catalog`, `installs` or `waiting`. Check `daemon.health` before reading them:
+
+```ts
+const status = await client.getStatus();
+if (status.daemon.health === "starting") {
+  // Only `status.daemon` and `status.host` are there yet.
+} else {
+  console.log(status.devices?.length);
+}
+```
 
 ## What is installing: `getStatus().installs`
 
@@ -521,7 +624,9 @@ const { waiting = [] } = await client.getStatus();
 ```
 
 - `stage` is `queued` while the request holds a place in the queue, with
-  `queuePosition` counting from 1, and `starting` while the daemon is
+  `queuePosition` counting from 1 within the request's own line (a physical
+  request, which has `spec.physical: true`, waits apart from simulator and
+  emulator requests), and `starting` while the daemon is
   working on it: placing it as it arrives, or finding, creating, booting or
   downloading a device for it. `spec` has only the fields the
   request named.
@@ -553,7 +658,9 @@ call `renewLease` with the lease id and you have picked the lease straight
 back up; do nothing and it expires at its deadline like any other. That is
 why `onLeaseLost` no longer fires on connection loss: it reports a lease the
 daemon actually ended (expiry, an operator release, an unrecoverable
-device), and a dropped socket is not one.
+device, a physical device unplugged for the grace period), and a dropped socket is not one. A daemon that starts again ends
+every lease whose device is not running then, as `device-lost`, so a
+`renewLease` after a restart can fail with `UNKNOWN_LEASE`.
 
 Reconnect policy is deliberately a frontend's own concern, not something
 this client can make a universal decision about:
@@ -634,9 +741,9 @@ doesn't end up holding the result. This is a known gap.
 
 ## Running a command on the leased device: `exec`
 
-`exec` runs one `simctl` / `adb` command against a device you hold a lease
-on, wherever that device actually is, and streams its output back as it
-arrives:
+`exec` runs one `simctl` / `adb` command (or, on a physical iPhone or iPad,
+one `devicectl` command) against a device you hold a lease on, wherever that
+device actually is, and streams its output back as it arrives:
 
 ```ts
 const { exitCode } = await client.exec(
@@ -695,12 +802,17 @@ Five things to know before building on it:
   is killed and the call rejects with `EXEC_TIMEOUT`.
 - **The refusals are the daemon's, not a client's.** A verb that would change
   a device's lifecycle behind the registry's back rejects with
-  `PASSTHROUGH_REFUSED`, and a `tool` outside `simctl`/`adb` with
-  `UNKNOWN_PASSTHROUGH_TOOL` — the same list `simlock simctl` /
-  `simlock adb` document. One refusal is particular to `exec`: a bare `adb
-  shell` with no command is `PASSTHROUGH_REFUSED` ("needs a terminal") rather
-  than a call that hangs until the timeout, since there is no pseudo-terminal
-  for it to attach to.
+  `PASSTHROUGH_REFUSED`, and a `tool` outside `simctl`/`adb`/`devicectl` with
+  `UNKNOWN_PASSTHROUGH_TOOL` — `simctl` and `adb` are the tools `simlock simctl` /
+  `simlock adb` wrap, and `devicectl` has no `simlock` command. `devicectl` runs only on a physical iOS lease, and
+  only the reviewed `device …` commands (install, uninstall, launch,
+  terminate, signal, and the `info` reads); anything else, and any option
+  that names a path on the worker (`--json-output`, `--log-output`,
+  `--destination`, `--file`, `--filter`), is `PASSTHROUGH_REFUSED`.
+  `simctl` on a physical lease is refused too. One refusal is particular to
+  `exec`: a bare `adb shell` with no command is `PASSTHROUGH_REFUSED`
+  ("needs a terminal") rather than a call that hangs until the timeout, since
+  there is no pseudo-terminal for it to attach to.
 
 ## A gateway is just a daemon, as far as this client knows
 
@@ -716,7 +828,7 @@ difference, and neither does code written against it.
 mode (`"slim" | "full"`). Everything else you might reach for is a leaky
 inference rather than an answer: a lease from a gateway carries an additive
 `worker: { id, label }` block, but so might a future single-machine daemon's;
-a lease id from a gateway names its worker, but ids are opaque and parsing
+a lease id from a gateway can name its worker, but ids are opaque and parsing
 one is a bug waiting to happen.
 
 Two behaviours worth knowing when the daemon on the other end is a gateway,
@@ -756,7 +868,7 @@ answers as a fleet of one:
   handshake means something answered, and launching there risks a second
   daemon instance or masking a real incompatibility).
 - It does not restart the daemon on a protocol version mismatch. Leases
-  survive a restart, but stopping a daemon out from under
+  whose device is still running survive a restart, but stopping a daemon out from under
   its users still kills every queued lease request on the machine and leaves
   every lease it was serving burning TTL with nothing to renew against.
   `PROTOCOL_VERSION_UNSUPPORTED` names the running daemon's version; the fix

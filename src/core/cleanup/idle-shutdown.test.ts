@@ -4,6 +4,7 @@ import type { Config, RegistryView } from "../index.js";
 import { idleShutdownRule } from "./idle-shutdown.js";
 
 const config: Config = {
+  capabilities: {},
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
@@ -34,6 +35,9 @@ const config: Config = {
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    maxConcurrentBoots: 1,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -47,6 +51,8 @@ const config: Config = {
     identity: { ios: "reusable", android: "reusable" },
     requestRetentionMs: 600_000,
     maxRequestRecords: 10_000,
+    maxPerRequester: 1,
+    endWaitMs: 600_000,
   },
   capacity: {
     strategy: "resource",
@@ -67,17 +73,18 @@ const config: Config = {
   },
 };
 
-function view(now: number): RegistryView {
+function view(now: number, targeted: readonly string[] = []): RegistryView {
   return {
     config,
     devices: [
       {
+        physical: false,
         createdAt: 0,
         driverData: {},
         driverDeviceId: "driver-1",
         id: "dev_1",
         lastLeaseEndedAt: 0,
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
         mode: "full",
         state: "ready",
       },
@@ -85,6 +92,7 @@ function view(now: number): RegistryView {
     diskFreeBytes: 100,
     leases: [],
     now,
+    targeted: new Set(targeted),
   };
 }
 
@@ -95,6 +103,18 @@ describe("idleShutdownRule", () => {
       {
         action: "shutdown",
         reason: "idle 10s > T1=10s",
+        rule: "idle-shutdown",
+        target: "dev_1",
+      },
+    ]);
+  });
+
+  it("leaves a targeted device idle past T1 alone, and still proposes the same device once it is not targeted", () => {
+    expect(idleShutdownRule.evaluate(view(60_000, ["dev_1"]))).toEqual([]);
+    expect(idleShutdownRule.evaluate(view(60_000, ["dev_other"]))).toEqual([
+      {
+        action: "shutdown",
+        reason: "idle 1m > T1=10s",
         rule: "idle-shutdown",
         target: "dev_1",
       },

@@ -1,6 +1,6 @@
 # 0005. Gateway and worker modes
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — partly implemented: §16, §19a', §19c and §27a
 - **Date:** 2026-09-05
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)

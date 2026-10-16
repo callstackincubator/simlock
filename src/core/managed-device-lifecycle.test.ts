@@ -4,6 +4,12 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
+import {
+  assertVirtual,
+  type DeviceState,
+  type DeviceTransitionUpdate,
+  type VirtualDevice,
+} from "./domain.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -12,6 +18,17 @@ import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const statePath = "/home/agent/.simlock/state.json";
+
+/** The registry's transition, narrowed to the virtual device every test here acts on. */
+async function transitionVirtual(
+  registry: Registry,
+  deviceId: string,
+  to: DeviceState,
+  event?: Parameters<Registry["transitionDevice"]>[2],
+  update?: DeviceTransitionUpdate,
+): Promise<VirtualDevice> {
+  return assertVirtual(await registry.transitionDevice(deviceId, to, event, update));
+}
 
 async function createHarness() {
   const clock = new FakeClock(1_000);
@@ -34,6 +51,7 @@ async function createHarness() {
     clock,
   );
   const driverDevice = await driver.provision({
+    physical: false,
     model: "iPhone 16",
     osVersion: "26.5",
     platform: "ios",
@@ -42,7 +60,7 @@ async function createHarness() {
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,
-    spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
   });
   return { claims, clock, device, driver, eventBus, lifecycle, registry };
 }
@@ -56,7 +74,8 @@ async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
     },
     { mode: "full", purpose: "prepare" },
   );
-  return harness.registry.transitionDevice(
+  return transitionVirtual(
+    harness.registry,
     harness.device.id,
     "ready",
     {
@@ -76,7 +95,7 @@ async function shutdownDevice(
     deviceId: ready.driverDeviceId,
     driverData: ready.driverData,
   });
-  return harness.registry.transitionDevice(ready.id, "shutdown", {
+  return transitionVirtual(harness.registry, ready.id, "shutdown", {
     event: "device.shutdown",
     payload: { deviceId: ready.id, initiator: "test" },
   });
@@ -102,9 +121,29 @@ describe("ManagedDeviceLifecycle", () => {
     expect(firstAddress).toBeDefined();
     expect(handoff?.device.address).toBeDefined();
     expect(handoff?.device.address).not.toBe(firstAddress);
-    expect(harness.registry.snapshot.devices[0]?.address).toBe(handoff?.device.address);
+    expect(harness.registry.snapshot.virtualDevices[0]?.address).toBe(handoff?.device.address);
     // The ownership identity is not a per-boot fact and must not drift with the address.
     expect(handoff?.device.driverDeviceId).toBe(ready.driverDeviceId);
+  });
+
+  it("hands the driver a device marked virtual for makeReady, shutdown and destroy", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const shutdown = await shutdownDevice(harness, ready);
+    const claim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (claim === undefined) throw new Error("expected boot claim");
+    const booted = await harness.lifecycle.bootForLease(shutdown, claim);
+    booted?.claim.release();
+    const stopped = await harness.lifecycle.shutdown(booted?.device ?? shutdown, "test", "cleanup");
+    await harness.lifecycle.destroy(stopped ?? shutdown, "test", "cleanup");
+
+    const handed = (operation: string) =>
+      harness.driver.calls
+        .filter((call) => call.operation === operation)
+        .map((call) => call.arguments[0]);
+    expect(handed("makeReady").at(-1)).toMatchObject({ physical: false });
+    expect(handed("shutdown").at(-1)).toMatchObject({ physical: false });
+    expect(handed("destroy")).toEqual([expect.objectContaining({ physical: false })]);
   });
 
   it("bootWarm makes a shut-down device ready and ends the boot claim, where bootForLease keeps it", async () => {
@@ -126,8 +165,32 @@ describe("ManagedDeviceLifecycle", () => {
     const booted = await harness.lifecycle.bootWarm(again, warmClaim);
 
     expect(booted).toMatchObject({ id: shutdown.id, state: "ready" });
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
     expect(harness.claims.isClaimed(shutdown.id)).toBe(false);
+  });
+
+  it("stamps readyAt with the moment a device becomes ready, on a boot for a lease and on a warm boot", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const shutdown = await shutdownDevice(harness, ready);
+    harness.clock.advance(5_000);
+    const leaseClaim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (leaseClaim === undefined) throw new Error("expected boot claim");
+
+    const handoff = await harness.lifecycle.bootForLease(shutdown, leaseClaim);
+    handoff?.claim.release();
+
+    expect(handoff?.device.readyAt).toBe(6_000);
+    expect(harness.registry.snapshot.virtualDevices[0]?.readyAt).toBe(6_000);
+
+    const again = await shutdownDevice(harness, handoff?.device ?? ready);
+    harness.clock.advance(7_000);
+    const warmClaim = harness.claims.tryClaim(again.id, "boot");
+    if (warmClaim === undefined) throw new Error("expected boot claim");
+
+    await harness.lifecycle.bootWarm(again, warmClaim);
+
+    expect(harness.registry.snapshot.virtualDevices[0]?.readyAt).toBe(13_000);
   });
 
   it("bootWarm ends the boot claim and leaves the device shut down when the boot fails", async () => {
@@ -142,7 +205,7 @@ describe("ManagedDeviceLifecycle", () => {
       "emulator would not start",
     );
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
     expect(harness.claims.isClaimed(shutdown.id)).toBe(false);
   });
 
@@ -236,7 +299,7 @@ describe("ManagedDeviceLifecycle", () => {
       deviceId: ready.driverDeviceId,
       driverData: ready.driverData,
     });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+    const shutdown = await transitionVirtual(harness.registry, ready.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },
     });
@@ -315,7 +378,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.driverDeviceId,
         driverData: ready.driverData,
       });
-      const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+      const shutdown = await transitionVirtual(harness.registry, ready.id, "shutdown", {
         event: "device.shutdown",
         payload: { deviceId: ready.id, initiator: "test" },
       });
@@ -439,6 +502,7 @@ describe("ManagedDeviceLifecycle", () => {
       clock,
     );
     const driverDevice = await driver.provision({
+      physical: false,
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -447,7 +511,7 @@ describe("ManagedDeviceLifecycle", () => {
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,
       provisionDuration: 0,
-      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
     });
 
     const handoff = await lifecycle.readyProvisionedForLease(device);
@@ -459,7 +523,8 @@ describe("ManagedDeviceLifecycle", () => {
     // A driver that reports no mode must not leave a previously stored "slim" on the record,
     // or a device that is no longer slim keeps reporting `mode: "slim"`.
     const harness = await createHarness();
-    const ready = await harness.registry.transitionDevice(
+    const ready = await transitionVirtual(
+      harness.registry,
       harness.device.id,
       "ready",
       { event: "device.ready", payload: { bootDuration: 0, deviceId: harness.device.id } },
@@ -474,7 +539,7 @@ describe("ManagedDeviceLifecycle", () => {
       deviceId: ready.driverDeviceId,
       driverData: ready.driverData,
     });
-    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+    const shutdown = await transitionVirtual(harness.registry, ready.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },
     });
@@ -497,6 +562,7 @@ describe("ManagedDeviceLifecycle", () => {
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, platform: "ios" });
     const driverDevice = await driver.provision({
+      physical: false,
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -508,12 +574,13 @@ describe("ManagedDeviceLifecycle", () => {
       JSON.stringify({
         devices: [
           {
+            physical: false,
             createdAt: 0,
             driverData: driverDevice.driverData,
             driverDeviceId: driverDevice.deviceId,
             mode: "slim",
             id: "dev_stale_2",
-            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+            spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
             state: "provisioning",
           },
         ],
@@ -534,7 +601,7 @@ describe("ManagedDeviceLifecycle", () => {
       new DeviceOperationClaims(),
       clock,
     );
-    const device = registry.snapshot.devices[0];
+    const device = registry.snapshot.virtualDevices[0];
     if (device === undefined) throw new Error("expected seeded device");
     expect(device.mode).toBe("slim");
 
@@ -545,6 +612,7 @@ describe("ManagedDeviceLifecycle", () => {
 
   describe("device mode on makeReady", () => {
     const slimSpec = {
+      physical: false,
       mode: "slim",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -595,7 +663,7 @@ describe("ManagedDeviceLifecycle", () => {
       provisioned.claim.release();
       const ready = provisioned.device;
       await harness.lifecycle.shutdown(ready, "test", "cleanup");
-      const shutdown = harness.registry.snapshot.devices[0];
+      const shutdown = harness.registry.snapshot.virtualDevices[0];
       if (shutdown === undefined) throw new Error("expected the device");
       const claim = harness.claims.tryClaim(shutdown.id, "boot");
       if (claim === undefined) throw new Error("expected boot claim");

@@ -85,6 +85,7 @@ export interface Filesystem {
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
   diskFree(path: string): Promise<number>;
+  diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
   /**
    * The bytes the files under a directory hold, its subdirectories included. Symlinks are not
    * followed, so nothing outside the directory is counted. Rejects when the directory, or
@@ -219,8 +220,15 @@ export class NodeFilesystem implements Filesystem {
   }
 
   async diskFree(path: string): Promise<number> {
+    return (await this.diskSpace(path)).freeBytes;
+  }
+
+  async diskSpace(path: string): Promise<{ freeBytes: number; totalBytes: number }> {
     const details = await statfs(path);
-    return details.bavail * details.bsize;
+    return {
+      freeBytes: details.bavail * details.bsize,
+      totalBytes: details.blocks * details.bsize,
+    };
   }
 
   async directorySize(path: string): Promise<number> {
@@ -298,6 +306,7 @@ export class MemoryFilesystem implements Filesystem {
     options?: WriteFileAtomicOptions,
   ): Promise<void> {
     this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
     this.#requireDirectory(parentPath(path));
     this.#entries.set(path, {
       ...this.#newEntry({ kind: "file", contents }),
@@ -307,6 +316,7 @@ export class MemoryFilesystem implements Filesystem {
 
   async writeFileExclusive(path: string, contents: string): Promise<void> {
     this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
 
     if (this.#entries.has(path)) {
       throw errnoError("EEXIST", `File already exists: ${path}`);
@@ -411,6 +421,7 @@ export class MemoryFilesystem implements Filesystem {
 
   async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {
     this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
 
     if (this.#entries.has(path)) {
       throw errnoError("EEXIST", `File already exists: ${path}`);
@@ -484,6 +495,12 @@ export class MemoryFilesystem implements Filesystem {
     return this.freeDiskBytes;
   }
 
+  async diskSpace(
+    _path: string,
+  ): Promise<{ readonly freeBytes: number; readonly totalBytes: number }> {
+    return { freeBytes: this.freeDiskBytes, totalBytes: this.freeDiskBytes };
+  }
+
   async directorySize(path: string): Promise<number> {
     let total = 0;
     for (const name of await this.readdir(path)) {
@@ -510,7 +527,6 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /** Test-only: rewrites an existing entry's ownership or permission bits. */
-  // fallow-ignore-next-line unused-class-member -- test-only state the port itself cannot create.
   defineAttributes(
     path: string,
     attributes: { readonly uid?: number; readonly mode?: number },
@@ -587,6 +603,13 @@ export class MemoryFilesystem implements Filesystem {
     const entry = this.#entries.get(resolved);
 
     return entry?.kind === "symlink" ? this.#resolveLinks(entry.target, hops + 1) : resolved;
+  }
+
+  #underResolvedParent(path: string): string {
+    return joinMemoryPath(
+      this.#resolveLinks(parentPath(path), 0),
+      path.slice(path.lastIndexOf("/") + 1),
+    );
   }
 
   #requireDirectory(path: string): void {

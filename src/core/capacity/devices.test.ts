@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeviceRecord, DeviceSpec } from "../domain.js";
+import type { VirtualDevice, VirtualSpec } from "../domain.js";
 import { capacityDevice, plannedCapacityDevice } from "./devices.js";
 
-const slimSpec: DeviceSpec = {
+const slimSpec: VirtualSpec = {
+  physical: false,
   mode: "slim",
   model: "iPhone 16",
   osVersion: "18.0",
   platform: "ios",
 };
-const fullSpec: DeviceSpec = { model: "iPhone 16", osVersion: "18.0", platform: "ios" };
+const fullSpec: VirtualSpec = {
+  physical: false,
+  model: "iPhone 16",
+  osVersion: "18.0",
+  platform: "ios",
+};
 
-function record(overrides: Partial<DeviceRecord>): DeviceRecord {
+function record(overrides: Partial<VirtualDevice>): VirtualDevice {
   return {
+    physical: false,
     createdAt: 0,
     driverData: {},
     driverDeviceId: "udid",

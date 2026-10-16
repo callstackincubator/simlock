@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONS, type OperationName } from "../src/contract/index.js";
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
-import { freeLoopbackPort, withDaemon } from "./helpers/index.js";
+import { withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
@@ -106,11 +106,10 @@ describe("contract surface", () => {
     // its input before deciding anything, so even the ones a gateway answers
     // `UNSUPPORTED_IN_GATEWAY_MODE` reject an unparseable payload with `BAD_REQUEST` first.
     // Anything that came back `UNKNOWN_REQUEST` here would be an operation a gateway forgot.
-    const port = await freeLoopbackPort();
-    const env = await withDaemon({
+    const { env } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     expect((await env.startDaemon()).code).toBe(0);
 
     expect(await sweep(env)).toEqual(

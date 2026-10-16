@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 /**
  * A worker answers the fleet operations as a fleet of one: `worker list` and `GET /v1/workers`
@@ -28,10 +28,9 @@ interface HttpHost {
 
 /** A single host with HTTP on, an operator token and an agent token, once it answers. */
 async function httpHost(): Promise<HttpHost> {
-  const port = await freeLoopbackPort();
-  const env = await withDaemon({
+  const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-  });
+  }));
   const baseUrl = `http://127.0.0.1:${port}`;
   const bearer = async (role: string) => {
     const minted = await env.cli(["token", "create", "--role", role]);
@@ -54,17 +53,26 @@ async function httpHost(): Promise<HttpHost> {
 }
 
 describe("a single host as a fleet of one", () => {
-  it("simlock worker list against a worker prints that worker", async () => {
+  it("simlock worker list against a worker waits for the reading, then sees the worker line and its Load line", async () => {
     const env = await withDaemon({ configOverrides: { gateway: { label: "mac-mini-1" } } });
     const id = await instanceId(env);
 
+    await waitFor(
+      async () => {
+        const read = await env.cli(["worker", "list", "--json"]);
+        const workers = (read.json as { workers?: { load?: unknown }[] }).workers;
+        return workers?.[0]?.load !== undefined;
+      },
+      { label: "the worker's first load reading" },
+    );
     const text = await env.cli(["worker", "list"]);
     const json = await env.cli(["worker", "list", "--json"]);
 
     expect(text.code).toBe(0);
     const lines = text.stdout.trim().split("\n");
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(new RegExp(`^${id} \\(mac-mini-1\\): connected -- `));
+    expect(lines[1]).toMatch(/^ {2}Load: .*memory .*read \d+s ago$/);
     expect(json.code).toBe(0);
     expect(json.json).toMatchObject({
       workers: [{ connection: "connected", drained: false, id, label: "mac-mini-1" }],

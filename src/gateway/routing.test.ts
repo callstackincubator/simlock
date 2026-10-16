@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
 
 import { createRoutingPolicy } from "./routing.js";
-import { catalogFixture, deviceFixture, statusFixture } from "./test-support.js";
+import * as routingModule from "./routing/index.js";
+import {
+  canServe,
+  freeCapacity,
+  freeSlot,
+  healthy,
+  idleQueue,
+  ramBudget,
+  takesRequests,
+  warmHit,
+} from "./routing/index.js";
+import {
+  catalogFixture,
+  deviceFixture,
+  physicalDeviceFixture,
+  statusFixture,
+} from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
 const REQUEST = {
+  physical: false,
   model: "iPhone 17",
   osVersion: "26.0",
   platform: "ios" as const,
@@ -51,6 +68,21 @@ describe("the registered warm-then-free policy", () => {
       stage: "free-capacity",
       workerId: "wrk_z_roomy",
     });
+  });
+
+  it("the gateway picks the same worker for a request whether or not the views carry load", () => {
+    const load = { cpu: { busyPercent: 100, cores: 2, limited: false }, readAt: 1 };
+    const quiet = view("wrk_a_quiet", { capacity: withIos({ maxRunning: 5 }) });
+    const busy = view("wrk_z_busy", { capacity: withIos({ maxRunning: 9 }) });
+
+    const without = policy.select(REQUEST, [quiet, busy]);
+    const withLoad = policy.select(REQUEST, [
+      { ...quiet, load: { readAt: 1 } },
+      { ...busy, load },
+    ]);
+
+    expect(without).toMatchObject({ workerId: "wrk_z_busy" });
+    expect(withLoad).toEqual(without);
   });
 
   it("picks a worker with a warm device over a cold one with more free running capacity", () => {
@@ -190,7 +222,7 @@ describe("the registered warm-then-free policy", () => {
     // planner evicts it, so the slot is free, on the platform and globally.
     const other = {
       ...deviceFixture("dev_1", "ready"),
-      spec: { model: "iPhone 17", osVersion: "25.0", platform: "ios" as const },
+      spec: { physical: false, model: "iPhone 17", osVersion: "25.0", platform: "ios" as const },
     };
     const capacity = statusFixture().capacity;
     const platformHeld = view("wrk_a", {
@@ -251,5 +283,159 @@ describe("the registered warm-then-free policy", () => {
     });
 
     expect(policy.select(REQUEST, [androidFull, view("wrk_b")])?.workerId).toBe("wrk_a");
+  });
+});
+
+describe("the warm-then-free policy for a physical request", () => {
+  const policy = createRoutingPolicy("warm-then-free");
+  const PHYSICAL = { model: "iPhone 17", physical: true as const, platform: "ios" as const };
+  const iphone = (id = "dev_p", state: "ready" | "leased" | "absent" = "ready") =>
+    physicalDeviceFixture(id, state, { model: "iPhone 17", osVersion: "26.0" });
+
+  function withIos(slots: { maxRunning: number; running?: number; atRamBudget?: boolean }) {
+    return {
+      ...statusFixture().capacity,
+      ios: { ...statusFixture().capacity.ios, ...slots },
+    };
+  }
+
+  it("picks the worker with a ready enrolled match over one with a warm simulator of the same model and more free capacity; reason and stage are warm-hit", () => {
+    const simulator = view("wrk_a_sim", {
+      capacity: withIos({ maxRunning: 5 }),
+      devices: [deviceFixture("dev_sim", "ready")],
+    });
+    const enrolled = view("wrk_z_phone", {
+      capacity: withIos({ maxRunning: 1 }),
+      devices: [iphone()],
+    });
+
+    expect(policy.select(PHYSICAL, [simulator, enrolled])).toEqual({
+      reason: "warm-hit",
+      stage: "warm-hit",
+      workerId: "wrk_z_phone",
+    });
+  });
+
+  it("gives no pick for a physical request when no taking worker has a ready enrolled match", () => {
+    const leased = view("wrk_a", { devices: [iphone("dev_p", "leased")] });
+    const absent = view("wrk_b", { devices: [iphone("dev_q", "absent")] });
+    const none = view("wrk_c", { devices: [deviceFixture("dev_sim", "ready")] });
+
+    expect(policy.select(PHYSICAL, [leased, absent, none])).toBeUndefined();
+  });
+
+  it.each(["locked", "untrusted", "not-present"] as const)(
+    "gives no pick for a physical request whose only ready enrolled match has presence not present (%s), and picks it when presence is present or absent",
+    (reason) => {
+      const read = (presence?: { present: true } | { present: false; reason: typeof reason }) =>
+        view("wrk_a", {
+          devices: [
+            physicalDeviceFixture("dev_p", "ready", {
+              model: "iPhone 17",
+              osVersion: "26.0",
+              ...(presence === undefined ? {} : { presence }),
+            }),
+          ],
+        });
+
+      expect(policy.select(PHYSICAL, [read({ present: false, reason })])).toBeUndefined();
+      expect(policy.select(PHYSICAL, [read({ present: true })])?.workerId).toBe("wrk_a");
+      expect(policy.select(PHYSICAL, [read()])?.workerId).toBe("wrk_a");
+    },
+  );
+
+  it("picks, for a physical request, a worker with no free running slot and at its RAM budget when it holds the only ready enrolled match", () => {
+    const full = view("wrk_a", {
+      capacity: withIos({ atRamBudget: true, maxRunning: 0 }),
+      devices: [iphone()],
+    });
+    const roomy = view("wrk_b", { capacity: withIos({ maxRunning: 5 }) });
+
+    expect(policy.select(PHYSICAL, [roomy, full])).toMatchObject({ workerId: "wrk_a" });
+  });
+
+  it("drops, for a physical request, a worker that is not running, as for a virtual one", () => {
+    const starting = view("wrk_a", { devices: [iphone()], health: "starting" });
+    const running = view("wrk_b", { devices: [iphone("dev_q")] });
+
+    expect(policy.select(PHYSICAL, [starting])).toBeUndefined();
+    expect(policy.select(PHYSICAL, [starting, running])?.workerId).toBe("wrk_b");
+  });
+
+  it("picks, for a physical request, a worker with a ready enrolled match whose queueDepth and physicalQueueDepth are both above zero; a virtual request still drops a worker whose queueDepth is above zero", () => {
+    const queued = view("wrk_a", {
+      devices: [iphone(), deviceFixture("dev_sim", "ready")],
+      physicalQueueDepth: 1,
+      queueDepth: 1,
+    } as Partial<WorkerView>);
+
+    expect(policy.select(PHYSICAL, [queued])).toMatchObject({
+      stage: "warm-hit",
+      workerId: "wrk_a",
+    });
+    expect(policy.select(REQUEST, [queued])).toBeUndefined();
+  });
+
+  it("picks, for a physical request, a worker that idle-queue and free-slot would drop and ram-budget would demote, by warm-hit; the four stages are the ones that skip a physical request", () => {
+    const blocked = view("wrk_a", {
+      capacity: withIos({ atRamBudget: true, maxRunning: 0 }),
+      devices: [iphone()],
+      queueDepth: 2,
+    });
+    const roomy = view("wrk_b", { capacity: withIos({ maxRunning: 5 }) });
+
+    expect(policy.select(PHYSICAL, [roomy, blocked])).toEqual({
+      reason: "warm-hit",
+      stage: "warm-hit",
+      workerId: "wrk_a",
+    });
+    expect(policy.select(REQUEST, [roomy, view("wrk_c", { ...blocked, queueDepth: 2 })])).toEqual({
+      reason: "free-capacity",
+      stage: "free-capacity",
+      workerId: "wrk_b",
+    });
+    const stages = {
+      canServe,
+      freeCapacity,
+      freeSlot,
+      healthy,
+      idleQueue,
+      ramBudget,
+      takesRequests,
+      warmHit,
+    };
+    const skipped = Object.entries(stages)
+      .filter(([, stage]) => (stage as { appliesToPhysical?: boolean }).appliesToPhysical === false)
+      .map(([name]) => name)
+      .sort();
+    expect(skipped).toEqual(["freeCapacity", "freeSlot", "idleQueue", "ramBudget"]);
+  });
+
+  it("lists no physical-interim stage in any policy", () => {
+    const sole = view("wrk_a", { devices: [iphone()] });
+
+    expect(Object.keys(routingModule)).not.toContain("physicalInterim");
+    expect(policy.select(PHYSICAL, [sole])?.stage).toBe("warm-hit");
+    expect(policy.select(PHYSICAL, [view("wrk_b")])?.stage).not.toBe("physical-interim");
+  });
+
+  it("gives a virtual request the same pick, reason and stage with and without a ready physical device of its model in the views", () => {
+    const sim = view("wrk_b", {
+      capacity: withIos({ maxRunning: 3 }),
+      devices: [deviceFixture("dev_sim", "ready")],
+    });
+    const cold = view("wrk_a", { capacity: withIos({ maxRunning: 5 }) });
+    const phoneOnA = view("wrk_a", { capacity: withIos({ maxRunning: 5 }), devices: [iphone()] });
+    const phoneOnC = view("wrk_c", {
+      capacity: withIos({ maxRunning: 9 }),
+      devices: [iphone("dev_q")],
+    });
+
+    const without = policy.select(REQUEST, [cold, sim]);
+    expect(without).toEqual({ reason: "warm-hit", stage: "warm-hit", workerId: "wrk_b" });
+    expect(policy.select(REQUEST, [phoneOnA, sim, phoneOnC])).toEqual(without);
+    expect(policy.select(REQUEST, [phoneOnA, phoneOnC])).toEqual(
+      policy.select(REQUEST, [cold, view("wrk_c", { capacity: withIos({ maxRunning: 9 }) })]),
+    );
   });
 });

@@ -35,49 +35,73 @@ type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[
 type WorkerView = z.infer<typeof workerViewSchema>;
 
 /** The answers a view is built from. `catalog` and `config` are optional because a gateway's
- * per-event refresh re-reads only status and devices; a field left out stays as it was. */
+ * per-event refresh re-reads only status and devices; a field left out stays as it was.
+ * `devices` is optional because a starting worker is not asked for them. */
 export interface WorkerReads {
   readonly status: Output<"status.get">;
-  readonly devices: Output<"list.get">;
+  readonly devices?: Output<"list.get">;
   readonly catalog?: Output<"catalog.get">;
   readonly config?: Output<"config.get">;
+  readonly receivedAt: number;
 }
 
-/** The view fields the reads fill. `catalog`, `downloads` and `lease` are present only when the
- * reads that carry them were made. */
-export type WorkerViewReport = Pick<
-  WorkerView,
-  "capacity" | "devices" | "health" | "host" | "installs" | "leases" | "queueDepth" | "waiting"
-> &
-  Partial<Pick<WorkerView, "catalog" | "downloads" | "lease">>;
+export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
+  Partial<
+    Pick<
+      WorkerView,
+      | "capabilities"
+      | "capacity"
+      | "catalog"
+      | "devices"
+      | "downloads"
+      | "installs"
+      | "lease"
+      | "leases"
+      | "load"
+      | "physicalQueueDepth"
+      | "queueDepth"
+      | "waiting"
+      | "warmPool"
+    >
+  >;
 
-/** The device shape a view carries. `list.get` answers an admin with full `DeviceRecord`s;
- * narrowing them here keeps `driverData` -- an opaque, driver-defined blob -- out of every
- * view, on a gateway and on a worker alike. */
+/** Narrowed so `driverData` -- an opaque, driver-defined blob -- stays out of every view. */
 const viewDevicesSchema = z.array(statusDeviceSchema);
 
 export function workerViewFields(reads: WorkerReads): WorkerViewReport {
-  const { catalog, config, status } = reads;
+  const { catalog, config, devices, receivedAt, status } = reads;
+  // why: a worker's ageMs is a claim; it is already capped at a day, and readAt never goes below 0.
+  const load =
+    status.load === undefined
+      ? {}
+      : (() => {
+          const { ageMs, ...parts } = status.load;
+          return { load: { readAt: Math.max(0, receivedAt - ageMs), ...parts } };
+        })();
+  // why: a starting worker has checked nothing: its view is its health, its host and its load, and every
+  // other field is absent -- never empty, which would read as "nothing is leased".
+  if (status.daemon.health === "starting")
+    return { health: "starting", host: status.host, ...load };
   return {
-    capacity: status.capacity,
     health: status.daemon.health,
     host: status.host,
-    // ADR 0010 §7: copied as the worker lists them, already bounded by the contract's parse
-    // (safety rule 10). A worker too old to list installs reports none.
+    ...load,
     installs: status.installs ?? [],
-    leases: status.leases,
-    queueDepth: status.queueDepth,
-    // Copied as `installs` is: the requests waiting in the worker's own queue. A worker too old
-    // to list them reports none.
     waiting: status.waiting ?? [],
-    devices: viewDevicesSchema.parse(reads.devices),
+    ...(status.capabilities === undefined ? {} : { capabilities: status.capabilities }),
+    ...(status.capacity === undefined ? {} : { capacity: status.capacity }),
+    ...(status.warmPool === undefined ? {} : { warmPool: status.warmPool }),
+    ...(status.leases === undefined ? {} : { leases: status.leases }),
+    ...(status.queueDepth === undefined ? {} : { queueDepth: status.queueDepth }),
+    ...(status.physicalQueueDepth === undefined
+      ? {}
+      : { physicalQueueDepth: status.physicalQueueDepth }),
+    ...(devices === undefined ? {} : { devices: viewDevicesSchema.parse(devices) }),
     ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
     ...(config === undefined
       ? {}
       : {
-          // ADR 0010 §7: the worker's own install budget, read with its policy.
           downloads: { policy: config.downloads.policy, timeoutMs: config.downloads.timeoutMs },
-          // ADR 0005 §15: a gateway compares this against its own `lease.maxTtlMs`.
           lease: { maxTtlMs: config.lease.maxTtlMs },
         }),
   };

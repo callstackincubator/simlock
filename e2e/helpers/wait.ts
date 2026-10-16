@@ -1,3 +1,8 @@
+// why: a released Android device boots again with a wiped disk, and several boot at once on a
+// loaded Mac, so it can take over four minutes; every slow test that waits for a real device to
+// turn ready shares this one limit.
+export const DEVICE_READY_MS = 330_000;
+
 /**
  * The only timing primitive in this suite: no test or helper may `sleep`/fixed-delay.
  * Everything that needs "wait until X" polls a predicate through this function.

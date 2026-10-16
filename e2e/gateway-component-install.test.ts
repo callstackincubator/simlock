@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 interface WorkerView {
   readonly id: string;
@@ -44,11 +44,10 @@ async function androidRuntimeWorkers(gateway: TestEnv, runtime: string): Promise
 
 describe("simlock component install through a gateway", () => {
   it("asks every worker, shows the install in worker list while it runs, reports each by id, refuses on the worker set to never, the gateway's catalog lists the component for the one that installed it, and an agent token gets 403 over HTTP", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     expect(minted.code, minted.stderr).toBe(0);
     const { secret } = minted.json as { secret: string };
@@ -150,11 +149,10 @@ describe("simlock component install through a gateway", () => {
   });
 
   it("refuses component install with no worker flag on a gateway with exit 2, telling the operator to name workers", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
 
     const result = await gateway.cli(["component", "install", "ios", "26.4"]);
 

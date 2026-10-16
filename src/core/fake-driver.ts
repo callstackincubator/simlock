@@ -1,5 +1,12 @@
 import type { Clock } from "../ports/index.js";
-import type { DeviceClass, DeviceMode, DeviceSpec, Platform } from "./domain.js";
+import type {
+  DeviceClass,
+  DeviceMode,
+  DeviceSpec,
+  PhysicalClass,
+  Platform,
+  VirtualSpec,
+} from "./domain.js";
 import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
@@ -13,16 +20,25 @@ import {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverRefusalReason,
   type InstalledComponent,
   type LegacyDevice,
   type ObservedRunState,
   type PassthroughCommand,
   PassthroughRefusedError,
   type PassthroughContext,
+  isPhysicalDriverDevice,
+  type PhysicalDriverDevice,
+  type VirtualDriverDevice,
+  type PhysicalInspection,
+  type PresentPhysical,
+  type ReclaimResult,
   removeListedComponent,
   RuntimeMissingError,
   UnknownModelError,
+  uninstallPlan,
 } from "./driver.js";
+import type { ScreenCapture } from "./screen.js";
 
 export type FakeDriverOperation =
   | "resolveSpec"
@@ -34,15 +50,25 @@ export type FakeDriverOperation =
   | "shutdown"
   | "destroy"
   | "listManaged"
+  | "inspectPhysical"
+  | "listPresentPhysical"
   | "listCatalog"
   | "listComponents"
   | "removeComponent"
-  /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
   | "revalidateRoot"
   | "findLegacy"
   | "destroyLegacy";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
+
+export interface FakePhysicalDevice {
+  readonly ids: readonly string[];
+  readonly model?: string;
+  readonly osVersion?: string;
+  readonly class?: PhysicalClass;
+  readonly apps?: readonly string[];
+  readonly refusal?: { readonly reason: DriverRefusalReason; readonly message: string };
+}
 
 export interface FakeDriverCall {
   readonly arguments: readonly unknown[];
@@ -52,17 +78,11 @@ export interface FakeDriverCall {
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   readonly clock: Clock;
-  /** What `componentFootprint` states. Defaults to nothing to reserve, at the device root. */
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
-  /** The percentages every `installComponent` reports through `onProgress`, in order. */
   readonly installProgress?: readonly number[];
-  /** What `listComponents` reports as each version's size; absent for a version left out. */
   readonly componentSizes?: Readonly<Record<string, number>>;
-  /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
   readonly foreignDevices?: Readonly<Record<string, number>>;
-  /** What every `removeComponent` reports as left on disk; nothing unless set. */
   readonly removalResidue?: string;
-  /** Stands in for a real driver's owned root; nothing here validates or creates it. */
   readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
   /**
@@ -105,17 +125,12 @@ export interface FakeDriverOptions {
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
-  /**
-   * The `simlock <tool>` name this fake claims, when a test needs one. Absent by default so
-   * two fakes in one catalog do not both answer to the same tool.
-   */
-  readonly passthroughTool?: string;
-  /**
-   * Builds the scoped command for that tool. Throw `PassthroughRefusedError` from here to
-   * model a driver's own refusal rules; omit it and every argument list is refused, which
-   * is what a driver claiming a tool it cannot build a command for would mean.
-   */
+  /** why: absent by default, so two fakes in one catalog do not both answer to the same tool. */
+  readonly passthroughTools?: readonly string[];
+  readonly screenCapture?: ScreenCapture;
   readonly passthrough?: (
+    tool: string,
+    device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
     args: readonly string[],
     context?: PassthroughContext,
   ) => PassthroughCommand;
@@ -128,6 +143,7 @@ export interface FakeDriverOptions {
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
+  readonly physicalDevices?: readonly FakePhysicalDevice[];
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -142,7 +158,6 @@ export class FakeDriver implements Driver {
   readonly #defaultModels: FakeDriverOptions["defaultModels"];
   readonly deviceRoot: string;
   readonly #availableOsVersions: Set<string>;
-  /** One receipt per installed version; an install replaces it with a new one. */
   readonly #receipts: Map<string, ComponentReceipt>;
   #installCount = 0;
   readonly #install: Pick<
@@ -174,10 +189,9 @@ export class FakeDriver implements Driver {
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
-  readonly passthroughTool: string | undefined;
-  readonly #passthrough:
-    | ((args: readonly string[], context?: PassthroughContext) => PassthroughCommand)
-    | undefined;
+  readonly passthroughTools: readonly string[] | undefined;
+  readonly screenCapture: ScreenCapture | undefined;
+  readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
   readonly #reclaimResult: "ready" | "shutdown";
@@ -187,6 +201,13 @@ export class FakeDriver implements Driver {
   /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
   readonly #bootCounts = new Map<string, number>();
   #managedReality: DriverReality | undefined;
+  #physicalDevices: readonly FakePhysicalDevice[] | undefined;
+  readonly #presentPhysical = new Set<string>();
+  readonly #absentReasons = new Map<string, "locked" | "untrusted" | "not-present">();
+  readonly #presentOsVersions = new Map<string, string>();
+  readonly #heldPresenceReads = new Set<string>();
+  readonly #pendingPresenceReads: (() => void)[] = [];
+  readonly #scriptedPhysicalDevices: FakeDriverOptions["physicalDevices"];
 
   constructor(options: FakeDriverOptions) {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
@@ -206,12 +227,14 @@ export class FakeDriver implements Driver {
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
-    this.passthroughTool = options.passthroughTool;
+    this.passthroughTools = options.passthroughTools;
+    this.screenCapture = options.screenCapture;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
+    this.#scriptedPhysicalDevices = options.physicalDevices;
     this.#install = options;
     this.#receipts = preinstalledReceipts(this.#availableOsVersions);
   }
@@ -248,7 +271,7 @@ export class FakeDriver implements Driver {
   }
 
   /** Never installs: a version that is not available throws, naming it as the component. */
-  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
+  async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
     await this.#beforeCall("resolveSpec", request);
     this.#assertMatchingPlatform(request.platform);
 
@@ -264,6 +287,7 @@ export class FakeDriver implements Driver {
     return {
       model: request.model,
       osVersion,
+      physical: false,
       platform: this.platform,
       ...(request.imageTag === undefined ? {} : { imageTag: request.imageTag }),
       ...(request.mode === "slim" && this.#slimmableOsVersions.has(osVersion)
@@ -419,7 +443,7 @@ export class FakeDriver implements Driver {
     });
   }
 
-  async provision(spec: DeviceSpec): Promise<DriverDevice> {
+  async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
 
@@ -471,20 +495,27 @@ export class FakeDriver implements Driver {
   async reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
-  ): Promise<{
-    readonly state: "ready" | "shutdown";
-    readonly strategy: "erase" | "snapshot" | "wipe";
-  }> {
+  ): Promise<ReclaimResult> {
     await this.#beforeCall("reclaim", device, options);
+    if (isPhysicalDriverDevice(device)) return this.#reclaimPhysical(device);
     this.#requireDevice(device);
     this.#devices.set(device.deviceId, this.#reclaimResult);
     return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
   }
 
-  reclaimStrategy(_options: {
-    readonly clean: "standard" | "full";
-  }): "erase" | "snapshot" | "wipe" {
-    return this.#reclaimStrategy;
+  #reclaimPhysical(device: PhysicalDriverDevice): ReclaimResult {
+    const scripted = (this.#physicalDevices ?? this.#scriptedPhysicalDevices ?? []).find(
+      (candidate) => candidate.ids.includes(device.deviceId),
+    );
+    const plan = uninstallPlan(scripted?.apps ?? [], device.enrolledApps);
+    return { missingApps: plan.missing, state: "ready", strategy: "uninstall" };
+  }
+
+  reclaimStrategy(
+    device: DriverDevice,
+    _options: { readonly clean: "standard" | "full" },
+  ): "erase" | "snapshot" | "wipe" | "uninstall" {
+    return isPhysicalDriverDevice(device) ? "uninstall" : this.#reclaimStrategy;
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -517,6 +548,68 @@ export class FakeDriver implements Driver {
     };
   }
 
+  setPhysicalDevices(devices: readonly FakePhysicalDevice[]): void {
+    this.#physicalDevices = devices;
+  }
+
+  async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
+    await this.#beforeCall("listPresentPhysical", enrolledIds);
+    if (enrolledIds.some((id) => this.#heldPresenceReads.has(id))) {
+      await new Promise<void>((resolve) => {
+        this.#pendingPresenceReads.push(resolve);
+      });
+    }
+    return enrolledIds.map((driverDeviceId) => {
+      if (this.#presentPhysical.has(driverDeviceId)) {
+        return {
+          driverDeviceId,
+          osVersion: this.#presentOsVersions.get(driverDeviceId) ?? "1.0",
+          present: true,
+        };
+      }
+      return {
+        driverDeviceId,
+        present: false,
+        reason: this.#absentReasons.get(driverDeviceId) ?? "not-present",
+      };
+    });
+  }
+
+  setPhysicalPresence(
+    driverDeviceId: string,
+    present: boolean,
+    detail: {
+      readonly reason?: "locked" | "untrusted" | "not-present";
+      readonly osVersion?: string;
+    } = {},
+  ): void {
+    if (present) this.#presentPhysical.add(driverDeviceId);
+    else this.#presentPhysical.delete(driverDeviceId);
+    this.#absentReasons.set(driverDeviceId, detail.reason ?? "not-present");
+    if (detail.osVersion === undefined) this.#presentOsVersions.delete(driverDeviceId);
+    else this.#presentOsVersions.set(driverDeviceId, detail.osVersion);
+  }
+
+  holdPresenceReads(...driverDeviceIds: readonly string[]): void {
+    for (const id of driverDeviceIds) this.#heldPresenceReads.add(id);
+  }
+
+  releasePresenceReads(): void {
+    this.#heldPresenceReads.clear();
+    for (const resolve of this.#pendingPresenceReads.splice(0)) resolve();
+  }
+
+  async inspectPhysical(id: string): Promise<PhysicalInspection> {
+    await this.#beforeCall("inspectPhysical", id);
+    const scripted = this.#physicalDevices ?? this.#scriptedPhysicalDevices ?? [];
+    const device = scripted.find((candidate) => candidate.ids.includes(id));
+    if (device === undefined) {
+      return { enrollable: false, message: `${id} is not connected`, reason: "not-connected" };
+    }
+    if (device.refusal !== undefined) return { enrollable: false, ...device.refusal };
+    return readPhysical(device, id);
+  }
+
   async listCatalog(): Promise<DriverCatalogEntry> {
     await this.#beforeCall("listCatalog");
     const runtimes = [...this.#availableOsVersions].sort(compareVersions);
@@ -535,25 +628,35 @@ export class FakeDriver implements Driver {
     };
   }
 
-  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
-    if (estimate.operation === "reclaim" && estimate.clean === "full") {
-      return this.#fullCleanReclaimEstimateMs ?? this.#estimateMs?.reclaim ?? 0;
-    }
-    return this.#estimateMs?.[estimate.operation] ?? 0;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+    if (estimate.operation !== "reclaim") return this.#estimateMs?.[estimate.operation] ?? 0;
+    return this.#reclaimEstimate(estimate.clean, spec);
   }
 
-  leaseEnvironment(): Readonly<Record<string, string>> {
+  #reclaimEstimate(clean: "standard" | "full", spec: DeviceSpec): number {
+    if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
+    if (clean === "full") return this.#fullCleanReclaimEstimateMs ?? this.#estimateMs?.reclaim ?? 0;
+    return this.#estimateMs?.reclaim ?? 0;
+  }
+
+  virtualLeaseEnvironment(): Readonly<Record<string, string>> {
     return this.#leaseEnvironment;
   }
 
-  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+  leaseEnvironment(_device: DriverDevice): Readonly<Record<string, string>> {
+    return this.#leaseEnvironment;
+  }
+
+  async passthrough(
+    tool: string,
+    device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
+    args: readonly string[],
+    context?: PassthroughContext,
+  ): Promise<PassthroughCommand> {
     if (this.#passthrough === undefined) {
-      throw new PassthroughRefusedError(
-        this.passthroughTool ?? "",
-        "Fake driver builds no passthrough command",
-      );
+      throw new PassthroughRefusedError(tool, "Fake driver builds no passthrough command");
     }
-    return this.#passthrough(args, context);
+    return await Promise.resolve(this.#passthrough(tool, device, args, context));
   }
 
   failOn(operation: FakeDriverOperation, callNumber: number, error: Error): void {
@@ -623,6 +726,9 @@ export class FakeDriver implements Driver {
     }
   }
 }
+
+/** One 30 s read limit plus one 60 s uninstall limit: what the real physical drivers will answer. */
+const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 
 function preinstalledReceipts(versions: ReadonlySet<string>): Map<string, ComponentReceipt> {
   return new Map([...versions].map((version) => [version, { preinstalled: version }]));
@@ -705,4 +811,15 @@ function compareVersions(left: string, right: string): number {
   }
 
   return left.localeCompare(right);
+}
+
+function readPhysical(device: FakePhysicalDevice, id: string): PhysicalInspection {
+  return {
+    apps: [...(device.apps ?? [])],
+    class: device.class ?? "phone",
+    driverDeviceId: device.ids[0] ?? id,
+    enrollable: true,
+    model: device.model ?? "Fake Phone",
+    osVersion: device.osVersion ?? "1.0",
+  };
 }

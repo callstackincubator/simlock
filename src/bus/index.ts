@@ -17,6 +17,9 @@ export interface EventMap {
     readonly requestSpec: unknown;
     readonly requester: string;
     readonly waitPolicy: string;
+    /** ADR 0021: the gateway's request id, on a worker's event for a gateway dispatch (a
+     * probe). Absent on a local request. */
+    readonly fleetRequestId?: string;
   };
   "lease.queued": { readonly requestId: string; readonly queuePosition: number };
   /** ADR 0004's Consequences: `mode` left this payload, a deliberate one-off exception to
@@ -31,21 +34,13 @@ export interface EventMap {
     /** How the device came to be ready: handed over `warm`, `booted` from shut down, or
      * `provisioned` for this request. */
     readonly source: "warm" | "booted" | "provisioned";
+    /** ADR 0021: the gateway's request id, when this grant served a gateway dispatch. */
+    readonly fleetRequestId?: string;
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
     readonly leaseId: string;
     readonly deviceId: string;
-    /**
-     * Who ended this lease, and whether its holder asked: `explicit` is a `lease.release` the
-     * holder itself sent (including the one a `simlock lease` sends on its way out), `killed`
-     * an operator taking it away (`release --all`, `nuke`), `device-lost` crash recovery
-     * giving up. Expiry is not in this union at all -- it has its own event.
-     *
-     * ADR 0004's Consequences: `closed` and `orphaned` are gone from it, the same deliberate
-     * 0.x exception to events rule 6. Closing a connection is not a release any more (§3), and
-     * there is no startup sweep left to orphan anything.
-     */
     readonly reason: "explicit" | "killed" | "device-lost";
     /** ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
      * live connection whose principal owns it -- the registry no longer has the lease to look
@@ -59,9 +54,10 @@ export interface EventMap {
     readonly ownerId: string;
   };
   "lease.rejected": {
-    /** The request's id. A request refused at admission (`killed`, `already-leased`) was never
+    /** The request's id. A request refused at admission (`killed`, `already-leased`, `lease-id-taken`) was never
      * stored and has no `lease.requested`, but it carries the id it would have been stored
-     * under. */
+     * under. A gateway's `lease-id-taken` can also follow a grant (a worker's lease whose ID the
+     * gateway already routes elsewhere): that request was stored and has its `lease.requested`. */
     readonly requestId: string;
     readonly requester: string;
     /** The request as it arrived, as on `lease.requested`: `class` when it named one, `model`
@@ -74,26 +70,48 @@ export interface EventMap {
       /** A gateway's request that no worker taking requests can serve (ADR 0009 §4). */
       | "no-worker"
       | "already-leased"
+      /** The request named a lease ID an active lease or a waiting request holds (ADR 0020). */
+      | "lease-id-taken"
       | "boot-timeout"
       | "killed"
       | "cancelled"
       /** A request still open when the daemon stopped, settled as failed at the next start. */
-      | "daemon-restarted";
+      | "daemon-restarted"
+      /** A gateway's request that failed on the worker it went to (ADR 0021 §4). */
+      | "worker-failed";
+    /** On `worker-failed`: the error code the caller got. */
+    readonly code?: string;
+    /** On `worker-failed`: the worker the request failed on. Named `worker`, never `workerId`,
+     * because `payload.workerId` marks a relayed event (ADR 0014 §6). */
+    readonly worker?: string;
   };
   /**
-   * A worker's capacity figures changed. Emitted after every registry commit and every
-   * reservation taken or released that changes them, and once at startup; never twice in a
-   * row with equal figures. `ramBudget` is there only under a strategy that keeps one.
+   * ADR 0021 §2: a worker refused or failed a gateway dispatch (a probe). The gateway owns that
+   * request's outcome, so the worker never rejects it. `reason` takes `lease.rejected`'s values.
    */
+  "lease.declined": {
+    readonly requestId: string;
+    readonly fleetRequestId: string;
+    readonly requester: string;
+    readonly requestSpec: unknown;
+    readonly reason: EventMap["lease.rejected"]["reason"];
+  };
+  "request.granted": {
+    readonly requestId: string;
+    readonly worker: string;
+    readonly leaseId: string;
+    readonly workerLeaseId: string;
+  };
   "capacity.changed": {
     readonly ios: CapacityFiguresPayload;
     readonly android: CapacityFiguresPayload;
     readonly global: CapacityFiguresPayload;
     readonly ramBudget?: { readonly usedBytes: number; readonly limitBytes: number };
   };
-  /** The depth of a wait queue changed (a worker's, or a gateway's fleet queue), and once at
-   * startup. */
-  "queue.changed": { readonly depth: number };
+  "queue.changed": {
+    readonly depth: number;
+    readonly physical?: true;
+  };
   "device.provisioned": {
     readonly deviceId: string;
     readonly spec: unknown;
@@ -103,7 +121,8 @@ export interface EventMap {
   "device.ready": { readonly deviceId: string; readonly bootDuration: number };
   "device.reclaimed": {
     readonly deviceId: string;
-    readonly strategy: "erase" | "snapshot" | "wipe";
+    readonly strategy: "erase" | "snapshot" | "wipe" | "uninstall";
+    readonly missingApps?: readonly string[];
     readonly duration: number;
   };
   "device.purge-failed": {
@@ -137,10 +156,17 @@ export interface EventMap {
     readonly maxRetries: number;
     readonly nextRetryAt: number;
   };
+  "device.absence-detected": {
+    readonly deviceId: string;
+    readonly previousState: "ready" | "leased" | "reclaiming";
+    readonly absentReason: "locked" | "untrusted" | "not-present";
+  };
+  "device.returned": { readonly deviceId: string; readonly osVersion: string };
   "device.quarantine-recovered": {
     readonly deviceId: string;
     readonly attempts: number;
-    readonly strategy: "erase" | "snapshot" | "wipe";
+    readonly strategy: "erase" | "snapshot" | "wipe" | "uninstall";
+    readonly missingApps?: readonly string[];
   };
   "device.quarantine-abandoned": { readonly deviceId: string; readonly attempts: number };
   "device.quarantine-stranded": {
@@ -154,7 +180,21 @@ export interface EventMap {
     readonly deviceRoot: string;
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
-  "device.deleted": { readonly deviceId: string; readonly initiator: string };
+  "device.deleted": {
+    readonly deviceId: string;
+    readonly initiator: string;
+    readonly physical: boolean;
+  };
+  "device.enrolled": {
+    readonly deviceId: string;
+    readonly platform: string;
+    readonly driverDeviceId: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly class: "phone" | "tablet";
+    readonly appCount: number;
+    readonly reenrolled: boolean;
+  };
   "device.slimmed": {
     readonly deviceId: string;
     readonly address: string;
@@ -167,9 +207,7 @@ export interface EventMap {
   };
   "component.install-started": {
     readonly platform: string;
-    /** The component string the install was asked for: a version, or a driver's word for newest. */
     readonly componentId: string;
-    /** The requester whose call started this install, when one is known. */
     readonly requesterId?: string;
   };
   "component.installed": {
@@ -230,6 +268,22 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
+  /**
+   * A warm pool target that was met, or not yet checked, ends a pass short for a reason: the pass
+   * could do nothing for it. Emitted once per kind of device on that edge (targets that resolve to one spec emit one event
+   * between them), not on each short pass after.
+   */
+  "warm-pool.target-missed": {
+    readonly platform: string;
+    readonly model: string;
+    /** Absent for a target that names none and did not resolve. */
+    readonly osVersion?: string;
+    readonly mode: "slim" | "full";
+    readonly count: number;
+    readonly ready: number;
+    /** Why it is short: the first of the reasons that apply (`docs/EVENTS.md`). */
+    readonly reason: string;
+  };
   // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------
   //
   // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own
@@ -320,6 +374,7 @@ export interface EventMap {
     readonly class?: string;
     /** The mode the request named (ADR 0009 §8); absent when it named none. */
     readonly mode?: "slim" | "full";
+    readonly physical?: true;
     readonly reason: "warm-hit" | "free-capacity";
     /** The routing stage that decided the pick (ADR 0009 §8). */
     readonly stage: string;

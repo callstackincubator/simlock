@@ -10,16 +10,17 @@ import {
   CleanupReaper,
   type Config,
   type DriverRejection,
+  type PassthroughCommand,
   PassthroughRefusedError,
   Registry,
   RuntimeMissingError,
 } from "../core/index.js";
 import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
 import {
-  createConnectionPair,
   CryptoTokenSecrets,
   FakeClock,
   FakeSystemStats,
+  IpcError,
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
@@ -40,7 +41,14 @@ import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
+import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
+import { linkPair } from "../link/testing.js";
+import { connectSimlockClient } from "../simlock-client/client.js";
+import { SimlockWire } from "../simlock-client/wire.js";
+import type { RelayTargets } from "./relay.js";
+import * as relaySupport from "./test-relay-support.js";
 import { AdminSecretManager } from "./admin-secret.js";
+import { type PhysicalDeviceWatcher } from "../leasing/index.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
@@ -179,12 +187,45 @@ describe("DaemonServer", () => {
     });
   });
 
-  // Every protocol bump so far shipped without a back-compat shim, so rejecting an older
-  // client outright is a deliberate product decision, not just arithmetic on the current
-  // constant. Protocol 3 (ADR 0003) turned the rejection into a range check; 4 (ADR 0004)
-  // removed `lease.heartbeat` and `mode` behind that same no-shim rule; 5 (ADR 0005) adds
-  // `device.exec` and a `mode` field on `status.get` the same way. A v1 client has no overlap
-  // with `PROTOCOL_VERSION_RANGE` and is still rejected outright.
+  it.each([
+    [17, "cannot parse a starting status.get answer"],
+    [18, "cannot parse config.get's warmPool.targets"],
+    [20, "cannot send lease.request's leaseId or read a lease's idChosenByRequester"],
+    [21, "cannot send lease.request's fleetRequestId"],
+    [24, "cannot send lease.request's physical or read physicalQueueDepth"],
+    [26, "cannot read a physical device's presence"],
+    [27, "cannot read config.get's lease.maxPerRequester"],
+    [28, "cannot read config.get's lease.endWaitMs"],
+    [29, "cannot read config.get's agentDevice"],
+    [30, "cannot read the agent-device-unavailable finding in doctor.run"],
+    [
+      32,
+      "cannot read status.get's capabilities, send lease.request's requires, or call relay.request",
+    ],
+    [33, "cannot send relay.request's channel, or read a relayed body from its byte channel"],
+    [34, "cannot read status.get's load block"],
+    [35, "cannot read a worker view's load"],
+    [36, "cannot read the module-unavailable finding in doctor.run"],
+    [37, "cannot read config.get's capabilities"],
+    [38, "cannot read agent-device's section under config.get's capabilities"],
+  ])(
+    "answers PROTOCOL_VERSION_UNSUPPORTED, naming protocol 39, to a client on protocol %i, which %s",
+    async (version) => {
+      const harness = await createHarness();
+      const previous = await createClient(harness.socketPath);
+
+      await expect(
+        previous.request("hello", { clientVersion: "test", protocolVersion: version }),
+      ).resolves.toMatchObject({
+        error: {
+          code: "PROTOCOL_VERSION_UNSUPPORTED",
+          details: { client: { min: version, max: version }, daemon: { min: 39, max: 39 } },
+        },
+        ok: false,
+      });
+    },
+  );
+
   it("rejects a protocol v1 client outright rather than serving it a wire it cannot speak", async () => {
     const harness = await createHarness();
     const legacy = await createClient(harness.socketPath);
@@ -442,7 +483,7 @@ describe("DaemonServer", () => {
 
   it("resolves a passthrough to its driver's command without running it here", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
+    const driver = passthroughFake({
       availableOsVersions: ["26.5"],
       clock,
       passthrough: (args) => ({
@@ -450,7 +491,7 @@ describe("DaemonServer", () => {
         command: "xcrun",
         env: {},
       }),
-      passthroughTool: "simctl",
+      passthroughTools: ["simctl"],
       platform: "ios",
     });
     const harness = await createHarness({ clock, driver });
@@ -467,13 +508,13 @@ describe("DaemonServer", () => {
 
   it("gives a refused verb its own code, so the CLI can render it as a usage error", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
+    const driver = passthroughFake({
       availableOsVersions: ["26.5"],
       clock,
       passthrough: () => {
         throw new PassthroughRefusedError("simctl", "Refusing it; use `simlock release` instead.");
       },
-      passthroughTool: "simctl",
+      passthroughTools: ["simctl"],
       platform: "ios",
     });
     const harness = await createHarness({ clock, driver });
@@ -525,7 +566,7 @@ describe("DaemonServer", () => {
    */
   it("pushes device.exec output frames keyed by the request id, then replies with the exit code", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
+    const driver = passthroughFake({
       availableOsVersions: ["26.5"],
       clock,
       passthrough: (args: readonly string[]) => ({
@@ -533,7 +574,7 @@ describe("DaemonServer", () => {
         command: "simctl",
         env: {},
       }),
-      passthroughTool: "simctl",
+      passthroughTools: ["simctl"],
       platform: "ios",
     });
     const harness = await createHarness({
@@ -615,7 +656,6 @@ describe("DaemonServer", () => {
       payload: { component: "27.0", outcome: "installed", platform: "ios", version: "27.0" },
     });
     expect(client.frames().filter((frame) => frame.push === "component-progress")).toEqual([
-      // The install's start, with no fraction: the schema accepts it as a push.
       {
         payload: { progress: { stage: "downloading" }, requestId: "install-frame" },
         push: "component-progress",
@@ -624,7 +664,6 @@ describe("DaemonServer", () => {
         payload: { progress: { fraction: 0.5, stage: "downloading" }, requestId: "install-frame" },
         push: "component-progress",
       },
-      // The install succeeded: its final report, before the reply.
       {
         payload: { progress: { fraction: 1, stage: "downloading" }, requestId: "install-frame" },
         push: "component-progress",
@@ -632,11 +671,33 @@ describe("DaemonServer", () => {
     ]);
   });
 
+  it("answers device.add and device.remove over the socket from the daemon's enrollment", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      clock,
+      physicalDevices: [
+        { apps: ["a"], ids: ["UDID-1"], model: "iPhone 15 Pro", osVersion: "18.4" },
+      ],
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver, includeEnrollment: true });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const added = await client.request("device.add", { id: "UDID-1", platform: "ios" }, "add-1");
+    const removed = await client.request("device.remove", { id: "UDID-1" }, "remove-1");
+
+    expect(added).toMatchObject({
+      ok: true,
+      payload: { appCount: 1, driverDeviceId: "UDID-1", platform: "ios", reenrolled: false },
+    });
+    expect(removed).toMatchObject({
+      ok: true,
+      payload: { driverDeviceId: "UDID-1", id: "dev_1" },
+    });
+  });
+
   it("routes two commands on one connection by frame id, and pushes to no other connection", async () => {
-    // ADR 0005 §19a keys `output` on the request's frame id for the same reason `progress` is
-    // keyed on it: one connection may have several calls in flight. And a push is a *reply* to
-    // one call, not a broadcast -- a second connection, even one owned by the same principal,
-    // has no business seeing another's command output.
     const clock = new FakeClock(1_000);
     const driver = passthroughDriver(clock);
     const harness = await createHarness({
@@ -879,6 +940,64 @@ describe("DaemonServer", () => {
     await client.close();
   });
 
+  it.each([false, true])(
+    "preserves the replacement daemon's admin credential and still releases the endpoint when it starts as the old endpoint is released (credential removal fails: %s)",
+    async (removalFails) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-admin-restart-"));
+      temporaryDirectories.push(directory);
+      const socketPath = join(directory, "daemon.sock");
+      const filesystem = new MemoryFilesystem();
+      const secrets = new CryptoTokenSecrets();
+      const oldSecret = new AdminSecretManager({ filesystem, path: "/admin.token", secrets });
+      const replacementSecret = new AdminSecretManager({
+        filesystem,
+        path: "/admin.token",
+        secrets,
+      });
+      const replacement = await createHarness({
+        adminSecret: replacementSecret,
+        socketPath,
+        start: false,
+      });
+      const host = new DaemonEndpointHost({
+        connector: new NodeIpcTransport(),
+        endpoint: socketPath,
+        filesystem: new NodeFilesystem(),
+        listenerFactory: new NodeIpcTransport(),
+      });
+      let replacementToken: string | undefined;
+      const old = await createHarness({
+        adminSecret: oldSecret,
+        host: {
+          endpoint: socketPath,
+          start: (accept) => host.start(accept),
+          async stop() {
+            await host.stop();
+            // why: endpoint release lets a new process start before the old stop resumes.
+            await replacement.daemon.start();
+            replacementToken = await filesystem.readFile("/admin.token");
+            expect(replacementSecret.verify(replacementToken.trim())).toBe(true);
+          },
+        },
+        socketPath,
+      });
+      expect(oldSecret.verify((await filesystem.readFile("/admin.token")).trim())).toBe(true);
+
+      if (removalFails) {
+        vi.spyOn(filesystem, "rm").mockRejectedValueOnce(new Error("EACCES"));
+        await expect(old.daemon.stop("restart")).rejects.toThrow("EACCES");
+        // why: the failed stop is settled; teardown must not stop it again.
+        runningDaemons.splice(runningDaemons.indexOf(old.daemon), 1);
+      } else {
+        await old.daemon.stop("restart");
+      }
+
+      // why: the replacement could only start because the old stop released the endpoint.
+      expect(replacementToken).toBeDefined();
+      await expect(filesystem.readFile("/admin.token")).resolves.toBe(replacementToken);
+    },
+  );
+
   it("gracefully stops without touching leases, persisting them with their deadlines", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
@@ -893,8 +1012,8 @@ describe("DaemonServer", () => {
 
     await expect(client.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
 
-    // ADR 0004 §3: a stop ends connections, not leases -- they persist and the next daemon
-    // restores each one's timer from its deadline.
+    // ADR 0004 §3: a stop ends connections, not leases -- they persist, and the next daemon
+    // judges each by its device (ADR 0019) and restores the timers of those it keeps.
     expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
     await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain(leaseId);
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
@@ -984,6 +1103,32 @@ describe("DaemonServer", () => {
     await expect(holder.request("status.get", {})).resolves.toMatchObject({ ok: true });
     expect(holder.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
     await holder.close();
+  });
+
+  it("drops a lease-lost push to a connection whose peer has hung up instead of leaving its failed write unhandled", async () => {
+    const connection = new BlockingConnection();
+    const harness = await createHarness({ host: new SingleConnectionHost(connection) });
+    await connection.request(
+      { clientVersion: "test", protocolVersion: DAEMON_PROTOCOL_VERSION },
+      "hello",
+    );
+    const grant = await connection.request(
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      "lease.request",
+    );
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", recordUnhandled);
+    try {
+      connection.hangUp();
+      await harness.engine.release(leaseIdOf(grant), "explicit");
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(connection.frames.filter((frame) => frame.push === "lease-lost")).toHaveLength(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", recordUnhandled);
+    }
   });
 
   it("ignores lease-lost facts for leases with no currently connected holder without breaking the daemon", async () => {
@@ -1145,10 +1290,12 @@ describe("DaemonServer startup readiness", () => {
 
     const client = await createClientRetrying(harness.socketPath);
     await hello(client);
-    await expect(client.request("status.get", {})).resolves.toMatchObject({
+    const during = await client.request("status.get", {});
+    expect(during).toMatchObject({
       ok: true,
       payload: { daemon: { health: "starting", mode: "worker" } },
     });
+    expect(Object.keys((during as { payload: object }).payload).sort()).toEqual(["daemon", "host"]);
 
     converge.resolve();
     await startPromise;
@@ -1276,7 +1423,11 @@ describe("DaemonServer startup readiness", () => {
  * held open must poll for the listener rather than assume it exists synchronously.
  */
 describe("DaemonServer stored lease requests", () => {
-  const iPhone = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+  const iPhone = {
+    model: "iPhone 16",
+    osVersion: "26.5",
+    platform: "ios",
+  } as const;
 
   /** `holder` takes the one device; `waiter` queues behind it under `key-1`. */
   async function queueBehindHolder(harness: Awaited<ReturnType<typeof createHarness>>) {
@@ -1386,6 +1537,160 @@ describe("DaemonServer stored lease requests", () => {
       ok: false,
     });
     expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+});
+
+describe("DaemonServer relays during startup", () => {
+  async function startParked(relayTargets: RelayTargets) {
+    const converge = deferred<void>();
+    const harness = await createHarness({
+      converge: () => converge.promise,
+      relayTargets,
+      start: false,
+    });
+    const startPromise = harness.daemon.start();
+    startPromise.catch(() => undefined);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    return { converge, harness, pair, startPromise };
+  }
+
+  async function wireOf(pair: ReturnType<typeof linkPair>) {
+    const wire = new SimlockWire(pair.gateway);
+    await wire.hello({ principal: "gw:test" });
+    await wire.call("status.get", {});
+    return { link: pair.gateway, wire };
+  }
+
+  async function gatewayRelayOf(pair: ReturnType<typeof linkPair>) {
+    const client = (await connectSimlockClient(
+      { connection: pair.gateway, principal: "gw:test" },
+      true,
+    )) as GatewayWorkerClient;
+    const directory: WorkerDirectory = {
+      target: (workerId) =>
+        workerId === "wrk_a"
+          ? { client: () => client, reachable: true, refresh: async () => undefined, workerId }
+          : undefined,
+    };
+    return new GatewayRelay({ directory });
+  }
+
+  it("a relay sent while the worker is still starting holds its channel, and its 8 MiB upload, twice the 4 MiB window, only finishes once startup converges and arrives in full", async () => {
+    let received = "";
+    let length = 0;
+    let calls = 0;
+    const { converge, pair, startPromise } = await startParked({
+      echo: async (request) => {
+        calls += 1;
+        const parts = await relaySupport.readParts(request.body);
+        received = relaySupport.digestOf(parts);
+        length = parts.reduce((total, part) => total + part.length, 0);
+        return new Response("ok");
+      },
+    });
+    const uplink = await wireOf(pair);
+
+    const relay = await relaySupport.openRelay(
+      uplink,
+      relaySupport.relayInput({ hasBody: true, method: "PUT" }),
+      { keepOpen: true },
+    );
+    // why: 8 MiB is twice the 4 MiB window, so a sender can only finish once the worker reads; a channel accepted but parked would let it write at most the window.
+    const upload = relaySupport.patternBytes(8 * relaySupport.MIB, 5);
+    const writer = relay.channel.writable.getWriter();
+    let written = 0;
+    const writing = (async () => {
+      for (let offset = 0; offset < upload.length; offset += relaySupport.MIB) {
+        await writer.write(upload.subarray(offset, offset + relaySupport.MIB));
+        written += relaySupport.MIB;
+      }
+      await writer.close();
+    })();
+    await relaySupport.sleep(200);
+    const callsWhileStarting = calls;
+    const writtenWhileStarting = written;
+    converge.resolve();
+    await startPromise;
+    const outcome = await relaySupport.settleWithin(relay.result);
+    await writing;
+
+    expect(callsWhileStarting).toBe(0);
+    // why: bytes written while startup is parked prove the channel was accepted; none written would also pass "< 8 MiB" if nothing were accepted.
+    expect(writtenWhileStarting).toBeGreaterThan(0);
+    expect(writtenWhileStarting).toBeLessThan(upload.length);
+    expect(outcome).toEqual({ state: "fulfilled", value: {} });
+    expect(length).toBe(upload.length);
+    expect(received).toBe(relaySupport.digestOf([upload]));
+  });
+
+  it("a relay whose 8 MiB upload stays parked by worker startup for 60 s fails INTERNAL on the gateway with the 60 s message", async () => {
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => Promise.resolve(new Response("ok")),
+    });
+    const relay = await gatewayRelayOf(pair);
+    const request = new Request("http://gateway.test:4321/agent-device/rpc", {
+      body: relaySupport.patternStream(8 * relaySupport.MIB, 2),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+
+    const pending = relaySupport.settleWithin(
+      relay.relay("wrk_a", { request, target: "echo", tenant: "gw.g1.alice" }),
+      10_000,
+    );
+    await relaySupport.sleep(300);
+    pair.clock.advance(60_000);
+    const outcome = await pending;
+    converge.resolve();
+    await startPromise;
+
+    expect(outcome).toEqual({
+      code: "INTERNAL",
+      message: "worker wrk_a did not read the relayed request body for 60 s",
+      state: "rejected",
+    });
+  });
+
+  it("a parked relay whose channel failed while it waited answers { cancelled: true } without running its target", async () => {
+    let calls = 0;
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => {
+        calls += 1;
+        return Promise.resolve(new Response("ok"));
+      },
+    });
+    const uplink = await wireOf(pair);
+    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput(), {
+      keepOpen: true,
+    });
+    await relaySupport.sleep(100);
+
+    relay.channel.abort("caller left while the worker started");
+    await relaySupport.sleep(100);
+    converge.resolve();
+    await startPromise;
+    const outcome = await relaySupport.settleWithin(relay.result);
+
+    expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
+    expect(calls).toBe(0);
+  });
+
+  it("a parked relay whose startup fails answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted", async () => {
+    const { converge, pair, startPromise } = await startParked({
+      echo: () => Promise.resolve(new Response("ok")),
+    });
+    const uplink = await wireOf(pair);
+    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
+    await relaySupport.sleep(100);
+
+    converge.reject(new Error("boom"));
+    await startPromise.catch(() => undefined);
+    const outcome = await relaySupport.settleWithin(relay.result);
+    const read = await relay.readError();
+
+    expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
+    expect(read).toEqual({ ended: false, reason: "aborted" });
   });
 });
 
@@ -1500,14 +1805,17 @@ describe("DaemonServer driver rejections", () => {
   it("names the refusal when a passthrough asks for the tool whose driver did not start", async () => {
     const harness = await createHarness({
       driverRejections: [
-        {
-          event: "driver.adb-server-rejected",
-          passthroughTool: "adb",
-          payload: { port: 5038, reason: "occupied" },
-          platform: "android",
-          reason: "occupied",
-          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
-        },
+        rejectionNaming(
+          {
+            event: "driver.adb-server-rejected",
+            payload: { port: 5038, reason: "occupied" },
+            platform: "android",
+            reason: "occupied",
+            summary:
+              "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+          },
+          ["adb"],
+        ),
       ],
     });
     const client = await createClient(harness.socketPath);
@@ -1525,17 +1833,48 @@ describe("DaemonServer driver rejections", () => {
     expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
   });
 
+  it("names the iOS refusal when a devicectl passthrough asks for the tool whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        rejectionNaming(
+          {
+            event: "driver.root-rejected",
+            payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+            platform: "ios",
+            reason: "symlink",
+            summary: "Refusing the ios device root /Devices: it is a symlink",
+          },
+          ["simctl", "devicectl"],
+        ),
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["list", "devices"],
+      tool: "devicectl",
+    });
+
+    expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
+    expect(response.error?.message).toContain(
+      "Refusing the ios device root /Devices: it is a symlink",
+    );
+  });
+
   it("leaves an unknown passthrough tool unexplained when no driver claimed it", async () => {
     const harness = await createHarness({
       driverRejections: [
-        {
-          event: "driver.root-rejected",
-          passthroughTool: "simctl",
-          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
-          platform: "ios",
-          reason: "symlink",
-          summary: "Refusing the ios device root /Devices: it is a symlink",
-        },
+        rejectionNaming(
+          {
+            event: "driver.root-rejected",
+            payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+            platform: "ios",
+            reason: "symlink",
+            summary: "Refusing the ios device root /Devices: it is a symlink",
+          },
+          ["simctl", "devicectl"],
+        ),
       ],
     });
     const client = await createClient(harness.socketPath);
@@ -1859,7 +2198,7 @@ describe("DaemonServer decorations", () => {
       driverData: {},
       driverDeviceId: "driver_provisioning",
       provisionDuration: 0,
-      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
     });
     harness.clock.advance(5_000);
 
@@ -1973,6 +2312,27 @@ describe("DaemonServer decorations", () => {
       expect(order).toEqual(["settle-start", "settle-end", "dispose"]);
     });
 
+    it("starts the physical-device watcher with the daemon and disposes it on stop before draining settle", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        physicalDeviceWatcher: {
+          dispose: () => {
+            order.push("watcher-dispose");
+          },
+          start: () => {
+            order.push("watcher-start");
+          },
+        },
+        settle: async () => {
+          order.push("settle");
+        },
+      });
+
+      await harness.daemon.stop("test-watcher");
+
+      expect(order).toEqual(["watcher-start", "watcher-dispose", "settle"]);
+    });
+
     it("waits for an asynchronous disposal before reporting the daemon stopped", async () => {
       let disposed = false;
       let finishDispose!: () => void;
@@ -2025,6 +2385,23 @@ describe("DaemonServer decorations", () => {
       // The lease is untouched: ADR 0004 §3 -- a stop tears down connections and timers,
       // and leaves every lease standing with its deadline for the next daemon.
       expect(harness.registry.snapshot.leases).toHaveLength(1);
+    });
+
+    it("calls beginStop once, before stopAuxiliary, when a stop is asked for", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        beginStop: () => {
+          order.push("beginStop");
+        },
+        stopAuxiliary: async () => {
+          order.push("stopAuxiliary");
+        },
+      });
+
+      await harness.daemon.stop("test-begin-stop");
+      await harness.daemon.stop("again");
+
+      expect(order).toEqual(["beginStop", "stopAuxiliary"]);
     });
 
     it("reports health via the public accessor across the startup/stop lifecycle", async () => {
@@ -2704,9 +3081,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
    */
   it("grants an accepted uplink the admin role without a credential (ADR 0005 §5)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
@@ -2734,9 +3111,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 
   it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
@@ -2758,9 +3135,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       protocolVersion: previous,
       resolveRole: { resolve: () => "admin" },
     });
-    const [workerEnd, gatewayEnd] = createConnectionPair();
-    harness.daemon.acceptUplink(workerEnd);
-    const gateway = driveConnection(gatewayEnd);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
 
     const reply = await gateway.request("hello", {
       clientVersion: "gateway",
@@ -2840,32 +3217,21 @@ async function createHarness(
     readonly driver?: FakeDriver;
     readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
-    /** Passed to the default `FakeDriver`: the OS versions it can slim. */
     readonly slimmableOsVersions?: readonly string[];
-    /** Overrides the default single-iOS-device capacity limit; a test that needs two
-     * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
     readonly iosMaxDevices?: number;
     readonly settle?: () => Promise<void>;
+    readonly physicalDeviceWatcher?: Pick<PhysicalDeviceWatcher, "dispose" | "start">;
+    readonly beginStop?: () => void;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
-    /** ADR 0003 §5's per-start admin secret (`AdminSecretManager`). Undefined by default, same
-     * as `DaemonServer`'s own default -- most of this suite doesn't exercise the credential
-     * handshake at all. A test that needs to observe `persist()`/`remove()` calls (or their
-     * absence -- see the "loses the start race" test) injects a spy here. */
     readonly adminSecret?: AdminSecretManager;
-    /** ADR 0003 §5's seam (see `session.ts`): defaults every session in this harness to
-     * "admin" -- this suite predates roles and exercises every operation freely, the same
-     * access a pre-ADR-0003 connection always had. Tests that specifically exercise role
-     * enforcement (ADR §3) override this to get an "agent" (or mixed) session instead. */
     readonly resolveRole?: SessionRoleResolver;
-    /** Overrides the `downloads` config block for tests that exercise the download policy. */
     readonly downloads?: Partial<Config["downloads"]>;
-    /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default like the option itself. */
     readonly processRunner?: ProcessRunner;
-    /** Replaces the real socket host, for a test that has to control a frame's write. */
     readonly host?: ConnectionHost;
-    /** Overrides the protocol range this daemon advertises, to stand in for an older worker. */
     readonly protocolVersion?: ProtocolRange;
+    readonly includeEnrollment?: boolean;
+    readonly relayTargets?: RelayTargets;
   } = {},
 ) {
   const directory =
@@ -2928,13 +3294,16 @@ async function createHarness(
   const daemon = new DaemonServer({
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
+    ...(options.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
+    ...(options.relayTargets === undefined ? {} : { relayTargets: options.relayTargets }),
     ...(options.driverRejections === undefined
       ? {}
       : { driverRejections: options.driverRejections }),
@@ -2961,11 +3330,15 @@ async function createHarness(
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     queue: engine,
+    ...(options.physicalDeviceWatcher === undefined
+      ? {}
+      : { physicalDeviceWatcher: options.physicalDeviceWatcher as PhysicalDeviceWatcher }),
     reaper,
     registry,
     resolveRole: options.resolveRole ?? { resolve: () => "admin" },
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
+    ...(options.beginStop === undefined ? {} : { beginStop: options.beginStop }),
     ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
     version: "test",
   });
@@ -2994,11 +3367,11 @@ class SingleConnectionHost implements ConnectionHost {
   async stop(): Promise<void> {}
 }
 
-/** One side of a connection whose writes complete only when this test says so. */
 class BlockingConnection implements IpcConnection {
   readonly closed = false;
   readonly frames: Record<string, unknown>[] = [];
   #blocked = false;
+  #hungUp = false;
   #pending: Array<() => void> = [];
   #dataListeners = new Set<(chunk: string) => void>();
 
@@ -3019,6 +3392,9 @@ class BlockingConnection implements IpcConnection {
     for (const line of contents.split("\n")) {
       if (line.trim() !== "") this.frames.push(JSON.parse(line) as Record<string, unknown>);
     }
+    if (this.#hungUp) {
+      throw new IpcError("unknown", "This socket has been ended by the other party", "EPIPE");
+    }
     if (!this.#blocked) return;
     await new Promise<void>((resolve) => this.#pending.push(resolve));
   }
@@ -3029,6 +3405,12 @@ class BlockingConnection implements IpcConnection {
     this.#blocked = true;
   }
 
+  /** From here on every write fails as a Node socket's does after its peer's FIN and before it is
+   * destroyed: `closed` is still false, and the write rejects with EPIPE. */
+  hangUp(): void {
+    this.#hungUp = true;
+  }
+
   releaseAll(): void {
     this.#blocked = false;
     const pending = this.#pending;
@@ -3036,7 +3418,6 @@ class BlockingConnection implements IpcConnection {
     for (const resolve of pending) resolve();
   }
 
-  /** Sends a request frame and waits for its reply, which arrives on `frames`. */
   async request(payload: unknown, type: string, id = type): Promise<ServerFrame> {
     for (const listener of this.#dataListeners) {
       listener(`${JSON.stringify({ id, payload, type })}\n`);
@@ -3046,9 +3427,8 @@ class BlockingConnection implements IpcConnection {
   }
 }
 
-/** A `FakeDriver` that claims the `simctl` wrapper, for the `device.exec` flows. */
 function passthroughDriver(clock: FakeClock): FakeDriver {
-  return new FakeDriver({
+  return passthroughFake({
     availableOsVersions: ["26.5"],
     clock,
     passthrough: (args: readonly string[]) => ({
@@ -3056,9 +3436,34 @@ function passthroughDriver(clock: FakeClock): FakeDriver {
       command: "simctl",
       env: {},
     }),
-    passthroughTool: "simctl",
+    passthroughTools: ["simctl"],
     platform: "ios",
   });
+}
+
+interface PassthroughFakeOptions {
+  readonly availableOsVersions: readonly string[];
+  readonly clock: FakeClock;
+  readonly passthrough: (args: readonly string[]) => PassthroughCommand;
+  readonly passthroughTools: readonly string[];
+  readonly platform: "android" | "ios";
+}
+
+/** why: the tests here build their command from the arguments alone, so this one place drops the tool and the device. */
+function passthroughFake(options: PassthroughFakeOptions): FakeDriver {
+  const { passthrough, ...rest } = options;
+  return new FakeDriver({
+    ...rest,
+    passthrough: (_tool, _device, args) => passthrough(args),
+  });
+}
+
+/** why: a rejection names every tool its driver would have answered to. */
+function rejectionNaming(
+  rejection: DriverRejection,
+  passthroughTools: readonly string[],
+): DriverRejection {
+  return { ...rejection, passthroughTools };
 }
 
 /**
@@ -3225,6 +3630,7 @@ function testConfig(
   iosMaxDevices = 1,
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -3264,6 +3670,8 @@ function testConfig(
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
       ...leaseOverrides,
     },
     capacity: {
@@ -3285,6 +3693,9 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

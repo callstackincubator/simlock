@@ -64,55 +64,43 @@ export class InMemoryLeaseRequestStore<Grant> implements LeaseRequestStore<Grant
   }
 }
 
-/**
- * A request still waiting for a device, as an operator sees it: who asked, for what, since when,
- * and where it stands. `queued` while it holds a place in the queue, `starting` while the daemon works
- * on it: placing it as it arrives, or finding, making, booting or downloading its device. Its idempotency key and owner are not here: they
- * are the requester's, not the operator's.
- */
 export interface WaitingRequest {
   readonly id: string;
   readonly requesterId: string;
-  /** The device as the request named it, with every field it left out left out. */
-  readonly spec: DeviceRequest;
+  readonly spec: Omit<DeviceRequest, "physical"> & { readonly physical?: true };
   readonly createdAt: number;
   readonly stage: "queued" | "starting";
   readonly queuePosition?: number;
 }
 
-/**
- * The one place a stored request and its place in a queue become a waiting entry. A daemon and a
- * gateway both list through it (`LeaseRequestBook#waiting`).
- */
 function waitingRequest(
   record: Pick<LeaseRequestRecord<unknown>, "createdAt" | "id" | "request" | "requesterId">,
   place: QueuePlace,
 ): WaitingRequest {
+  const { physical, ...named } = record.request;
   return {
     createdAt: record.createdAt,
     id: record.id,
     requesterId: record.requesterId,
-    spec: { ...record.request },
+    spec: { ...named, ...(physical === true ? { physical: true as const } : {}) },
     ...(place.queuePosition === undefined
       ? { stage: "starting" }
       : { queuePosition: place.queuePosition, stage: "queued" }),
   };
 }
 
-/** The same `(requesterId, idempotencyKey)` arrived again naming a different device. */
 export class IdempotencyConflictError extends Error {
   constructor(
     readonly requesterId: string,
     readonly idempotencyKey: string,
   ) {
     super(
-      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request`,
+      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request or lease ID`,
     );
     this.name = "IdempotencyConflictError";
   }
 }
 
-/** A replay of a request another principal sent. */
 export class LeaseRequestForbiddenError extends Error {
   constructor(readonly requestId: string) {
     super(`Lease request ${requestId} belongs to another principal`);
@@ -171,8 +159,9 @@ interface OpenRequest<Grant> {
  * - a request is stored before anything queues it (`admit`);
  * - a repeat under the same `(requesterId, idempotencyKey)` returns the stored result, or attaches
  *   to the wait that is still open, and never starts a second one (`replay`);
- * - the same key naming a different device is `IdempotencyConflictError`, and a repeat from
- *   another principal is `LeaseRequestForbiddenError`;
+ * - the same key naming a different device or a different `leaseId` (one side having none counts
+ *   as different) is `IdempotencyConflictError`, and a repeat from another principal is
+ *   `LeaseRequestForbiddenError`;
  * - a request's result is written once and never re-evaluated: when its own promise settles, or,
  *   for a daemon's grant, already in the commit that added the lease (`Registry.createLease`),
  *   in which case the settle that follows finds it granted and writes nothing.
@@ -224,7 +213,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       );
     if (record === undefined) return undefined;
     if (record.ownerId !== options.ownerId) throw new LeaseRequestForbiddenError(record.id);
-    if (!sameDeviceRequest(record.request, request)) {
+    if (!sameDeviceRequest(record.request, request) || record.leaseId !== options.leaseId) {
       throw new IdempotencyConflictError(options.requesterId, key);
     }
     return record;
@@ -247,6 +236,8 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     const record = await this.options.store.createLeaseRequest({
       id,
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+      ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
+      ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
       ownerId: options.ownerId,
       request,
       requesterId: options.requesterId,
@@ -318,6 +309,17 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       const place = byId.get(record.id);
       return place === undefined ? [] : [waitingRequest(record, place)];
     });
+  }
+
+  /**
+   * Whether a request still open holds `leaseId`: one that chose it and has no result yet (ADR
+   * 0020). Call it inside the owner's serialized admission section, beside the owner's check of
+   * its own leases: the two together are the one clash check.
+   */
+  holdsLeaseId(leaseId: string): boolean {
+    return this.options.store
+      .leaseRequests()
+      .some((record) => record.leaseId === leaseId && !isSettled(record));
   }
 
   /** The id of the stored request that was granted `leaseId`, while that record is retained. */
@@ -400,11 +402,7 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
   return Promise.reject(new ReplayedLeaseRequestError(failure.code, failure.message));
 }
 
-/**
- * Whether two requests name the same device: what an idempotency key promises not to change. An
- * omitted `model`, `class`, `osVersion`, `mode` or `imageTag` compares equal to itself only: a request that named
- * no mode is not the same request as one that named the worker's default.
- */
+/** An omitted field equals only an omitted one: a request naming no mode is not one naming the worker's default. */
 function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
   return (
     left.platform === right.platform &&
@@ -412,6 +410,7 @@ function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
     left.class === right.class &&
     left.osVersion === right.osVersion &&
     left.mode === right.mode &&
-    left.imageTag === right.imageTag
+    left.imageTag === right.imageTag &&
+    (left.physical === true) === (right.physical === true)
   );
 }

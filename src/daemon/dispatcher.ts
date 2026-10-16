@@ -10,22 +10,35 @@ import {
   type Config,
   type DeviceRecord,
   type DeviceRequest,
+  DeviceBusyError,
+  DeviceNotEnrollableError,
   type Doctor,
   type Driver,
   type HostFacts,
   isStalledTransition,
+  type LatestPresence,
   type Nuke,
+  type PhysicalClass,
+  type PhysicalEnrollment,
   type Registry,
   type StallInput,
+  UnknownEnrolledDeviceError,
   effectiveAllowDownload,
   RuntimeMissingError,
   transitionEnteredAt,
+  toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
 } from "../core/index.js";
-import { type DeviceModeReader, type LeaseCommands, type QueueControl } from "../leasing/index.js";
+import {
+  type DeviceModeReader,
+  LeaseIdTakenError,
+  type LeaseCommands,
+  type QueueControl,
+} from "../leasing/index.js";
 import type {
   Clock,
   Logger,
@@ -35,12 +48,15 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  capabilityReason,
+  type capabilitySchema,
   consoleUrlField,
   fitPlatformCatalog,
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
   type OperationName,
+  type StatusLoad,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
@@ -52,6 +68,7 @@ import {
   type DispatchSession,
   type ErasedHandler,
 } from "./dispatch.js";
+import type { RelayConnection } from "./relay.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
@@ -87,8 +104,20 @@ export class NukeUnavailableError extends Error {
   }
 }
 
+const CAPABILITY_READ_BUDGET_MS = 1_000;
+
+type CapabilityEntry = z.infer<typeof capabilitySchema>;
+
+export interface CapabilitySource {
+  readonly name: string;
+  readonly read: () => Promise<{ readonly state: string; readonly reason?: string }>;
+}
+
 export interface DispatcherOptions {
+  readonly capabilitySources?: readonly CapabilitySource[];
   readonly capacity: CapacityReader;
+  /** The warm pool as its last pass left it, for `status.get`. */
+  readonly warmPool: WarmPoolReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
   /**
@@ -99,9 +128,7 @@ export interface DispatcherOptions {
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
-  /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
-  /** Answers whether a device's pool is the one a request naming no mode draws from. */
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
@@ -109,11 +136,8 @@ export interface DispatcherOptions {
    * Injected because `error-code.ts` imports this module. Unset or `undefined`: `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly nuke?: Nuke;
-  /**
-   * Builds the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision 7).
-   * Optional for the same reason as `nuke`/`doctor`: the many tests that never issue a
-   * passthrough should not have to fabricate a resolver.
-   */
+  readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
+  /** Optional so the many tests that never issue a passthrough need not fabricate a resolver. */
   readonly passthrough?: PassthroughResolver;
   /**
    * Runs the command `device.exec` resolves (ADR 0005 §19a). Optional for the same reason as
@@ -130,6 +154,7 @@ export interface DispatcherOptions {
    */
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly queue: QueueControl;
+  readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
   /**
@@ -154,6 +179,7 @@ export interface DispatcherOptions {
   readonly health: () => "starting" | "running" | "failed";
   /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
   readonly hostFacts: () => HostFacts;
+  readonly load?: () => StatusLoad | undefined;
   /**
    * ADR §2 step 4: every operation but `status.get` parks here before its handler runs.
    * `hello` never reaches `dispatch()` at all -- it is answered before a `Session` exists,
@@ -252,6 +278,8 @@ export class Dispatcher {
       "lease.list": this.#leaseList,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
+      "relay.request": this.#relayRequest,
+      "relay.cancel": this.#relayCancel,
       "doctor.run": this.#doctorRun,
       "lease.release-all": this.#leaseReleaseAll,
       "list.get": this.#listGet,
@@ -267,6 +295,8 @@ export class Dispatcher {
       "component.install": this.#componentInstall,
       "component.list": this.#componentList,
       "component.remove": this.#componentRemove,
+      "device.add": this.#deviceAdd,
+      "device.remove": this.#deviceRemove,
       "worker.list": this.#workerList,
       "worker.drain": unsupportedOnWorker("worker.drain"),
       "worker.undrain": unsupportedOnWorker("worker.undrain"),
@@ -275,20 +305,14 @@ export class Dispatcher {
         "worker.install-component",
         "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
       ),
-      // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
-      // `dispatch()` for a frame type this map has no entry for.
     };
   }
 
-  /** Ends this dispatcher's bus subscriptions. `DaemonServer` calls it when the daemon stops. */
   dispose(): void {
     for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
     this.#viewCatalog = undefined;
   }
 
-  /** ADR 0003 §2's pipeline, run by the shared `runDispatch` (see `./dispatch.js`) over this
-   * dispatcher's own handlers, lease lookups, and startup gate. The ordering and the checks
-   * are the contract's; only the three inputs below are this implementation's. */
   dispatch<Op extends OperationName>(
     operation: Op,
     rawInput: unknown,
@@ -328,27 +352,90 @@ export class Dispatcher {
     platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
   });
 
-  #statusGet: Handler<"status.get"> = () => {
+  #statusGet: Handler<"status.get"> = async () => {
+    const daemon = {
+      health: this.options.health(),
+      mode: this.options.config.mode,
+      ...consoleUrlField(this.options.config.http),
+    };
+    const host = this.options.hostFacts();
+    const load = this.options.load?.();
+    const loadField = load === undefined ? {} : { load };
+    // why: while starting, the registry has not been checked against the machine, so what it holds
+    // is a claim nobody has looked at; the answer is the daemon, its host and the load reading.
+    if (daemon.health === "starting") return { daemon, host, ...loadField };
+    const capabilities = await this.#readCapabilities();
     const snapshot = this.options.registry.snapshot;
     return {
-      capacity: buildCapacityFigures(snapshot.devices, this.options.capacity),
+      ...(capabilities === undefined ? {} : { capabilities }),
+      capacity: buildCapacityFigures(snapshot.virtualDevices, this.options.capacity),
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
-      // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
-      // config rather than being assumed, because it is what tells a client whether the device
-      // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
-      // #117 is what makes `gateway` mean something beyond this field.
-      daemon: {
-        health: this.options.health(),
-        mode: this.options.config.mode,
-        ...consoleUrlField(this.options.config.http),
-      },
-      host: this.options.hostFacts(),
+      daemon,
+      host,
+      ...loadField,
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],
+      physicalQueueDepth: this.options.queue.physicalQueueDepth,
       queueDepth: this.options.queue.queueDepth,
       waiting: [...this.options.queue.waitingRequests()],
+      warmPool: this.options.warmPool.figures(),
     };
   };
+
+  // why: a module can never make status.get fail or hang, which would cut the worker off from its gateway.
+  async #readCapabilities(): Promise<CapabilityEntry[] | undefined> {
+    const sources = this.options.capabilitySources;
+    if (sources === undefined || sources.length === 0) return undefined;
+    return Promise.all(sources.map((source) => this.#readCapability(source)));
+  }
+
+  async #readCapability(source: CapabilitySource): Promise<CapabilityEntry> {
+    const unreadable: CapabilityEntry = {
+      name: source.name,
+      reason: capabilityReason(`could not read ${source.name}'s status`),
+      state: "unavailable",
+    };
+    let timer: TimerHandle | undefined;
+    const expired = new Promise<undefined>((resolve) => {
+      timer = this.options.clock.setTimer(CAPABILITY_READ_BUDGET_MS, () => resolve(undefined));
+    });
+    try {
+      const answer = await Promise.race([source.read().catch((): undefined => undefined), expired]);
+      if (answer === undefined) return unreadable;
+      if (answer.state === "available" || answer.state === "off") {
+        return { name: source.name, state: answer.state };
+      }
+      if (answer.state !== "unavailable") {
+        return { name: source.name, reason: "reported an invalid status", state: "unavailable" };
+      }
+      return {
+        name: source.name,
+        reason: capabilityReason(answer.reason ?? ""),
+        state: "unavailable",
+      };
+    } finally {
+      if (timer !== undefined) this.options.clock.cancel(timer);
+    }
+  }
+
+  // why: a request that waits in the worker's queue is not checked again; the check runs once, before leasing.
+  async #requireCapabilities(requires: readonly string[] | undefined): Promise<void> {
+    if (requires === undefined || requires.length === 0) return;
+    const sources = this.options.capabilitySources ?? [];
+    const states = await Promise.all(
+      requires.map(async (name) => {
+        const source = sources.find((candidate) => candidate.name === name);
+        return source === undefined ? undefined : this.#readCapability(source);
+      }),
+    );
+    const missing = requires.filter((_name, index) => states[index]?.state !== "available");
+    if (missing.length === 0) return;
+    throw new DispatchError(
+      "CAPABILITY_MISSING",
+      `This worker cannot serve ${missing.join(", ")}`,
+      { capabilities: missing },
+    );
+  }
 
   // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
@@ -357,27 +444,33 @@ export class Dispatcher {
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
-    // ADR 0005 §27a (narrowed, round 3 review, H3): `owner` is read only from the gateway's own
-    // uplink session -- forwarding the principal it authorized the request against on its own
-    // side -- never merely from `role === "admin"`. HTTP's `operator` token maps onto that same
-    // role (`dispatcher-session.ts`), so gating on role alone let *any* operator bearer
-    // credential set someone else's owner on a plain worker with no gateway anywhere; the field
-    // exists for one caller (the gateway's uplink, forced to `admin` by `acceptUplink`
-    // regardless of credential -- see `session.isGatewayUplink`'s own doc), not for every
-    // session that happens to carry that role. Any session that is not the uplink naming one is
-    // rejected outright rather than silently ignored: a caller free to name someone else as
-    // owner would be naming its way into their lease, and "ignore the field" would hide that a
-    // non-uplink caller tried. Omitting it keeps today's behaviour -- the owner is always the
-    // calling connection.
+    // `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
+    // maps to `admin`, so a role check would let any operator name someone else's owner. Refused, not ignored.
     if (input.owner !== undefined && session.isGatewayUplink !== true) {
       throw new DispatchError(
         "FORBIDDEN",
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
+    // Uplink only, refused before anything is stored: a probe is never queued on a worker, so it must say `noWait`.
+    if (input.fleetRequestId !== undefined) {
+      if (session.isGatewayUplink !== true) {
+        throw new DispatchError(
+          "FORBIDDEN",
+          "Only the gateway's own uplink session may set lease.request's `fleetRequestId` field",
+        );
+      }
+      if (input.noWait !== true) {
+        throw new DispatchError(
+          "BAD_REQUEST",
+          "lease.request's `fleetRequestId` is sent only with `noWait: true`",
+        );
+      }
+    }
+    await this.#requireCapabilities(input.requires);
     const ownerId = input.owner ?? session.principal;
     try {
-      return await this.options.leases.request(request, {
+      const grant = await this.options.leases.request(request, {
         allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
         noWait: input.noWait ?? false,
         ownerId,
@@ -387,14 +480,22 @@ export class Dispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });
+      const { device } = grant;
+      return {
+        ...grant,
+        device: device.physical ? { ...device, class: device.spec.class } : device,
+      };
     } catch (error: unknown) {
-      // The lease path only ever sees the clamped-to-false permission, so it cannot itself
-      // tell the caller that config, not missing consent, is what stood between this request
-      // and success. Recover that distinction here, the one place that saw both sides. Moved
-      // verbatim from `DaemonServer`'s former `#requestLease`.
+      if (error instanceof LeaseIdTakenError) {
+        throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
+      // The lease path sees only the clamped-to-false permission, so this is the one place that can
+      // tell the caller that config, not missing consent, blocked the download.
       if (
         downloadsPolicy === "never" &&
         error instanceof RuntimeMissingError &&
@@ -478,22 +579,53 @@ export class Dispatcher {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
     }
-    return this.options.passthrough.passthrough(input.tool, input.args);
+    return this.options.passthrough.passthrough(input.tool, undefined, input.args);
+  };
+
+  #relays(session: DispatchSession): RelayConnection {
+    if (session.isGatewayUplink !== true) {
+      throw new DispatchError("FORBIDDEN", "Only the gateway's own uplink session may relay");
+    }
+    if (session.relays === undefined) {
+      throw new DispatchError("INTERNAL", "The uplink session carries no relays");
+    }
+    return session.relays;
+  }
+
+  #relayRequest: Handler<"relay.request"> = (input, session) => {
+    const relays = this.#relays(session);
+    if (session.relayChannel === undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `The relay's channel ${input.channel} was not accepted`,
+      );
+    }
+    return relays.request(
+      input,
+      { head: (status, headers) => session.onRelayHead?.(status, headers) ?? Promise.resolve() },
+      session.relayChannel,
+    );
+  };
+
+  #relayCancel: Handler<"relay.cancel"> = (input, session) => {
+    this.#relays(session).cancel(input.relayId);
+    return {};
   };
 
   /**
-   * ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
+   * why: ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
    * instead of there. Everything a passthrough already decides is reused verbatim -- which
    * flag scopes the tool to this daemon's root, which verbs the driver refuses -- because it
-   * is the same call: `#driverPassthrough` above and this handler differ only in who spawns
-   * the result.
+   * is the same driver call: `#driverPassthrough` above passes no device, this handler passes
+   * the lease's device and the lease's platform, and it also spawns the result.
    *
-   * `leaseId` is proof of ownership and nothing else. It is checked against the registry here
-   * so an id that names no lease answers `UNKNOWN_LEASE` rather than running a command
-   * (`authorize`'s `ownsLease` deliberately lets an unknown id through so this handler can say
-   * that -- see `roles.ts`); the *device* the command touches is named by the command's own
-   * arguments, which this daemon does not parse. That is the same accident boundary ADR 0001
-   * draws for the local wrappers, reached over the wire.
+   * `leaseId` is checked against the registry here so an id that names no lease answers
+   * `UNKNOWN_LEASE` rather than running a command (`authorize`'s `ownsLease` deliberately lets
+   * an unknown id through so this handler can say that -- see `roles.ts`). Which device the
+   * command touches is the driver's answer: `simctl` and `adb` take it from the command's own
+   * arguments, which this daemon does not parse, and `devicectl` gets the lease's `--device`
+   * added when the arguments name none (`devicectl-exec.ts`). That is the same accident
+   * boundary ADR 0001 draws for the local wrappers, reached over the wire.
    *
    * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
    * so a command that writes a gigabyte costs this process nothing, and a client sees the
@@ -510,16 +642,28 @@ export class Dispatcher {
       (candidate) => candidate.id === input.leaseId,
     );
     if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const record = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
 
-    // `hasTerminal: false` is the one thing this path tells the driver about its caller: the
-    // command runs here, with pipes and no pty (ADR 0005 §19c), so a driver may refuse
-    // something it allows a local `simlock <tool>` invocation -- a bare `adb shell` would
-    // otherwise sit on those pipes until `exec.timeoutMs` killed it.
-    const command = this.options.passthrough.passthrough(input.tool, input.args, {
-      hasTerminal: false,
-    });
+    // why: `hasTerminal: false` tells the driver its caller has no terminal: the command runs
+    // here, with pipes and no pty (ADR 0005 §19c), so a driver may refuse something it allows
+    // a local `simlock <tool>` invocation -- a bare `adb shell` would otherwise sit on those
+    // pipes until `exec.timeoutMs` killed it. `platform` is the leased device's own.
+    const command = await this.options.passthrough.passthrough(
+      input.tool,
+      toDriverDevice(record),
+      input.args,
+      { hasTerminal: false, platform: record.spec.platform },
+    );
+    const execEnv: NodeJS.ProcessEnv = { ...this.options.execEnv, ...command.env };
+    for (const key of command.unsetEnv ?? []) {
+      // why: the daemon's own environment is the base, so a key it inherited could re-aim the command.
+      delete execEnv[key];
+    }
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
-      env: { ...this.options.execEnv, ...command.env },
+      env: execEnv,
       // Returned, not fired and forgotten: whatever the transport hands back is what pauses
       // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
       onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
@@ -654,8 +798,13 @@ export class Dispatcher {
    * holds that flag, not this host.
    */
   #workerList: Handler<"worker.list"> = async (_input, session) => {
+    // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
+    let receivedAt = this.options.clock.now();
     const [status, devices, catalog] = await Promise.all([
-      this.#statusGet({}, session),
+      Promise.resolve(this.#statusGet({}, session)).then((answer) => {
+        receivedAt = this.options.clock.now();
+        return answer;
+      }),
       this.#listGet({ kind: "devices" }, session),
       this.#keptViewCatalog(session),
     ]);
@@ -667,6 +816,7 @@ export class Dispatcher {
             catalog: OPERATIONS["catalog.get"].output.parse(catalog),
             config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
             devices: OPERATIONS["list.get"].output.parse(devices),
+            receivedAt,
             status: OPERATIONS["status.get"].output.parse(status),
           }),
           connection: "connected",
@@ -775,11 +925,40 @@ export class Dispatcher {
     }
   };
 
-  /**
-   * ADR §11: the daemon is the only owner of `tokens.json` -- `TokenStore.create` never
-   * persists the plaintext `secret`, only its hash, exactly as it did when the CLI called it
-   * directly.
-   */
+  #deviceAdd: Handler<"device.add"> = async (input) => {
+    try {
+      const { device, reenrolled } = await this.#requireEnrollment().add(input.platform, input.id);
+      return {
+        appCount: device.enrolledApps.length,
+        class: device.spec.class,
+        driverDeviceId: device.driverDeviceId,
+        id: device.id,
+        model: device.spec.model,
+        osVersion: device.spec.osVersion,
+        platform: device.spec.platform,
+        reenrolled,
+      };
+    } catch (error: unknown) {
+      throw describeEnrollmentError(error);
+    }
+  };
+
+  #deviceRemove: Handler<"device.remove"> = async (input) => {
+    try {
+      const device = await this.#requireEnrollment().remove(input.id);
+      return { driverDeviceId: device.driverDeviceId, id: device.id };
+    } catch (error: unknown) {
+      throw describeEnrollmentError(error);
+    }
+  };
+
+  #requireEnrollment(): Pick<PhysicalEnrollment, "add" | "remove"> {
+    if (this.options.enrollment === undefined) {
+      throw new DispatchError("INTERNAL", "Device enrollment is unavailable");
+    }
+    return this.options.enrollment;
+  }
+
   #tokenCreate: Handler<"token.create"> = async (input) => {
     const { record, secret } = await this.#requireTokens().create(input.role, input.label);
     return { secret, token: record };
@@ -798,23 +977,29 @@ export class Dispatcher {
     return this.options.tokens;
   }
 
-  /**
-   * A device as `status.get` and `list.get` report it: with `transitionAgeMs` while it is
-   * mid-transition, `servesDefaultMode` always (ADR 0009 §6), and `stalled: true` once that transition is a stall by the rule `doctor`
-   * reports (`isStalledTransition`). A device that is not stalled carries no `stalled` at all.
-   */
   #decorateDevice(device: DeviceRecord): DeviceRecord & {
+    readonly class?: PhysicalClass;
     readonly servesDefaultMode: boolean;
+    readonly presence?: LatestPresence;
     readonly transitionAgeMs?: number;
     readonly stalled?: true;
   } {
-    const servesDefaultMode = this.options.deviceModes.servesDefaultMode(device.spec);
+    // why: `reclaimingSince` only ages a transition: it stays off the wire (`transitionAgeMs` carries it).
+    const { reclaimingSince: _internal, ...onTheWire } = device as DeviceRecord & {
+      readonly reclaimingSince?: number;
+    };
+    const presence = device.physical ? this.options.presence?.(device.driverDeviceId) : undefined;
+    const decorated = {
+      ...onTheWire,
+      ...(device.physical ? { class: device.spec.class } : {}),
+      ...(presence === undefined ? {} : { presence }),
+      servesDefaultMode: this.options.deviceModes.servesDefaultMode(device.spec),
+    };
     const enteredAt = transitionEnteredAt(device);
-    if (enteredAt === undefined) return { ...device, servesDefaultMode };
+    if (enteredAt === undefined) return decorated;
     const now = this.options.clock.now();
     return {
-      ...device,
-      servesDefaultMode,
+      ...decorated,
       transitionAgeMs: now - enteredAt,
       ...(this.#isStalled(device, now) ? { stalled: true as const } : {}),
     };
@@ -857,7 +1042,27 @@ function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): vo
   }
 }
 
-/** ADR 0012 §2: an operation that acts on a gateway's workers, asked of a worker. */
+function describeEnrollmentError(error: unknown): unknown {
+  if (error instanceof DeviceNotEnrollableError) {
+    return new DispatchError("DEVICE_NOT_ENROLLABLE", error.message, {
+      id: error.id,
+      platform: error.platform,
+      reason: error.reason,
+      ...(error.canonicalId === undefined ? {} : { canonicalId: error.canonicalId }),
+    });
+  }
+  if (error instanceof DeviceBusyError) {
+    return new DispatchError("DEVICE_BUSY", error.message, {
+      id: error.id,
+      reason: error.reason,
+    });
+  }
+  if (error instanceof UnknownEnrolledDeviceError) {
+    return new DispatchError("UNKNOWN_DEVICE", error.message, { id: error.id });
+  }
+  return error;
+}
+
 function unsupportedOnWorker(
   operation: OperationName,
   message = `${operation} acts on a gateway's workers, and this daemon is not a gateway`,

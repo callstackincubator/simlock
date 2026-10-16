@@ -327,6 +327,80 @@ describe("GET /v1/components", () => {
   });
 });
 
+describe("POST /v1/devices and DELETE /v1/devices/{id}", () => {
+  const enrolled = {
+    appCount: 2,
+    class: "phone",
+    driverDeviceId: "00008110-001A2B3C4D5E",
+    id: "dev_1",
+    model: "iPhone 15 Pro",
+    osVersion: "18.4",
+    platform: "ios",
+    reenrolled: false,
+  };
+
+  it("dispatches device.add with the body's platform and id, and answers its result as JSON", async () => {
+    const { app, dispatcher } = buildHarness();
+    const seen: unknown[] = [];
+    dispatcher.handlers["device.add"] = (input) => {
+      seen.push(input);
+      return enrolled;
+    };
+
+    const response = await app.request("/v1/devices", {
+      body: JSON.stringify({ id: "00008110-001A2B3C4D5E", platform: "ios" }),
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/application\/json/);
+    expect(await response.json()).toEqual(enrolled);
+    expect(seen).toEqual([{ id: "00008110-001A2B3C4D5E", platform: "ios" }]);
+  });
+
+  it.each([
+    ["a field it does not declare", { id: "A", platform: "ios", worker: "w1" }],
+    ["no platform", { id: "A" }],
+    ["an id that is not a string", { id: 7, platform: "ios" }],
+  ])("400s a body with %s, before the device is read", async (_case, body) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["device.add"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request("/v1/devices", {
+      body: JSON.stringify(body),
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("dispatches device.remove with the path's id, and answers its result as JSON", async () => {
+    const { app, dispatcher } = buildHarness();
+    const seen: unknown[] = [];
+    dispatcher.handlers["device.remove"] = (input) => {
+      seen.push(input);
+      return { driverDeviceId: "00008110-001A2B3C4D5E", id: "00008110-001A2B3C4D5E" };
+    };
+
+    const response = await app.request("/v1/devices/00008110-001A2B3C4D5E", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      driverDeviceId: "00008110-001A2B3C4D5E",
+      id: "00008110-001A2B3C4D5E",
+    });
+    expect(seen).toEqual([{ id: "00008110-001A2B3C4D5E" }]);
+  });
+});
+
 describe("DELETE /v1/components/{platform}/{version}", () => {
   it("dispatches component.remove with the path's platform and version, and answers its result as JSON", async () => {
     const { app, dispatcher } = buildHarness();
@@ -494,6 +568,36 @@ describe("POST /v1/lease-requests", () => {
     expect(call.input).toMatchObject({ imageTag: "google_apis_playstore" });
   });
 
+  it("forwards a body's physical true to the dispatched lease.request", async () => {
+    const { app, dispatcher } = buildHarness();
+    const first = await Promise.race([
+      postLeaseRequest(app, { ...defaultBody, physical: true }),
+      waitForDispatch(dispatcher, "lease.request").then((call) => call),
+    ]);
+    if (first instanceof Response) throw new Error(`the body was refused with ${first.status}`);
+    expect(first.input).toMatchObject({ physical: true });
+  });
+
+  it("answers 400 BAD_REQUEST naming allowDownload for a body with physical true and allowDownload true", async () => {
+    const { app, dispatcher } = buildHarness();
+    const accepted = await Promise.race([
+      postLeaseRequest(app, { ...defaultBody, physical: true }),
+      waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
+    ]);
+    expect(accepted).toBe("dispatched");
+
+    const response = await Promise.race([
+      postLeaseRequest(app, { ...defaultBody, allowDownload: true, physical: true }),
+      waitForDispatch(dispatcher, "lease.request", 1).then(() => "dispatched" as const),
+    ]);
+    if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toContain("allowDownload");
+  });
+
   it("forwards a body's mode to the dispatched lease.request", async () => {
     const { app, dispatcher } = buildHarness();
     void postLeaseRequest(app, { ...defaultBody, mode: "slim" });
@@ -502,13 +606,6 @@ describe("POST /v1/lease-requests", () => {
   });
 
   it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
-    // Before this, `leaseRequestBodySchema` had no `owner` field at all, so a caller naming one
-    // was answered as though it had named none -- the same anti-pattern this codebase's own
-    // `device.exec`'s `requesterId` precedent already rejected: an identity named and answered
-    // as if it had not is the kind of silence that reads like authorization. The gate itself
-    // (FORBIDDEN for a non-admin token) lives in the shared dispatcher, exercised once for every
-    // transport in `daemon/dispatcher.test.ts`/`gateway/dispatcher.test.ts` -- this only proves
-    // the field actually reaches that dispatcher from HTTP instead of being dropped in transit.
     const { app, dispatcher } = buildHarness();
     void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" });
     const call = await waitForDispatch(dispatcher, "lease.request");
@@ -517,16 +614,6 @@ describe("POST /v1/lease-requests", () => {
   });
 
   it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
-    // §27a's `owner` field is narrowed to `session.isGatewayUplink` (round 3 review, H3): an
-    // HTTP `operator` bearer token maps onto `role: "admin"` (`dispatcher-session.ts`'s
-    // `toRole`), same as before, but `buildHttpSession` never sets `isGatewayUplink` -- no HTTP
-    // request is ever the worker's own uplink connection to its configured gateway, which is the
-    // only session that connection-acceptance signal is stamped on (`DaemonServer#acceptUplink`,
-    // via `connection.forcedRole`). This is what makes the real gate in
-    // `daemon/dispatcher.test.ts`/`gateway/dispatcher.test.ts` (FORBIDDEN for `isGatewayUplink !==
-    // true`, exercised there against the real dispatcher) actually bite an operator token too,
-    // not just an agent one -- this test only proves the session HTTP hands that dispatcher never
-    // carries the one flag that would let it through.
     const { app, dispatcher } = buildHarness();
     void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" }, operatorAuth);
     const call = await waitForDispatch(dispatcher, "lease.request");
@@ -640,6 +727,71 @@ describe("POST /v1/lease-requests", () => {
     call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
     await responsePromise;
     expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
+  });
+});
+
+describe("POST /v1/lease-requests leaseId", () => {
+  it("passes a caller-chosen leaseId onto the dispatch input as sent, and no leaseId key when the body names none", async () => {
+    const { app, dispatcher } = buildHarness();
+    const withId = postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ leaseId: "ad-7f3a" });
+    call.resolve(makeGrant({ lease: { id: "ad-7f3a" } }));
+    await withId;
+
+    const withoutId = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("leaseId");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    await withoutId;
+  });
+
+  it("answers 400 BAD_REQUEST for a leaseId outside the pattern, without dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    // A handler takes the call without the fake's own input parse, so only the route's schema
+    // can keep a bad ID from reaching the dispatcher.
+    dispatcher.handlers["lease.request"] = () => makeGrant({ lease: { id: "w1.myid" } });
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "w1.myid" });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toEqual([]);
+  });
+
+  it("answers 400 BAD_REQUEST for a body carrying fleetRequestId, as for any unknown field, without dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => makeGrant({ lease: { id: "lse_1" } });
+
+    const response = await postLeaseRequest(app, {
+      ...defaultBody,
+      fleetRequestId: "req_1",
+      noWait: true,
+    });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toEqual([]);
+  });
+
+  it("answers 409 LEASE_ID_TAKEN with the ID in the body when the dispatcher refuses it", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+        leaseId: "ad-7f3a",
+      });
+    };
+
+    const response = await postLeaseRequest(app, { ...defaultBody, leaseId: "ad-7f3a" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "LEASE_ID_TAKEN",
+        leaseId: "ad-7f3a",
+        message: "lease ID ad-7f3a is already in use",
+      },
+    });
   });
 });
 
@@ -1030,6 +1182,84 @@ describe("lease routes", () => {
       worker: { id: "wrk_b", label: "mac-b" },
       workerId: "wrk_b",
     });
+  });
+
+  it("GET /v1/leases/:id keeps a simulator's mode on the lease object", async () => {
+    const { app, registry } = buildHarness();
+    registry.devices = [makeDevice({ id: "dev_1", mode: "slim" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+
+    const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
+
+    expect(((await response.json()) as { lease: unknown }).lease).toMatchObject({ mode: "slim" });
+  });
+
+  it("GET /v1/leases/:id answers a lease on a physical device with no mode, on a worker", async () => {
+    const { app, registry } = buildHarness();
+    registry.devices = [
+      {
+        createdAt: 0,
+        driverData: undefined,
+        driverDeviceId: "00008110-001A2B3C4D5E",
+        enrolledApps: [],
+        id: "dev_phys",
+        physical: true,
+        spec: {
+          class: "phone",
+          model: "iPhone 15 Pro",
+          osVersion: "18.4",
+          physical: true,
+          platform: "ios",
+        },
+        state: "leased",
+      },
+    ];
+    registry.leases = [makeLease({ deviceId: "dev_phys", id: "lse_p", ownerId: "tok_agent" })];
+
+    const response = await app.request("/v1/leases/lse_p", { headers: agentAuth });
+
+    expect(response.status).toBe(200);
+    const { lease } = (await response.json()) as { lease: Record<string, unknown> };
+    expect(lease).toMatchObject({
+      device: "iPhone 15 Pro",
+      deviceId: "dev_phys",
+      os: "18.4",
+      udid: "00008110-001A2B3C4D5E",
+    });
+    expect(lease).not.toHaveProperty("mode");
+  });
+
+  it("GET /v1/leases/:id answers a lease on a physical device with no mode, on a gateway", async () => {
+    const { app, dispatcher } = buildHarness({
+      registry: {
+        snapshot: {
+          devices: [
+            {
+              driverDeviceId: "00008110-001A2B3C4D5E",
+              id: "dev_phys",
+              spec: { model: "iPhone 15 Pro", osVersion: "18.4", platform: "ios" },
+              workerId: "wrk_a",
+            },
+          ],
+        },
+      },
+    });
+    dispatcher.handlers["lease.list"] = () => ({
+      leases: [
+        {
+          ...makeLease({ deviceId: "dev_phys", id: "wrk_a.lse_p", ownerId: "tok_agent" }),
+          worker: { id: "wrk_a" },
+          workerId: "wrk_a",
+        },
+      ],
+    });
+
+    const response = await app.request("/v1/leases/wrk_a.lse_p", { headers: agentAuth });
+
+    expect(response.status).toBe(200);
+    const { lease } = (await response.json()) as { lease: Record<string, unknown> };
+    expect(lease).toMatchObject({ deviceId: "dev_phys", udid: "00008110-001A2B3C4D5E" });
+    expect(lease).not.toHaveProperty("mode");
   });
 
   it("404s an unknown lease id", async () => {

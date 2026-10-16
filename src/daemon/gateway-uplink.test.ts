@@ -8,6 +8,7 @@ import {
   type IpcConnection,
   type UplinkConnector,
   type UplinkDialOptions,
+  type UplinkTransportConnection,
 } from "../ports/index.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 
@@ -22,7 +23,7 @@ class ScriptedConnector implements UplinkConnector {
     this.#outcomes.push(...outcomes);
   }
 
-  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+  async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     this.dials.push(options);
     const outcome = this.#outcomes.shift() ?? "connect";
     if (outcome !== "connect") throw outcome;
@@ -260,8 +261,8 @@ describe("GatewayUplink", () => {
   });
 
   it("closes a connection that lands after a stop rather than serving it", async () => {
-    let release: ((connection: IpcConnection) => void) | undefined;
-    const pending = new Promise<IpcConnection>((resolve) => {
+    let release: ((connection: UplinkTransportConnection) => void) | undefined;
+    const pending = new Promise<UplinkTransportConnection>((resolve) => {
       release = resolve;
     });
     const connector: UplinkConnector = { connect: async () => pending };

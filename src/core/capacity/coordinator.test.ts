@@ -168,6 +168,7 @@ describe("CapacityCoordinator", () => {
   it("holds the full size for a provisioning reservation until it is released, whatever its spec's mode", () => {
     const capacity = sizedCoordinator();
     const slimSpec: DeviceSpec = {
+      physical: false,
       mode: "slim",
       model: "iPhone 16",
       osVersion: "26.0",

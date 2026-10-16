@@ -111,25 +111,16 @@ export interface GatewayDispatcherOptions {
    * not supply one -- revocation still writes the store either way.
    */
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
-  /** Times each call for its `operation` log line. */
   readonly clock: Clock;
   readonly logger?: Logger;
   /** Classifies a thrown error for the `operation` log line (`classifyError` in production),
    * injected because `src/gateway` imports nothing from `src/core`. Unset or `undefined`:
    * `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
-  /** The gateway's own health, for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
-  /** The gateway's own machine, for `status.get` (ADR 0008 §8): read once at start, no tools. */
   readonly host: AggregateStatusOptions["host"];
+  readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
-  /**
-   * #118: admission, dispatch, and lease/exec forwarding. Every lease-lifecycle handler and
-   * `device.exec` below is a thin translation from contract input to a `coordinator` call; the
-   * two ownership lookups (`ownerId`, `leaseRequesterId`) and the pending-request lookup
-   * (`pendingRequestOwner`) it also exposes feed `dispatch()`'s `authorizeLookups` directly, the
-   * same shape a worker's own `Dispatcher` supplies from its registry and queue.
-   */
   readonly coordinator: Pick<
     FleetLeaseCoordinator,
     | "request"
@@ -139,15 +130,12 @@ export interface GatewayDispatcherOptions {
     | "releaseAll"
     | "exec"
     | "queueDepth"
+    | "physicalQueueDepth"
     | "ownerId"
     | "leaseRequesterId"
     | "pendingRequestOwner"
     | "waitingRequests"
   >;
-  /** #118: read-only access for `lease.list`/`list.get`/`status.get`'s lease projection
-   * (`FleetLeaseIndex#project`/`#all`) -- kept separate from `coordinator` because this
-   * dispatcher only ever *reads* it, never mutates it. `isGatewayRequester` marks the requests
-   * this gateway sent a worker, which `list.get`'s `requests` already lists as its own. */
   readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "isGatewayRequester">;
 }
 
@@ -195,6 +183,15 @@ export class GatewayDispatcher {
         "component.remove",
         "component.remove removes a component from one machine; run it against a worker",
       ),
+      // A device is plugged into one machine, and a gateway asks no worker.
+      "device.add": unsupportedByDesign(
+        "device.add",
+        "device.add enrols a device plugged into one machine; run it on the worker the device is plugged into",
+      ),
+      "device.remove": unsupportedByDesign(
+        "device.remove",
+        "device.remove unenrols a device plugged into one machine; run it on the worker the device is plugged into",
+      ),
 
       "lease.request": this.#leaseRequest,
       "lease.renew": this.#leaseRenew,
@@ -202,6 +199,8 @@ export class GatewayDispatcher {
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
+      "relay.request": relayRefused,
+      "relay.cancel": relayRefused,
       // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).
     };
@@ -214,9 +213,6 @@ export class GatewayDispatcher {
   ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
     return runDispatch(operation, rawInput, session, {
       handlers: this.#handlers,
-      // #118: `ownsLease`/`device.exec`'s own hook and `lease.cancel`'s resolve these against
-      // the fleet's own lease index and pending-request queue -- the same shape a worker's own
-      // `Dispatcher` supplies from its registry and queue, read through `coordinator` instead.
       authorizeLookups: {
         leaseRequesterId: (id) => this.options.coordinator.leaseRequesterId(id),
         ownerId: (id) => this.options.coordinator.ownerId(id),
@@ -237,22 +233,27 @@ export class GatewayDispatcher {
     });
   }
 
-  // ---- handlers -----------------------------------------------------------------------------
-
   #statusGet: Handler<"status.get"> = () => {
+    const consoleUrl = consoleUrlField(this.options.config.http);
+    const load = this.options.load?.();
+    const loadField = load === undefined ? {} : { load };
+    if (this.options.health() === "starting") {
+      return {
+        daemon: { health: "starting", mode: "gateway", ...consoleUrl },
+        host: this.options.host,
+        ...loadField,
+      };
+    }
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       host: this.options.host,
-      // ADR 0005 §20: the gateway's own fleet queue depth, and the requests waiting in it.
+      ...(load === undefined ? {} : { load }),
+      physicalQueueDepth: this.options.coordinator.physicalQueueDepth,
       queueDepth: this.options.coordinator.queueDepth,
       waiting: [...this.options.coordinator.waitingRequests()],
       leaseIndex: this.options.leaseIndex,
     });
-    // ADR 0011 §3: a gateway serves the console on its own listener, as a worker does.
-    return {
-      ...status,
-      daemon: { ...status.daemon, ...consoleUrlField(this.options.config.http) },
-    };
+    return { ...status, daemon: { ...status.daemon, ...consoleUrl } };
   };
 
   #catalogGet: Handler<"catalog.get"> = (input) =>
@@ -347,7 +348,7 @@ export class GatewayDispatcher {
     for (const entry of this.options.leaseIndex.all()) {
       if (entry.ownerId !== ownerId) continue;
       const view = this.options.workers.view(entry.workerId);
-      const raw = view?.leases.find((lease) => lease.id === entry.workerLeaseId);
+      const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
       if (view === undefined || raw === undefined) continue;
       leases.push(this.options.leaseIndex.project(raw, view.id, view.label));
     }
@@ -372,7 +373,9 @@ export class GatewayDispatcher {
       case undefined:
         return this.options.workers
           .views()
-          .flatMap((view) => view.devices.map((device) => ({ ...device, workerId: view.id })));
+          .flatMap((view) =>
+            (view.devices ?? []).map((device) => ({ ...device, workerId: view.id })),
+          );
     }
   };
 
@@ -402,7 +405,9 @@ export class GatewayDispatcher {
     return this.options.workers
       .views()
       .flatMap((view) =>
-        view.leases.map((lease) => this.options.leaseIndex.project(lease, view.id, view.label)),
+        (view.leases ?? []).map((lease) =>
+          this.options.leaseIndex.project(lease, view.id, view.label),
+        ),
       );
   }
 
@@ -432,6 +437,14 @@ export class GatewayDispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
+    // ADR 0021 §1: gateways do not chain, so no session may send the field a gateway puts on its
+    // own dispatch to a worker. Refused whatever `noWait` says, as on a worker.
+    if (input.fleetRequestId !== undefined) {
+      throw new DispatchError(
+        "FORBIDDEN",
+        "A gateway does not accept lease.request's `fleetRequestId` field: only a gateway sets it, on its own dispatch to a worker",
+      );
+    }
     return this.options.coordinator.request(
       // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
       // relays an image tag unread.
@@ -447,6 +460,9 @@ export class GatewayDispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        // ADR 0020: forwarded to the worker as sent, and the gateway's own lease ID when it grants.
+        ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.requires === undefined ? {} : { requires: input.requires }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         // Always explicit past this point (§15): a request that named none is filled in here,
         // before dispatch, rather than left for whichever worker happens to grant it to default
@@ -525,4 +541,9 @@ function unsupportedByDesign(
   return () => {
     throw new DispatchError("UNSUPPORTED_IN_GATEWAY_MODE", message, { operation });
   };
+}
+
+// why: relays run from a gateway to its workers, so a gateway's own front door has none.
+function relayRefused(): never {
+  throw new DispatchError("FORBIDDEN", "A gateway does not accept relay operations");
 }

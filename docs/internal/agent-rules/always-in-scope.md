@@ -13,7 +13,9 @@ spec says otherwise in its own words, the spec wins.
    (architecture rule 13). That covers the end-user docs — `README.md`,
    `docs/ABOUT.md`, `docs/CLI.md`, `docs/CLIENT.md`, `docs/CONFIGURATION.md`,
    `docs/HTTP-API.md`, `docs/CONSOLE.md`, `docs/EVENTS.md` (documentation
-   rule 2) — and the maintainer docs under `docs/internal/`.
+   rule 2) — the maintainer docs under `docs/internal/`, and the manual
+   (`src/<module>/AGENTS.md`) of every module the change touches
+   (documentation rule 7).
 2. **What the tool prints.** Help text, usage banners, error messages and
    HTTP error bodies the change makes false are fixed in the same change
    (architecture rule 13), and none of them names a file path in this repo
@@ -21,11 +23,14 @@ spec says otherwise in its own words, the spec wins.
 3. **Both event catalogs.** A new or changed event updates `docs/EVENTS.md`
    and `docs/internal/EVENTS.md` in the same change (events rule 8,
    documentation rule 4).
-4. **A test for every new path.** Every new code path has a test that goes
-   red when the path is deleted, fallbacks and error paths included (testing
-   rule 3), and the test fails on a named assertion for the right reason
-   (testing rule 2). Every surviving mutant is killed or
-   explained in the PR body (testing rule 3, delivery rule 15).
+4. **A test for every new behaviour.** Every new behaviour a caller, a
+   user, a stored record or an event can see has a test that goes red when
+   its code is deleted, fallbacks and error paths included; in a strict
+   area [toolchain.md](toolchain.md) names, every new path does (testing
+   rule 3). The test fails on a named assertion for the right reason
+   (testing rule 2), drives the module through its surface (testing rule
+   6), and extends an existing test where one proves the claim next to it
+   (testing rule 7).
 5. **Tests that see their whole rule.** A test that enforces a boundary or
    invariant looks everywhere the rule covers, not only where the change
    happened to touch (testing rule 4).
@@ -39,13 +44,25 @@ spec says otherwise in its own words, the spec wins.
    10).
 9. **A module keeps its surface.** A new component that is a directory
    exposes what others use from its `index.ts`, nothing outside reaches past
-   it (architecture rule 14), and its row in `docs/internal/COMPONENTS.md`
-   is added or updated with the change (architecture rule 13).
+   it (architecture rule 14), a host wires it through one factory
+   (architecture rule 18), and a new module under `src/` gets its manual and
+   a row in `docs/internal/ARCHITECTURE.md` (documentation rule 7).
 10. **Fallow stays green.** A new file that nothing imports statically — an
    entry point, a dynamically loaded module, a config file only a tool reads
    — gets its entry in `.fallowrc.json`, and so does a new dependency
    nothing imports. `main` takes no change whose Fallow check failed
    (DELIVERY.md, "`main` and releases").
+11. **Comments say why.** Every comment the change adds or edits starts with
+   `why:` and says why, or is deleted; the commit hook and CI reject the
+   rest (architecture rule 17).
+12. **A vendored artifact's notice and row.** A change under `vendor/` updates
+   that directory's `NOTICE.md`, its row in `docs/internal/VENDORED-CODE.md`
+   and `vendor/README.md`'s index in the same change
+   (vendor-and-third-party-code rule 11). A new first-level `vendor/`
+   directory carries its license text under `LICENSES/` and a `NOTICE.md`;
+   `src/source-hygiene.test.ts` enforces that shape, and counts a vendored
+   binary as excluded from the text scan only where a `SHA256SUMS.txt` pins
+   its digest (vendor-and-third-party-code rules 2, 3, 7).
 
 **CI proves the suite.** CI runs the checks [toolchain.md](toolchain.md)
 lists on every push, and the merge gate refuses a PR whose checks are not

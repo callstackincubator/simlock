@@ -1,4 +1,4 @@
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import type { LeaseRecord, VirtualDevice } from "./domain.js";
 import type { NukeExecutor } from "./core-ports.js";
 
 /** Release maintenance boundary required by an operator reset. */
@@ -17,7 +17,7 @@ export interface AcquisitionMaintenance {
 /** Read-only registry view used to select Simlock-owned device records. */
 export interface NukeRegistryView {
   readonly snapshot: {
-    readonly devices: readonly DeviceRecord[];
+    readonly virtualDevices: readonly VirtualDevice[];
     readonly leases: readonly LeaseRecord[];
   };
 }
@@ -25,15 +25,15 @@ export interface NukeRegistryView {
 /** Managed operations; implementations own driver calls, claims, and state commits. */
 export interface NukeDeviceLifecycle {
   shutdown(
-    target: DeviceRecord,
+    target: VirtualDevice,
     initiator: "nuke",
     operation: "nuke",
-  ): Promise<DeviceRecord | undefined>;
+  ): Promise<VirtualDevice | undefined>;
   destroy(
-    target: DeviceRecord,
+    target: VirtualDevice,
     initiator: "nuke",
     operation: "nuke",
-  ): Promise<DeviceRecord | undefined>;
+  ): Promise<VirtualDevice | undefined>;
 }
 
 export interface NukeServiceOptions {
@@ -77,7 +77,7 @@ export class NukeService implements NukeExecutor {
       releaseMaintenanceStarted = true;
       const releasedLeaseIds = await this.options.leases.releaseAllDuringMaintenance("killed");
 
-      for (const device of this.options.registry.snapshot.devices) {
+      for (const device of this.options.registry.snapshot.virtualDevices) {
         await this.#resetDevice(device, deleteDevices);
       }
 
@@ -92,14 +92,16 @@ export class NukeService implements NukeExecutor {
   }
 
   #canOperate(deviceId: string, expectedState: "ready" | "shutdown"): boolean {
-    const current = this.options.registry.snapshot.devices.find((device) => device.id === deviceId);
+    const current = this.options.registry.snapshot.virtualDevices.find(
+      (device) => device.id === deviceId,
+    );
     return (
       current?.state === expectedState &&
       !this.options.registry.snapshot.leases.some((lease) => lease.deviceId === deviceId)
     );
   }
 
-  async #resetDevice(device: DeviceRecord, deleteDevices: boolean): Promise<void> {
+  async #resetDevice(device: VirtualDevice, deleteDevices: boolean): Promise<void> {
     if (device.state === "deleted") return;
 
     const shutdown = await this.#shutdownIfReady(device);
@@ -109,13 +111,15 @@ export class NukeService implements NukeExecutor {
     if (current !== undefined) await this.options.devices.destroy(current, "nuke", "nuke");
   }
 
-  async #shutdownIfReady(device: DeviceRecord): Promise<DeviceRecord | undefined> {
+  async #shutdownIfReady(device: VirtualDevice): Promise<VirtualDevice | undefined> {
     if (device.state !== "ready" || !this.#canOperate(device.id, "ready")) return undefined;
     return this.options.devices.shutdown(device, "nuke", "nuke");
   }
 
-  #currentShutdown(deviceId: string): DeviceRecord | undefined {
-    const current = this.options.registry.snapshot.devices.find((device) => device.id === deviceId);
+  #currentShutdown(deviceId: string): VirtualDevice | undefined {
+    const current = this.options.registry.snapshot.virtualDevices.find(
+      (device) => device.id === deviceId,
+    );
     if (current?.state !== "shutdown" || !this.#canOperate(current.id, "shutdown"))
       return undefined;
     return current;

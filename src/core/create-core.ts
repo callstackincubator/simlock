@@ -12,23 +12,26 @@ import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
 import type {
   CapacityReader,
+  WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
   PassthroughResolver,
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import { Doctor } from "./doctor.js";
-import type { WaitingDemand } from "./domain.js";
-import type { Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
+import { Doctor, type OptionalModuleFinding } from "./doctor.js";
+import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
+import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from "./nuke-service.js";
+import { PhysicalEnrollment } from "./physical-enrollment.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { readStartup, type StartupRead } from "./startup-read.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 interface CoreOptions {
@@ -58,40 +61,29 @@ interface CoreOptions {
   readonly logger?: Logger | undefined;
   /** ADR 0015 §4: the model names to try for each class, per platform, operator's list first. */
   readonly modelPreferences?: ModelPreferences | undefined;
+  readonly optionalModules?: (() => readonly OptionalModuleFinding[]) | undefined;
   /** The checks `doctor` runs per platform this host could run. None if omitted. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
 }
 
-/**
- * What core needs from leasing and cannot import (ADR 0018 §2). Leasing implements each one and
- * the composition root hands them over through `Core#connect`.
- */
 export interface CorePorts {
-  /**
-   * The fences an operator reset puts around acquisition and around release, and the release of
-   * every lease it runs between them (`NukeService`).
-   */
   readonly leaseMaintenance: {
     readonly acquisition: AcquisitionMaintenance;
     readonly leases: LeaseMaintenance;
   };
-  /** Administrative lease expiry, which doctor reconciliation uses on a lease that lapsed. */
   readonly leaseExpirer: LeaseExpirer;
-  /**
-   * What the warm pool reads of acquisition: the requests with no device yet, and whether an
-   * operator reset holds acquisition closed (the pool then leaves every device alone).
-   */
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
+    defaultMode(platform: Platform): DeviceMode;
+    resolve(request: DeviceRequest): Promise<TargetResolution>;
   };
-  /** Tells acquisition a device came back, so a waiting request is tried again. */
   readonly notifyAvailability: () => void;
+  readonly physicalDeviceReady?: (deviceId: string) => void;
 }
 
-/** A core service reached a port that `Core#connect` has not been given yet. */
 class CorePortMissingError extends Error {
   constructor(readonly port: keyof CorePorts) {
     super(`A core service was called before connect() supplied the "${port}" port`);
@@ -99,26 +91,19 @@ class CorePortMissingError extends Error {
   }
 }
 
-/** Device management, built and ready except for the ports `connect` fills. */
 export interface Core {
   readonly capacity: CapacityCoordinator;
-  /** Read-only capacity view for status, and for the daemon's status reporting. */
   readonly capacityReader: CapacityReader;
-  /** The device catalog and the passthrough resolver, both answered by the driver catalog. */
+  readonly warmPoolReader: WarmPoolReader;
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
-  /**
-   * Read-only claim view for `Doctor`, which must not read a device a service is actively
-   * operating on as a stalled transition. Exposed as a reader, not the claims themselves, so
-   * a consumer handed only this view cannot take or release a claim. (`claims` above is the
-   * full surface; leasing takes and releases through it.)
-   */
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
   readonly deviceLifecycle: ManagedDeviceLifecycle;
   readonly doctor: Doctor;
   readonly drivers: DriverCatalog;
+  readonly enrollment: PhysicalEnrollment;
   readonly nuke: NukeService;
   readonly provisioner: DeviceProvisioner;
   readonly quarantine: QuarantineCoordinator;
@@ -126,25 +111,26 @@ export interface Core {
   readonly registry: Registry;
   /** Supplies the ports leasing implements. Call it once, before any request is admitted. */
   connect(ports: CorePorts): void;
-  /**
-   * The device steps of startup: quarantine restore, interrupted reclaims, spent devices; then it
-   * starts the capacity observer and the warm pool, so the facts convergence commits trigger no
-   * pass and the first one follows `daemon.started`, where a lowered `maxRunning` is converged.
-   */
-  converge(): Promise<void>;
+  readStartup(): Promise<StartupRead>;
+  converge(read: StartupRead): Promise<void>;
   /**
    * Runs a warm pool pass now. Leasing calls it once a backgrounded reclaim has given up its
    * claim: `device.reclaimed` fires while that claim is still held, so the pass it triggers sees
    * the device as busy, and this is the first moment the pool can act on it.
    */
   passWarmPool(): Promise<void>;
-  /** Awaits the warm pool's running pass, so a graceful shutdown hands back a settled pool. */
+  /** The devices the idle shutdown timer leaves alone: those a warm target keeps. */
+  targetedDevices(): Promise<ReadonlySet<string>>;
   settle(): Promise<void>;
-  /** Cancels the timers core armed, so the process can exit. */
+  drain(): Promise<void>;
+  /**
+   * why: closes the warm pool before leasing settles, so a reclaim
+   * that commits meanwhile cannot start a creation `drain` would then wait for.
+   */
+  closeWarmPool(): void;
   dispose(): void;
 }
 
-/** Composition root for device management: the registry's services, with no lease in them. */
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
   let ports: CorePorts | undefined;
@@ -153,6 +139,7 @@ export function createCore(options: CoreOptions): Core {
     return ports[name];
   };
   const notifyAvailability = (): void => port("notifyAvailability")();
+  const physicalDeviceReady = (deviceId: string): void => ports?.physicalDeviceReady?.(deviceId);
   const leaseMaintenance = {
     acquisition: {
       beginMaintenance: () => port("leaseMaintenance").acquisition.beginMaintenance(),
@@ -170,7 +157,7 @@ export function createCore(options: CoreOptions): Core {
     createCapacityStrategy(options.config.capacity, options.systemStats),
     () => capacityObserver.changed(),
   );
-  const devices = () => capacityDevices(registry.snapshot.devices);
+  const devices = () => capacityDevices(registry.snapshot.virtualDevices);
   const capacityReader: CapacityReader = {
     get runningCapacity() {
       return capacity.runningCapacity(devices());
@@ -183,7 +170,7 @@ export function createCore(options: CoreOptions): Core {
   };
   const capacityObserver: CapacityObserver = new CapacityObserver({
     eventBus: options.eventBus,
-    figures: () => buildCapacityFigures(registry.snapshot.devices, capacityReader),
+    figures: () => buildCapacityFigures(registry.snapshot.virtualDevices, capacityReader),
   });
   registry.onCommit(() => capacityObserver.changed());
   const claims = new DeviceOperationClaims();
@@ -200,6 +187,7 @@ export function createCore(options: CoreOptions): Core {
   );
   const provisioner = new DeviceProvisioner({
     catalog: drivers,
+    claims,
     clock: options.clock,
     components: options.components,
     decisions,
@@ -208,22 +196,35 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const quarantine = new QuarantineCoordinator({
+    claims,
     clock: options.clock,
     config: options.config.warmPool.quarantine,
     decisions,
     drivers,
     eventBus: options.eventBus,
     notifyAvailability,
+    physicalDeviceReady,
+    probeIntervalMs: options.config.health.probeIntervalMs,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
   const reclaim = new ReclaimCoordinator({
+    claims,
     clock: options.clock,
     decisions,
     drivers,
     eventBus: options.eventBus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
+    physicalDeviceReady,
     quarantine,
+    registry,
+  });
+  const enrollment = new PhysicalEnrollment({
+    claims,
+    decisions,
+    drivers,
+    physicalDeviceReady,
     registry,
   });
   const cleanup = new CleanupExecutor({
@@ -238,7 +239,9 @@ export function createCore(options: CoreOptions): Core {
       get maintenanceActive() {
         return port("warmPoolDemand").maintenanceActive;
       },
+      resolve: (request) => port("warmPoolDemand").resolve(request),
       waitingDemand: () => port("warmPoolDemand").waitingDemand(),
+      defaultMode: (platform) => port("warmPoolDemand").defaultMode(platform),
     },
     capacity,
     claims,
@@ -249,14 +252,18 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    provisioner,
     registry,
   });
   const nuke = new NukeService({
     acquisition: {
       // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
-      // already has in flight is waited for, so the reset sees a settled pool.
+      // already has in flight is waited for, so the reset sees a settled pool. A startup wipe still
+      // running is waited for first: its commit can start a pool pass, and the device it holds in
+      // `reclaiming` is one the reset would skip.
       beginMaintenance: async () => {
         await leaseMaintenance.acquisition.beginMaintenance();
+        await reclaim.settle();
         await warmPool.settle();
       },
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
@@ -271,25 +278,30 @@ export function createCore(options: CoreOptions): Core {
     claims,
     clock: options.clock,
     config: options.config,
+    decisions,
     drivers: options.drivers,
     driverRejections: options.driverRejections ?? [],
     eventBus: options.eventBus,
     leaseExpirer: { expire: async (leaseId) => port("leaseExpirer").expire(leaseId) },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.optionalModules === undefined ? {} : { optionalModules: options.optionalModules }),
     prerequisiteChecks: options.prerequisiteChecks ?? [],
     quarantine,
     registry,
+    warmPool: {
+      figures: () => warmPool.figures(),
+      runningCapacity: () => capacityReader.runningCapacity,
+    },
   });
   const startup = new StartupConverger({
     claims,
     decisions,
-    drivers,
     interruptedReclaimRecovery: {
       recoverInterruptedReclaim: async (device) => {
         await reclaim.recoverInterrupted(device.id);
       },
     },
-    quarantineRestore: { restore: () => quarantine.restore() },
+    quarantineRestore: { restore: (include) => quarantine.restore(include) },
     registry,
     spentDeviceDeletion: {
       // A failed delete must not stop the daemon from starting: the device stays `shutdown`
@@ -310,6 +322,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    warmPoolReader: warmPool,
     catalog: drivers,
     claims,
     claimReader: claims,
@@ -318,6 +331,7 @@ export function createCore(options: CoreOptions): Core {
     deviceLifecycle,
     doctor,
     drivers,
+    enrollment,
     nuke,
     provisioner,
     quarantine,
@@ -326,16 +340,28 @@ export function createCore(options: CoreOptions): Core {
     connect(supplied) {
       ports = supplied;
     },
-    async converge() {
-      await startup.converge();
+    readStartup: () =>
+      readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
+    async converge(read) {
+      await startup.converge(read);
       warmPool.start();
-      // Every run begins with a step in the figures: what they are now.
       capacityObserver.start();
     },
     async passWarmPool() {
       await warmPool.pass();
     },
+    async targetedDevices() {
+      return warmPool.targeted();
+    },
+    closeWarmPool() {
+      warmPool.close();
+    },
+    async drain() {
+      await warmPool.drain();
+    },
     async settle() {
+      // The wipe's commit can start a pool pass, so the wipes are awaited first.
+      await reclaim.settle();
       await warmPool.settle();
     },
     dispose() {

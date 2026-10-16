@@ -1,4 +1,5 @@
 import type { EventBus } from "../bus/index.js";
+import { parseOsConstraint } from "../contract/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
@@ -8,20 +9,27 @@ import {
   mayBeGranted,
   type Platform,
   transitionEnteredAt,
+  type VirtualDevice,
 } from "./domain.js";
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
-import type {
-  Driver,
-  DriverDevice,
-  DriverRejection,
-  DriverRejectionReason,
-  MissingPrerequisite,
-  ObservedDevice,
-  ObservedMark,
-  PrerequisiteCheck,
+import type { StartupRead } from "./startup-read.js";
+import {
+  type Driver,
+  type DriverCatalogEntry,
+  type DriverDevice,
+  type DriverRejection,
+  type DriverReality,
+  type DriverRejectionReason,
+  type MissingPrerequisite,
+  type ObservedDevice,
+  type ObservedMark,
+  type PrerequisiteCheck,
+  virtualDriverDevice,
 } from "./driver.js";
-import type { LeaseExpirer } from "./core-ports.js";
+import type { CapacityReader, LeaseExpirer, WarmPoolReader } from "./core-ports.js";
+import { reservedRunning, type WarmTargetFigures } from "./warm-pool/index.js";
 import type { Registry } from "./registry.js";
+import type { SerializedDecision } from "./serialized-decision.js";
 
 export type DoctorFinding =
   | {
@@ -99,18 +107,24 @@ export type DoctorFinding =
       readonly prerequisite: string;
       readonly message: string;
       readonly remedy: string;
+    }
+  | {
+      readonly kind: "warm-pool-target-unreachable";
+      readonly platform?: Platform;
+      readonly target: string;
+      readonly reason: "runtime-missing" | "unknown-model" | "over-limit";
+      readonly message: string;
+      readonly remedy: string;
+    }
+  | {
+      readonly kind: "module-unavailable";
+      readonly module: string;
+      readonly message: string;
+      readonly remedy: string;
     };
 
-/**
- * `erased` -- the durable mark stands but the erasable one is gone: the device
- * was erased or wiped outside Simlock.
- * `mark-mismatch` -- both regions carry a token but they disagree, so
- * something re-marked one region independently.
- * `durable-mark-missing` -- the durable region carries no token at all: the
- * device definition was recreated, or foreign tooling rewrote it. On Android
- * that also catches an `avdmanager create` reusing a `simlock_` name, which
- * the prefix match in `listManaged` would otherwise adopt silently.
- */
+export type OptionalModuleFinding = Extract<DoctorFinding, { readonly kind: "module-unavailable" }>;
+
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
 
 type OrphanDeviceFinding = Extract<DoctorFinding, { readonly kind: "orphan-device" }>;
@@ -119,44 +133,45 @@ export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
 }
 
-/** The one quarantine-entry operation Doctor needs -- see `QuarantineCoordinator.enterFromStalledTransition`. */
 export interface DoctorQuarantine {
-  enterFromStalledTransition(deviceId: string): Promise<void>;
+  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<void>;
 }
 
 export interface DoctorOptions {
   readonly clock: Clock;
   readonly config: Config;
+  /**
+   * The decision section every registry write of this daemon is made in. A write made outside it
+   * can land on top of a concurrent one that read the registry before it, and undo it.
+   */
+  readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly leaseExpirer?: LeaseExpirer;
   readonly quarantine?: DoctorQuarantine;
-  /**
-   * Read-only view of the per-device operation claims. A device this daemon holds a
-   * claim on is work in progress by definition, which is what keeps a healthy
-   * backgrounded reclaim from being read as a stall -- see `isStalledTransition`.
-   */
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
-  /**
-   * Drivers that refused to start, as reported once at daemon startup. They are findings
-   * on every run, not just the first: the daemon has been serving without that platform
-   * ever since, and `doctor` is where `docs/CLI.md` promises the reason turns up.
-   */
   readonly driverRejections?: readonly DriverRejection[];
   readonly logger?: Logger;
-  /** One per platform this host could run, whether or not its driver started. */
+  readonly optionalModules?: () => readonly OptionalModuleFinding[];
+  readonly warmPool?: {
+    readonly figures: WarmPoolReader["figures"];
+    readonly runningCapacity: () => CapacityReader["runningCapacity"];
+  };
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
-  /**
-   * The platforms whose driver is serving. Defaults to the platforms of `drivers`. A platform
-   * outside it gets the restart sentence on every prerequisite finding, because only a daemon
-   * restart retries driver discovery.
-   */
   readonly runningPlatforms?: () => readonly Platform[];
   readonly registry: Registry;
 }
 
 export interface DoctorReconcileOptions {
   readonly fix?: boolean;
+  /**
+   * The startup read to reconcile against instead of listing every driver again. A platform it
+   * leaves out has no reality to compare, so its devices get no missing-device, orphan or other
+   * drift-against-reality finding. A `stalled-transition` finding is the exception: it reads the
+   * registry and the platform's driver, not the listing, so a platform that has a driver but
+   * whose listing failed still gets it.
+   */
+  readonly read?: StartupRead;
   /**
    * Destroys the orphans this run finds. Safety rule 1's single opt-in exception, and
    * deliberately not part of `fix`: someone already running `doctor --fix` unattended in
@@ -181,13 +196,13 @@ export class Doctor {
     fix = false,
     purgeOrphans = false,
     prerequisites = false,
+    read,
   }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
     const snapshot = this.options.registry.snapshot;
-    const realities = await Promise.all(
-      this.options.drivers.map(async (driver) => ({ driver, reality: await driver.listManaged() })),
-    );
+    const realities = await this.#realities(read);
     // A platform with no driver has no observable reality: its driver refused to start,
-    // its SDK is missing, or this host has none. "I could not look" is not "the device is
+    // its SDK is missing, or this host has none. The same holds for a platform the startup
+    // read could not list. "I could not look" is not "the device is
     // gone", and reading it as such is destructive -- every registry device of that
     // platform would drift-report as missing and `--fix` would mark the lot `deleted`,
     // stranding tens of gigabytes of simulators in a root with no record left to reach
@@ -195,7 +210,7 @@ export class Doctor {
     // state, provenance and orphans are all reported only for platforms a driver
     // actually observed. What remains reportable is what needs no driver: expired
     // leases, and the `driver-unavailable` finding that says why the platform is dark.
-    const observedPlatforms = new Set(this.options.drivers.map((driver) => driver.platform));
+    const observedPlatforms = new Set(realities.map(({ driver }) => driver.platform));
     const realDeviceKeys = new Set(
       realities.flatMap(({ driver, reality }) =>
         reality.devices.map((device) => key(driver.platform, device.deviceId)),
@@ -214,40 +229,21 @@ export class Doctor {
     );
     const findings: DoctorFinding[] = [];
 
-    for (const device of snapshot.devices) {
-      if (observedPlatforms.has(device.spec.platform)) {
-        const deviceFindings = await this.#withLegacyDevice(
-          device,
-          registryDriftFindings(device, realDeviceKeys, observedDevices, this.options.claims),
-          driversByPlatform.get(device.spec.platform),
-        );
-        findings.push(...deviceFindings);
-        if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
-          await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
-        }
-        if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
-          await this.options.registry.markForeignProvenanceDetected(
-            device.id,
-            this.options.clock.now(),
-          );
-        }
-      }
-      const stalled = stalledTransitionFinding(
-        device,
+    findings.push(
+      ...(await this.#driftFindings(snapshot.virtualDevices, {
         driversByPlatform,
-        this.options.config.stalledTransition,
-        this.options.clock.now(),
-        this.options.claims,
-      );
-      if (stalled !== undefined) {
-        findings.push(stalled);
-      }
-    }
+        observedDevices,
+        observedPlatforms,
+        realDeviceKeys,
+      })),
+    );
+    findings.push(...this.#stalledFindings(snapshot.devices, driversByPlatform));
     findings.push(...driverUnavailableFindings(this.options.driverRejections ?? []));
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
     findings.push(...(await this.#collectAdvisories()));
 
+    this.#emitStalledEvents(findings);
     if (fix) {
       await this.#applySafeFixes(findings, driversByPlatform);
     }
@@ -256,6 +252,8 @@ export class Doctor {
     const remaining = [
       ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
       ...(await this.#collectPrerequisites(prerequisites)),
+      ...(await this.#warmPoolFindings()),
+      ...this.#optionalModuleFindings(),
     ];
 
     const report = { findings: remaining };
@@ -263,18 +261,31 @@ export class Doctor {
     this.options.eventBus.emit(
       "doctor.reconciled",
       {
-        // `driftFindings` is a stable payload contract (events rule 6: additive changes only)
-        // that has always meant "things `--fix` might correct" -- every finding kind so far.
-        // A `driver-advisory` or `prerequisite-missing` is neither drift nor ever actionable by
-        // `--fix` (see `#applySafeFix`), so folding it into this field would silently redefine
-        // what an existing consumer is entitled to assume about every entry in it. Both stay
-        // available through `DoctorReport.findings` (what `doctor.run` returns to a caller) but
-        // are filtered out of the event payload.
+        // why: `driftFindings` means things `--fix` might correct;
+        // advisory and prerequisite findings are not drift, so they stay out of this payload.
         driftFindings: remaining.filter(isDrift),
       },
       "doctor",
     );
     return report;
+  }
+
+  /** Each driver's reality: the startup read's, or a fresh `listManaged` when there is none. */
+  async #realities(
+    read: StartupRead | undefined,
+  ): Promise<readonly { readonly driver: Driver; readonly reality: DriverReality }[]> {
+    if (read === undefined) {
+      return Promise.all(
+        this.options.drivers.map(async (driver) => ({
+          driver,
+          reality: await driver.listManaged(),
+        })),
+      );
+    }
+    return this.options.drivers.flatMap((driver) => {
+      const reality = read.reality(driver.platform);
+      return reality === undefined ? [] : [{ driver, reality }];
+    });
   }
 
   /**
@@ -310,7 +321,7 @@ export class Doctor {
       const driver = driversByPlatform.get(orphan.platform);
       if (driver === undefined) continue;
       try {
-        await driver.destroy(orphan.device);
+        await driver.destroy(virtualDriverDevice(orphan.device));
       } catch (error: unknown) {
         this.#logger.error("Could not purge orphan device", {
           deviceId: orphan.device.deviceId,
@@ -379,6 +390,64 @@ export class Doctor {
       }
     }
     return true;
+  }
+
+  /**
+   * Registry versus root, per device: existence, run state and provenance. Drift compares the
+   * registry with what a root holds, so it reads virtual devices only: a physical record is in
+   * no root and would read as missing (ADR 0022 §4).
+   */
+  async #driftFindings(
+    devices: readonly VirtualDevice[],
+    reality: {
+      readonly driversByPlatform: ReadonlyMap<Platform, Driver>;
+      readonly observedDevices: ReadonlyMap<string, ObservedDevice>;
+      readonly observedPlatforms: ReadonlySet<Platform>;
+      readonly realDeviceKeys: ReadonlySet<string>;
+    },
+  ): Promise<DoctorFinding[]> {
+    const findings: DoctorFinding[] = [];
+    for (const device of devices) {
+      if (!reality.observedPlatforms.has(device.spec.platform)) continue;
+      const deviceFindings = await this.#withLegacyDevice(
+        device,
+        registryDriftFindings(
+          device,
+          reality.realDeviceKeys,
+          reality.observedDevices,
+          this.options.claims,
+        ),
+        reality.driversByPlatform.get(device.spec.platform),
+      );
+      findings.push(...deviceFindings);
+      if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
+        await this.options.decisions.run(() =>
+          this.options.registry.markForeignStateDetected(device.id, this.options.clock.now()),
+        );
+      }
+      if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
+        await this.options.decisions.run(() =>
+          this.options.registry.markForeignProvenanceDetected(device.id, this.options.clock.now()),
+        );
+      }
+    }
+    return findings;
+  }
+
+  #stalledFindings(
+    devices: readonly DeviceRecord[],
+    driversByPlatform: ReadonlyMap<Platform, Driver>,
+  ): DoctorFinding[] {
+    return devices.flatMap((device) => {
+      const stalled = stalledTransitionFinding(
+        device,
+        driversByPlatform,
+        this.options.config.stalledTransition,
+        this.options.clock.now(),
+        this.options.claims,
+      );
+      return stalled === undefined ? [] : [stalled];
+    });
   }
 
   /**
@@ -497,6 +566,97 @@ export class Doctor {
     return perCheck.flat();
   }
 
+  #optionalModuleFindings(): readonly OptionalModuleFinding[] {
+    try {
+      return this.options.optionalModules?.() ?? [];
+    } catch (error) {
+      this.#logger.warn("Could not read optional module findings", {
+        error: errorMessage(error),
+      });
+      return [];
+    }
+  }
+
+  async #catalogsOfMissingRuntimes(
+    targets: readonly WarmTargetFigures[],
+  ): Promise<Map<Platform, DriverCatalogEntry>> {
+    const catalogs = new Map<Platform, DriverCatalogEntry>();
+    const platforms = new Set(
+      targets.filter((target) => target.short === "runtime-missing").map((t) => t.platform),
+    );
+    for (const driver of this.options.drivers) {
+      if (!platforms.has(driver.platform)) continue;
+      try {
+        catalogs.set(driver.platform, await driver.listCatalog());
+      } catch (error) {
+        this.#logger.warn("Could not read a catalog for a warm pool finding", {
+          error: errorMessage(error),
+          platform: driver.platform,
+        });
+      }
+    }
+    return catalogs;
+  }
+
+  /**
+   * The warm pool's targets that cannot be met as configured: those the last pass found a runtime
+   * or a model missing for, and the platforms (or the machine) whose targets add up to more than
+   * the running limit leaves once the reserve is held back. Read, never acted on, like
+   * `prerequisite-missing`. A target short for RAM, the device limit or a failed boot is no
+   * finding: those pass with time or with an operator's choice of machine. None with the pool off.
+   */
+  async #warmPoolFindings(): Promise<DoctorFinding[]> {
+    const { warmPool } = this.options;
+    const { enabled, targets } = this.options.config.warmPool;
+    if (warmPool === undefined || !enabled) return [];
+    const limits = warmPool.runningCapacity();
+    const figures = warmPool.figures().targets;
+    const catalogs = await this.#catalogsOfMissingRuntimes(figures);
+    const findings = figures.flatMap((target) =>
+      unreachableTarget(target, catalogs.get(target.platform)),
+    );
+    const reserves = reservedRunning(this.options.config.warmPool, limits);
+    let wanted = 0;
+    for (const platform of ["ios", "android"] as const) {
+      const sum = targets
+        .filter((target) => target.platform === platform)
+        .reduce((total, target) => total + target.count, 0);
+      const reserve = reserves[platform];
+      const available = limits[platform].maxRunning - reserve;
+      wanted += sum;
+      if (sum > available) {
+        findings.push(
+          overLimit({
+            limit: limits[platform].maxRunning,
+            platform,
+            reserve,
+            room: available,
+            scope: `${platform} `,
+            sum,
+            target: `${platform} targets`,
+          }),
+        );
+      }
+    }
+    // The machine's reserve cannot hold more slots than the machine has: a figure past the limit
+    // would print a room below zero, and with no target there is nothing to report.
+    const reserved = Math.min(reserves.ios + reserves.android, limits.global.maxRunning);
+    const room = limits.global.maxRunning - reserved;
+    if (wanted > room) {
+      findings.push(
+        overLimit({
+          limit: limits.global.maxRunning,
+          reserve: reserved,
+          room,
+          scope: "",
+          sum: wanted,
+          target: "all targets",
+        }),
+      );
+    }
+    return findings;
+  }
+
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
     for (const finding of findings) {
       if (finding.kind === "foreign-state-change") {
@@ -518,19 +678,27 @@ export class Doctor {
           "doctor",
         );
       }
-      if (finding.kind === "stalled-transition") {
-        this.options.eventBus.emit(
-          "device.stalled-transition-detected",
-          {
-            ageMs: finding.ageMs,
-            deviceId: finding.deviceId,
-            platform: finding.platform,
-            state: finding.state,
-            thresholdMs: finding.thresholdMs,
-          },
-          "doctor",
-        );
-      }
+    }
+  }
+
+  /**
+   * why: announced as soon as the read finds it, before `--fix` acts: a stall is not a commit, and the
+   * fix re-reads the device under its claim, so a reclaim that starts in between is left alone.
+   */
+  #emitStalledEvents(findings: readonly DoctorFinding[]): void {
+    for (const finding of findings) {
+      if (finding.kind !== "stalled-transition") continue;
+      this.options.eventBus.emit(
+        "device.stalled-transition-detected",
+        {
+          ageMs: finding.ageMs,
+          deviceId: finding.deviceId,
+          platform: finding.platform,
+          state: finding.state,
+          thresholdMs: finding.thresholdMs,
+        },
+        "doctor",
+      );
     }
   }
 
@@ -543,8 +711,6 @@ export class Doctor {
     }
   }
 
-  /** One finding's `--fix` action, split out of `#applySafeFixes` so the per-kind dispatch
-   * (already at the edge of this file's complexity budget) doesn't also have to carry the loop. */
   // fallow-ignore-next-line complexity -- one exhaustive arm per finding kind, each a single call or a documented no-op.
   async #applySafeFix(
     finding: DoctorFinding,
@@ -552,7 +718,7 @@ export class Doctor {
   ): Promise<void> {
     switch (finding.kind) {
       case "registry-device-missing":
-        await this.#fixMissingDevice(finding.deviceId);
+        await this.options.decisions.run(() => this.#fixMissingDevice(finding.deviceId));
         break;
       case "orphan-device":
       case "orphan-process":
@@ -564,7 +730,7 @@ export class Doctor {
         }
         break;
       case "foreign-state-change":
-        await this.#fixForeignStateChange(finding);
+        await this.options.decisions.run(() => this.#fixForeignStateChange(finding));
         break;
       case "foreign-provenance-change":
         // Report-only: re-marking destroys the evidence, and the device may be leased.
@@ -593,15 +759,10 @@ export class Doctor {
     if (snapshot.leases.some((lease) => lease.deviceId === deviceId)) {
       return;
     }
-    const device = snapshot.devices.find((candidate) => candidate.id === deviceId);
-    if (device !== undefined && device.state !== "deleted") {
-      await this.options.registry.markDeviceMissing(deviceId, "doctor");
-    }
+    await this.options.registry.markDeviceMissing(deviceId, "doctor");
   }
 
   /**
-   * Destroys a stranded pre-root device and then records what that leaves behind.
-   *
    * The destroy reaches outside the driver's root, which every other path in Simlock is
    * forbidden to do -- and is permitted here for one reason: the device is in the registry.
    * Registry-only destruction (safety rule 1) is a rule about *what may be destroyed*, and
@@ -624,7 +785,7 @@ export class Doctor {
       return;
     }
     try {
-      await destroyLegacy(finding.device);
+      await destroyLegacy(virtualDriverDevice(finding.device));
     } catch (error: unknown) {
       this.#logger.error("Could not destroy a pre-root device", {
         deviceId: finding.deviceId,
@@ -633,7 +794,7 @@ export class Doctor {
       });
       return;
     }
-    await this.#fixMissingDevice(finding.deviceId);
+    await this.options.decisions.run(() => this.#fixMissingDevice(finding.deviceId));
   }
 
   async #fixForeignStateChange(
@@ -685,20 +846,16 @@ export class Doctor {
       return;
     }
     const device = snapshot.devices.find((candidate) => candidate.id === finding.deviceId);
-    // Only fix if the device is still in the exact state the finding was computed
-    // against -- it may have resolved on its own between finding computation and fix
-    // application within this reconcile call.
     if (device === undefined || device.state !== finding.state) {
       return;
     }
     if (this.options.quarantine === undefined) {
       return;
     }
-    await this.options.quarantine.enterFromStalledTransition(finding.deviceId);
+    await this.options.quarantine.enterFromStalledTransition(finding.deviceId, finding.state);
   }
 }
 
-/** Existence and boot-state drift for a single registry device against observed reality. */
 function registryDriftFindings(
   device: DeviceRecord,
   realDeviceKeys: ReadonlySet<string>,
@@ -713,21 +870,13 @@ function registryDriftFindings(
     findings.push(missing);
   }
 
-  // `expected === undefined` means the registry is mid-transition (provisioning,
-  // reclaiming, deleted). Simlock is acting on the device itself in those states,
-  // including erasing it, so neither run state nor marks are compared.
+  // why: `expected === undefined` means the registry is mid-transition: simlock is acting on the device
+  // itself, so neither run state nor marks are compared.
   //
-  // A device this daemon holds an operation claim on is excluded the same way, the same
-  // live-versus-orphaned test `isStalledTransition` already applies (see its comment). A
-  // lease-path boot from `shutdown` runs `makeReady` while the committed record still says
-  // `shutdown` -- observed reality goes `running` before the transition that would update
-  // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
-  // as foreign drift, "fixes" the record to `ready`, and the boot's own transition commit
-  // afterwards finds the record changed underneath it and silently drops its
-  // `address`/`driverData`/`mode`, dropping the waiter. The claim is held for the
-  // whole boot, so it exactly brackets the window this needs to cover -- unlike
-  // `isStalledTransition`, this applies regardless of `device.state`, since the record can
-  // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.
+  // A device this daemon holds an operation claim on is excluded too: a lease-path boot from
+  // `shutdown` runs `makeReady` while the record still says `shutdown`, and a concurrent
+  // `doctor --fix` would read that as foreign drift, "fix" the record, and make the boot's own
+  // commit drop its `address`/`driverData`/`mode`.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);
   const claimed = claims?.isClaimed(device.id) === true;
@@ -942,9 +1091,114 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
   }));
 }
 
+const PLATFORM_NAMES: Readonly<Record<Platform, string>> = { android: "Android", ios: "iOS" };
+
+/** Whether an OS constraint is a range rather than one version. */
+function isRange(osVersion: string): boolean {
+  const parsed = parseOsConstraint(osVersion);
+  return parsed.ok && parsed.constraint.kind === "range";
+}
+
+// fallow-ignore-next-line complexity -- one finding per short reason, each a fixed message.
+function unreachableTarget(
+  target: WarmTargetFigures,
+  catalog: DriverCatalogEntry | undefined,
+): DoctorFinding[] {
+  const { model, osVersion, platform, short } = target;
+  const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
+  const name = PLATFORM_NAMES[platform];
+  if (short === "runtime-missing") {
+    // A range names no version to install: `component install` takes one catalog version.
+    if (osVersion !== undefined && isRange(osVersion)) {
+      return [
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `no installed ${name} runtime satisfies ${osVersion}`,
+          platform,
+          reason: short,
+          remedy: `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version> for one inside ${osVersion}`,
+          target: named,
+        },
+      ];
+    }
+    if (
+      model !== undefined &&
+      osVersion !== undefined &&
+      catalog?.runtimes.includes(osVersion) === true &&
+      catalog.modelRuntimes[model] !== undefined &&
+      !catalog.modelRuntimes[model].includes(osVersion)
+    ) {
+      return [
+        {
+          kind: "warm-pool-target-unreachable",
+          message: `${model} does not pair with ${name} ${osVersion}`,
+          platform,
+          reason: short,
+          remedy: `run simlock catalog --platform ${platform}`,
+          target: named,
+        },
+      ];
+    }
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${name} ${osVersion ?? "runtime"} is not installed`,
+        platform,
+        reason: short,
+        remedy:
+          osVersion === undefined
+            ? `run simlock component list --platform ${platform} to see the versions, then simlock component install ${platform} <version>`
+            : `run simlock component install ${platform} ${osVersion}`,
+        target: named,
+      },
+    ];
+  }
+  if (short === "unknown-model") {
+    return [
+      {
+        kind: "warm-pool-target-unreachable",
+        message: `${model} is not a known ${name} model`,
+        platform,
+        reason: short,
+        remedy: `run simlock catalog --platform ${platform} to list the models`,
+        target: named,
+      },
+    ];
+  }
+  return [];
+}
+
+/** Targets whose counts add up to more than the running limit leaves for them. */
+function overLimit(input: {
+  readonly target: string;
+  readonly sum: number;
+  readonly limit: number;
+  readonly reserve: number;
+  readonly room: number;
+  /** `ios ` or `android `, or empty for the machine. */
+  readonly scope: string;
+  readonly platform?: Platform;
+}): DoctorFinding {
+  const { limit, platform, reserve, room, scope, sum, target } = input;
+  const held = reserve > 0 ? `, of which warmPool.reserveRunning holds ${reserve}` : "";
+  return {
+    kind: "warm-pool-target-unreachable",
+    message: `the ${scope}targets want ${sum} running devices, and the ${scope}running limit is ${limit}${held}, leaving room for ${room}`,
+    reason: "over-limit",
+    remedy: `lower the counts of the ${scope}warmPool.targets, ${reserve > 0 ? "" : "or "}raise the ${scope}running limit${reserve > 0 ? ", or lower warmPool.reserveRunning" : ""}`,
+    target,
+    ...(platform === undefined ? {} : { platform }),
+  };
+}
+
 /** Whether a finding belongs in `doctor.reconciled`'s `driftFindings` -- see the emit call. */
 function isDrift(finding: DoctorFinding): boolean {
-  return finding.kind !== "driver-advisory" && finding.kind !== "prerequisite-missing";
+  return (
+    finding.kind !== "driver-advisory" &&
+    finding.kind !== "prerequisite-missing" &&
+    finding.kind !== "warm-pool-target-unreachable" &&
+    finding.kind !== "module-unavailable"
+  );
 }
 
 /** One platform's check result, as findings -- see `Doctor#collectPrerequisites`. */
@@ -1029,6 +1283,7 @@ function expectedRunState(state: DeviceState): "running" | "stopped" | undefined
     case "provisioning":
     case "reclaiming":
     case "quarantined":
+    case "absent":
     case "deleted":
       return undefined;
   }

@@ -9,6 +9,7 @@ export interface CliOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly input?: string;
   readonly timeout?: number;
+  readonly entry?: string;
 }
 
 export interface CliError {
@@ -36,7 +37,7 @@ export function cli(
   options: CliOptions = {},
 ): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
+    const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
       env: { ...env, ...options.env },
     });
     let stdout = "";
@@ -82,30 +83,26 @@ export interface CliBackgroundHandle {
   readonly pid: number | undefined;
 }
 
-/**
- * Starts a `simlock` invocation that stays running (held-mode `lease`), for tests
- * that need to observe progress, kill the process, or hold a lease across other
- * assertions.
- */
 export function cliBackground(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   options: CliOptions = {},
 ): CliBackgroundHandle {
-  const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
+  const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
     env: { ...env, ...options.env },
   });
   let stdout = "";
   let stderr = "";
   const progress: unknown[] = [];
-  const stdoutWaiters: ((line: string) => void)[] = [];
+  const stdoutWaiters: { resolve(line: string): void; reject(error: Error): void }[] = [];
   let firstLineSeen: string | undefined;
+  let exitedWithoutLine: Error | undefined;
 
   child.stdout.on("data", (chunk: Buffer) => {
     stdout += chunk.toString("utf8");
     if (firstLineSeen === undefined && stdout.includes("\n")) {
       firstLineSeen = stdout.slice(0, stdout.indexOf("\n"));
-      for (const waiter of stdoutWaiters.splice(0)) waiter(firstLineSeen);
+      for (const waiter of stdoutWaiters.splice(0)) waiter.resolve(firstLineSeen);
     }
   });
   child.stderr.on("data", (chunk: Buffer) => {
@@ -126,7 +123,15 @@ export function cliBackground(
   // attached after the fact never fires. That would time out as "process never
   // exited" when it had in fact already exited.
   const exited = new Promise<CliResult>((resolve) => {
-    child.once("close", (code) => {
+    // A process that dies before printing would otherwise surface only as a timeout, a minute
+    // later and without its stderr. "close", not "exit": it comes after the last stdout chunk,
+    // so a line printed just before exiting has already been seen and its waiters resolved. A
+    // failed spawn emits "close" too.
+    child.once("close", (code, signal) => {
+      exitedWithoutLine = new Error(
+        `simlock ${args.join(" ")} exited with code ${code}, signal ${signal} before printing a stdout line; stderr: ${stderr.trim() || "(empty)"}`,
+      );
+      for (const waiter of stdoutWaiters.splice(0)) waiter.reject(exitedWithoutLine);
       resolve({ code, stdout, stderr, ...parseOutputs(stdout, stderr) });
     });
   });
@@ -137,13 +142,20 @@ export function cliBackground(
     stdoutSoFar: () => stdout,
     async firstStdoutLine(timeout = 30_000) {
       if (firstLineSeen !== undefined) return firstLineSeen;
+      if (exitedWithoutLine !== undefined) throw exitedWithoutLine;
       return new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => {
           reject(new Error(`Timed out after ${timeout}ms waiting for first stdout line`));
         }, timeout);
-        stdoutWaiters.push((line) => {
-          clearTimeout(timer);
-          resolve(line);
+        stdoutWaiters.push({
+          resolve(line) {
+            clearTimeout(timer);
+            resolve(line);
+          },
+          reject(error) {
+            clearTimeout(timer);
+            reject(error);
+          },
         });
       });
     },

@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap } from "../bus/index.js";
-import { SimlockError } from "../contract/index.js";
+import type { LeaseRecord } from "../admin/index.js";
+import { fromWireError, SimlockError } from "../contract/index.js";
 import { QueueTimeoutError } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import { FleetLeaseIndex } from "./lease-index.js";
+import { FleetLeaseIndex, type WorkerReportedLease } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
 import { createRoutingPolicy, type RoutingPolicy } from "./routing.js";
 import {
   catalogFixture,
   deviceFixture,
   grantFixture,
+  hostFixture,
   leaseFixture,
   noCapacityError,
+  physicalDeviceFixture,
+  type PhysicalPresenceFixture,
   ScriptedWorkerClient,
   statusFixture,
 } from "./test-support.js";
@@ -24,12 +28,10 @@ import { WorkerRegistry } from "./worker-registry.js";
 
 const GATEWAY_PREFIX = "gw:instance-1:";
 
-/** A `WorkerDirectory` a test populates by hand: one `ScriptedWorkerClient` per worker id, with
- * `reachable` and the `refresh()` call count independently controllable. */
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
   readonly unreachable = new Set<string>();
-  /** C1 (round 2 review): a worker id in here answers `reachable: true` but `client()`
+  /** why: C1 (round 2 review): a worker id in here answers `reachable: true` but `client()`
    * `undefined` -- the real window `WorkerLink#reachable`/`#client` can disagree in, between a
    * reconnecting link's `#closed` clearing and its own handshake finishing (`#client` is not
    * assigned until `start()` completes). Distinct from `unreachable` above, which models
@@ -37,9 +39,7 @@ class FakeDirectory implements WorkerDirectory {
    * test previously exercised the *first* of the two ways. */
   readonly reachableButNoClient = new Set<string>();
   readonly refreshCalls: string[] = [];
-  /** The workers whose refresh asked for the catalog too, in call order. */
   readonly catalogRefreshCalls: string[] = [];
-  /** Workers whose refresh rejects. */
   readonly failingRefresh = new Set<string>();
 
   add(workerId: string, client: ScriptedWorkerClient): void {
@@ -64,8 +64,6 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-/** Records every `warn` call -- for H6's own test, which asserts a mismatched ownerId echo is
- * logged rather than silently swallowed. */
 class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 
@@ -89,8 +87,7 @@ function harness(
     readonly execTimeoutMs?: number;
     readonly leaseRequestTimeoutMs?: number;
     readonly logger?: Logger;
-    /** Built with the registry so a stub can change the views from inside the dispatch walk --
-     * the one way to reach `#dispatch`'s re-entrancy guard. Defaults to the real policy. */
+    readonly maxPerRequester?: number;
     readonly routing?: (workers: WorkerRegistry) => RoutingPolicy;
   } = {},
 ) {
@@ -99,9 +96,6 @@ function harness(
   const workers = new WorkerRegistry({
     clock,
     eventBus,
-    // ADR §15: the gateway's own cap, which `WorkerRegistry` warns against when a worker
-    // reports a lower one. Nothing in this file exercises that warning -- the value only has
-    // to exist, and is set high enough that no fixture here trips it.
     leaseMaxTtlMs: 4 * 60 * 60_000,
     retentionMs: 24 * 60 * 60_000,
   });
@@ -116,9 +110,6 @@ function harness(
     }),
     leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,
-    // Deliberately large by default -- P5's own test overrides this to something the FakeClock
-    // can advance past inside the test, without every other test in this file needing to know
-    // gateway.execTimeoutMs exists.
     execTimeoutMs: overrides.execTimeoutMs ?? 11 * 60_000,
     idGenerator: {
       generate: (() => {
@@ -127,18 +118,17 @@ function harness(
       })(),
     },
     leaseIndex,
-    // Deliberately large by default -- P2's own test overrides this the same way P5 does for
-    // execTimeoutMs above.
     leaseRequestTimeoutMs: overrides.leaseRequestTimeoutMs ?? 5 * 60_000,
     ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
+    ...(overrides.maxPerRequester === undefined
+      ? {}
+      : { maxPerRequester: overrides.maxPerRequester }),
     routing: overrides.routing?.(workers) ?? createRoutingPolicy("warm-then-free"),
     views: workers,
   });
   return { clock, coordinator, directory, eventBus, leaseIndex, workers };
 }
 
-/** Connects a worker with a catalog, capacity, and devices a test can override -- everything
- * defaults to "eligible for an iOS iPhone 17 request with free capacity". */
 function connectWorker(
   workers: WorkerRegistry,
   workerId: string,
@@ -168,24 +158,22 @@ function connectWorker(
   });
 }
 
-/** Flushes enough microtasks for `SerializedDecision.run`'s chain (admission) and a fire-and-
- * forget dispatch attempt's own synchronous-until-the-RPC portion to have run, without waiting on
- * a real timer -- everything in this module is driven by `FakeClock` and in-memory promises, so
- * there is nothing a real clock tick would advance that this does not already cover. */
 async function tick(times = 16): Promise<void> {
   for (let iteration = 0; iteration < times; iteration += 1) await Promise.resolve();
 }
 
-const REQUEST = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
+const REQUEST = {
+  physical: false,
+  model: "iPhone 17",
+  osVersion: "26.0",
+  platform: "ios" as const,
+};
 
-/** Capacity with no free iOS slot: a worker that can serve an iPhone 17 request and is busy. */
 function saturatedIos(): ReturnType<typeof statusFixture>["capacity"] {
   const capacity = statusFixture().capacity;
   return { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } };
 }
 
-/** Free iOS capacity that differs from the default, so a refresh with it is a changed view that
- * still takes requests -- unlike a queued waiter or a saturated slot, which a filter drops. */
 function roomierIos(): ReturnType<typeof statusFixture>["capacity"] {
   const capacity = statusFixture().capacity;
   return { ...capacity, ios: { ...capacity.ios, maxRunning: 3 } };
@@ -309,9 +297,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
     directory.add("wrk_b", clientB);
-    // Both start at zero free capacity, so the first look finds nobody and the request waits.
-    // Worker A offers *more* running capacity than B -- if both had free room, routing would
-    // prefer A (more free capacity wins the tie-break).
     const noFree = { ...statusFixture().capacity.android, maxRunning: 0, running: 0 };
     connectWorker(workers, "wrk_a", {
       capacity: { ...statusFixture().capacity, ios: { ...noFree, maxRunning: 5, running: 5 } },
@@ -324,7 +309,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    // Worker B frees up (A stays saturated) -- the pass-over that grants it.
     clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     workers.refresh("wrk_b", {
       capacity: { ...statusFixture().capacity, ios: { ...noFree, maxRunning: 5, running: 0 } },
@@ -342,13 +326,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const clientB = new ScriptedWorkerClient();
     directory.add("wrk_a", clientA);
     directory.add("wrk_b", clientB);
-    // Worker A never answers -- the attempt this waiter is dispatched to stays in flight.
     clientA.requestLeaseQueue.push({ kind: "hang" });
 
-    // Worker A is connected but has no free slot: admission's own first look finds nobody to
-    // send it to, so this waiter genuinely enters the queue (`queue.list()`) rather than settling
-    // on the fast admission-time path -- exactly the shape a *second* dispatch pass (triggered
-    // below) would otherwise re-scan.
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     void coordinator.request(REQUEST, requestOptions());
     await tick();
@@ -358,15 +337,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(clientA.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
-    // Worker B connects (also eligible for this request) *while A's attempt is still hanging* --
-    // with strictly *more* free capacity than A, so routing would prefer B outright on a second
-    // look. A dispatch loop that only checks `waiter.state !== "queued"` (and one that never
-    // left the waiter `processing` in the first place, i.e. `#beginAttempt` calling
-    // `queue.markProcessing` before the RPC starts) would pick the same still-visible waiter up
-    // again here and send it to B. Round 2 review (C2): this test alone proves the state check
-    // is what suppresses the second dispatch, not a second guard beside it -- reverting just
-    // `queue.markProcessing(waiter)` in `#beginAttempt` (leaving the state check in `#dispatch`
-    // untouched) makes this assertion fail.
     connectWorker(workers, "wrk_b", {
       capacity: {
         ...statusFixture().capacity,
@@ -382,13 +352,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
-    // Exactly one grant scripted -- every other forwarded lease.request answers
-    // `requestLeaseDefault`'s own NO_CAPACITY, modelling a worker whose reported free capacity
-    // (two full slots below) does not match what it can actually grant right now.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    // Three requests queue up behind a worker with no free slot -- all genuinely `queued`, not
-    // settled at admission.
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const p1 = coordinator.request(
       REQUEST,
@@ -405,52 +370,28 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(3);
 
-    // The refresh below reports two free iOS slots -- on paper, room for two of
-    // the three queued waiters above. Without the per-pass cap, `#dispatch`'s single pass would
-    // run `routing.select` against this same unchanged view for every one of the three, pick
-    // worker A for every one of them, and fire three concurrent `lease.request`s in this one pass.
     workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
 
-    // Capped at one dispatch *per pass* -- but C1 (round 3 review) guarantees a fresh pass the
-    // moment p1's own attempt settles, so p2 gets its own look right behind it (in this same
-    // tick), rather than being stranded until "the next real view change" this test used to have
-    // to wait forever for. p2's attempt still reads the same stale view (routing has no way to
-    // know p1 already used the worker's one real slot) and is refused NO_CAPACITY in turn --
-    // exactly the self-limiting RPC storm the module doc describes, not a second bug.
     const leaseRequests = client.calls.filter((call) => call.startsWith("lease.request"));
     expect(leaseRequests).toHaveLength(2);
     expect(leaseRequests[1]).toContain("agent-2");
 
     await expect(p1).resolves.toBeDefined();
-    // p2's own attempt above already failed and re-queued it -- it is genuinely `queued` again,
-    // not stuck `processing`. p3 was passed over by that *same* pass (only one worker, already
-    // claimed for it once p2 claimed it) and is waiting for its own turn next -- neither granted
-    // nor rejected, and never even attempted yet.
     const outcome = await Promise.race([
       Promise.allSettled([p2, p3]).then(() => "settled" as const),
       tick(6).then(() => "still-pending" as const),
     ]);
     expect(outcome).toBe("still-pending");
     expect(coordinator.queueDepth).toBe(2);
-    // p2's own stale-view retry really ran the ordinary NO_CAPACITY path (refreshing the
-    // worker's view), not merely stayed queued from before.
     expect(directory.refreshCalls).toEqual(["wrk_a"]);
   });
 
   it("gives a waiter passed over by the per-pass cap a guaranteed next look once the claiming attempt settles terminally, even when that failure produces no worker-side event at all (C1, round 3 review)", async () => {
-    // The finding's own reproduction: a terminal failure other than an immediate NO_CAPACITY
-    // (WORKER_UNREACHABLE here, via `leaseRequestTimeoutMs`) hits `#attempt`'s `queue.reject`
-    // branch directly -- no `refresh()`, no worker event, nothing that `#staleView`'s own
-    // self-heal depends on. Before this fix, nothing else ever scheduled another `#dispatch`
-    // pass, so a waiter passed over in the same pass (H6's per-worker-per-pass cap) stalled
-    // forever, reachable only by the unrelated 30s worker-refresh tick.
     const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
-    // w1's own forwarded RPC never answers at all.
     client.requestLeaseQueue.push({ kind: "hang" });
-    // w2's own eventual attempt, once it gets its turn.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
@@ -469,12 +410,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
-    // H6's own per-pass cap: only w1 was attempted this pass, w2 passed over.
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
-    // w1's RPC settles terminally with WORKER_UNREACHABLE, never an immediate NO_CAPACITY -- so
-    // `#staleView`'s own refresh-triggered self-heal never runs for it, and this test never
-    // triggers any worker-view change of its own either.
     clock.advance(5_000);
     await tick();
     expect(w1State.state).toBe("rejected");
@@ -492,16 +429,10 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(outcome).toBe("resolved");
     const w2Grant = await w2;
     expect(w2Grant.lease.worker?.id).toBe("wrk_a");
-    // The self-heal here is `#attempt`'s own guaranteed next pass, not a worker-view refresh.
     expect(directory.refreshCalls).toEqual([]);
   });
 
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {
-    // C1 (round 2 review): the routine trigger is a worker reconnect -- `GatewayService#accept`
-    // sets the new link in `#links` and calls `start()` before the handshake's `#client` is
-    // assigned, so `directory.target(id)` answers `reachable: true` with `client()` still
-    // `undefined` for a real window. `FakeDirectory#reachableButNoClient` reproduces exactly
-    // that window without a real `WorkerLink`.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -511,16 +442,9 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const grantPromise = coordinator.request(REQUEST, requestOptions());
     await tick();
 
-    // The attempt found no client to call at all -- nothing was ever sent to the worker, and the
-    // waiter is back in the queue, not stuck `processing`.
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
     expect(coordinator.queueDepth).toBe(1);
 
-    // The handshake finishes and a later view change re-runs dispatch, exactly as a real
-    // `WorkerLink#start()` completing (or any subsequent refresh) would trigger. On the pre-fix
-    // code this waiter is invisible to `#dispatch` forever from here on: its own leaked
-    // dispatch-target mark keeps failing `#dispatch`'s guard even though its queue state is
-    // genuinely `queued` again.
     directory.reachableButNoClient.delete("wrk_a");
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     workers.refresh("wrk_a", {}); // any refresh re-runs dispatch, exactly as a real one would
@@ -543,7 +467,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
     expect(directory.refreshCalls).toEqual(["wrk_a"]);
 
-    // The refreshed view now has capacity, and this time the worker grants it.
     const capacity = statusFixture().capacity;
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     workers.refresh("wrk_a", {
@@ -580,7 +503,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     directory.add("wrk_a", preferred);
     directory.add("wrk_b", other);
     const capacity = statusFixture().capacity;
-    // wrk_a has more free slots, so free-capacity picks it first.
     connectWorker(workers, "wrk_a", {
       capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
     });
@@ -591,7 +513,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(other.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
 
-    // A refresh of wrk_a that changes nothing load-bearing runs the next pass.
     workers.refresh("wrk_a", {});
 
     const grant = await grantPromise;
@@ -628,8 +549,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
-    // The worker goes away between routing and its answer: its view is gone by the time the
-    // NO_CAPACITY lands, so there is no view left to remember the refusal against.
     const target = directory.target.bind(directory);
     directory.target = (workerId) => {
       const found = target(workerId);
@@ -653,8 +572,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("sends a queued noWait request refused by one worker to only one other worker in the next walk", async () => {
-    // The refused waiter is already in the queue (it first met a worker with no client yet), so
-    // the walk must not offer it twice: once in its queue position and once as the candidate.
     const { coordinator, directory, workers } = harness();
     const first = new ScriptedWorkerClient();
     const second = new ScriptedWorkerClient();
@@ -710,11 +627,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("terminally rejects, rather than re-queuing, a NO_CAPACITY that arrives after progress already fired (P1, round 2 review)", async () => {
-    // ADR §11: "an *immediate* NO_CAPACITY is the only answer that leaves it queued" -- one
-    // reached *after* a progress push means device work had already begun (the worker's own
-    // `#evictManaged` failure path can answer this way, after `provisioning`/`reclaiming`), so
-    // this request was already dispatched and a NO_CAPACITY past that point is its own terminal
-    // failure, not a stale view to retry.
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -731,8 +643,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       .request(REQUEST, requestOptions())
       .catch((error: unknown) => error);
 
-    // It really was announced -- proving this is the "already dispatched" branch, not the
-    // ordinary immediate-refusal one.
     expect(dispatched).toHaveLength(1);
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("NO_CAPACITY");
@@ -741,11 +651,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("bounds a forwarded lease.request against gateway.leaseRequestTimeoutMs when the worker never answers at all (P2, round 2 review)", async () => {
-    // ADR §10: timeoutMs/QUEUE_TIMEOUT and lease.cancel are enforced on the gateway's own queue
-    // -- which only holds while a waiter is `queued`, never while it is `processing` a forwarded
-    // RPC. Before this fix, a forwarded `lease.request` had no timeout of its own, so a worker
-    // whose handler wedged left the request `processing` forever: neither a deadline nor
-    // `lease.cancel` could ever reach it again.
     const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -756,8 +661,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const requestState = promiseState(request);
     const rejection = request.catch((error: unknown) => error);
     await tick();
-    // Not stuck forever, and not answerable by a stale-view refresh either -- the waiter must
-    // come back to a state the queue's own machinery can act on.
     expect(coordinator.queueDepth).toBe(0);
     expect(directory.refreshCalls).toEqual([]);
 
@@ -772,13 +675,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("does not emit request.dispatched for a progress push that arrives after gateway.leaseRequestTimeoutMs already rejected the waiter (P4, round 3 review)", async () => {
-    // H4's own reasoning, applied to the sibling timeout P2 added in the same round and left
-    // undetached: `#withLeaseRequestTimeout` settling `WORKER_UNREACHABLE` only stops the
-    // returned promise from being awaited -- the worker's own still-pending `lease.request` RPC
-    // is never cancelled, and its `onProgress` closure stays live for as long as the worker cares
-    // to keep pushing. `docs/internal/EVENTS.md` defines `request.dispatched` as "the gateway's fleet queue
-    // sent a queued request to a worker ... and the worker took it" -- a false past-tense fact for
-    // a request the caller has already been told is `WORKER_UNREACHABLE`.
     const { clock, coordinator, directory, eventBus, workers } = harness({
       leaseRequestTimeoutMs: 5_000,
     });
@@ -800,20 +696,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(requestState.state).toBe("rejected");
     const error = await rejection;
     expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
-    expect(events).toEqual([]);
+    expect(events).toEqual(["lease.rejected"]);
 
-    // The worker, unaware this gateway already gave up, pushes progress on the RPC it still
-    // thinks is live -- exactly as `client.exec`'s own late `onOutput` chunk does in H4's test.
     client.lastRequestLeaseOptions?.onProgress?.({ etaMs: 5_000, stage: "provisioning" });
     await tick();
 
-    expect(events).toEqual([]);
+    expect(events).toEqual(["lease.rejected"]);
   });
 
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {
     const { coordinator, leaseIndex } = harness();
-    // Simulates a gateway restart's reconnect rebuild (§30): this lease was never granted
-    // through `coordinator.request` in this process at all.
     leaseIndex.rebuildFromWorker("wrk_a", [
       {
         grantedAt: 1,
@@ -836,14 +728,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const client = new ScriptedWorkerClient();
     directory.add("wrk_ios", client);
     directory.add("wrk_android", new ScriptedWorkerClient());
-    // `oldFirst`'s own attempt claims the worker for the whole test and never settles -- what
-    // matters here is which *other* waiter gets a look at the worker's nominal second slot next,
-    // not what `oldFirst` itself resolves to.
     client.requestLeaseQueue.push({ kind: "hang" });
 
-    // Both workers are connected and busy, so every request below waits (a request no worker
-    // could ever serve would fail at once instead). Admitted oldest first: an android request
-    // whose worker stays busy for the whole test, then two iOS waiters.
     const capacity = statusFixture().capacity;
     connectWorker(workers, "wrk_ios", { capacity: saturatedIos() });
     connectWorker(workers, "wrk_android", {
@@ -866,11 +752,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(3);
 
-    // The iOS worker frees two slots. An android-then-iOS dispatch loop that gives up (or
-    // blocks) on android's own "no worker" answer would never reach either iOS waiter behind it
-    // in this same pass. Its reported capacity (two free slots) is on paper room for both
-    // `oldFirst` and `oldSecond`, but H6's own per-worker-per-pass cap intentionally leaves
-    // `oldSecond` passed over here -- genuinely `queued`, not the bug this test targets.
     workers.refresh("wrk_ios", { capacity: statusFixture().capacity });
     await tick();
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
@@ -887,12 +768,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(androidSettled).toBe(false);
 
-    // A brand-new iOS waiter arrives after `oldSecond`, with no worker-view change since --
-    // `routing.select` is a pure function of the current views, so the very same stale view that
-    // already left `oldSecond` queued still nominally reports the same free capacity. ADR
-    // §10/§11's FIFO is oldest-first: that capacity belongs to `oldSecond`, which has been queued
-    // and eligible the whole time, never to a brand-new admission that only got a look because
-    // `#admit` took its own out-of-order peek instead of deferring to `#dispatch`.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const newPromise = coordinator.request(
       REQUEST,
@@ -900,8 +775,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     );
     await tick();
 
-    // The second `lease.request` this test ever sends must be `oldSecond`'s own, not the
-    // brand-new admission's -- regardless of what either eventually settles to.
     const leaseRequests = client.calls.filter((call) => call.startsWith("lease.request"));
     expect(leaseRequests.length).toBeGreaterThanOrEqual(2);
     expect(leaseRequests[1]).toContain("agent-old-2");
@@ -923,10 +796,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       grant: grantFixture({
         lease: {
           ...grantFixture().lease,
-          // A worker that ignores or rewrites the field it was asked to store verbatim --
-          // exactly the case this gateway must not trust for a fresh grant, even though
-          // `FleetLeaseIndex#rebuildFromWorker` (the reconnect path) has no better source and
-          // must trust it there.
           ownerId: "worker-rewrote-this",
         },
       }),
@@ -949,14 +818,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ).toBe(true);
   });
 
-  // C4 (round 2 review): the test below titled around "the worker's first progress push"
-  // asserted nothing that a progress push specifically causes -- the grant path emits
-  // `request.dispatched` right after `client.requestLease` resolves regardless of whether
-  // `progress` fired first, so deleting `announceDispatched()` from `#attempt`'s `onProgress`
-  // callback entirely left every test in this file passing. This one scripts a request that is
-  // genuinely dispatched (a `progress` push fires) and then never settles at all, so the *only*
-  // way `request.dispatched` can appear is the progress-driven call -- proving it fires before,
-  // not merely alongside, settlement (there is none, ever, in this scenario).
   it("emits request.dispatched on the worker's first progress push even when the request never settles at all (§11, C4 round 2 review)", async () => {
     const { coordinator, eventBus, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
@@ -995,10 +856,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
   });
 
-  // H10 (round 2 review): `request.dispatched` had no test at all -- not its payload, not
-  // emit-once, not §11's "first progress push counts as dispatched" rule. `progress` on
-  // `RequestLeaseOutcome` (`test-support.ts`) was added for exactly this and was dead code until
-  // these three tests started using it.
   it("emits request.dispatched exactly once, on the worker's first progress push, not again when the grant lands afterward (§11)", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
@@ -1017,8 +874,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     const grant = await coordinator.request(REQUEST, requestOptions());
 
-    // C2 (round 2 review): the full self-contained payload `docs/internal/EVENTS.md` specifies -- not
-    // just the gateway-internal `requestId`/`workerId` pair.
     expect(dispatched).toEqual([
       {
         model: "iPhone 17",
@@ -1031,7 +886,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
         workerId: "wrk_a",
       },
     ]);
-    // Sanity: the request really did land where the event says it did.
     expect(grant.lease.worker?.id).toBe("wrk_a");
   });
 
@@ -1122,8 +976,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const { clock, coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
-    // No free capacity yet -- the request genuinely queues instead of settling on the fast
-    // admission-time path, so `queuedMs` has something real to measure.
     const noFree = { ...statusFixture().capacity.ios, maxRunning: 0, running: 0 };
     connectWorker(workers, "wrk_a", { capacity: { ...statusFixture().capacity, ios: noFree } });
     const dispatched: unknown[] = [];
@@ -1135,8 +987,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     clock.advance(2_500);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // The worker now reports the requested device itself sitting ready -- a warm hit, not a
-    // free-capacity pick, once capacity frees up too.
     workers.refresh("wrk_a", {
       capacity: { ...statusFixture().capacity, ios: { ...noFree, maxRunning: 5 } },
       devices: [deviceFixture("dev_1", "ready")],
@@ -1159,8 +1009,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("request.dispatched carries the routing decision's stage name and reason", async () => {
-    // A stage name no shipped policy has, and a reason that does not follow from it, so both
-    // payload fields can only have come from the decision itself.
     const { coordinator, directory, eventBus, workers } = harness({
       routing: () => ({
         assess: () => ({ kind: "route-or-wait" }),
@@ -1227,19 +1075,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
   });
 
-  // C3 (round 2 review): `session.onStarted` used to fire before `client.exec` even went out --
-  // committing an HTTP caller's `200` before this gateway had any idea whether the worker would
-  // accept the command at all, including a worker-side `FORBIDDEN` (§19a', the one place `admin`
-  // does not bypass ownership) and the driver's own `PASSTHROUGH_REFUSED` / a bad `tool`. These
-  // two tests exercise `FleetLeaseCoordinator#exec` itself, the actual chokepoint -- not just
-  // `http/app.ts`'s own route logic, which was already correct given whatever a dispatcher told
-  // it (see `http/app.test.ts`'s "answers a failure that lands before any output with its own
-  // status, not a stream").
   it("announces started from the worker's own push, before any output, and never before client.exec is sent (ADR §19a)", async () => {
-    // The signal is the worker's `started` frame and nothing else -- not the first output chunk
-    // (which cannot fire for a silent command) and not a timer (which cannot tell a slow worker
-    // from a refusing one). This asserts the ordering that matters to a transport: `started`
-    // lands before the first chunk, and never before the forward actually goes out.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -1290,9 +1126,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       kind: "grant",
     });
     const grant = await coordinator.request(REQUEST, requestOptions());
-    // §19a': the worker's own ownership check disagreeing with what this gateway forwarded --
-    // exactly the answer that must still reach an HTTP caller as its own status code, not as an
-    // already-committed 200 + SSE `error`.
     client.execQueue.push({
       error: new SimlockError("FORBIDDEN", "domain", "Lease belongs to a different requester", {}),
       kind: "error",
@@ -1319,19 +1152,11 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("a noWait request refused while other requests are queued emits no lease.queued and no queued progress -- it never entered the queue (ADR §10, architecture rule 10)", async () => {
-    // `noWait` used to be enforced twice: once in `#admit`'s own direct look and once after an
-    // enqueue-then-dispatch. The second path committed queue membership *before* it knew the
-    // answer, and `WaitQueue#enqueue` pushes a `queued` progress frame and `#enqueue` emits
-    // `lease.queued` -- so the same request produced different observable facts depending on
-    // whether *unrelated* requests happened to be queued at the time. ADR §10 requires "the same
-    // codes and progress states a worker uses", and a worker's own `#defer` rejects a `noWait`
-    // waiter before it enqueues.
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
 
-    // Occupy the worker and leave a waiter in the queue, so the queue is non-empty.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     await coordinator.request(REQUEST, requestOptions());
     void coordinator.request(
@@ -1371,8 +1196,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   ] as const)(
     "rejects a noWait request refused by its only worker with NO_CAPACITY and lease.rejected no-wait, and refreshes that worker's view, with %s -- the answer does not depend on queue depth",
     async (_queue, queued) => {
-      // Deciding on `waiter.state === "queued"` could not tell "never attempted" from "attempted
-      // and refused inside the same pass", so the answer used to flip with unrelated queue depth.
       const { coordinator, directory, eventBus, workers } = harness();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_a", client);
@@ -1380,7 +1203,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       if (queued > 0) {
         client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
         await coordinator.request(REQUEST, requestOptions());
-        // Refused by wrk_a and left queued, so the queue is non-empty.
         void coordinator.request(
           REQUEST,
           requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
@@ -1399,7 +1221,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       const refusedState = promiseState(refused);
       await tick();
 
-      // Answered, not left waiting in the queue: a noWait caller never asked to wait.
       expect(refusedState.state).toBe("rejected");
       await expect(refused).rejects.toMatchObject({ code: "NO_CAPACITY" });
       expect(client.calls).toContain(`lease.request:${GATEWAY_PREFIX}agent-3`);
@@ -1410,20 +1231,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
   );
 
   it("relays the worker's own started push for a silent, long-running command -- no output, no answer, still a 200 through a gateway (ADR §19a/§19b/§19e)", async () => {
-    // ADR §19e/§19b: "a command that prints nothing for nine minutes still gets its 200 and its
-    // keepalives" -- `simctl install <path>` (§19b's own worked example) is exactly such a
-    // command. Deferring `onStarted` to the first output chunk never fires for one, so a
-    // gateway-fronted caller got no `200`, no keepalives, and eventually a `504` instead of the
-    // stream's own terminal `EXEC_TIMEOUT`. The worker knows the moment and now sends it, so
-    // this asserts the relay and nothing about timing: no clock is advanced anywhere below.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const grant = await coordinator.request(REQUEST, requestOptions());
-    // The process exists on the worker -- it says so -- and then writes nothing and never
-    // settles, which is the whole shape of a silent long-running command.
     client.execQueue.push({ kind: "hang", started: true });
 
     let started = false;
@@ -1474,8 +1287,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as DispatchError).code).toBe("FORBIDDEN");
     expect(started).toBe(false);
 
-    // There is no timer to fire any more -- advancing the clock well past where one used to be
-    // must not fire a stray `onStarted` for a call that is already over.
     clock.advance(10_000);
     expect(started).toBe(false);
   });
@@ -1531,9 +1342,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       kind: "grant",
     });
     const grant = await coordinator.request(REQUEST, requestOptions());
-    // Never settles -- exactly the "worker never answers at all" case `EXEC_TIMEOUT` exists for
-    // -- but the underlying RPC is never cancelled, so a real worker's own `onOutput` pushes can
-    // still arrive on it after this gateway has already given up.
     client.execQueue.push({ kind: "hang" });
 
     const relayed: Array<{ stream: string; chunk: string }> = [];
@@ -1557,20 +1365,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 
-    // The worker, unaware this gateway already timed the call out, keeps streaming -- this is
-    // exactly the closure `client.exec` was given, invoked exactly as the worker's own RPC
-    // handling would invoke it in production, well after `EXEC_TIMEOUT` already settled.
     client.lastExecOptions?.onOutput?.({ chunk: "late output", stream: "stdout" });
     await tick();
 
     expect(relayed).toEqual([]);
   });
 
-  // Round 6 review: `#raceTimeout`'s own doc claims no late frame "reaches `session.onOutput`
-  // (or spuriously fires `onStarted`) once that has happened", but only the `onOutput` half was
-  // tested -- both `detached` guards were deletable with the whole suite green. HTTP survives a
-  // spurious `onStarted` only because `OutputRelay` swallows it, which is the transport saving
-  // this class again: exactly the reasoning H4 rejected for `onOutput`.
   it("does not announce started from a worker frame that arrives after gateway.execTimeoutMs already rejected the call (H4, round 6 review)", async () => {
     const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
@@ -1601,8 +1401,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const error = await rejection;
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
 
-    // The worker finally spawns the process and says so -- the same closure `client.exec` was
-    // given, well after this gateway answered `EXEC_TIMEOUT`.
     client.lastExecOptions?.onStarted?.();
     await tick();
 
@@ -1610,9 +1408,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("announces started once even if the worker sends the frame more than once", async () => {
-    // A `started` push is request-scoped and should arrive once, but nothing on the wire stops a
-    // worker from sending it twice, and a transport that has already chosen its response shape
-    // cannot un-choose it. The dedupe is what makes the signal idempotent for every consumer.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -1639,21 +1434,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(startedCount).toBe(1);
   });
 
-  // Round 6 review: `#dispatch`'s re-entrancy guard and its `#passRequested` deferral were
-  // deletable with the whole suite green, and instrumenting the `#dispatchDepth > 0` branch
-  // showed *zero* hits across every test in the repo -- round 4 finding 6's fix ("defer instead
-  // of dropping") was a green light wired to nothing.
-  //
-  // It takes a synchronous view change raised from inside the walk to reach, which no production
-  // path does today (`WorkerLink#refresh` mutates only past its first await). That is precisely
-  // why it needs a test rather than deletion: the guard exists so that a future caller which
-  // *does* mutate synchronously cannot silently reintroduce C1's stall, and nothing but this
-  // test would notice if the deferral were removed again.
   it("runs another pass for a view change raised from inside the walk, rather than dropping it (round 4 finding 6, round 6 review)", async () => {
-    // Call 1 is the admission look (worker still carries the wrong model, so the real policy
-    // refuses and the waiter queues). Call 2 is the pass the single refresh below triggers --
-    // that is the one that injects. Call 3 can only happen if the nested change was deferred
-    // rather than dropped.
     let selectCalls = 0;
     const { coordinator, directory, workers } = harness({
       routing: (registry) => {
@@ -1663,11 +1444,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
           select(request, workerViews) {
             selectCalls += 1;
             if (selectCalls === 2) {
-              // A view change *during* the walk: re-enters `#dispatch`, which cannot run a pass
-              // now (one is already walking a snapshot) and must therefore remember to run one
-              // when this one unwinds.
               registry.refresh("wrk_a", {});
-              // ...and this waiter finds nothing this pass, so only that next pass can serve it.
               return undefined;
             }
             return real.select(request, workerViews);
@@ -1679,25 +1456,15 @@ describe("FleetLeaseCoordinator dispatch", () => {
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
-    // Connected, but with no free slot -- so the waiter queues behind a busy worker, and the
-    // worker is already fully connected. That matters: `connectWorker` raises *two* view changes
-    // (`connected`, then `refresh`), and a second top-level dispatch would serve the waiter on
-    // its own, masking whether the deferred pass did anything at all. Getting the worker
-    // connected before the request leaves exactly one trigger below.
     connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
     const grantPromise = coordinator.request(REQUEST, requestOptions());
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    // The single trigger: one refresh that frees a slot. Pass 1 refuses the waiter
-    // and raises a nested view change; only the deferred pass 2 can dispatch it. Asserted on the
-    // forwarded RPC rather than by awaiting the grant, so dropping the deferral fails here on a
-    // named assertion instead of by timing out (testing rule 2).
     workers.refresh("wrk_a", { capacity: statusFixture().capacity });
     await tick();
 
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
-    // Three looks: admission, the injecting pass, and the deferred pass that actually dispatched.
     expect(selectCalls).toBe(3);
     const grant = await grantPromise;
     expect(grant.lease.worker?.id).toBe("wrk_a");
@@ -1738,10 +1505,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
-    // What the admin client's own wire rejects an in-flight call with when *its* connection to
-    // the worker dies mid-call (`src/simlock-client/wire.ts`) -- `kind: "transport"` names the
-    // uplink itself, not a worker fact, and forwarding it verbatim would tell the fleet client
-    // its own connection to *this gateway* was lost, which never happened.
     client.requestLeaseQueue.push({
       error: new SimlockError(
         "DAEMON_CONNECTION_LOST",
@@ -1791,10 +1554,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
   });
 
   it("reports a non-SimlockError from a forwarded renew as INTERNAL, never as WORKER_UNREACHABLE (H1, round 2 review)", async () => {
-    // A raw TypeError here is this coordinator's own bug, not a fact about the worker -- every
-    // real transport failure already arrives as a `kind: "transport"` SimlockError (the test
-    // above). Answering WORKER_UNREACHABLE for a value like this would misreport a gateway-side
-    // crash as "the machine is unreachable".
     const { coordinator, directory, workers, leaseIndex } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -1854,9 +1613,6 @@ describe("FleetLeaseCoordinator dispatch", () => {
       code: "UNKNOWN_LEASE",
     });
 
-    // The gateway's own record was provably wrong (the worker has no idea what this lease is) --
-    // it must not survive to block `agent-1`'s next request with REQUESTER_ALREADY_LEASED
-    // naming a lease that exists nowhere.
     expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     await expect(coordinator.request(REQUEST, requestOptions())).resolves.toBeDefined();
@@ -1908,22 +1664,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
       kind: "error",
     });
 
-    // Without C3's fix this single zombie entry throws on *every* future release-all -- proven
-    // by calling it twice.
     await expect(coordinator.releaseAll()).resolves.toEqual(["wrk_a.lse_zombie"]);
     expect(leaseIndex.resolve("wrk_a.lse_zombie")).toBeUndefined();
     await expect(coordinator.releaseAll()).resolves.toEqual([]);
   });
 
   it("does not evict a lease on one worker when only a different worker's view changes repeatedly (C1, round 2 review)", async () => {
-    // Reproduces the round 2 finding exactly: a grant lands on wrk_a, but wrk_a's own cached
-    // view never gets refreshed with the new lease in this test (nothing here calls
-    // `workers.refresh("wrk_a", { leases: [...] })`, exactly the race where a real
-    // `WorkerLink`'s post-grant refresh is still in flight). Unrelated churn on wrk_b must never
-    // be able to evict wrk_a's lease -- before the fix, `#onViewsChanged` reconciled *every*
-    // view (including wrk_a's stale, lease-less one) on every notification, so two view changes
-    // on wrk_b alone were enough to walk wrk_a's entry through both halves of
-    // `rebuildFromWorker`'s two-consecutive-misses rule and forget it.
     const { coordinator, directory, workers, leaseIndex } = harness();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
@@ -1935,11 +1681,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     const grant = await coordinator.request(REQUEST, requestOptions());
     expect(grant.lease.worker?.id).toBe("wrk_a");
-    // wrk_a's own view still reports no leases at all -- the stale-cache race this finding
-    // describes, not a hypothetical.
     expect(workers.view("wrk_a")?.leases).toEqual([]);
 
-    // Two unrelated view changes on wrk_b -- neither one is about wrk_a.
     workers.refresh("wrk_b", {});
     workers.refresh("wrk_b", {});
 
@@ -1980,38 +1723,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as DispatchError).details).toMatchObject({
       releasedLeaseIds: ["wrk_a.lse_1"],
     });
-    // What already succeeded stays released regardless of the answer's own shape.
     expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
     expect(leaseIndex.resolve("wrk_b.lse_1")).toBeDefined();
   });
 });
 
-/**
- * #119: drain and disconnect lifecycle, and the `WORKER_UNREACHABLE` paths §28/§29 name.
- * `routing.test.ts` already proves eligibility is a pure function that drops a drained or
- * disconnected worker; what these tests add is the coordinator-level proof that the exclusion
- * actually starves that worker's own client of calls while an eligible sibling keeps serving --
- * a call-count assertion, not just "the grant landed on the other one".
- */
 describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
-  /**
-   * H2 (round 1 review, #119): the drain and disconnect tests below were ~40-line near-clones
-   * differing in three lines -- the exclusion action, and which ADR section it cites. Shared
-   * here so the one real difference between them is what each `it` block shows, not buried in
-   * two copies of the setup and assertions around it.
-   *
-   * wrk_a starts saturated so the first request is forced onto wrk_b -- which one ends up
-   * excluded is deliberate, not incidental to routing's own tie-break. After `exclude` runs,
-   * wrk_a is given *less* free capacity than wrk_b's own (unchanged) view still reports: if
-   * exclusion did not drop wrk_b outright, warm-then-free's free-capacity tie-break would still
-   * prefer B (more free capacity wins). The second request landing on A anyway, despite being
-   * the worse capacity pick, is what proves the exclusion -- not the capacity numbers -- is what
-   * kept B out. wrk_b's client is scripted with a spare grant too (C2, round 1 review): without
-   * it, a routing regression that let the excluded worker back into eligibility would route
-   * there, its empty queue would answer `NO_CAPACITY`, the coordinator would read that as a
-   * stale view (§11) and re-enqueue forever, and this test would time out instead of failing the
-   * wrong-worker assertion below.
-   */
   async function excludedWorkerKeepsLeaseButGetsNoNewDispatch(
     exclude: (workers: WorkerRegistry) => unknown,
   ): Promise<void> {
@@ -2029,8 +1746,6 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(firstGrant.lease.worker?.id).toBe("wrk_b");
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
-    // Excluded mid-service: its existing lease must stay exactly where it is (§9's "keeps its
-    // existing leases" / §6).
     await exclude(workers);
     expect(leaseIndex.resolve(firstGrant.lease.id)).toBeDefined();
 
@@ -2050,8 +1765,6 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
 
     expect(secondGrant.lease.worker?.id).toBe("wrk_a");
     expect(clientA.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
-    // The real assertion: the excluded worker's own call count never grew past the one lease it
-    // already held before its exclusion -- not merely "the second grant's worker id is wrk_a".
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   }
 
@@ -2089,30 +1802,14 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
 
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
-    // Never reached the worker at all -- a call that then failed would still show up here.
-    // P1 (round 1 review, #119): this does *not* pin the pre-flight `target?.reachable === true
-    // ?` conjunct in `#forwardToWorker` specifically -- deleting it leaves this test (and all
-    // 1776 others) green, because `FakeDirectory.target()` already makes `client()` return
-    // `undefined` whenever `reachable` is false, so the conjunct is redundant here. It is
-    // redundant in production too: `WorkerLink#reachable` and `#client()` both mirror the same
-    // `#closed` flag (`worker-link.ts`), so the conjunct can never change the outcome there
-    // either. Left in place rather than dropped, since this PR makes no production changes.
     expect(client.calls.filter((call) => call.startsWith("device.exec"))).toEqual([]);
   });
 
   it("a request dispatched to a worker whose uplink then drops: the client sees WORKER_UNREACHABLE, and the lease is not silently double-granted once the worker's view catches up (§29)", async () => {
-    // H4 (round 1 review, #119): everything through `rebuiltLeaseId`'s own assertion below
-    // re-asserts what "maps a transport failure on lease.request to WORKER_UNREACHABLE" (P4,
-    // above) already pins -- not new load-bearing coverage, just the setup this test's own
-    // genuinely new part (the retry below) needs. That retry -- proving the fleet-wide rule the
-    // rebuild just populated is what a same-requester retry finds, never a second grant -- is
-    // what §29 adds here.
     const { coordinator, directory, workers, leaseIndex } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
-    // The worker's own answer to this dispatch never makes it back -- the uplink itself died
-    // mid-call, exactly the `kind: "transport"` shape a real connection loss arrives as.
     client.requestLeaseQueue.push({
       error: new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Connection lost", {}),
       kind: "error",
@@ -2123,13 +1820,8 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
       .catch((error: unknown) => error);
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
-    // The client's own request is over -- nothing is left queued to double-settle later.
     expect(coordinator.queueDepth).toBe(0);
 
-    // The worker actually granted it before the uplink dropped: the next real snapshot the
-    // gateway sees once the uplink returns reports the lease, exactly as §29 describes ("if the
-    // worker actually granted it, the lease exists on the worker"). This is the ordinary
-    // reconcile path (`#onViewsChanged`/`rebuildFromWorker`), not a special case.
     workers.refresh("wrk_a", {
       leases: [
         {
@@ -2143,22 +1835,16 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     const rebuiltLeaseId = "wrk_a.lse_ghost";
     expect(leaseIndex.resolve(rebuiltLeaseId)).toBeDefined();
 
-    // The requester's retry -- "the same `409 → GET` recovery loop ... applied across the
-    // uplink gap" -- must find the lease the fleet-wide rule now knows about, never a second
-    // grant for the same requester.
     const retry = await coordinator
       .request(REQUEST, requestOptions())
       .catch((error: unknown) => error);
     expect(retry).toBeInstanceOf(RequesterAlreadyLeasedError);
     expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(rebuiltLeaseId);
-    // Only ever the one `lease.request` call this worker actually answered -- the retry above
-    // was refused at admission, before ever reaching a worker again.
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 });
 
 describe("FleetLeaseCoordinator sends a worker only requests its catalog can serve (ADR 0009 §3)", () => {
-  /** Connects a worker with one catalog entry stated in full, so pairings and aliases are explicit. */
   function connectWithCatalog(
     workers: WorkerRegistry,
     workerId: string,
@@ -2209,7 +1895,6 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     directory.add("wrk_a", other);
     directory.add("wrk_b", lister);
     lister.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // wrk_a sorts first and has the same free capacity, so only the alias can send it to wrk_b.
     connectWithCatalog(workers, "wrk_a", {
       models: ["Pixel 7"],
       platform: "android",
@@ -2238,7 +1923,6 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     directory.add("wrk_a", unpaired);
     directory.add("wrk_b", paired);
     paired.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // wrk_a lists iPhone 17 and 26.0, but pairs iPhone 17 only with 18.0.
     connectWithCatalog(workers, "wrk_a", {
       modelRuntimes: { "iPhone 15": ["26.0"], "iPhone 17": ["18.0"] },
       models: ["iPhone 17", "iPhone 15"],
@@ -2292,7 +1976,6 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     directory.add("wrk_a", otherTag);
     directory.add("wrk_b", lister);
     lister.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // wrk_a sorts first and has the same free capacity, so only the tag can send it to wrk_b.
     connectWithCatalog(workers, "wrk_a", {
       images: [
         { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
@@ -2356,8 +2039,6 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     directory.add("wrk_a", downloader);
     directory.add("wrk_b", installed);
     installed.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // wrk_a would download 26.0 under its own policy; on main that made it eligible, and it
-    // sorts first with the same free capacity.
     connectWithCatalog(
       workers,
       "wrk_a",
@@ -2393,7 +2074,6 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     return { outcome, state: promiseState(outcome) };
   }
 
-  /** One scenario per row of ADR 0009 §4's table, each with the workers it needs connected. */
   const ROWS = [
     {
       code: "NO_CAPACITY",
@@ -2464,7 +2144,6 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
       const { outcome, state } = lease(fleetHarness, row.request, options);
       await tick();
 
-      // Settled with no clock advanced: neither the timeout nor a worker's answer was waited on.
       expect(state.state).toBe("rejected");
       await expect(outcome).rejects.toMatchObject({
         code: row.code,
@@ -2551,13 +2230,11 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     expect(first.state.state).toBe("rejected");
     await expect(first.outcome).rejects.toMatchObject({ code: "UNKNOWN_MODEL" });
 
-    // The same requester asks again: a second rejection, not REQUESTER_ALREADY_LEASED.
     const second = lease(fleetHarness, unknown);
     await tick();
     expect(second.state.state).toBe("rejected");
     await expect(second.outcome).rejects.toMatchObject({ code: "UNKNOWN_MODEL" });
 
-    // And once a worker lists the model, the same requester is served.
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     connectWorker(workers, "wrk_b", { models: ["iPhone 99"] });
     const third = await coordinator.request(unknown, requestOptions());
@@ -2603,7 +2280,6 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
 
       const { outcome, state } = lease(fleetHarness, REQUEST);
       await tick();
-      // Control: a busy worker makes it wait.
       expect(state.state).toBe("pending");
       expect(coordinator.queueDepth).toBe(1);
 
@@ -2636,7 +2312,6 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     const fleetHarness = harness();
     const { workers } = fleetHarness;
     workers.connected("wrk_a", undefined, "0.3.0");
-    // Its status has been read; its catalog has not.
     workers.refresh("wrk_a", { capacity, devices: [], health: "running", leases: [] });
 
     const { outcome, state } = lease(fleetHarness, REQUEST);
@@ -2651,14 +2326,12 @@ describe("FleetLeaseCoordinator fails a request no worker can serve at once (ADR
     const { workers } = fleetHarness;
     connectWorker(workers, "wrk_a");
     connectWorker(workers, "wrk_b", { models: ["iPhone 16"] });
-    // wrk_a reconnects: its uplink is open again and nothing has been read from it yet.
     workers.connected("wrk_a", undefined, "0.3.0");
 
     const { outcome, state } = lease(fleetHarness, REQUEST);
     await tick();
 
     expect(state.state).toBe("rejected");
-    // UNKNOWN_MODEL would say no worker has the model, and wrk_a's last catalog says it does.
     await expect(outcome).rejects.toMatchObject({ code: "NO_CAPACITY" });
   });
 
@@ -2720,7 +2393,20 @@ describe("FleetLeaseCoordinator waits for a worker that is busy, not unable (ADR
   }
 
   it.each([
-    ["is not healthy", { health: "starting" as const }, { health: "running" as const }],
+    ["is not healthy", { health: "failed" as const }, { health: "running" as const }],
+    [
+      "is still starting",
+      { health: "starting" as const },
+      {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        devices: [],
+        health: "running" as const,
+        leases: [],
+        queueDepth: 0,
+      },
+    ],
     ["has its own waiters queued", { queueDepth: 2 }, { queueDepth: 0 }],
   ])(
     "queues a request, and does not fail it, when the only capable worker %s, and sends it once the worker is ready",
@@ -2758,7 +2444,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     return client.calls.filter((call) => call.startsWith("lease.request"));
   }
 
-  /** Two workers that both list the request; `wrk_a` is scripted first, `wrk_b` second. */
   function twoWorkers(options: { readonly busyB?: boolean; readonly logger?: Logger } = {}) {
     const fleetHarness = harness(options.logger === undefined ? {} : { logger: options.logger });
     const a = new ScriptedWorkerClient();
@@ -2774,8 +2459,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     return { a, b, ...fleetHarness };
   }
 
-  /** Starts the request and lets it settle as far as it will without the clock moving, so each
-   * test asserts where it stands instead of waiting for an outcome that may never come. */
   async function start(
     coordinator: FleetLeaseCoordinator,
     options: Parameters<typeof requestOptions>[0] = {},
@@ -2820,14 +2503,12 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
   it("does not ask the refusing worker again for that request", async () => {
     const { a, b, coordinator, workers } = twoWorkers();
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
-    // wrk_b is busy at first, so the request waits with only wrk_a's refusal behind it.
     b.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
     const { outcome, state } = await start(coordinator);
     expect(state.state).toBe("pending");
     expect(leaseRequests(a)).toHaveLength(1);
-    // Every later view change re-walks the waiter; wrk_a must stay out of it.
     workers.refresh("wrk_a", { capacity: roomierIos() });
     workers.refresh("wrk_b", { queueDepth: 1 });
     workers.refresh("wrk_b", { capacity: roomierIos(), queueDepth: 0 });
@@ -2852,7 +2533,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     const { ended, state } = await start(coordinator);
 
     expect(state.state).toBe("rejected");
-    // The most recent refusal, not the first and not the table's own.
     const rejection = await ended;
     expect(rejection).toBeInstanceOf(DispatchError);
     expect(rejection).toMatchObject({
@@ -2880,12 +2560,9 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
   });
 
   it("does not reset the queue deadline when it retries to a queue position", async () => {
-    // wrk_b is busy, so the only worker the retry can reach is wrk_a.
     const { a, clock, coordinator, workers } = twoWorkers({ busyB: true });
     a.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
-    // wrk_a's second answer takes 60 000 ms, all of the request's budget: the deadline passes
-    // while the attempt is in flight, which is not itself a rejection.
     let calls = 0;
     const answer = a.requestLease.bind(a);
     a.requestLease = async (input, options) => {
@@ -2897,8 +2574,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     const { ended, state } = await start(coordinator, { timeoutMs: 60_000 });
     expect(coordinator.queueDepth).toBe(1);
     expect(state.state).toBe("pending");
-    // wrk_a's view changed, so it is asked again and refuses for good. The retry goes back to
-    // the queue, and the original deadline has already passed.
     workers.refresh("wrk_a", { capacity: roomierIos() });
     await tick();
 
@@ -2913,7 +2588,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
     a.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
     a.requestLeaseQueue.push({ error: runtimeMissing(), kind: "error" });
     b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // During wrk_a's second attempt the whole budget passes and wrk_b frees up.
     let calls = 0;
     const answer = a.requestLease.bind(a);
     a.requestLease = async (input, options) => {
@@ -3019,7 +2693,6 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       const { ended, state } = await start(coordinator);
       expect(state.state).toBe("pending");
 
-      // The only worker left goes away: the table ends the request with wrk_a's stored refusal.
       workers.disconnected("wrk_b");
       await tick();
 
@@ -3029,7 +2702,7 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
       expect(events[1]?.payload).toMatchObject({ reason: "unresolvable-spec" });
     });
 
-    it("emits no gateway lease.rejected for a request the stored refusal ends before it entered the gateway queue", async () => {
+    it("emits one lease.rejected with reason unresolvable-spec, and no lease.queued, for a request the stored refusal ends before it entered the gateway queue (ADR 0021 §4)", async () => {
       const fleetHarness = harness();
       const a = new ScriptedWorkerClient();
       fleetHarness.directory.add("wrk_a", a);
@@ -3041,7 +2714,12 @@ describe("FleetLeaseCoordinator retries a worker's cannot-serve refusal on anoth
 
       expect(state.state).toBe("rejected");
       expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
-      expect(events).toEqual([]);
+      expect(events).toEqual([
+        {
+          name: "lease.rejected",
+          payload: expect.objectContaining({ reason: "unresolvable-spec" }),
+        },
+      ]);
     });
   });
 });
@@ -3053,11 +2731,9 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
   interface Outcome {
     readonly fleet: Fleet;
     readonly requester: string;
-    /** The id the request was stored under, when it was stored. */
     readonly requestId?: string | undefined;
   }
 
-  /** Asks for a device as `requesterId` and settles whatever the request ends with. */
   async function ask(
     fleet: Fleet,
     overrides: Parameters<typeof requestOptions>[0] & { readonly request?: typeof REQUEST },
@@ -3073,7 +2749,6 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
 
   const holderGrant = () => ({ grant: grantFixture(), kind: "grant" as const });
 
-  /** A fleet whose one worker is serving `agent-1`, saturated for everyone after. */
   async function busyFleet(): Promise<Fleet> {
     const fleet = harness();
     const client = new ScriptedWorkerClient();
@@ -3085,7 +2760,6 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
     return fleet;
   }
 
-  /** One case per reason in `EventMap`, so a reason added there without a case fails typecheck. */
   const cases: Record<Reason, (() => Promise<Outcome>) | "worker"> = {
     timeout: async () => {
       const fleet = await busyFleet();
@@ -3126,11 +2800,37 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
       await ask(fleet, { requesterId: "agent-1" });
       return { fleet, requester: "agent-1" };
     },
+    "lease-id-taken": async () => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        grant: grantFixture({ lease: { ...grantFixture().lease, id: "myid" } }),
+        kind: "grant",
+      });
+      await fleet.coordinator.request(REQUEST, requestOptions({ leaseId: "myid" }));
+      await ask(fleet, { leaseId: "myid", ownerId: "agent-2", requesterId: "agent-2" });
+      return { fleet, requester: "agent-2" };
+    },
     cancelled: async () => {
       const fleet = await busyFleet();
       const requestId = await ask(fleet, { ownerId: "agent-2", requesterId: "agent-2" });
       await fleet.coordinator.cancelPending("agent-2");
       return { fleet, requestId, requester: "agent-2" };
+    },
+    "worker-failed": async () => {
+      const fleet = harness();
+      const client = new ScriptedWorkerClient();
+      fleet.directory.add("wrk_a", client);
+      connectWorker(fleet.workers, "wrk_a");
+      client.requestLeaseQueue.push({
+        error: new SimlockError("INTERNAL", "domain", "the worker broke", {}),
+        kind: "error",
+        progress: [{ etaMs: 1_000, stage: "booting" }],
+      });
+      const requestId = await ask(fleet, { requesterId: "agent-9" });
+      return { fleet, requestId, requester: "agent-9" };
     },
     "boot-timeout": "worker",
     killed: "worker",
@@ -3180,7 +2880,6 @@ describe("FleetLeaseCoordinator: lease.rejected names its request", () => {
     expect(rejected).toEqual([
       expect.objectContaining({ reason: "already-leased", requester: "agent-1" }),
     ]);
-    // Each request mints one id, in order: the refused one took the one before the admitted one.
     expect(requested).toEqual([admittedId]);
     expect(rejected[0]?.requestId).toMatch(/^req_/);
     expect(rejected[0]?.requestId).not.toBe(admittedId);
@@ -3342,7 +3041,6 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
     directory.add("wrk_a", phonesOnly);
     directory.add("wrk_b", withTablet);
     withTablet.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    // wrk_a sorts first and has the same room, so only the class can send it to wrk_b.
     connectWith(workers, "wrk_a", phones);
     connectWith(workers, "wrk_b", {
       ...phones,
@@ -3400,11 +3098,18 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
       runtimes: ["35"],
     };
     const ready = deviceFixture("dev_1", "ready");
-    // wrk_a sorts first and has the same room, so only the warm device can send it to wrk_b.
     connectWith(workers, "wrk_a", pixels);
     connectWith(workers, "wrk_b", pixels, {
       devices: [
-        { ...ready, spec: { model: "Pixel 8", osVersion: "35", platform: "android" as const } },
+        {
+          ...ready,
+          spec: {
+            physical: false,
+            model: "Pixel 8",
+            osVersion: "35",
+            platform: "android" as const,
+          },
+        },
       ],
     });
 
@@ -3415,5 +3120,1485 @@ describe("FleetLeaseCoordinator routes a class or range request (ADR 0015 §8)",
 
     expect(leaseRequests(warm)).toHaveLength(1);
     expect(leaseRequests(free)).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator: requires", () => {
+  const available = [{ name: "agent-device", state: "available" }] as const;
+  const off = [{ name: "agent-device", state: "off" }] as const;
+  const missing = () =>
+    fromWireError("CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+  it("sends requires to the worker on every dispatch, beside the request and not inside it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    workers.refresh("wrk_a", { capabilities: [...available] });
+
+    await coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] }));
+
+    expect(client.lastRequestLeaseInput).toMatchObject({ requires: ["agent-device"] });
+  });
+
+  it("leaves a worker whose own check answers CAPABILITY_MISSING out for this request and tries the next, and gives the caller that error when no worker is left", async () => {
+    const { coordinator, directory, workers } = harness();
+    const stale = new ScriptedWorkerClient();
+    const next = new ScriptedWorkerClient();
+    stale.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    next.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    directory.add("wrk_a", stale);
+    directory.add("wrk_b", next);
+    for (const id of ["wrk_a", "wrk_b"]) {
+      connectWorker(workers, id);
+      workers.refresh(id, { capabilities: [...available] });
+    }
+
+    await expect(
+      coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] })),
+    ).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+    expect(stale.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+
+    stale.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    next.requestLeaseQueue.push({ error: missing(), kind: "error" });
+    await expect(
+      coordinator.request(
+        REQUEST,
+        requestOptions({ ownerId: "agent-2", requesterId: "agent-2", requires: ["agent-device"] }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      message: "This worker cannot serve agent-device",
+    });
+  });
+
+  it("fails a request waiting only on the capable worker with CAPABILITY_MISSING when that worker's view turns starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { capabilities: [...available] });
+    const waiting = coordinator.request(REQUEST, requestOptions({ requires: ["agent-device"] }));
+    const outcome = { settled: false };
+    waiting.then(
+      () => (outcome.settled = true),
+      () => (outcome.settled = true),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+    expect(outcome.settled).toBe(false);
+
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+    await tick();
+
+    expect(outcome.settled).toBe(true);
+    await expect(waiting).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
+  });
+
+  it("keeps a request with requires waiting for a busy capable worker while a free worker lists the capability off", async () => {
+    const { coordinator, directory, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    const free = new ScriptedWorkerClient();
+    directory.add("wrk_b", free);
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { capabilities: [...available] });
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_b", { capabilities: [...off] });
+
+    void coordinator
+      .request(REQUEST, requestOptions({ requires: ["agent-device"] }))
+      .catch(() => undefined);
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(1);
+    expect(free.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator: a worker that is still starting", () => {
+  const gatewayLease = {
+    deviceId: "dev_1",
+    grantedAt: 1,
+    id: "lse_1",
+    lastRenewedAt: 1,
+    idChosenByRequester: false,
+    ownerId: "agent-9",
+    requesterId: `${GATEWAY_PREFIX}agent-9`,
+    ttlDeadline: 900_001,
+    ttlMs: 900_000,
+  };
+  const running = (leases: (typeof gatewayLease)[]) => ({
+    capacity: statusFixture().capacity,
+    devices: [deviceFixture("dev_1", "leased")],
+    health: "running" as const,
+    host: hostFixture(),
+    leases,
+    queueDepth: 0,
+  });
+
+  it("gives a starting worker a view with health and host and no devices, leases or capacity, indexes none of its leases, then indexes them once the worker answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    const starting = workers.view("wrk_a");
+    expect(starting?.health).toBe("starting");
+    expect(starting?.host).toEqual(hostFixture());
+    expect(Object.keys(starting ?? {})).not.toContain("devices");
+    expect(Object.keys(starting ?? {})).not.toContain("leases");
+    expect(Object.keys(starting ?? {})).not.toContain("capacity");
+    expect(leaseIndex.all()).toEqual([]);
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("keeps the leases it indexed for a worker through every answer the worker gives while starting, until it answers running", () => {
+    const { leaseIndex, workers } = harness();
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+
+    for (let answer = 0; answer < 3; answer += 1) {
+      workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+      expect(Object.keys(workers.view("wrk_a") ?? {})).not.toContain("leases");
+      expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+    }
+
+    workers.refresh("wrk_a", running([gatewayLease]));
+    expect(leaseIndex.existingLeaseId("agent-9")).toBe("wrk_a.lse_1");
+  });
+
+  it("sends a request to the worker that answered running, never to one that answered starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    const ready = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    directory.add("wrk_b", ready);
+    ready.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).resolves.toMatchObject({
+      lease: { worker: { id: "wrk_b" } },
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+
+  it("keeps dispatching a queued request to a running worker while another, already reconciled, answers starting", async () => {
+    const { coordinator, directory, workers } = harness();
+    const restarting = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_a", restarting);
+    directory.add("wrk_b", other);
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { capacity: saturatedIos() });
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    workers.refresh("wrk_b", { capacity: statusFixture().capacity });
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(0);
+    expect(other.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
+  it("queues a request for the only worker that can serve it, which is starting, though another worker takes requests but lists no such model", async () => {
+    const { coordinator, directory, workers } = harness();
+    const other = new ScriptedWorkerClient();
+    const restarting = new ScriptedWorkerClient();
+    directory.add("wrk_a", other);
+    directory.add("wrk_b", restarting);
+    restarting.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a", { models: ["iPad Pro"] });
+    connectWorker(workers, "wrk_b");
+    workers.refresh("wrk_b", { health: "starting", host: hostFixture() });
+
+    const granted = coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    expect(coordinator.queueDepth).toBe(1);
+    expect(restarting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+
+    workers.refresh("wrk_b", {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+    await expect(granted).resolves.toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+  });
+
+  it("fails a request at once with NO_CAPACITY when the only worker has answered starting without a catalog ever read from it, as it does for a worker not yet read", async () => {
+    const { coordinator, directory, workers } = harness();
+    const starting = new ScriptedWorkerClient();
+    directory.add("wrk_a", starting);
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    await expect(coordinator.request(REQUEST, requestOptions())).rejects.toMatchObject({
+      code: "NO_CAPACITY",
+    });
+
+    expect(starting.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+});
+
+describe("FleetLeaseCoordinator caller-chosen lease IDs", () => {
+  function chosenGrant(leaseId: string) {
+    return grantFixture({
+      lease: { ...grantFixture().lease, id: leaseId, idChosenByRequester: true } as LeaseRecord,
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  function forwardedLeaseId(client: ScriptedWorkerClient): unknown {
+    return (client.lastRequestLeaseInput as Record<string, unknown> | undefined)?.leaseId;
+  }
+
+  function refreshWorker(workers: WorkerRegistry, capacity: ReturnType<typeof roomierIos>): void {
+    workers.refresh("wrk_a", {
+      capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      downloads: { policy: "on-request" },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+  }
+
+  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
+    const fleet = harness(overrides);
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    connectWorker(fleet.workers, "wrk_a");
+    return { ...fleet, client };
+  }
+
+  function chosen(leaseId: string, overrides: Parameters<typeof requestOptions>[0] = {}) {
+    return { ...requestOptions(overrides), leaseId } as ReturnType<typeof requestOptions>;
+  }
+
+  it("through a gateway, a caller-chosen ID comes back with no worker prefix", async () => {
+    const { client, coordinator, leaseIndex } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("ad-7f3a"), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, chosen("ad-7f3a"));
+
+    expect(forwardedLeaseId(client)).toBe("ad-7f3a");
+    expect(grant.lease.id).toBe("ad-7f3a");
+    expect(leaseIndex.resolve("ad-7f3a")).toMatchObject({
+      gatewayLeaseId: "ad-7f3a",
+      workerId: "wrk_a",
+      workerLeaseId: "ad-7f3a",
+    });
+  });
+
+  it("through a gateway, a request without leaseId gets <worker>.lse_ as today", async () => {
+    const { client, coordinator } = oneWorker();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, requestOptions());
+
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("leaseId");
+    expect(grant.lease.id).toBe("wrk_a.lse_1");
+  });
+
+  it("through a gateway, renew and release by a caller-chosen ID reach the right worker", async () => {
+    const { coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b", { capacity: roomierIos() });
+    clientB.requestLeaseQueue.push({ grant: chosenGrant("ad-7f3a"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("ad-7f3a"));
+    expect(leaseIndex.resolve("ad-7f3a")).toMatchObject({ workerId: "wrk_b" });
+
+    await coordinator.renew("ad-7f3a", undefined);
+    await coordinator.release("ad-7f3a");
+
+    expect(clientB.calls).toEqual(
+      expect.arrayContaining(["lease.renew:ad-7f3a", "lease.release:ad-7f3a"]),
+    );
+    expect(clientA.calls.filter((call) => /^lease\.(renew|release)/.test(call))).toEqual([]);
+    expect(leaseIndex.resolve("ad-7f3a")).toBeUndefined();
+  });
+
+  it("when two workers report the same caller-chosen ID on rebuild, renew of that ID reaches the first worker", async () => {
+    const { coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    const reported = (ownerId: string) => ({
+      grantedAt: 1,
+      id: "myid",
+      idChosenByRequester: true,
+      ownerId,
+      requesterId: `${GATEWAY_PREFIX}${ownerId}`,
+    });
+
+    leaseIndex.rebuildFromWorker("wrk_a", [reported("agent-1")]);
+    leaseIndex.rebuildFromWorker("wrk_b", [reported("agent-2")]);
+    await coordinator.renew("myid", undefined);
+
+    expect(clientA.calls).toContain("lease.renew:myid");
+    expect(clientB.calls.filter((call) => call.startsWith("lease.renew"))).toEqual([]);
+  });
+
+  it("through a gateway, a request whose requester already holds a lease fails with REQUESTER_ALREADY_LEASED, not LEASE_ID_TAKEN, when it names that lease's own ID", async () => {
+    const { client, coordinator } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("myid"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("myid"));
+
+    const refusal = await coordinator.request(REQUEST, chosen("myid")).catch((e: unknown) => e);
+
+    expect(refusal).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((refusal as RequesterAlreadyLeasedError).existingLeaseId).toBe("myid");
+  });
+
+  it("through a gateway, a second request for an ID held by a gateway lease fails with LEASE_ID_TAKEN, emits lease.rejected with reason lease-id-taken, and is not forwarded", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    client.requestLeaseQueue.push({ grant: chosenGrant("myid"), kind: "grant" });
+    await coordinator.request(REQUEST, chosen("myid"));
+    const rejected: unknown[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    const second = coordinator.request(
+      REQUEST,
+      chosen("myid", { ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    const secondState = promiseState(second);
+    const refusal = second.catch((error: unknown) => error);
+    await tick();
+
+    expect(secondState.state).toBe("rejected");
+    expect(await refusal).toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "myid" },
+      message: "lease ID myid is already in use",
+    });
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "lease-id-taken", requester: "agent-2" }),
+    ]);
+    expect(leaseRequests(client)).toHaveLength(1);
+  });
+
+  it("through a gateway, a second request for an ID held by a waiting gateway request fails with LEASE_ID_TAKEN and is not forwarded", async () => {
+    const { client, coordinator, directory, workers } = oneWorker();
+    connectWorker(workers, "wrk_a", { capacity: saturatedIos() });
+    directory.add("wrk_a", client);
+    void coordinator.request(REQUEST, chosen("myid")).catch(() => undefined);
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    const second = coordinator.request(
+      REQUEST,
+      chosen("myid", { ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    const secondState = promiseState(second);
+    const refusal = second.catch((error: unknown) => error);
+    await tick();
+
+    expect(secondState.state).toBe("rejected");
+    expect(await refusal).toMatchObject({ code: "LEASE_ID_TAKEN" });
+    expect(leaseRequests(client)).toEqual([]);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("through a gateway, a worker's LEASE_ID_TAKEN is passed to the caller and no other worker is tried", async () => {
+    const { client, coordinator, directory, workers } = oneWorker();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_b", other);
+    connectWorker(workers, "wrk_b");
+    const taken = fromWireError("LEASE_ID_TAKEN", "lease ID myid is already in use", {
+      leaseId: "myid",
+    });
+    for (const scripted of [client, other]) {
+      scripted.requestLeaseQueue.push(
+        { error: taken, kind: "error" },
+        { grant: chosenGrant("myid"), kind: "grant" },
+      );
+    }
+
+    await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "myid" },
+    });
+
+    expect(leaseRequests(client).length + leaseRequests(other).length).toBe(1);
+  });
+
+  it("a worker grant whose lease ID differs from the forwarded leaseId is released on the worker, never enters the gateway index, and the request is queued again", async () => {
+    const logger = new RecordingLogger();
+    const { client, coordinator, leaseIndex } = oneWorker({ logger });
+    client.requestLeaseQueue.push({ grant: chosenGrant("not-what-was-sent"), kind: "grant" });
+    const outcome = promiseState(coordinator.request(REQUEST, chosen("myid")));
+    await tick();
+
+    expect(client.calls).toContain("lease.release:not-what-was-sent");
+    expect(leaseIndex.all()).toEqual([]);
+    expect(outcome.state).toBe("pending");
+    expect(coordinator.queueDepth).toBe(1);
+    expect(JSON.stringify(logger.warnings)).toContain("wrk_a");
+  });
+
+  it("a worker that answered a grant under another ID is not asked again until its view changes, then is, and the right grant settles the request", async () => {
+    const { client, coordinator, workers } = oneWorker();
+    client.requestLeaseQueue.push(
+      { grant: chosenGrant("not-what-was-sent"), kind: "grant" },
+      { grant: chosenGrant("myid"), kind: "grant" },
+    );
+    const request = coordinator.request(REQUEST, chosen("myid"));
+    const outcome = promiseState(request);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    refreshWorker(workers, statusFixture().capacity);
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    refreshWorker(workers, roomierIos());
+    await tick();
+    expect(outcome.state).toBe("fulfilled");
+    await expect(request).resolves.toMatchObject({ lease: { id: "myid" } });
+    expect(leaseRequests(client)).toHaveLength(2);
+  });
+
+  it("the gateway answers UNKNOWN_LEASE for a renew of an ID missing from its index", async () => {
+    const { coordinator } = oneWorker();
+
+    await expect(coordinator.renew("myid", undefined)).rejects.toMatchObject({
+      code: "UNKNOWN_LEASE",
+      details: { leaseId: "myid" },
+    });
+  });
+
+  describe("a grant for a bare ID the index maps to another worker", () => {
+    function grantRacingAReport(overrides: Parameters<typeof harness>[0] = {}) {
+      const fleet = oneWorker(overrides);
+      fleet.client.requestLeaseQueue.push({
+        beforeGrant: () => {
+          fleet.leaseIndex.rebuildFromWorker("wrk_b", [
+            {
+              grantedAt: 1,
+              id: "myid",
+              idChosenByRequester: true,
+              ownerId: "agent-9",
+              requesterId: `${GATEWAY_PREFIX}agent-9`,
+            } as WorkerReportedLease,
+          ]);
+        },
+        grant: chosenGrant("myid"),
+        kind: "grant",
+      });
+      return fleet;
+    }
+
+    it("is released on the new worker and answers LEASE_ID_TAKEN, and the first entry stays routed", async () => {
+      const { client, coordinator, eventBus, leaseIndex } = grantRacingAReport();
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+        details: { leaseId: "myid" },
+      });
+
+      expect(client.calls).toContain("lease.release:myid");
+      expect(leaseIndex.resolve("myid")).toMatchObject({ workerId: "wrk_b" });
+      expect(rejected).toEqual([
+        expect.objectContaining({ reason: "lease-id-taken", requester: "agent-1" }),
+      ]);
+    });
+
+    it("logs a release the worker refuses, naming the worker and the lease, and still answers LEASE_ID_TAKEN", async () => {
+      const logger = new RecordingLogger();
+      const { client, coordinator } = grantRacingAReport({ logger });
+      client.releaseLeaseQueue.push({ error: new Error("worker said no"), kind: "error" });
+
+      await expect(coordinator.request(REQUEST, chosen("myid"))).rejects.toMatchObject({
+        code: "LEASE_ID_TAKEN",
+      });
+      await tick();
+
+      expect(logger.warnings).toEqual([
+        expect.objectContaining({
+          fields: expect.objectContaining({ workerId: "wrk_a", workerLeaseId: "myid" }),
+          message: "Failed to release a lease the gateway will not route",
+        }),
+      ]);
+    });
+  });
+});
+
+describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)", () => {
+  function oneWorker(overrides: Parameters<typeof harness>[0] = {}) {
+    const fleet = harness(overrides);
+    const client = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", client);
+    connectWorker(fleet.workers, "wrk_a");
+    return { ...fleet, client };
+  }
+
+  function record<Name extends keyof EventMap>(
+    eventBus: EventBus,
+    ...names: Name[]
+  ): Array<{ name: Name; payload: EventMap[Name] }> {
+    const seen: Array<{ name: Name; payload: EventMap[Name] }> = [];
+    for (const name of names) {
+      eventBus.subscribe(name, (envelope) =>
+        seen.push({ name, payload: envelope.payload as EventMap[Name] }),
+      );
+    }
+    return seen;
+  }
+
+  async function start(
+    coordinator: FleetLeaseCoordinator,
+    overrides: Parameters<typeof requestOptions>[0] = {},
+  ) {
+    let requestId: string | undefined;
+    const outcome = coordinator.request(
+      REQUEST,
+      requestOptions({ ...overrides, onAdmitted: (id) => (requestId = id) }),
+    );
+    const ended = outcome.then(
+      (grant) => grant as unknown,
+      (error: unknown) => error,
+    );
+    const state = promiseState(outcome);
+    await tick();
+    return { ended, outcome, requestId: () => requestId, state };
+  }
+
+  it.each([
+    ["a waiting caller", { noWait: false }],
+    ["a noWait caller", { noWait: true }],
+  ])(
+    "sends the gateway's request id as fleetRequestId on every dispatch, for %s",
+    async (_label, caller) => {
+      const { client, coordinator } = oneWorker();
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const { requestId } = await start(coordinator, caller);
+
+      expect(requestId()).toMatch(/^req_/);
+      expect(client.lastRequestLeaseInput).toMatchObject({
+        fleetRequestId: requestId(),
+        noWait: true,
+      });
+    },
+  );
+
+  function twoWorkersAPreferred() {
+    const fleet = harness();
+    const preferred = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    fleet.directory.add("wrk_a", preferred);
+    fleet.directory.add("wrk_b", other);
+    const capacity = statusFixture().capacity;
+    connectWorker(fleet.workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(fleet.workers, "wrk_b");
+    return { ...fleet, other, preferred };
+  }
+
+  it("sends the same fleetRequestId to the second worker when the first refuses NO_CAPACITY", async () => {
+    const { coordinator, other, preferred } = twoWorkersAPreferred();
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { requestId } = await start(coordinator, { noWait: true });
+
+    expect(
+      [preferred, other].map(
+        (client) =>
+          (client.lastRequestLeaseInput as Record<string, unknown> | undefined)?.fleetRequestId,
+      ),
+    ).toEqual([requestId(), requestId()]);
+  });
+
+  it("emits one lease.rejected worker-failed with the caller's error code for a request whose dispatch fails after a progress push", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "request.granted");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("INTERNAL", "domain", "the worker broke", {}),
+      kind: "error",
+      progress: [{ etaMs: 1_000, stage: "booting" }],
+    });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "INTERNAL" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: {
+          code: "INTERNAL",
+          reason: "worker-failed",
+          requestId: requestId(),
+          requestSpec: REQUEST,
+          requester: "agent-1",
+          worker: "wrk_a",
+        },
+      },
+    ]);
+  });
+
+  it("emits one lease.rejected worker-failed with code WORKER_UNREACHABLE for a request whose worker is unreachable", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected");
+    client.requestLeaseQueue.push({
+      error: new SimlockError(
+        "DAEMON_CONNECTION_LOST",
+        "transport",
+        "Daemon connection is closed",
+        {},
+      ),
+      kind: "error",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({
+          code: "WORKER_UNREACHABLE",
+          reason: "worker-failed",
+          worker: "wrk_a",
+        }),
+      },
+    ]);
+  });
+
+  it("emits one lease.rejected worker-failed for a dispatch that timed out, naming the worker", async () => {
+    const { clock, client, coordinator, eventBus } = oneWorker({ leaseRequestTimeoutMs: 5_000 });
+    const events = record(eventBus, "lease.rejected");
+    client.requestLeaseQueue.push({ kind: "hang" });
+
+    const { ended } = await start(coordinator);
+    clock.advance(5_000);
+    await tick();
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "worker-failed", worker: "wrk_a" }),
+      },
+    ]);
+  });
+
+  it("carries the failing worker's id, not the one that only refused, as worker on a worker-failed rejection", async () => {
+    const { coordinator, eventBus, other } = twoWorkersAPreferred();
+    const events = record(eventBus, "lease.rejected");
+    other.requestLeaseQueue.push({
+      error: new SimlockError("INTERNAL", "domain", "wrk_b broke", {}),
+      kind: "error",
+      progress: [{ etaMs: 1, stage: "booting" }],
+    });
+
+    await start(coordinator, { noWait: true });
+
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "worker-failed", worker: "wrk_b" }),
+      },
+    ]);
+  });
+
+  it("ends a request never queued on a worker's cannot-serve refusal in one lease.rejected unresolvable-spec", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "lease.queued");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("RUNTIME_MISSING", "domain", "no such runtime", {
+        downloadable: false,
+        osVersion: "26.0",
+        platform: "ios",
+      }),
+      kind: "error",
+    });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(events).toEqual([
+      {
+        name: "lease.rejected",
+        payload: expect.objectContaining({ reason: "unresolvable-spec", requestId: requestId() }),
+      },
+    ]);
+  });
+
+  it("emits no lease.rejected for a request one worker refuses NO_CAPACITY and another grants", async () => {
+    const { coordinator, eventBus, other } = twoWorkersAPreferred();
+    const events = record(eventBus, "lease.rejected");
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { ended } = await start(coordinator, { noWait: true });
+
+    expect(await ended).toMatchObject({ lease: { worker: { id: "wrk_b" } } });
+    expect(events).toEqual([]);
+  });
+
+  it("emits one request.granted with worker and both lease ids, and no workerId in its payload, for a settled grant", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { ended, requestId } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ lease: { id: "wrk_a.lse_1" } });
+    expect(events).toEqual([
+      {
+        name: "request.granted",
+        payload: {
+          leaseId: "wrk_a.lse_1",
+          requestId: requestId(),
+          worker: "wrk_a",
+          workerLeaseId: "lse_1",
+        },
+      },
+    ]);
+    expect(events[0]?.payload).not.toHaveProperty("workerId");
+  });
+
+  it("emits lease.rejected lease-id-taken and no request.granted for a grant the lease index refuses", async () => {
+    const { client, coordinator, eventBus, leaseIndex } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({
+      beforeGrant: () => {
+        leaseIndex.rebuildFromWorker("wrk_b", [
+          {
+            grantedAt: 1,
+            id: "myid",
+            idChosenByRequester: true,
+            ownerId: "agent-9",
+            requesterId: `${GATEWAY_PREFIX}agent-9`,
+          } as WorkerReportedLease,
+        ]);
+      },
+      grant: grantFixture({
+        lease: { ...grantFixture().lease, id: "myid", idChosenByRequester: true } as LeaseRecord,
+      }),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator, { leaseId: "myid" } as never);
+
+    expect(await ended).toMatchObject({ code: "LEASE_ID_TAKEN" });
+    expect(events).toEqual([
+      { name: "lease.rejected", payload: expect.objectContaining({ reason: "lease-id-taken" }) },
+    ]);
+  });
+
+  it("emits no request.granted for a grant that lands after dispose()", async () => {
+    const { client, coordinator, eventBus } = oneWorker();
+    const events = record(eventBus, "request.granted", "lease.rejected");
+    client.requestLeaseQueue.push({
+      beforeGrant: () => coordinator.dispose(),
+      grant: grantFixture(),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no request.granted for a grant that lands after the dispatch timed out", async () => {
+    const { clock, client, coordinator, eventBus } = oneWorker({ leaseRequestTimeoutMs: 5_000 });
+    const events = record(eventBus, "request.granted");
+    client.requestLeaseQueue.push({
+      beforeGrant: async () => {
+        await Promise.resolve();
+        clock.advance(5_000);
+      },
+      grant: grantFixture(),
+      kind: "grant",
+    });
+
+    const { ended } = await start(coordinator);
+
+    expect(await ended).toMatchObject({ code: "WORKER_UNREACHABLE" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no lease.rejected and no request.granted on dispose() with a queued and an in-flight request", async () => {
+    const { client, coordinator, directory, eventBus, workers } = oneWorker();
+    const events = record(eventBus, "lease.rejected", "request.granted");
+    client.requestLeaseQueue.push({ kind: "hang" });
+    const inFlight = await start(coordinator);
+    const busy = new ScriptedWorkerClient();
+    directory.add("wrk_b", busy);
+    connectWorker(workers, "wrk_b", { capacity: saturatedIos(), models: ["iPhone 18"] });
+    const queued = await start(coordinator, { ownerId: "agent-2", requesterId: "agent-2" });
+    expect(coordinator.queueDepth + (inFlight.state.state === "pending" ? 1 : 0)).toBeGreaterThan(
+      0,
+    );
+
+    coordinator.dispose();
+    await tick();
+
+    expect(await inFlight.ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(await queued.ended).toMatchObject({ code: "DAEMON_STOPPING" });
+    expect(events).toEqual([]);
+  });
+
+  it("emits no request.granted for a grant given back for a mismatched leaseId, and one for the retried grant", async () => {
+    const { client, coordinator, eventBus, workers } = oneWorker();
+    const events = record(eventBus, "request.granted");
+    const chosen = (leaseId: string) =>
+      grantFixture({
+        lease: { ...grantFixture().lease, id: leaseId, idChosenByRequester: true } as LeaseRecord,
+      });
+    client.requestLeaseQueue.push(
+      { grant: chosen("not-what-was-sent"), kind: "grant" },
+      { grant: chosen("myid"), kind: "grant" },
+    );
+
+    const { ended, requestId } = await start(coordinator, { leaseId: "myid" } as never);
+    expect(events).toEqual([]);
+
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+
+    expect(await ended).toMatchObject({ lease: { id: "myid" } });
+    expect(events).toEqual([
+      {
+        name: "request.granted",
+        payload: {
+          leaseId: "myid",
+          requestId: requestId(),
+          worker: "wrk_a",
+          workerLeaseId: "myid",
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "REQUESTER_ALREADY_LEASED",
+      fromWireError("REQUESTER_ALREADY_LEASED", "already holds a lease", { requesterId: "gw" }),
+    ],
+    [
+      "LEASE_ID_TAKEN",
+      fromWireError("LEASE_ID_TAKEN", "lease ID myid is already in use", { leaseId: "myid" }),
+    ],
+  ])(
+    "ends a request a worker refuses %s before any progress in lease.rejected worker-failed with that code, not the gateway's own lease-id-taken",
+    async (code, error) => {
+      const { client, coordinator, eventBus } = oneWorker();
+      const events = record(eventBus, "lease.rejected");
+      client.requestLeaseQueue.push({ error, kind: "error" });
+
+      const { ended } = await start(coordinator);
+
+      expect(await ended).toMatchObject({ code });
+      expect(events).toEqual([
+        {
+          name: "lease.rejected",
+          payload: expect.objectContaining({ code, reason: "worker-failed", worker: "wrk_a" }),
+        },
+      ]);
+    },
+  );
+});
+
+describe("FleetLeaseCoordinator routes a physical request by the enrolled devices in the workers' views (ADR 0022)", () => {
+  const PHONE = { platform: "ios" as const, physical: true as const };
+  const NOT_PRESENT = { present: false, reason: "not-present" } as const;
+
+  function physicalRequest(
+    overrides: {
+      readonly model?: string;
+      readonly osVersion?: string;
+      readonly class?: "phone" | "tablet";
+    } = {},
+  ) {
+    return { ...PHONE, ...overrides };
+  }
+
+  function iphone(
+    id = "dev_p",
+    state: "ready" | "leased" | "absent" = "ready",
+    presence?: PhysicalPresenceFixture,
+    model?: string,
+  ) {
+    return physicalDeviceFixture(id, state, {
+      ...(presence === undefined ? {} : { presence }),
+      ...(model === undefined ? {} : { model }),
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  async function start(
+    coordinator: FleetLeaseCoordinator,
+    request: Parameters<FleetLeaseCoordinator["request"]>[0],
+    options: Parameters<typeof requestOptions>[0] = {},
+  ) {
+    const outcome = coordinator.request(request, requestOptions(options));
+    const ended = outcome.catch((error: unknown) => error);
+    const state = promiseState(outcome);
+    await tick();
+    return { ended, outcome, state };
+  }
+
+  const owner = (name: string) => requestOptions({ ownerId: name, requesterId: name });
+
+  function oneWorker(
+    devices: ReturnType<typeof deviceFixture>[],
+    capacity?: ReturnType<typeof statusFixture>["capacity"],
+  ) {
+    const fleetHarness = harness();
+    const client = new ScriptedWorkerClient();
+    fleetHarness.directory.add("wrk_a", client);
+    connectWorker(fleetHarness.workers, "wrk_a", {
+      devices,
+      ...(capacity === undefined ? {} : { capacity }),
+    });
+    return { client, ...fleetHarness };
+  }
+
+  function twoWorkers(
+    devicesA: ReturnType<typeof deviceFixture>[] = [iphone()],
+    devicesB: ReturnType<typeof deviceFixture>[] = [iphone("dev_q")],
+  ) {
+    const fleetHarness = harness();
+    const a = new ScriptedWorkerClient();
+    const b = new ScriptedWorkerClient();
+    fleetHarness.directory.add("wrk_a", a);
+    fleetHarness.directory.add("wrk_b", b);
+    connectWorker(fleetHarness.workers, "wrk_a", { devices: devicesA });
+    connectWorker(fleetHarness.workers, "wrk_b", { devices: devicesB });
+    return { a, b, ...fleetHarness };
+  }
+
+  it.each([
+    { model: "iPhone 15 Pro", osVersion: "18.4", row: "exact model and OS" },
+    {
+      model: "iphone 15 pro",
+      osVersion: ">=18 <19",
+      row: "model in another letter case and an OS range",
+    },
+    { model: undefined, osVersion: undefined, row: "neither model nor OS" },
+  ])(
+    "a physical request with an enrolled match is dispatched with physical: true and its model as typed ($row)",
+    async ({ model, osVersion }) => {
+      const { client, coordinator } = oneWorker([iphone()]);
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const { state } = await start(
+        coordinator,
+        physicalRequest({
+          ...(model === undefined ? {} : { model }),
+          ...(osVersion === undefined ? {} : { osVersion }),
+        }),
+      );
+
+      expect(state.state).toBe("fulfilled");
+      expect(leaseRequests(client)).toHaveLength(1);
+      expect(client.lastRequestLeaseInput).toMatchObject({
+        ...(model === undefined ? {} : { model }),
+        ...(osVersion === undefined ? {} : { osVersion }),
+        physical: true,
+      });
+    },
+  );
+
+  it.each([
+    { name: "model", request: physicalRequest({ model: "iPhone 99" }), devices: [iphone()] },
+    { name: "class", request: physicalRequest({ class: "tablet" }), devices: [iphone()] },
+    { name: "OS", request: physicalRequest({ osVersion: ">=17 <18" }), devices: [iphone()] },
+    {
+      name: "state (deleted)",
+      request: physicalRequest(),
+      devices: [physicalDeviceFixture("dev_p", "deleted")],
+    },
+    { name: "enrolled device", request: physicalRequest(), devices: [] },
+  ])(
+    "a physical request with no enrolled match by $name fails UNKNOWN_MODEL at once, and no worker is asked",
+    async ({ request, devices }) => {
+      const { client, coordinator, eventBus } = oneWorker(devices);
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      const { ended, state } = await start(coordinator, request);
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toMatchObject({ code: "UNKNOWN_MODEL" });
+      expect(rejected).toEqual([expect.objectContaining({ reason: "unresolvable-spec" })]);
+      expect(leaseRequests(client)).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      code: "NO_CAPACITY",
+      reason: "no-worker",
+      request: physicalRequest(),
+      row: "no worker takes requests",
+      setup: (_workers: WorkerRegistry) => {},
+    },
+    {
+      code: "NO_DRIVER",
+      reason: "unresolvable-spec",
+      request: { ...physicalRequest(), platform: "android" as const },
+      row: "no known worker has its platform",
+      setup: (workers: WorkerRegistry) => connectWorker(workers, "wrk_a", { devices: [iphone()] }),
+    },
+  ])(
+    "a physical request fails $code $reason when $row",
+    async ({ code, reason, request, setup }) => {
+      const { coordinator, directory, eventBus, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_a", client);
+      setup(workers);
+      const rejected: unknown[] = [];
+      eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+      const { ended, state } = await start(coordinator, request);
+
+      expect(state.state).toBe("rejected");
+      expect(await ended).toMatchObject({ code });
+      expect(rejected).toEqual([expect.objectContaining({ reason })]);
+      expect(leaseRequests(client)).toEqual([]);
+    },
+  );
+
+  it("a physical request is offered to a worker with no free running slot that holds a ready enrolled match, and request.dispatched carries physical: true with reason and stage warm-hit", async () => {
+    const { client, coordinator, eventBus } = oneWorker([iphone()], saturatedIos());
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await start(coordinator, physicalRequest());
+
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        physical: true,
+        reason: "warm-hit",
+        stage: "warm-hit",
+        workerId: "wrk_a",
+      }),
+    ]);
+  });
+
+  it("request.dispatched for a virtual request carries no physical", async () => {
+    const { client, coordinator, eventBus } = oneWorker([iphone()]);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await start(coordinator, REQUEST);
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).not.toHaveProperty("physical");
+  });
+
+  it("a physical request is sent to the worker that holds the ready enrolled match, not the one with a warm simulator", async () => {
+    const { a, b, coordinator } = twoWorkers(
+      [deviceFixture("dev_sim", "ready")],
+      [iphone("dev_q")],
+    );
+    b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const { outcome, state } = await start(coordinator, physicalRequest());
+
+    expect(leaseRequests(a)).toEqual([]);
+    expect(state.state).toBe("fulfilled");
+    expect((await outcome).lease.worker?.id).toBe("wrk_b");
+  });
+
+  it("a physical request whose only enrolled match is on a restarting worker waits, and is not failed UNKNOWN_MODEL", async () => {
+    const { client, coordinator, workers } = oneWorker([iphone()]);
+    workers.refresh("wrk_a", { health: "starting", host: hostFixture() });
+
+    const waiting = await start(coordinator, physicalRequest());
+
+    expect(waiting.state.state).toBe("pending");
+    expect(leaseRequests(client)).toEqual([]);
+  });
+
+  it("a physical request waits when its only ready enrolled match was last read not present, and is sent once the view shows it present", async () => {
+    const { client, clock, coordinator, workers } = oneWorker([
+      iphone("dev_p", "ready", NOT_PRESENT),
+    ]);
+
+    const waiting = await start(coordinator, physicalRequest());
+    expect(waiting.state.state).toBe("pending");
+    expect(leaseRequests(client)).toEqual([]);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { devices: [iphone("dev_p", "ready", { present: true })] });
+    await tick();
+
+    expect(leaseRequests(client)).toHaveLength(1);
+  });
+
+  it("a physical request refused UNKNOWN_MODEL by worker 1 is offered to worker 2, and fails UNKNOWN_MODEL when no other worker has an enrolled match", async () => {
+    const unknownModel = (message: string) =>
+      new SimlockError("UNKNOWN_MODEL", "domain", message, { platform: "ios" });
+    const offered = twoWorkers();
+    offered.a.requestLeaseQueue.push({ error: unknownModel("worker a: no"), kind: "error" });
+    offered.b.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const second = await start(offered.coordinator, physicalRequest());
+
+    expect(second.state.state).toBe("fulfilled");
+    expect(leaseRequests(offered.a)).toHaveLength(1);
+    expect(leaseRequests(offered.b)).toHaveLength(1);
+    expect((await second.outcome).lease.worker?.id).toBe("wrk_b");
+
+    const only = twoWorkers([iphone()], []);
+    only.a.requestLeaseQueue.push({ error: unknownModel("worker a: no"), kind: "error" });
+
+    const failed = await start(only.coordinator, physicalRequest());
+
+    expect(failed.state.state).toBe("rejected");
+    expect(await failed.ended).toMatchObject({ code: "UNKNOWN_MODEL", message: "worker a: no" });
+    expect(leaseRequests(only.a)).toHaveLength(1);
+    expect(leaseRequests(only.b)).toEqual([]);
+  });
+
+  it("a worker that answers a physical request NO_CAPACITY is not sent it again by a refresh that leaves its view unchanged, and the request waits meanwhile", async () => {
+    const { client, clock, coordinator, workers } = oneWorker([iphone()]);
+
+    const waiting = await start(coordinator, physicalRequest());
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      clock.advance(1_000);
+      workers.refresh("wrk_a", { devices: [iphone()] });
+      await tick();
+    }
+
+    expect(waiting.state.state).toBe("pending");
+    expect(leaseRequests(client)).toHaveLength(1);
+    expect(coordinator.waitingRequests()).toEqual([
+      expect.objectContaining({ queuePosition: 1, stage: "queued" }),
+    ]);
+  });
+
+  it("after a NO_CAPACITY refusal, a refresh in which the device's presence turns not present sends the request nowhere, and the next refresh in which it turns present sends it to that worker again", async () => {
+    const { client, clock, coordinator, workers } = oneWorker([
+      iphone("dev_p", "ready", { present: true }),
+    ]);
+    await start(coordinator, physicalRequest());
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { devices: [iphone("dev_p", "ready", NOT_PRESENT)] });
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { devices: [iphone("dev_p", "ready", { present: true })] });
+    await tick();
+
+    expect(leaseRequests(client)).toHaveLength(2);
+  });
+
+  it("a virtual request refused NO_CAPACITY is still kept out until its worker's view changes", async () => {
+    const { client, clock, coordinator, workers } = oneWorker([]);
+    await start(coordinator, REQUEST);
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { capacity: statusFixture().capacity });
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(1);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+    expect(leaseRequests(client)).toHaveLength(2);
+  });
+
+  it("a noWait physical request refused NO_CAPACITY by its only candidate fails NO_CAPACITY and is sent to that worker once", async () => {
+    const { client, coordinator } = oneWorker([iphone()]);
+
+    const noWait = await start(coordinator, physicalRequest(), requestOptions({ noWait: true }));
+
+    expect(noWait.state.state).toBe("rejected");
+    expect(await noWait.ended).toMatchObject({ code: "NO_CAPACITY" });
+    expect(leaseRequests(client)).toHaveLength(1);
+  });
+
+  it("a physical request whose only enrolled match is on a disconnected worker fails NO_CAPACITY no-worker, and fails UNKNOWN_MODEL after pruneExpired forgets that worker", async () => {
+    const { clock, coordinator, directory, eventBus, workers } = harness();
+    directory.add("wrk_a", new ScriptedWorkerClient());
+    directory.add("wrk_b", new ScriptedWorkerClient());
+    connectWorker(workers, "wrk_a", { devices: [iphone()] });
+    connectWorker(workers, "wrk_b");
+    workers.disconnected("wrk_a");
+    const rejected: { reason: string }[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) =>
+      rejected.push(envelope.payload as { reason: string }),
+    );
+
+    const first = await start(coordinator, physicalRequest(), owner("agent-1"));
+
+    expect(first.state.state).toBe("rejected");
+    expect(await first.ended).toMatchObject({ code: "NO_CAPACITY" });
+    expect(rejected.map((payload) => payload.reason)).toEqual(["no-worker"]);
+
+    clock.advance(24 * 60 * 60_000);
+    await workers.pruneExpired();
+    const second = await start(coordinator, physicalRequest(), owner("agent-2"));
+
+    expect(second.state.state).toBe("rejected");
+    expect(await second.ended).toMatchObject({ code: "UNKNOWN_MODEL" });
+    expect(rejected.map((payload) => payload.reason)).toEqual(["no-worker", "unresolvable-spec"]);
+  });
+
+  it("queued physical requests count on their own line: queue.changed names the line and lease.queued reports the position within it", async () => {
+    const { coordinator, eventBus } = oneWorker([iphone()], saturatedIos());
+    const changed: unknown[] = [];
+    const queued: unknown[] = [];
+    eventBus.subscribe("queue.changed", (envelope) => changed.push(envelope.payload));
+    eventBus.subscribe("lease.queued", (envelope) => queued.push(envelope.payload));
+
+    await start(coordinator, physicalRequest(), owner("agent-1"));
+    await start(coordinator, physicalRequest(), owner("agent-2"));
+    await start(coordinator, { ...REQUEST, physical: false }, owner("agent-3"));
+
+    expect(changed).toStrictEqual([
+      { depth: 1, physical: true },
+      { depth: 2, physical: true },
+      { depth: 1 },
+    ]);
+    expect(queued.map((payload) => (payload as { queuePosition: number }).queuePosition)).toEqual([
+      1, 2, 1,
+    ]);
+  });
+
+  it("in one dispatch pass, a waiting virtual request and a waiting physical request are both sent to worker 1, the only worker that can take either", async () => {
+    const { client, clock, coordinator, workers } = oneWorker([iphone()], saturatedIos());
+    client.requestLeaseQueue.push(
+      { error: noCapacityError(), kind: "error" },
+      { kind: "hang" },
+      { kind: "hang" },
+    );
+    await start(coordinator, REQUEST, owner("agent-1"));
+    await start(coordinator, physicalRequest(), owner("agent-2"));
+    const before = leaseRequests(client).length;
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+
+    expect(leaseRequests(client).slice(before).sort()).toEqual([
+      `lease.request:${GATEWAY_PREFIX}agent-1`,
+      `lease.request:${GATEWAY_PREFIX}agent-2`,
+    ]);
+  });
+
+  it("in one dispatch pass, two waiting physical requests for different models, whose ready matches are both on worker 1, are both sent to it", async () => {
+    const { client, clock, coordinator, workers } = oneWorker(
+      [iphone("dev_p"), iphone("dev_q", "ready", undefined, "iPhone 16 Pro")],
+      saturatedIos(),
+    );
+    client.requestLeaseQueue.push(
+      { error: noCapacityError(), kind: "error" },
+      { error: noCapacityError(), kind: "error" },
+      { kind: "hang" },
+      { kind: "hang" },
+    );
+    await start(coordinator, physicalRequest({ model: "iPhone 15 Pro" }), owner("agent-1"));
+    await start(coordinator, physicalRequest({ model: "iPhone 16 Pro" }), owner("agent-2"));
+    expect(leaseRequests(client)).toHaveLength(2);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+
+    expect(leaseRequests(client).slice(2).sort()).toEqual([
+      `lease.request:${GATEWAY_PREFIX}agent-1`,
+      `lease.request:${GATEWAY_PREFIX}agent-2`,
+    ]);
+  });
+
+  it("in one dispatch pass, of two waiting physical requests with the same platform, model, class and OS, only the older is sent to worker 1, though it has two ready matches; the newer is sent in the next pass", async () => {
+    const { client, clock, coordinator, workers } = oneWorker(
+      [iphone("dev_p"), iphone("dev_q")],
+      saturatedIos(),
+    );
+    client.requestLeaseQueue.push(
+      { error: noCapacityError(), kind: "error" },
+      { error: noCapacityError(), kind: "error" },
+      { kind: "hang" },
+      { kind: "hang" },
+    );
+    const request = physicalRequest({ model: "iPhone 15 Pro", osVersion: "18.4" });
+    await start(coordinator, request, owner("agent-1"));
+    await start(coordinator, request, owner("agent-2"));
+    expect(leaseRequests(client)).toHaveLength(2);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", { capacity: roomierIos() });
+    await tick();
+    expect(leaseRequests(client).slice(2)).toEqual([`lease.request:${GATEWAY_PREFIX}agent-1`]);
+
+    clock.advance(1_000);
+    workers.refresh("wrk_a", {
+      capacity: {
+        ...statusFixture().capacity,
+        ios: { ...statusFixture().capacity.ios, maxRunning: 4 },
+      },
+    });
+    await tick();
+
+    expect(leaseRequests(client).slice(3)).toEqual([`lease.request:${GATEWAY_PREFIX}agent-2`]);
+  });
+});
+
+describe("FleetLeaseCoordinator: a requester may hold up to lease.maxPerRequester fleet leases (ADR 0023)", () => {
+  const held = (id: string, grantedAt: number, requester = "agent-1") => ({
+    grantedAt,
+    id,
+    ownerId: requester,
+    requesterId: `${GATEWAY_PREFIX}${requester}`,
+  });
+  const atLimit = (held: number, limit: number, leaseId: string) =>
+    `Requester agent-1 already holds ${String(held)} leases and lease.maxPerRequester is ${String(limit)}; release one (\`simlock release ${leaseId}\`) before requesting another device`;
+  const waitingMessage =
+    "Requester agent-1 already has a waiting request; wait for it to be granted or cancel it before requesting another device";
+
+  async function withWaitingRequest(maxPerRequester?: number) {
+    const built = harness(maxPerRequester === undefined ? {} : { maxPerRequester });
+    connectWorker(built.workers, "wrk_a", { capacity: saturatedIos() });
+    built.directory.add("wrk_a", new ScriptedWorkerClient());
+    void built.coordinator.request(REQUEST, requestOptions()).catch(() => undefined);
+    await tick();
+    expect(built.coordinator.queueDepth).toBe(1);
+    return built;
+  }
+
+  it("with no limit set, a requester holding a fleet lease is refused with today's message, naming that lease", async () => {
+    const { coordinator, leaseIndex } = harness();
+    leaseIndex.rebuildFromWorker("wrk_a", [held("lse_1", 1)]);
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      existingLeaseId: "wrk_a.lse_1",
+      message:
+        "Requester agent-1 already holds lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another device",
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  it("with limit 2, a requester holding two fleet leases is refused, naming the earlier-granted one", async () => {
+    const { coordinator, leaseIndex } = harness({ maxPerRequester: 2 });
+    leaseIndex.rebuildFromWorker("wrk_a", [held("lse_9", 10), held("lse_1", 20)]);
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      existingLeaseId: "wrk_a.lse_9",
+      message: atLimit(2, 2, "wrk_a.lse_9"),
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  it("with limit 2, a requester holding one fleet lease is not refused", async () => {
+    const { coordinator, directory, leaseIndex, workers } = harness({ maxPerRequester: 2 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    leaseIndex.rebuildFromWorker("wrk_a", [held("lse_1", 1)]);
+
+    await expect(coordinator.request(REQUEST, requestOptions())).resolves.toMatchObject({
+      lease: expect.anything(),
+    });
+  });
+
+  it("with limit 2, a requester with a waiting fleet request is refused with the waiting-request message", async () => {
+    const { coordinator } = await withWaitingRequest(2);
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      message: waitingMessage,
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  it("with limit 2, a requester with a waiting fleet request that also holds two fleet leases gets the waiting-request message", async () => {
+    const { coordinator, leaseIndex } = await withWaitingRequest(2);
+    leaseIndex.rebuildFromWorker("wrk_a", [held("lse_1", 1), held("lse_2", 2)]);
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      message: waitingMessage,
+      name: "RequesterAlreadyLeasedError",
+    });
+  });
+
+  it("with no limit set, a requester that holds a fleet lease and has a waiting request gets today's message naming that lease", async () => {
+    const { coordinator, leaseIndex } = await withWaitingRequest();
+    leaseIndex.rebuildFromWorker("wrk_a", [held("lse_1", 1)]);
+
+    const refusal = await coordinator.request(REQUEST, requestOptions()).catch((e: unknown) => e);
+
+    expect(refusal).toMatchObject({
+      existingLeaseId: "wrk_a.lse_1",
+      message:
+        "Requester agent-1 already holds lease wrk_a.lse_1; release it (`simlock release wrk_a.lse_1`) before requesting another device",
+    });
+  });
+});
+
+describe("FleetLeaseCoordinator reads a lost uplink in one place (#514)", () => {
+  it("reads DAEMON_STOPPING from a worker as a lost uplink: lease.request fails WORKER_UNREACHABLE", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_STOPPING", "transport", "The daemon is stopping", {}),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
   });
 });

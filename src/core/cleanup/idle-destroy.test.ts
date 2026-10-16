@@ -6,6 +6,7 @@ import { idleDestroyRule } from "./idle-destroy.js";
 const gibibyte = 1024 ** 3;
 
 const config: Config = {
+  capabilities: {},
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
@@ -36,6 +37,9 @@ const config: Config = {
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    maxConcurrentBoots: 1,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -49,6 +53,8 @@ const config: Config = {
     identity: { ios: "reusable", android: "reusable" },
     requestRetentionMs: 600_000,
     maxRequestRecords: 10_000,
+    maxPerRequester: 1,
+    endWaitMs: 600_000,
   },
   capacity: {
     strategy: "resource",
@@ -71,18 +77,23 @@ const config: Config = {
 
 function view(
   now: number,
-  overrides: { readonly diskFreeBytes?: number; readonly leases?: readonly LeaseRecord[] } = {},
+  overrides: {
+    readonly devices?: RegistryView["devices"];
+    readonly diskFreeBytes?: number;
+    readonly leases?: readonly LeaseRecord[];
+  } = {},
 ): RegistryView {
   return {
     config,
-    devices: [
+    devices: overrides.devices ?? [
       {
+        physical: false as const,
         createdAt: 0,
         driverData: {},
         driverDeviceId: "driver-1",
         id: "dev_1",
         lastLeaseEndedAt: 0,
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        spec: { physical: false as const, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
         mode: "full",
         state: "shutdown",
       },
@@ -90,6 +101,7 @@ function view(
     diskFreeBytes: overrides.diskFreeBytes ?? 100,
     leases: overrides.leases ?? [],
     now,
+    targeted: new Set(),
   };
 }
 
@@ -144,6 +156,7 @@ describe("idleDestroyRule", () => {
           requesterId: "agent-1",
           ownerId: "agent-1",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: 1,
         },
@@ -151,5 +164,70 @@ describe("idleDestroyRule", () => {
     });
 
     expect(idleDestroyRule.evaluate({ ...leased, config: pressuredConfig })).toEqual([]);
+  });
+
+  describe("a device that never served a lease", () => {
+    const never = (id: string, overrides: Partial<RegistryView["devices"][number]> = {}) => ({
+      physical: false as const,
+      createdAt: 0,
+      driverData: {},
+      driverDeviceId: `driver-${id}`,
+      id,
+      mode: "full" as const,
+      readyAt: 1_000,
+      shutdownAt: 5_000,
+      spec: {
+        physical: false as const,
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios" as const,
+      },
+      state: "shutdown" as const,
+      ...overrides,
+    });
+
+    it("is proposed for destruction once it has been shut down past T2, timed from shutdownAt and not readyAt, and not before", () => {
+      const devices = [never("dev_never")];
+
+      expect(idleDestroyRule.evaluate(view(35_000, { devices }))).toEqual([]);
+      expect(idleDestroyRule.evaluate(view(35_001, { devices }))).toEqual([
+        {
+          action: "destroy",
+          reason: "idle 30s > T2=30s",
+          rule: "idle-destroy",
+          target: "dev_never",
+        },
+      ]);
+    });
+
+    it("is left alone when the record carries no shutdownAt, because nothing says when it was shut down", () => {
+      const { shutdownAt: _shutdownAt, ...older } = never("dev_old");
+
+      expect(idleDestroyRule.evaluate(view(1_000_000, { devices: [older] }))).toEqual([]);
+    });
+
+    it("uses T1 under disk pressure, as a device that was leased does", () => {
+      const devices = [never("dev_never")];
+      const pressured = (now: number): RegistryView => ({
+        ...view(now, { devices, diskFreeBytes: 2 * gibibyte }),
+        config: { ...config, diskPressure: { freeBytesThreshold: 10 * gibibyte } },
+      });
+
+      expect(idleDestroyRule.evaluate(pressured(15_000))).toEqual([]);
+      expect(idleDestroyRule.evaluate(pressured(15_001))).toMatchObject([{ target: "dev_never" }]);
+    });
+
+    it("is never proposed while it is ready, leased, or still has a lease record", () => {
+      const ready = never("ready", { state: "ready" });
+      const leased = never("leased", { state: "leased" });
+      const recorded = never("recorded");
+      const lease = { deviceId: "recorded" } as LeaseRecord;
+
+      expect(
+        idleDestroyRule.evaluate(
+          view(1_000_000, { devices: [ready, leased, recorded], leases: [lease] }),
+        ),
+      ).toEqual([]);
+    });
   });
 });

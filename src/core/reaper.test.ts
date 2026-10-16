@@ -27,7 +27,7 @@ import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
-const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 /**
  * MemoryFilesystem's free-disk figure is fixed at construction; this
@@ -52,6 +52,7 @@ class MutableFreeDiskFilesystem extends MemoryFilesystem {
 
 function config(): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -86,6 +87,8 @@ function config(): Config {
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
     },
     capacity: {
       strategy: "resource",
@@ -106,6 +109,9 @@ function config(): Config {
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -123,6 +129,7 @@ async function createHarness(
     readonly cleanupConfig?: Config;
     readonly filesystem?: MemoryFilesystem;
     readonly logger?: Logger;
+    readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
     readonly tickMs?: number;
     readonly useEngineExecutor?: boolean;
   } = {},
@@ -188,6 +195,7 @@ async function createHarness(
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     rules,
+    ...(options.targetedDevices === undefined ? {} : { targetedDevices: options.targetedDevices }),
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
   });
 
@@ -328,6 +336,26 @@ describe("CleanupReaper", () => {
     ]);
     expect(harness.driver.calls).toHaveLength(callsBefore);
     expect(harness.registry.snapshot).toEqual(before);
+  });
+
+  it("does not propose a shutdown for a targeted device idle past T1, and does for one that is not targeted", async () => {
+    let targeted: ReadonlySet<string> = new Set();
+    const harness = await createHarness(
+      automaticCleanupRules,
+      {},
+      { targetedDevices: async () => targeted },
+    );
+    const kept = await seedReleased(harness, "ready");
+    harness.clock.advance(11_000);
+    targeted = new Set([kept.id]);
+
+    await expect(harness.reaper.run({ dryRun: true })).resolves.toEqual([]);
+
+    targeted = new Set();
+    await expect(harness.reaper.run({ dryRun: true })).resolves.toEqual([
+      expect.objectContaining({ action: "shutdown", rule: "idle-shutdown", target: kept.id }),
+    ]);
+    harness.reaper.dispose();
   });
 
   it("runs only the rule --rule names, and no rule at all for a name that is not registered", async () => {

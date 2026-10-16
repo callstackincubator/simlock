@@ -46,6 +46,8 @@
       "Bash(git commit -n*)",
       "Bash(git commit * --no-verify*)",
       "Bash(git commit * -n *)",
+      "Bash(git push --no-verify*)",
+      "Bash(git push * --no-verify*)",
       "Bash(git push --force*)",
       "Bash(git push -f*)",
       "Bash(git push * --force*)",
@@ -53,6 +55,7 @@
       "Bash(git reset --hard*)",
       "Bash(git branch -D *)",
       "Bash(gh pr merge*)",
+      "Bash(gh api */merge*)",
       "Bash(gh release *)",
       "Bash(gh workflow run*)",
       "Bash(gh api *rulesets*)",
@@ -74,6 +77,37 @@
             "command": "node \"$CLAUDE_PROJECT_DIR\"/.agents/scripts/budget-guard.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Bash|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.agents/scripts/tool-guard.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.agents/scripts/clock.mjs"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "implementer|reviewer|hardware-verifier",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.agents/scripts/report-guard.mjs"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -82,6 +116,10 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.agents/scripts/ensure-pnpm.sh --hook"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.agents/scripts/session-env.sh"
           }
         ]
       }

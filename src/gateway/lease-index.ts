@@ -1,19 +1,22 @@
+import { LEASE_ID_PATTERN } from "../contract/index.js";
 import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 
 /**
  * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
- * §27a, §30). Nothing here is persisted -- like every worker view, it is rebuilt from what a
- * worker reports (`rebuildFromWorker`) whenever the gateway can see it, which is what makes a
- * gateway restart lose nothing a worker restart would not also lose (Decision 5).
+ * §27a, §30; ADR 0020). Nothing here is persisted -- like every worker view, it is rebuilt from
+ * what a worker reports (`rebuildFromWorker`) whenever the gateway can see it. A gateway restart
+ * loses nothing a worker restart would not also lose (Decision 5): every id, generated or
+ * caller-chosen (ADR 0020), is looked up in this one map, so for the moment before its worker
+ * has reported, the gateway does not know it.
  *
- * A gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) and never
- * re-derived by splitting the string back apart -- every lookup in this class goes through the
- * map this index keeps, keyed by the id it minted or by the `(workerId, workerLeaseId)` pair a
- * relayed worker event carries. The "split on the first `.`" the ADR describes is what makes the
- * id *routable in principle* (a worker id is a UUID, so it can never itself contain the
- * separator); nothing in this codebase needs to actually perform that split, because this index
- * always has the structured pair already.
+ * A generated gateway lease id is minted once, at grant, as `${workerId}.${workerLeaseId}` (§16) --
+ * a caller-chosen one is that id as sent, bare -- and never re-derived by splitting the string back
+ * apart: every lookup in this class goes through the map this index keeps, keyed by the id it
+ * minted or by the `(workerId, workerLeaseId)` pair a relayed worker event carries. The "split on
+ * the first `.`" the ADR describes is what makes a generated id *routable in principle* (a worker
+ * id is a UUID, so it can never itself contain the separator); nothing in this codebase needs to
+ * actually perform that split, because this index always has the structured pair already.
  */
 
 /** One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*
@@ -35,6 +38,8 @@ export interface WorkerReportedLease {
   readonly requesterId: string;
   readonly ownerId: string;
   readonly grantedAt: number;
+  /** ADR 0020: whether the requester chose `id`. Absent, the id is a generated one. */
+  readonly idChosenByRequester?: boolean;
 }
 
 /** A lease record projected for a fleet client: rewritten to the gateway's id and fleet-level
@@ -54,8 +59,9 @@ export type ProjectedLease<Lease> = Lease extends {
 
 export class FleetLeaseIndex {
   readonly #byGatewayId = new Map<string, FleetLeaseEntry>();
-  readonly #byRequester = new Map<string, string>();
+  readonly #byRequester = new Map<string, Set<string>>();
   readonly #byWorkerLease = new Map<string, string>();
+  readonly #removalListeners: ((entry: FleetLeaseEntry) => void)[] = [];
   /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
    * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
    * from this snapshot" apart from "missing for a whole extra snapshot in a row" without
@@ -124,20 +130,40 @@ export class FleetLeaseIndex {
     return this.resolve(gatewayLeaseId)?.requesterId;
   }
 
-  /** ADR §14: the fleet-wide one-lease-per-requester check, keyed on `requesterId` (never
+  /** why: ADR §14 -- the fleet-wide one-lease-per-requester check, keyed on `requesterId` (never
    * `ownerId` -- see the module doc on the distinction). `undefined` means "no lease", so a
-   * caller gets the existing id to report (`RequesterAlreadyLeasedError`) in the same lookup
-   * that answers the boolean question. */
+   * caller gets the earliest existing lease id to report (`RequesterAlreadyLeasedError`). The
+   * admission decision itself rests on the lease count, not on this lookup. */
   existingLeaseId(requesterId: string): string | undefined {
-    return this.#byRequester.get(requesterId);
+    let earliest: FleetLeaseEntry | undefined;
+    for (const id of this.#byRequester.get(requesterId) ?? []) {
+      const entry = this.#byGatewayId.get(id);
+      if (entry !== undefined && (earliest === undefined || entry.grantedAt < earliest.grantedAt)) {
+        earliest = entry;
+      }
+    }
+    return earliest?.gatewayLeaseId;
   }
 
-  /** Records a lease this gateway just granted. Idempotent by `gatewayLeaseId`: granting twice
-   * under the same id (it never happens outside a test) replaces rather than duplicates. */
-  add(entry: FleetLeaseEntry): void {
+  leaseCount(requesterId: string): number {
+    return this.#byRequester.get(requesterId)?.size ?? 0;
+  }
+
+  /**
+   * Records a lease this gateway just granted. Idempotent by `gatewayLeaseId` for one worker:
+   * granting twice under the same id (it never happens outside a test) replaces rather than
+   * duplicates. A bare id (ADR 0020) belongs to the worker that first held it: another worker's
+   * entry under it is not added, and `false` says so.
+   */
+  add(entry: FleetLeaseEntry): boolean {
+    const existing = this.#byGatewayId.get(entry.gatewayLeaseId);
+    if (existing !== undefined && existing.workerId !== entry.workerId) return false;
     this.#byGatewayId.set(entry.gatewayLeaseId, entry);
-    this.#byRequester.set(entry.requesterId, entry.gatewayLeaseId);
+    const ids = this.#byRequester.get(entry.requesterId) ?? new Set<string>();
+    ids.add(entry.gatewayLeaseId);
+    this.#byRequester.set(entry.requesterId, ids);
     this.#byWorkerLease.set(workerKey(entry.workerId, entry.workerLeaseId), entry.gatewayLeaseId);
+    return true;
   }
 
   /** Forgets one lease by its gateway id -- the gateway's own `lease.release` completing. */
@@ -216,10 +242,21 @@ export class FleetLeaseIndex {
     const reported = new Set<string>();
     for (const lease of leases) {
       if (!this.isGatewayRequester(lease.requesterId)) continue;
-      const gatewayLeaseId = `${workerId}.${lease.id}`;
+      const gatewayLeaseId = this.#gatewayLeaseId(workerId, lease);
+      const existing = this.#byGatewayId.get(gatewayLeaseId);
+      if (existing !== undefined && existing.workerId !== workerId) {
+        // ADR 0020: two workers hold the same caller-chosen id. The first reported keeps it; this
+        // lease is not routed and expires at its TTL. Not counted as a report from this worker's
+        // entry, because it is not one, so it never resets the first entry's missing count.
+        this.logger.warn(
+          "Two workers report a lease with the same caller-chosen id; routing the first and ignoring the second",
+          { gatewayLeaseId, firstWorkerId: existing.workerId, secondWorkerId: workerId },
+        );
+        continue;
+      }
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);
-      if (this.#byGatewayId.has(gatewayLeaseId)) continue;
+      if (existing !== undefined) continue;
       // C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
       // `lease.expired`/`lease.released` -- reappearing in a snapshot now means that snapshot
       // was gathered before the relayed fact landed and is only completing late (see
@@ -242,6 +279,24 @@ export class FleetLeaseIndex {
       });
     }
     return reported;
+  }
+
+  /**
+   * The id a reported lease is routed under (ADR 0020): bare when the requester chose it and it
+   * is a valid chosen id, `<workerId>.<id>` otherwise. A lease flagged as chosen whose id could
+   * not have been chosen is prefixed and logged: the worker's claim is not trusted past the
+   * pattern a requester's id must match (safety rule 10).
+   */
+  #gatewayLeaseId(workerId: string, lease: WorkerReportedLease): string {
+    if (lease.idChosenByRequester !== true) return `${workerId}.${lease.id}`;
+    if (LEASE_ID_PATTERN.test(lease.id)) return lease.id;
+    if (!this.#byWorkerLease.has(workerKey(workerId, lease.id))) {
+      this.logger.warn(
+        "A worker reported a lease flagged as caller-chosen whose id is not a valid one; routing it under a worker-prefixed id",
+        { leaseId: lease.id, workerId },
+      );
+    }
+    return `${workerId}.${lease.id}`;
   }
 
   /** `rebuildFromWorker`'s removal half: forgets an existing entry for `workerId` that this
@@ -294,13 +349,23 @@ export class FleetLeaseIndex {
     } as ProjectedLease<Lease>;
   }
 
+  #dropRequesterLink(entry: FleetLeaseEntry): void {
+    const ids = this.#byRequester.get(entry.requesterId);
+    ids?.delete(entry.gatewayLeaseId);
+    if (ids?.size === 0) this.#byRequester.delete(entry.requesterId);
+  }
+
+  // why: every way the index drops a lease (a release, an expiry, a reconciled miss, a forgotten worker) tells the listener after the entry is gone.
+  onRemoved(listener: (entry: FleetLeaseEntry) => void): void {
+    this.#removalListeners.push(listener);
+  }
+
   #forget(entry: FleetLeaseEntry): void {
     this.#byGatewayId.delete(entry.gatewayLeaseId);
-    if (this.#byRequester.get(entry.requesterId) === entry.gatewayLeaseId) {
-      this.#byRequester.delete(entry.requesterId);
-    }
+    this.#dropRequesterLink(entry);
     this.#byWorkerLease.delete(workerKey(entry.workerId, entry.workerLeaseId));
     this.#missingSince.delete(entry.gatewayLeaseId);
+    for (const listener of this.#removalListeners) listener(entry);
   }
 }
 

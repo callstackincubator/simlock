@@ -1,7 +1,3 @@
-/**
- * Protocol version range negotiation (ADR 0003 §6). Client and daemon each advertise
- * `{min, max}`; the negotiated version is the highest value both ranges contain.
- */
 import { z } from "zod";
 
 import { SimlockError } from "./errors.js";
@@ -13,49 +9,11 @@ export interface ProtocolRange {
 
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
-/**
- * The range this contract's daemon speaks. Both ends are 13, and every move that got it there
- * was breaking with no shim kept behind them, which is exactly when ADR 0003 §6's honesty
- * rule says a range must *not* widen: ADR 0004 removed `lease.heartbeat` and `mode` from the
- * wire (taking it to 4), and ADR 0005 adds `device.exec` and its `output` push family, a
- * `mode` field `status.get` now always carries, and the gateway surface -- `worker.*`,
- * `workerId`, the `worker` token role -- on top (taking it to 5). ADR 0008 makes the catalog
- * carry a required `modelRuntimes` and `modelAliases` per platform (taking it to 6), which a
- * gateway reading a worker's catalog depends on. ADR 0007 makes a device's mode a required `mode`
- * on the grant, `status.get`, and `list.get` (taking it to 7), then lets a lease request choose
- * that mode with `mode`, replacing `full`, and reshapes `config.get`'s `ios` block (taking it to
- * 8). ADR 0010 adds `component.install` and its `component-progress` push (taking it to 9): a
- * gateway's `worker.install-component` (ADR 0010 §7) relays that operation to its
- * workers, so a worker without it must be `incompatible` rather than fail in the middle of a
- * relay. ADR 0014 gives every event envelope an `id` (taking it to 10): a worker's pushed events
- * without one would fail the gateway's schema, so a worker on 9 is `incompatible` instead. ADR 0009 §7 makes `atRamBudget` a required field of each platform's `status.get`
- * capacity (taking it to 11), which a gateway routing on it depends on. ADR 0015 §3 makes `modelClasses` a required field of each platform's catalog (taking it to 12): a gateway reading a worker's catalog would fail its schema without it, so a worker on 11 is `incompatible`. ADR 0015 §4 makes `classDefaults` a required field of each platform's catalog too (taking it to 13), for the same reason: a worker on 12 is `incompatible`. ADR 0009 §6 makes `servesDefaultMode` a required field of each device in `status.get` (taking it to 16), which a gateway telling a warm hit for a request with no mode depends on: a worker on 15 is `incompatible`. It only ever widens once a second version is actually kept alive side by side with the
- * first, which nothing here does.
- *
- * A client from before any of those changes simply does not overlap this daemon, and `hello`
- * fails with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the frozen
- * exception so the upgrade path (stop, then start the new daemon) exists at all. `status.get`'s
- * `mode` is the clearest reason this had to move rather than stay at 4: an older client parsing
- * that response against a schema without the field is not a compatibility story anyone kept, so
- * advertising 4 would be a claim to a compatibility path that does not exist.
- *
- * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
- * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
- * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10), and so is one on 7
- * (ADR 0007 §12), and so is one on 8 (ADR 0010 §9), one on 10 (ADR 0009 §7), one on 11 (ADR 0015 §3), one on 12 (ADR 0015 §4), one on 13 (ADR 0015 §1), one on 14 (ADR 0015 §2), and one on 15 (ADR 0009 §6).
- */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 16, max: 16 };
+/** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 39, max: 39 };
 
-/**
- * The one protocol version that ever existed before ranges did. Used only to build the
- * `{min:2,max:2}` "daemon range" a client reports when it detects a legacy daemon's old-style
- * exact-match mismatch (see `mapLegacyProtocolMismatch`) -- there is no live protocol-2 daemon
- * in this repository to negotiate with; this constant documents the historical fact the ADR's
- * compatibility note depends on.
- */
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
-/** Highest version present in both ranges, or `undefined` if they do not overlap at all. */
 export function negotiateProtocolVersion(
   client: ProtocolRange,
   daemon: ProtocolRange,
@@ -65,18 +23,13 @@ export function negotiateProtocolVersion(
   return overlapMin <= overlapMax ? overlapMax : undefined;
 }
 
-/** A new daemon treats a bare number as `{n, n}` (ADR §6). */
 export function normalizeProtocolVersion(value: number | ProtocolRange): ProtocolRange {
   return typeof value === "number" ? { min: value, max: value } : value;
 }
 
 /**
- * Builds the client-side error the ADR's compatibility note describes: a legacy protocol-2
- * daemon replies to `hello` with its own old-style `PROTOCOL_VERSION_MISMATCH` (no `{min,max}`
- * of its own -- that concept did not exist), so the client cannot learn the daemon's real
- * range from the wire. It reports the range as `{2,2}` because 2 is the only protocol version
- * that ever shipped without ranges -- see `LEGACY_DAEMON_PROTOCOL_VERSION`. `daemonVersion` is
- * `"unknown"` for the same reason: the legacy mismatch error carries no version string either.
+ * A legacy protocol-2 daemon sends no `{min,max}`, so its range is reported as `{2,2}`, the only version
+ * that shipped without ranges; `daemonVersion` is `"unknown"` for the same reason.
  */
 export function mapLegacyProtocolMismatch(
   clientRange: ProtocolRange,
@@ -124,3 +77,18 @@ export const helloReplySchema = z.object({
   role: z.enum(["agent", "admin"]),
   principal: z.string(),
 });
+
+/** The first path segment of every route the HTTP app registers itself; a module's name may not start with one. */
+export const CORE_ROUTE_SEGMENTS: readonly string[] = [
+  "catalog",
+  "components",
+  "devices",
+  "events",
+  "healthz",
+  "lease-requests",
+  "leases",
+  "status",
+  "tokens",
+  "uplink",
+  "workers",
+];

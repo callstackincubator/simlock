@@ -4,6 +4,7 @@ import {
   type LeaseRecord,
   SerializedDecision,
   type LeaseGrant,
+  type VirtualDevice,
 } from "../core/index.js";
 import {
   InMemoryLeaseRequestStore,
@@ -30,6 +31,7 @@ export function testConfig(
   mode: Config["mode"] = "worker",
 ): Config {
   return {
+    capabilities: {},
     mode,
     gateway: {
       disconnectedRetentionMs: 24 * 60 * 60_000,
@@ -74,6 +76,8 @@ export function testConfig(
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
       ...overrides,
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
@@ -85,6 +89,9 @@ export function testConfig(
     stalledTransition: { minimumThresholdMs: 60_000, thresholdMultiplier: 3 },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -105,14 +112,15 @@ export function sequenceIdGenerator(prefix = "id"): IdGenerator {
   };
 }
 
-export function makeDevice(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
+export function makeDevice(overrides: Partial<VirtualDevice> = {}): VirtualDevice {
   return {
     createdAt: 0,
     driverData: undefined,
     driverDeviceId: "ABCD-1234",
     id: "dev_1",
-    spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     mode: "full",
+    physical: false,
+    spec: { model: "iPhone 17 Pro", osVersion: "26.5", physical: false, platform: "ios" },
     state: "leased",
     ...overrides,
   };
@@ -126,6 +134,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     ownerId: "tok_agent",
     requesterId: "tok_agent",
     lastRenewedAt: 1_000,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 1_000 + 900_000,
     ...overrides,
@@ -134,7 +143,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
 
 export function makeGrant(
   overrides: {
-    readonly device?: Partial<DeviceRecord>;
+    readonly device?: Partial<VirtualDevice>;
     readonly lease?: Partial<LeaseRecord>;
   } = {},
 ): LeaseGrant {
@@ -299,8 +308,14 @@ export class FakeRegistry {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
     readonly components: readonly [];
+    readonly virtualDevices: readonly VirtualDevice[];
   } {
-    return { components: [], devices: this.devices, leases: this.leases };
+    return {
+      components: [],
+      devices: this.devices,
+      leases: this.leases,
+      virtualDevices: this.devices.filter((device): device is VirtualDevice => !device.physical),
+    };
   }
 }
 

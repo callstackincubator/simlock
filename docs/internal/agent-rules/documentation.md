@@ -7,8 +7,9 @@ grounds for rejecting a change even if the prose reads well.
 1. **There are two audiences, and they get two directories.** `docs/` is for
    end users of the built tool — someone who installed `simlock` and wants to
    use, configure, or integrate with it. `docs/internal/` (plus `AGENTS.md` at
-   the repo root) is for maintainers and coding agents changing simlock
-   itself — architecture, ADRs, agent rules, known pitfalls, and future ideas.
+   the repo root and the module manuals, rule 7) is for maintainers and coding
+   agents changing simlock itself — architecture, flows, ADRs, agent rules,
+   and future ideas.
    Before adding a new doc file, decide which reader it is for and put it in
    the matching directory; do not add a third category.
 2. **An end-user doc never cites an ADR, and never links into
@@ -48,3 +49,13 @@ grounds for rejecting a change even if the prose reads well.
    `docs/internal/` out to `docs/` (e.g. `../CLIENT.md`) is fine — a
    maintainer doc pointing at the user-facing reference for the same
    feature. From `docs/` into `docs/internal/` is never fine (see rule 2).
+7. **Every module has a manual, beside its code.** `src/<module>/AGENTS.md`
+   says what the module does today, how, and what a change must not break,
+   in the shape of [../templates/manual.md](../templates/manual.md), in at
+   most 150 lines. A `CLAUDE.md` beside it holds only `@AGENTS.md`, so Claude
+   Code loads the manual when it reads a file in the module; other agents load
+   it by the rule in the root `AGENTS.md`. A path that runs
+   through several modules (startup, device selection, `device.exec`) is a
+   flow doc under `docs/internal/flows/`, linked from each module's manual.
+   A manual and a flow doc hold no rationale (the ADR does) and no history
+   (git does); a known gap lives in its module's manual.

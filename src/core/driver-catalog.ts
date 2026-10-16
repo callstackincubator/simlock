@@ -1,13 +1,16 @@
 import { type Logger, NoopLogger } from "../ports/index.js";
 import { classCandidates, pairedRuntimes } from "./catalog-match.js";
-import { DEVICE_CLASSES, type DeviceClass, type DeviceSpec, type Platform } from "./domain.js";
+import { DEVICE_CLASSES, type DeviceClass, type VirtualSpec, type Platform } from "./domain.js";
 import type {
   ExactDeviceRequest,
   Driver,
   DriverCatalogEntry,
   PassthroughCommand,
   PassthroughContext,
+  PhysicalDriverDevice,
+  VirtualDriverDevice,
 } from "./driver.js";
+import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
 
 /** Thrown when no installed driver can serve the requested platform. */
@@ -41,6 +44,11 @@ export interface PlatformCatalog extends DriverCatalogEntry {
   readonly classDefaults: Readonly<Partial<Record<DeviceClass, string>>>;
 }
 
+export interface ScreenAvailability {
+  readonly platform: Platform;
+  readonly reason?: string;
+}
+
 /** Immutable platform-to-driver lookup used by the lease path. */
 export class DriverCatalog {
   readonly #drivers: ReadonlyMap<Platform, Driver>;
@@ -65,32 +73,58 @@ export class DriverCatalog {
     return driver;
   }
 
-  /** Whether a driver started for this platform; false for one discovery refused. */
-  // fallow-ignore-next-line unused-class-member -- reached through StartupDriverAvailability by StartupConverger.
-  has(platform: Platform): boolean {
-    return this.#drivers.has(platform);
-  }
-
   /**
    * Routes `simlock <tool> <args>` to whichever driver claims that tool name. Routing is
    * all this does: which flag scopes the tool, which verbs it refuses, and what its
    * environment must carry are decided inside the driver, so a third driver can add a
    * wrapper without a line changing here (architecture rules 2 and 3).
    */
-  passthrough(
+  async passthrough(
     tool: string,
+    device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
     args: readonly string[],
     context?: PassthroughContext,
-  ): PassthroughCommand {
+  ): Promise<PassthroughCommand> {
     for (const driver of this.#drivers.values()) {
-      if (driver.passthroughTool === tool && driver.passthrough !== undefined) {
-        return driver.passthrough(args, context);
+      if (driver.passthroughTools?.includes(tool) === true && driver.passthrough !== undefined) {
+        return await driver.passthrough(tool, device, args, context);
       }
     }
     throw new UnknownPassthroughToolError(tool);
   }
 
-  async resolveSpec(request: ExactDeviceRequest): Promise<DeviceSpec> {
+  async openScreen(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    settings: ScreenSettings,
+    signal: AbortSignal,
+  ): Promise<ScreenFeed> {
+    const capture = this.#drivers.get(platform)?.screenCapture;
+    if (capture === undefined) {
+      throw new ScreenNotSupportedError(`A ${platform} device's screen cannot be streamed`);
+    }
+    return await capture.open(device, settings, signal);
+  }
+
+  async screenAvailability(): Promise<readonly ScreenAvailability[]> {
+    return await Promise.all(
+      [...this.#drivers.values()].flatMap((driver) =>
+        driver.screenCapture === undefined
+          ? []
+          : [
+              driver.screenCapture
+                .unavailable()
+                .then((reason) =>
+                  reason === undefined
+                    ? { platform: driver.platform }
+                    : { platform: driver.platform, reason },
+                ),
+            ],
+      ),
+    );
+  }
+
+  async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
     return this.get(request.platform).resolveSpec(request);
   }
 

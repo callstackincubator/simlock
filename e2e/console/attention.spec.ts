@@ -131,16 +131,24 @@ async function strandProvisioning(
 async function openAttention(page: Page, daemon: RunningDaemon): Promise<void> {
   await page.goto(daemon.url);
   await signIn(page, daemon.tokens.operator);
-  await page.getByRole("link", { name: "Attention" }).click();
+  // why: a phone folds the navigation into a menu, so the page is opened by its address.
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await page.goto(new URL("/attention", daemon.url).href);
   await expect(page.getByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
 }
 
-/** The item for `condition` about the worker or device named `subject`. */
+function rows(page: Page): Locator {
+  return page.getByRole("list", { name: "Needs attention" }).getByRole("link");
+}
+
 function item(page: Page, condition: string, subject: string): Locator {
-  return page
-    .locator(".attention-table tbody tr")
-    .filter({ has: page.locator(".status", { hasText: new RegExp(`^${condition}$`) }) })
+  return rows(page)
+    .filter({ has: page.getByRole("img", { exact: true, name: condition }) })
     .filter({ hasText: subject });
+}
+
+function facts(page: Page): Locator {
+  return page.getByRole("group", { name: "Facts" });
 }
 
 /** Whether the page itself scrolls sideways. */
@@ -169,11 +177,23 @@ test.describe("the attention view", () => {
 
       const drained = item(page, "drained", "worker-b");
       await expect(drained).toBeVisible({ timeout: 1_000 });
-      await expect(drained.getByRole("link", { name: "worker-b" })).toHaveAttribute(
+      await expect(drained).toHaveAttribute(
+        "href",
+        `/attention/${encodeURIComponent(`${b?.id}/drained`)}`,
+      );
+      await expect(rows(page)).toHaveCount(1);
+      await expect(page).toHaveURL(/\/attention$/);
+      await expect(page.getByRole("heading", { level: 2, name: "worker-b" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Open worker" })).toHaveAttribute(
         "href",
         `/workers/${encodeURIComponent(b?.id ?? "")}`,
       );
-      await expect(page.locator(".attention-table tbody tr")).toHaveCount(1);
+      await expect(facts(page)).toContainText("Leases still held");
+      const recent = page.getByRole("region", { name: "Recent events" });
+      await expect(recent.getByRole("link", { name: /worker\.drain-started/ })).toHaveAttribute(
+        "href",
+        /^\/events\/.+/,
+      );
     } finally {
       await disposeFleet(fleet);
     }
@@ -198,6 +218,30 @@ test.describe("the attention view", () => {
     }
   });
 
+  test("an item named in the URL that stops needing attention says Resolved. with a link back", async ({
+    page,
+  }) => {
+    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
+    try {
+      const [a] = await workers(fleet.gateway);
+      expect((await fleet.gateway.cli(["worker", "drain", a?.id ?? ""])).code).toBe(0);
+      await openAttention(page, fleet.gateway);
+      await item(page, "drained", "worker-a").click();
+      await expect(page).toHaveURL(/\/attention\/.+/);
+      await expect(page.getByRole("heading", { level: 2, name: "worker-a" })).toBeVisible();
+
+      expect((await fleet.gateway.cli(["worker", "undrain", a?.id ?? ""])).code).toBe(0);
+      await untilTheDaemonSays(fleet.gateway, (views) => views[0]?.drained === false);
+
+      await expect(page.getByText("Resolved.")).toBeVisible({ timeout: 1_000 });
+      await page.getByRole("link", { name: "Back to Attention" }).click();
+      await expect(page).toHaveURL(/\/attention$/);
+      await expect(page.getByText("Nothing needs attention.")).toBeVisible();
+    } finally {
+      await disposeFleet(fleet);
+    }
+  });
+
   test("stopping a worker adds it as disconnected within a second", async ({ page }) => {
     const fleet = await startFleet([
       { driverScript: { ios: IOS }, label: "worker-a" },
@@ -215,6 +259,8 @@ test.describe("the attention view", () => {
 
       await expect(item(page, "disconnected", "worker-b")).toBeVisible({ timeout: 1_000 });
       await expect(item(page, "disconnected", "worker-a")).toHaveCount(0);
+      await item(page, "disconnected", "worker-b").click();
+      await expect(facts(page)).toContainText(/Last seen\s*\d+ s ago/);
     } finally {
       await disposeFleet(fleet);
     }
@@ -266,12 +312,16 @@ test.describe("the attention view", () => {
       await openAttention(page, fleet.gateway);
 
       await expect(item(page, "incompatible", "old-worker")).toBeVisible();
-      await expect(
-        item(page, "quarantined", `Device ${quarantined?.id} on worker-a`),
-      ).toBeVisible();
-      await expect(item(page, "stalled", `Device ${stalled?.id} on worker-a`)).toContainText(
-        /stuck provisioning for \d+ (s|min)/,
-      );
+      await item(page, "incompatible", "old-worker").click();
+      await expect(facts(page)).toContainText("Gateway protocol");
+      await expect(facts(page)).toContainText("Worker protocol");
+
+      await item(page, "quarantined", "iPhone 16 on worker-a").click();
+      await expect(facts(page)).toContainText(quarantined?.id ?? "");
+
+      await item(page, "stalled", "iPhone 16 on worker-a").click();
+      await expect(facts(page)).toContainText(stalled?.id ?? "");
+      await expect(facts(page)).toContainText(/In this state for\s*\d+ (s|min)/);
     } finally {
       hangUp();
       await disposeFleet(fleet);
@@ -317,10 +367,16 @@ test.describe("the attention view", () => {
       await openAttention(page, host);
 
       const name = view?.id ?? "";
-      await expect(item(page, "quarantined", `Device ${quarantined?.id} on ${name}`)).toBeVisible();
-      await expect(item(page, "stalled", `Device ${stalled?.id} on ${name}`)).toBeVisible();
+      await expect(item(page, "quarantined", `iPhone 16 on ${name}`)).toBeVisible();
+      await expect(item(page, "stalled", `iPhone 16 on ${name}`)).toBeVisible();
       await expect(item(page, "over RAM budget", name)).toBeVisible();
-      await expect(page.locator(".attention-table tbody tr")).toHaveCount(3);
+      await expect(rows(page)).toHaveCount(3);
+      expect(quarantined?.id).toBeTruthy();
+      expect(stalled?.id).toBeTruthy();
+
+      await item(page, "over RAM budget", name).click();
+      await expect(facts(page)).toContainText(/Used\s*\d+\.\d\d GiB/);
+      await expect(facts(page)).toContainText(/Limit\s*\d+\.\d\d GiB/);
     } finally {
       await host.dispose();
     }
@@ -339,11 +395,15 @@ test.describe("the attention view", () => {
       await page.goto(gateway.url);
       await signIn(page, gateway.tokens.operator);
 
-      const attention = page.getByRole("navigation").getByRole("link", { name: /^Attention/ });
+      const attention = page
+        .getByRole("navigation", { name: "Console" })
+        .getByRole("link", { name: /^Attention/ });
       for (const label of NAV_LABELS) {
-        await page.getByRole("navigation").getByRole("link", { name: label }).click();
+        await page
+          .getByRole("navigation", { name: "Console" })
+          .getByRole("link", { name: label })
+          .click();
         await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
-        await expect(attention.locator(".nav-count")).toHaveText(/^\D*2\D*$/);
         await expect(attention).toHaveAccessibleName("Attention 2 items");
       }
 
@@ -375,7 +435,10 @@ test.describe("the attention view", () => {
 
       await openAttention(page, gateway);
 
-      await expect(page.locator(".attention-table tbody tr")).toHaveCount(1);
+      await expect(rows(page)).toHaveCount(1);
+      expect(await hasHorizontalScroll(page)).toBe(false);
+      await rows(page).click();
+      await expect(page.getByRole("heading", { level: 2, name: /^aworkerwith/ })).toBeVisible();
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       hangUp();
@@ -404,13 +467,18 @@ test.describe("the attention view", () => {
       await page.keyboard.press(tab);
       await page.keyboard.type(gateway.tokens.operator);
       await page.keyboard.press("Enter");
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
-      await follow(page.getByRole("navigation").getByRole("link", { name: /^Attention/ }));
+      await follow(
+        page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /^Attention/ }),
+      );
       await expect(page.getByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
 
-      await follow(item(page, "incompatible", "old-worker").getByRole("link"));
-      await expect(page.getByRole("heading", { level: 1, name: "old-worker" })).toBeVisible();
+      await follow(item(page, "incompatible", "old-worker"));
+      await expect(page.getByRole("heading", { level: 2, name: "old-worker" })).toBeVisible();
+
+      await follow(page.getByRole("link", { name: "Open worker" }));
+      await expect(page).toHaveURL(/\/workers\/wrk_old$/);
     } finally {
       hangUp();
       await gateway.dispose();

@@ -1,9 +1,5 @@
-// Shapes shared by the scriptable fake driver, its script file, and its call log.
-// These are hand-declared rather than imported from src/core/driver.ts because the
-// structural pieces (ObservedDevice, DriverReality, ...) are simple enough to duplicate
-// and doing so keeps this file free of any value-level coupling to the src tree beyond
-// the four error classes declared in driver-errors.d.ts. Type-only imports would also
-// work, but duplicating here makes it obvious at a glance what the JSON script format is.
+// Hand-declared rather than imported from src/core/driver.ts, to keep this file free of
+// value-level coupling to the src tree and to show the JSON script format at a glance.
 
 export type FakeDriverPlatform = "ios" | "android";
 
@@ -22,18 +18,42 @@ export type FakeDriverOperation =
   | "listCatalog"
   | "listComponents"
   | "removeComponent"
-  /** The root re-proof `doctor --purge-orphans` takes before its first destroy. */
-  | "revalidateRoot";
+  | "revalidateRoot"
+  | "inspectPhysical"
+  | "listPresentPhysical"
+  | "uninstall";
 
 export type FakeDriverEstimateOperation = "provision" | "boot" | "reclaim";
 
-/** A forced failure for one operation. `type: "generic"` throws a plain Error. */
 export type FakeDriverErrorSpec =
   | { readonly type: "RuntimeMissingError"; readonly osVersion?: string }
   | { readonly type: "UnknownModelError"; readonly model?: string }
   | { readonly type: "BootTimeoutError"; readonly deviceId?: string }
   | { readonly type: "DriverCrashError"; readonly message?: string }
   | { readonly type: "generic"; readonly message?: string };
+
+export type FakeDriverRefusalReason =
+  | "not-connected"
+  | "network-only"
+  | "untrusted"
+  | "developer-mode-off"
+  | "os-too-old"
+  | "unsupported-kind"
+  | "locked"
+  | "unreadable"
+  | "virtual-device";
+
+export interface ScriptedPhysicalDevice {
+  readonly ids: readonly string[];
+  readonly model?: string;
+  readonly osVersion?: string;
+  readonly class?: "phone" | "tablet";
+  readonly apps?: readonly string[];
+  readonly installedApps?: readonly string[];
+  readonly present?: boolean;
+  readonly absentReason?: "locked" | "untrusted" | "not-present";
+  readonly refusal?: { readonly reason: FakeDriverRefusalReason; readonly message: string };
+}
 
 export type ScriptedRunState = "running" | "stopped" | "transitioning";
 
@@ -53,7 +73,6 @@ export interface ScriptedProcessEntry {
   readonly deviceId: string;
 }
 
-/** Overrides `listManaged()` so doctor drift (unknown/vanished devices) can be staged. */
 export interface ScriptedManagedReality {
   readonly devices?: readonly ScriptedObservedDevice[];
   readonly processes?: readonly ScriptedProcessEntry[];
@@ -101,18 +120,9 @@ export interface FakeDriverPlatformScript {
     readonly version: string;
     readonly build?: string;
   }[];
-  /**
-   * The percentages each `installComponent` reports through `onProgress`, in order. An install
-   * makes its version available for the rest of the daemon's life, on top of
-   * `availableOsVersions`; `latencyMs.installComponent` makes it wait and
-   * `failures.installComponent` makes it fail.
-   */
   readonly installProgress?: readonly number[];
-  /** What `listComponents` reports as each version's size in bytes; absent for one left out. */
   readonly componentSizes?: Readonly<Record<string, number>>;
-  /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
   readonly foreignDevices?: Readonly<Record<string, number>>;
-  /** What every `removeComponent` reports as left on disk; nothing unless set. */
   readonly removalResidue?: string;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
@@ -120,11 +130,7 @@ export interface FakeDriverPlatformScript {
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
-  /**
-   * Environment the grant for this platform's devices should carry, standing in for the
-   * device-set path / adb port a real driver contributes. Read on every operation like
-   * everything else here, so a test can set it before the lease it wants to assert on.
-   */
+  readonly physicalDevices?: readonly ScriptedPhysicalDevice[];
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
   /**
    * Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
@@ -133,10 +139,10 @@ export interface FakeDriverPlatformScript {
    * Defaults to `<deviceId>-address`.
    */
   readonly address?: string;
-  /**
-   * What this platform's `prerequisiteChecks` entry reports missing, read fresh on every
-   * `doctor` run. None by default.
-   */
+  // why: the browser lane has no simulator to film, so a script names a stand-in program that writes
+  // the capture envelope; unset, this platform's screen is unavailable, as on a host whose capture
+  // program was never built.
+  readonly screenCaptureCommand?: string;
   readonly missingPrerequisites?: readonly {
     readonly prerequisite: string;
     readonly message: string;

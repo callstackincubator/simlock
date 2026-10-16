@@ -1,6 +1,6 @@
 # 0017. The warm pool is a module beside the lease transaction, not a step in it
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — partly implemented: §3 (the release path still calls into the pool)
 - **Date:** 2026-10-05
 - **Issue:** [#359](https://github.com/callstackincubator/simlock/issues/359)
 - **Supersedes:** nothing. Replaces the "Warm pool" entry of
@@ -187,7 +187,9 @@ A device that counts toward a target is **targeted**; a device kept by
 step 2 without a target is **kept**. The reaper's idle-shutdown rule skips
 targeted devices and keeps its timers for kept ones; the rule reads the set
 of targeted device ids from its view, which the composition root fills from
-the pool. Idle-destroy is unchanged.
+the pool. Idle-destroy also deletes a device that never served a lease, timed from
+the moment it was shut down (`shutdownAt`) with the same `idle.deleteAfterMs`, so a
+device the pool created and later shut down is not kept forever (decided in #370).
 
 `warmPool.enabled: false` is the policy that keeps nothing: every pass shuts
 down every idle ready device, targets are ignored, and the reserve has no

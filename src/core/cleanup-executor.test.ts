@@ -11,7 +11,7 @@ import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const statePath = "/home/agent/.simlock/state.json";
-const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 async function createHarness() {
   const clock = new FakeClock(1_000);

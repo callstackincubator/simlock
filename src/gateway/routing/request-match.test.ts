@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { catalogFixture, statusFixture } from "../test-support.js";
 import type { WorkerView } from "../worker-registry.js";
-import { listsModel, matchRequest } from "./request-match.js";
+import { deviceFit, listsModel, matchRequest } from "./request-match.js";
 
 function worker(entry: Parameters<typeof catalogFixture>[0][number]): WorkerView {
   return {
@@ -228,5 +228,72 @@ describe("matchRequest", () => {
 
     expect(matchRequest(view, { ...request, osVersion: ">=26" })).toBe("iPhone 17");
     expect(matchRequest(view, { ...request, osVersion: ">26" })).toBeUndefined();
+  });
+});
+
+describe("deviceFit: the runtime a model with no OS is expected to get", () => {
+  const specOf = (platform: "android" | "ios", model: string, osVersion: string) =>
+    ({ model, osVersion, physical: false, platform }) as const;
+
+  it.each([
+    ["android", "Pixel 9", ["35", "36"]],
+    ["ios", "iPhone 17", ["18.0", "26.0"]],
+  ] as const)(
+    "expects the newest paired runtime on %s even when the default runtime is an older paired one",
+    (platform, model, runtimes) => {
+      const [older, newest] = runtimes;
+      const view = worker({
+        defaultRuntime: older,
+        models: [model],
+        platform,
+        runtimes: [...runtimes],
+      });
+
+      const fit = deviceFit(view, { model, platform });
+
+      expect(fit?.(specOf(platform, model, newest))).toBe(true);
+      expect(fit?.(specOf(platform, model, older))).toBe(false);
+    },
+  );
+
+  it.each([
+    ["android", "Pixel 9", ["35", "36"], "37"],
+    ["ios", "iPhone 17", ["18.0", "26.0"], "27.0"],
+  ] as const)(
+    "expects the newest paired runtime on %s when several are paired and the default is not one of them",
+    (platform, model, runtimes, unpaired) => {
+      const [older, newest] = runtimes;
+      const view = worker({
+        defaultRuntime: unpaired,
+        modelRuntimes: { [model]: [...runtimes] },
+        models: [model],
+        platform,
+        runtimes: [...runtimes, unpaired],
+      });
+
+      const fit = deviceFit(view, { model, platform });
+
+      expect(fit?.(specOf(platform, model, newest))).toBe(true);
+      expect(fit?.(specOf(platform, model, older))).toBe(false);
+    },
+  );
+
+  it("expects the newest paired runtime that has an image of the tag, for a request naming a tag", () => {
+    const view = worker({
+      images: [
+        { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "36", tag: "google_apis_playstore" },
+      ],
+      models: ["Pixel 9"],
+      platform: "android",
+      runtimes: ["34", "35", "36"],
+    });
+
+    const fit = deviceFit(view, { imageTag: "google_apis", model: "Pixel 9", platform: "android" });
+
+    expect(fit?.({ ...specOf("android", "Pixel 9", "35"), imageTag: "google_apis" })).toBe(true);
+    expect(fit?.({ ...specOf("android", "Pixel 9", "34"), imageTag: "google_apis" })).toBe(false);
+    expect(fit?.({ ...specOf("android", "Pixel 9", "36"), imageTag: "google_apis" })).toBe(false);
   });
 });

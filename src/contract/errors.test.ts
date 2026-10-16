@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_TABLE, fromWireError, isSimlockError } from "./errors.js";
+import {
+  CODES_WITH_DECLARED_DETAILS,
+  ERROR_TABLE,
+  fromWireError,
+  isSimlockError,
+} from "./errors.js";
 
 describe("SimlockError", () => {
   it("narrows details by code", () => {
@@ -38,7 +43,92 @@ describe("SimlockError", () => {
     },
   );
 
+  it("narrows LEASE_ID_TAKEN's details to the ID, and answers it with exit 13 and HTTP 409 as a domain error", () => {
+    const error = fromWireError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+      leaseId: "ad-7f3a",
+    });
+    if (error.code !== "LEASE_ID_TAKEN") throw new Error("expected LEASE_ID_TAKEN");
+
+    expect(error.details.leaseId).toBe("ad-7f3a");
+    expect(ERROR_TABLE.LEASE_ID_TAKEN).toEqual({
+      cliExitCode: 13,
+      code: "LEASE_ID_TAKEN",
+      httpStatus: 409,
+      kind: "domain",
+    });
+  });
+
   it("isSimlockError rejects a plain Error", () => {
     expect(isSimlockError(new Error("boom"))).toBe(false);
+  });
+
+  it("answers the three enrollment codes as domain errors: not enrollable 12 and 422, busy 11 and 409, unknown 12 and 404, each with declared details", () => {
+    expect(ERROR_TABLE.DEVICE_NOT_ENROLLABLE).toEqual({
+      cliExitCode: 12,
+      code: "DEVICE_NOT_ENROLLABLE",
+      httpStatus: 422,
+      kind: "domain",
+    });
+    expect(ERROR_TABLE.DEVICE_BUSY).toEqual({
+      cliExitCode: 11,
+      code: "DEVICE_BUSY",
+      httpStatus: 409,
+      kind: "domain",
+    });
+    expect(ERROR_TABLE.UNKNOWN_DEVICE).toEqual({
+      cliExitCode: 12,
+      code: "UNKNOWN_DEVICE",
+      httpStatus: 404,
+      kind: "domain",
+    });
+    for (const code of ["DEVICE_NOT_ENROLLABLE", "DEVICE_BUSY", "UNKNOWN_DEVICE"] as const) {
+      expect(CODES_WITH_DECLARED_DETAILS.has(code)).toBe(true);
+    }
+  });
+});
+
+describe("CAPABILITY_MISSING", () => {
+  it("maps CAPABILITY_MISSING to HTTP 422 and CLI exit 12 as a domain error whose details name the capabilities", () => {
+    const table: Record<string, unknown> = ERROR_TABLE;
+    const error = fromWireError("CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+    expect(table["CAPABILITY_MISSING"]).toEqual({
+      cliExitCode: 12,
+      code: "CAPABILITY_MISSING",
+      httpStatus: 422,
+      kind: "domain",
+    });
+    expect(error).toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      kind: "domain",
+    });
+  });
+});
+
+describe("RELAY_TARGET_MISSING", () => {
+  it("maps RELAY_TARGET_MISSING to HTTP 503 and CLI exit 1 as a domain error whose details name the target", () => {
+    const table: Record<string, unknown> = ERROR_TABLE;
+    const error = fromWireError(
+      "RELAY_TARGET_MISSING",
+      "No module on this worker serves agent-device",
+      {
+        target: "agent-device",
+      },
+    );
+
+    expect(table["RELAY_TARGET_MISSING"]).toEqual({
+      cliExitCode: 1,
+      code: "RELAY_TARGET_MISSING",
+      httpStatus: 503,
+      kind: "domain",
+    });
+    expect(error).toMatchObject({
+      code: "RELAY_TARGET_MISSING",
+      details: { target: "agent-device" },
+      kind: "domain",
+    });
   });
 });

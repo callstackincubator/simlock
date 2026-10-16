@@ -517,12 +517,12 @@ export class ComponentInstaller {
   }
 
   /**
-   * Simlock's own devices of this platform and version: every registry device in any state but
-   * `deleted`, and every provision that has claimed one and not registered it yet. The one count
+   * Simlock's own devices of this platform and version: every virtual registry device in any
+   * state but `deleted` (a physical device uses no runtime), and every provision that has claimed one and not registered it yet. The one count
    * `list` reports and a removal refuses on.
    */
   #simlockDevices(platform: Platform, version: string): number {
-    const registered = this.options.registry.snapshot.devices.filter(
+    const registered = this.options.registry.snapshot.virtualDevices.filter(
       (device) =>
         device.state !== "deleted" &&
         device.spec.platform === platform &&

@@ -8,7 +8,6 @@ import type { TokenIdentity } from "./token-store.js";
 
 export interface LeaseRequestInput {
   readonly platform: "ios" | "android";
-  /** The exact model; absent for a request that names a class or nothing (ADR 0015 §1). */
   readonly device?: string;
   readonly class?: DeviceClass;
   readonly os?: string;
@@ -18,17 +17,12 @@ export interface LeaseRequestInput {
   readonly allowDownload?: boolean;
   readonly mode?: "slim" | "full";
   readonly imageTag?: string;
-  /** ADR §27a. Threaded straight through to the shared dispatcher's own `lease.request` input --
-   * the same gate every other transport is held to (`FORBIDDEN` for a non-admin token) decides
-   * this, not this route (H7, round 2 review: before this, `leaseRequestBodySchema` had no
-   * `owner` field at all and quietly discarded one a caller sent, the anti-pattern this
-   * codebase's own `device.exec`'s `requesterId` precedent already rejected for the same reason
-   * -- an identity named and answered as though it had not been is the kind of silence that
-   * reads like authorization). */
+  readonly physical?: boolean;
+  /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
+  readonly leaseId?: string;
 }
 
-/** Matches the issue's lease object exactly; `dataPlane` is reserved and always `null` in v1. */
 export interface LeasePayload {
   readonly id: string;
   readonly requestId?: string;
@@ -41,8 +35,7 @@ export interface LeasePayload {
   readonly expiresAt: string;
   readonly ttlMs: number;
   readonly dataPlane: null;
-  /** The mode the granted device actually has -- see `DeviceRecord.mode`. */
-  readonly mode: "slim" | "full";
+  readonly mode?: "slim" | "full";
   /** The image tag the device was created from, on a device whose request named one. */
   readonly imageTag?: string;
   /** The worker a gateway-issued lease lives on, as its lease record names it. Absent from a
@@ -81,19 +74,13 @@ export function buildLeasePayload(
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: lease.ttlMs,
     dataPlane: null,
-    mode: device.mode,
+    ...(device.mode === undefined ? {} : { mode: device.mode }),
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
-    // A gateway's lease record names its worker and a worker's own never does. `workerId` is
-    // derived from `worker` rather than read off the record: a grant's record has no
-    // `workerId` field (only `lease.list`'s does), and the two must never disagree.
+    // `workerId` derives from `worker` so the two never disagree.
     ...(lease.worker === undefined ? {} : { worker: lease.worker, workerId: lease.worker.id }),
   };
 }
 
-/**
- * `lease.request`'s input for an HTTP body: the route's names (`device`, `os`) mapped onto the
- * contract's, and a field the body left out left out.
- */
 function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: string | undefined) {
   return {
     ...(body.device === undefined ? {} : { model: body.device }),
@@ -102,24 +89,20 @@ function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: stri
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...(body.physical === undefined ? {} : { physical: body.physical }),
     ...requestOptions(body),
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   };
 }
 
-/** The body's fields that say how to wait and hold, rather than which device. */
 function requestOptions(body: LeaseRequestInput) {
   return {
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-    // ADR 0003 §9: the initial TTL travels on the request itself -- this deletes the old
-    // grant-then-immediately-renew hack. Under ADR 0004 the daemon then stores that width on the
-    // lease, so nothing here has to remember it either.
     ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
-    // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
-    // `lease.request` handler is what rejects a non-admin token naming this.
     ...(body.owner === undefined ? {} : { owner: body.owner }),
+    ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
   };
 }
 
@@ -399,7 +382,8 @@ export interface HttpLeaseDevice {
     readonly osVersion: string;
     readonly imageTag?: string | undefined;
   };
-  readonly mode: "slim" | "full";
+  /** Absent only for a physical device, which has no mode. */
+  readonly mode?: "slim" | "full" | undefined;
 }
 
 interface HttpLeaseRecord {

@@ -1,0 +1,182 @@
+/* Tables: a row per item, in a panel. Headers are labels, rows are roomy, numbers sit right.
+ * Under 768px each row stacks into labelled lines, so the page never scrolls sideways. */
+
+/* Fixed layout: the columns share the panel's width and a long cell wraps or is cut, so a table
+ * never grows wider than its panel. */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  table-layout: fixed;
+}
+
+.table th,
+.table td {
+  padding: var(--space-4) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  overflow-wrap: break-word;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-left: var(--space-6);
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: var(--space-6);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .mono {
+  overflow-wrap: break-word;
+}
+
+.table th {
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.table .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.table th.num {
+  width: 8rem;
+}
+
+/* A table stacks its rows into labelled lines where its columns would be too narrow: every
+ * table under 768px, and a wide one, of six columns or more, under 1100px. */
+@media (max-width: 1099.98px) {
+  .table-wide thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table-wide thead th {
+    white-space: normal;
+  }
+
+  .table-wide,
+  .table-wide tbody,
+  .table-wide tr {
+    display: block;
+  }
+
+  .table-wide tr {
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-wide tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table-wide td,
+  .table-wide td:first-child,
+  .table-wide td:last-child {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .table-wide .num {
+    text-align: left;
+  }
+
+  .table-wide th.num {
+    width: auto;
+  }
+
+  .table-wide td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table thead th {
+    white-space: normal;
+  }
+
+  .table,
+  .table tbody,
+  .table tr {
+    display: block;
+  }
+
+  .table tr {
+    padding: var(--space-3) var(--space-6);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td,
+  .table td:first-child,
+  .table td:last-child {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .table .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .table .num {
+    text-align: left;
+  }
+
+  .table th.num {
+    width: auto;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+}
+
+.table th {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}

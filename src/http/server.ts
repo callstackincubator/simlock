@@ -172,7 +172,11 @@ export class HttpGateway {
     return new Promise((resolve, reject) => {
       let settled = false;
       const server = serve(
-        { fetch: site.fetch, hostname: this.#host, port: this.#port },
+        {
+          fetch: async (request, env) => abortOnBodyError(await site.fetch(request, env), env),
+          hostname: this.#host,
+          port: this.#port,
+        },
         (info) => {
           if (settled) return;
           settled = true;
@@ -216,4 +220,31 @@ export class HttpGateway {
     });
     this.#logger.info("HTTP gateway stopped", { host: this.#host, port: this.#port });
   }
+}
+
+// why: the node adapter answers a body that fails mid-stream by ending the response cleanly with an error line, so a client would take a cut-short download for a whole one; this makes the client see the failure.
+function abortOnBodyError(response: Response, env: unknown): Response {
+  const body = response.body;
+  const outgoing = (env as { outgoing?: { socket?: Socket | null } } | undefined)?.outgoing;
+  if (body === null || outgoing === undefined) return response;
+  const reader = body.getReader();
+  const guarded = new ReadableStream<Uint8Array>({
+    cancel: (reason) => reader.cancel(reason),
+    pull: async (controller) => {
+      try {
+        const next = await reader.read();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      } catch {
+        // why: a client told "connection: close" takes a socket closed mid-chunk for the end of the body, so an invalid chunk header goes first.
+        outgoing.socket?.end("!\r\n");
+        controller.close();
+      }
+    },
+  });
+  return new Response(guarded, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }

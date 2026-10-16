@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
 import {
   DeviceOperationClaims,
   type ObservedDevice,
@@ -13,16 +13,17 @@ import {
   ManagedDeviceLifecycle,
   SerializedDecision,
 } from "../core/index.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, HeldWritesFilesystem } from "../core/testing.js";
 import type { DeviceLostReleaser } from "./lease-health-monitor.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
-const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 function config(overrides: Partial<Config["health"]> = {}): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -36,6 +37,9 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     eventBuffer: { capacity: 100 },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,
@@ -59,6 +63,8 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
     },
     capacity: {
       strategy: "resource",
@@ -101,7 +107,7 @@ class RecordingReleaser implements DeviceLostReleaser {
 
 async function createHarness(healthOverrides: Partial<Config["health"]> = {}) {
   const clock = new FakeClock(1_000);
-  const filesystem = new MemoryFilesystem();
+  const filesystem = new HeldWritesFilesystem();
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
   let nextId = 1;
@@ -120,6 +126,7 @@ async function createHarness(healthOverrides: Partial<Config["health"]> = {}) {
   const monitor = new LeaseHealthMonitor({
     clock,
     config: config(healthOverrides),
+    decisions,
     drivers: catalog,
     eventBus,
     lifecycle,
@@ -129,8 +136,10 @@ async function createHarness(healthOverrides: Partial<Config["health"]> = {}) {
 
   return {
     clock,
+    decisions,
     driver,
     eventBus,
+    filesystem,
     monitor,
     registry,
     get releaseCalls() {
@@ -228,28 +237,32 @@ describe("LeaseHealthMonitor", () => {
     harness.monitor.dispose();
   });
 
-  it("does not recover on a single stopped reading but recovers on the second consecutive one", async () => {
+  it("observes only leased devices: a ready device the driver reports stopped costs no driver listing and starts no recovery", async () => {
     const harness = await createHarness();
-    const { device, lease } = await seedLeased(harness);
+    const device = await harness.registry.registerDevice({
+      driverData: { fakeDeviceId: "simlock-idle" },
+      driverDeviceId: "simlock-idle",
+      provisionDuration: 0,
+      spec,
+    });
+    await harness.registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
     harness.driver.setManagedReality({
-      devices: [observedDevice(device.driverDeviceId, "stopped")],
+      devices: [observedDevice("simlock-idle", "stopped")],
       processes: [],
     });
 
     harness.monitor.start();
     harness.clock.advance(30_000);
     await flush();
-    expect(makeReadyCalls(harness.driver)).toBe(0);
-
     harness.clock.advance(30_000);
     await flush();
-    expect(makeReadyCalls(harness.driver)).toBe(1);
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("leased");
-    const crashEvents = harness.eventBus
-      .replay()
-      .filter((event) => event.event === "device.crash-detected");
-    expect(crashEvents).toHaveLength(1);
-    expect(crashEvents[0]).toMatchObject({ payload: { deviceId: device.id, leaseId: lease.id } });
+
+    expect(listManagedCalls(harness.driver)).toBe(0);
+    expect(makeReadyCalls(harness.driver)).toBe(0);
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
     harness.monitor.dispose();
   });
 
@@ -345,6 +358,7 @@ describe("LeaseHealthMonitor", () => {
       "device.crash-detected",
       "device.recovered",
     ]);
+    expect(events[0]).toMatchObject({ payload: { deviceId: device.id, leaseId: lease.id } });
     expect(events[1]).toMatchObject({
       payload: { attempts: 1, deviceId: device.id, leaseId: lease.id },
     });
@@ -534,7 +548,7 @@ describe("LeaseHealthMonitor", () => {
     harness.monitor.dispose();
   });
 
-  it("caps concurrent recoveries at maxConcurrentRecoveries, leaving a second crashed device for a later tick", async () => {
+  it("caps concurrent recoveries at maxConcurrentRecoveries, dispatching one reboot for two crashed devices", async () => {
     const harness = await createHarness({ maxConcurrentRecoveries: 1 });
     await seedLeased(harness, { driverDeviceId: "simlock-a" });
     await seedLeased(harness, { driverDeviceId: "simlock-b", requesterId: "agent-2" });
@@ -599,6 +613,93 @@ describe("LeaseHealthMonitor", () => {
     await flush();
     harness.monitor.dispose();
   });
+
+  it.each([
+    {
+      name: "recording a recovery attempt",
+      recoveryAttempts: 1,
+      async reachWrite(harness: Awaited<ReturnType<typeof createHarness>>, driverDeviceId: string) {
+        harness.driver.setManagedReality({
+          devices: [observedDevice(driverDeviceId, "stopped")],
+          processes: [],
+        });
+        harness.driver.failOn("makeReady", 1, new Error("boom"));
+        harness.monitor.start();
+        harness.clock.advance(30_000);
+        await flush();
+        harness.filesystem.holding = true;
+        harness.clock.advance(30_000);
+      },
+    },
+    {
+      name: "clearing recovery markers on a device observed running",
+      recoveryAttempts: undefined,
+      async reachWrite(harness: Awaited<ReturnType<typeof createHarness>>, driverDeviceId: string) {
+        const device = harness.registry.snapshot.virtualDevices.find(
+          (candidate) => candidate.driverDeviceId === driverDeviceId,
+        );
+        await harness.registry.markRecoveryAttempt(device?.id ?? "", 1_000);
+        harness.driver.setManagedReality({
+          devices: [observedDevice(driverDeviceId, "running")],
+          processes: [],
+        });
+        harness.monitor.start();
+        harness.filesystem.holding = true;
+        harness.clock.advance(30_000);
+      },
+    },
+    {
+      name: "clearing recovery markers after a successful reboot",
+      recoveryAttempts: undefined,
+      async reachWrite(harness: Awaited<ReturnType<typeof createHarness>>, driverDeviceId: string) {
+        harness.driver.setManagedReality({
+          devices: [observedDevice(driverDeviceId, "stopped")],
+          processes: [],
+        });
+        harness.driver.hangMakeReady();
+        harness.monitor.start();
+        harness.clock.advance(30_000);
+        await flush();
+        harness.clock.advance(30_000);
+        await flush();
+        harness.filesystem.holding = true;
+        harness.driver.releaseMakeReady();
+      },
+    },
+  ])(
+    "$name keeps its write, and another device's transition committed in the decision section while that write is in flight keeps its own",
+    async ({ reachWrite, recoveryAttempts }) => {
+      const harness = await createHarness();
+      const { device } = await seedLeased(harness);
+      const idle = await harness.registry.registerDevice({
+        driverData: { fakeDeviceId: "simlock-idle" },
+        driverDeviceId: "simlock-idle",
+        provisionDuration: 0,
+        spec,
+      });
+      await harness.registry.transitionDevice(idle.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: idle.id },
+      });
+
+      await reachWrite(harness, device.driverDeviceId);
+      await harness.filesystem.held(1);
+      const shuttingDown = harness.decisions.run(() =>
+        harness.registry.transitionDevice(idle.id, "shutdown", {
+          event: "device.shutdown",
+          payload: { deviceId: idle.id, initiator: "warm-pool" },
+        }),
+      );
+      await harness.filesystem.releaseUntil(shuttingDown);
+      await flush();
+
+      const record = (id: string) => harness.registry.snapshot.devices.find((d) => d.id === id);
+      expect(record(device.id)?.state).toBe("leased");
+      expect(record(device.id)?.recoveryAttempts).toBe(recoveryAttempts);
+      expect(record(idle.id)?.state).toBe("shutdown");
+      harness.monitor.dispose();
+    },
+  );
 
   it("performs no driver calls when health.enabled is false", async () => {
     const harness = await createHarness({ enabled: false });

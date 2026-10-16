@@ -1,6 +1,8 @@
 # 0001. Simlock-owned device roots
 
-- **Status:** Accepted
+- **Status:** Accepted. Root membership as the only proof of ownership, and the
+  Android driver's one adb server, are narrowed by [ADR
+  0022](0022-a-physical-device-is-a-second-device-type-the-core-knows.md) for physical devices.
 - **Date:** 2026-09-02
 - **Issue:** [#73](https://github.com/callstackincubator/simlock/issues/73),
   part of [#70](https://github.com/callstackincubator/simlock/issues/70)

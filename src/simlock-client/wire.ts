@@ -55,6 +55,13 @@ export interface CallHooks {
   readonly onComponentProgress?:
     | ((progress: ComponentInstallProgress, workerId: string | undefined) => void)
     | undefined;
+  readonly onRelayHead?: ((head: RelayHead) => void) | undefined;
+  readonly onRelayInvalid?: (() => void) | undefined;
+}
+
+export interface RelayHead {
+  readonly status: number;
+  readonly headers: readonly (readonly [string, string])[];
 }
 
 interface PendingCall extends CallHooks {
@@ -323,6 +330,17 @@ export class SimlockWire {
         this.#pending.get(id)?.onComponentProgress?.(parsed.data.progress, parsed.data.workerId);
         return;
       }
+      case "relay-head": {
+        // why: routed by `requestId` before the rest of the push is checked, so a push that breaks its schema still reaches its relay as invalid instead of being dropped (ADR 0026).
+        const id = relayRequestId(payload);
+        const pending = id === undefined ? undefined : this.#pending.get(id);
+        if (pending === undefined) return;
+        const parsed = PUSH_SCHEMAS["relay-head"].safeParse(payload);
+        if (parsed.success) {
+          pending.onRelayHead?.({ headers: parsed.data.headers, status: parsed.data.status });
+        } else pending.onRelayInvalid?.();
+        return;
+      }
       case "lease-lost": {
         const parsed = PUSH_SCHEMAS["lease-lost"].safeParse(payload);
         if (!parsed.success) return;
@@ -398,6 +416,12 @@ export class WireCallError extends Error {
     super(message);
     this.name = "WireCallError";
   }
+}
+
+function relayRequestId(payload: unknown): number | undefined {
+  const requestId = asRecord(payload).requestId;
+  if (typeof requestId === "number") return requestId;
+  return typeof requestId === "string" ? Number(requestId) : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

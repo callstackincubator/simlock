@@ -114,14 +114,22 @@ called out where it applies below:
 - **The lease's `slim` boolean is gone; it carries `mode` instead** —
   `"slim"` or `"full"`, the device mode of the granted device. Every device in
   `GET /v1/status` carries the same `mode`.
+- **A physical device carries `driverDeviceId`** in `GET /v1/status`, its canonical
+  ID, to every role: the ID `DELETE /v1/devices/{id}` takes. A simulator or
+  emulator has none there.
+- **A device carries `physical`**, `false` for a simulator or emulator and
+  `true` for a real phone or tablet, in `GET /v1/status` and its `spec`. A
+  physical device has a `class` (`phone` or `tablet`) and no `mode`, and so does
+  a lease on one: its lease object has no `mode`.
 
 Routes, status codes, and every other field are unchanged.
 
 Gateway/worker fleet mode is purely additive on top of
 that: the same routes answer identically whether the daemon behind them is a
 worker or a **gateway** fronting a fleet of workers (except
-`POST /v1/components/install`, `GET /v1/components` and
-`DELETE /v1/components/{platform}/{version}`, which only a worker serves; a
+`POST /v1/components/install`, `GET /v1/components`,
+`DELETE /v1/components/{platform}/{version}`, `POST /v1/devices` and
+`DELETE /v1/devices/{id}`, which only a worker serves; a
 gateway answers `501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
 routes (`/v1/uplink`, `/v1/workers*`, `POST /v1/leases/{id}/exec`), new
 fields (`mode` on status, `workers[]`, `workerId`, `worker` on the lease),
@@ -136,7 +144,28 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
 Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
 managed/running capacity per platform, active leases, managed devices (each
-with its device mode, `mode`: `"slim"` or `"full"`), queue depth.
+with its device mode, `mode`: `"slim"` or `"full"`), queue depth (`queueDepth` counts the virtual line; `physicalQueueDepth` the physical one), and the warm
+pool: `warmPool` carries `enabled`, `reserveRunning` (`ios`, `android`) and
+`targets`, each with `platform`, `model`, `osVersion` (the one the target resolved
+to, or the one it names when it did not resolve; absent when it names none and
+did not resolve),
+`mode`, `count`, `ready`, `booting` and, for a target the last pass could do
+nothing for, `short` — one of `disabled`, `no-driver`, `runtime-missing`,
+`unknown-model`, `unresolvable`, `boot-failed`, `device-limit`, `running-limit`,
+`reserve` or `ram-budget`. With the pool off every configured target is
+`short: "disabled"`. A gateway's own `warmPool` is empty and off; each worker's
+is on its entry in `workers`.
+
+While the daemon is starting (`daemon.health` is `starting`), the answer is
+`200` with the `daemon` block, `host` and, once read, `load` only: it has not yet checked what it
+holds, so `capabilities`, `devices`, `leases`, `capacity`, `queueDepth`, `physicalQueueDepth`, `installs`,
+`waiting`, `warmPool` and `workers` are absent, not empty. They are all there once `health` is
+`running`, and also when it is `failed`.
+
+```json
+{ "daemon": { "health": "starting", "mode": "worker" },
+  "host": { "os": "macOS", "osVersion": "15.5", "arch": "arm64", "tools": [] } }
+```
 
 The daemon block carries `health` (`starting`/`running`) and **`mode`**
 (`"worker" | "gateway"`), the one field that tells a client which kind of
@@ -170,6 +199,26 @@ versions are read at start and again in the background once a minute has
 passed, so this endpoint never waits for them. Right after a start, or for a
 tool that is not installed, `tools` has no entry for it; if a later read
 fails, the last version read stays.
+
+**`load`** is how busy the machine is, as of the daemon's last read, which it
+makes every 15 seconds. It is absent until the first read finishes, and on
+both the starting and the running answer once it is there:
+
+```json
+"load": { "ageMs": 4120,
+  "cpu": { "busyPercent": 34.2, "cores": 10, "limited": false },
+  "memory": { "totalBytes": 34359738368, "availableBytes": 10522669875,
+              "swapUsedBytes": 1288490188, "pressure": "normal", "limited": false },
+  "disk": { "freeBytes": 120689623040, "totalBytes": 530870820864 } }
+```
+
+`ageMs` is how old the reading is when the daemon answers, a whole number of
+milliseconds up to one day. `cpu`, `memory` and `disk` are each left out when
+they could not be read; `cpu` is also left out for the first 15 seconds, since
+it is busy time between two reads. `pressure` (`normal`, `warn` or `critical`)
+is present only where the operating system reports one. `disk` is the folder
+Simlock keeps its data in. `limited` is `false` for the whole machine's figures, and `true` when a Linux
+cgroup CPU or memory limit applies and the figures are measured against it.
 
 Under the `resource` capacity strategy, **`capacity.ramBudget`** reports the
 RAM budget; under `fixed` the field is absent:
@@ -216,6 +265,22 @@ device, oldest first, in the shape
 [`GET /v1/lease-requests`](#get-v1lease-requests) answers. A worker always
 sends it, empty when nothing waits; an older daemon leaves it out.
 
+**`capabilities`** lists the optional modules the daemon reports, with their
+state, in the order it sends them (at most 16, no name twice):
+
+```json
+[{ "name": "agent-device", "state": "unavailable", "reason": "found 0.20.1, need 0.21.28 or later" }]
+```
+
+`name` is lower-case letters, digits and `-`, starting with a letter, up to 32
+characters. `state` is `available`, `unavailable` or `off`. `reason` is there
+for `unavailable` only: 1 to 500 characters, with control characters replaced
+by spaces. A worker with `capabilities.agent-device.enabled` `false` or unset sends
+`agent-device` as `off`, and one with `capabilities.stream.enabled` `false` or unset
+sends `stream` as `off`. A status read that takes over 1 s or fails shows
+`unavailable` with `could not read <name>'s status`. A gateway's own answer
+leaves `capabilities` out: each worker's list is on its entry in `workers`.
+
 A device in `devices` that is `provisioning` or `reclaiming` carries
 `transitionAgeMs`, how long it has been in that state. One that has been there
 past its threshold with nothing working on it also carries
@@ -228,6 +293,11 @@ its pool is the one a lease request with no `mode` draws from on this daemon
 (the default mode of the device's platform). `mode` says what the device is;
 `servesDefaultMode` says whether a request naming no mode would get it. An
 older daemon does not send it.
+
+A physical device that has been read at least once also carries **`presence`**:
+`{ "present": true }`, or `{ "present": false, "reason": "locked" | "untrusted" | "not-present" }`,
+the latest read of whether it is plugged in. A simulator, an emulator and a
+physical device not yet read carry none.
 
 ```json
 { "id": "dev_7", "state": "provisioning", "mode": "full", "servesDefaultMode": true, "transitionAgeMs": 412000, "stalled": true,
@@ -398,9 +468,35 @@ same tag, and a request without `imageTag` only one created for none. On iOS
 worker lists for that API level, an iOS one included, fails at once with
 `422 RUNTIME_MISSING`, with or without `noWait`.
 
+`physical` (optional, boolean) asks for an enrolled physical phone or tablet
+instead of a simulator or emulator. It matches an enrolled device of the
+platform by `device` (ignoring letter case), `class` and `os`; `os` is exact,
+so `"18"` matches no device on `18.4.1` and "any 18.x" is `">=18 <19"`, and on
+Android it is the API level (`"34"`). A request no enrolled device could match
+fails at once with `422 UNKNOWN_MODEL`. One that could match a device that is
+leased or being reclaimed waits, or is `503 NO_CAPACITY` with `noWait`.
+`physical` with `mode` or `imageTag`, or with `allowDownload: true`, is
+`400 BAD_REQUEST` naming the field. The lease's `device` then has no `mode`. A
+request without `physical` never gets a physical device. A physical request
+waits in a line of its own: `queuePosition` counts within it, and a simulator
+request is never held behind it.
+
+`leaseId` (optional) is the ID you want the granted lease to have, in place of
+one Simlock generates: 1 to 64 ASCII letters, digits, `-` and `_`, starting
+with a letter or digit, case-sensitive (`ad-7f3a` and `Ad-7f3a` are two IDs).
+It has no `.`, so it can never look like a gateway's `<worker>.<lease id>`.
+Everything that names the lease afterwards, `renew`, `release` and the reads,
+uses that ID, on a worker and through a gateway. You promise it is unique for
+all time: it names one lease, and you do not send it again once that lease has
+ended. Simlock refuses an ID an active lease or a waiting request already holds
+with `409 LEASE_ID_TAKEN` (the body carries `leaseId`) and does not remember
+IDs that were used before. A requester that already holds `lease.maxPerRequester` leases (default 1) or a waiting
+request gets `409 REQUESTER_ALREADY_LEASED` first, whatever `leaseId` it sends.
+
 The body is strict: a key this route does not know, a `mode` other than
-`"slim"` or `"full"`, or an `imageTag` that is not 1 to 64 letters, digits,
-`_`, `.` or `-`, is `400 BAD_REQUEST`.
+`"slim"` or `"full"`, an `imageTag` that is not 1 to 64 letters, digits,
+`_`, `.` or `-`, a `physical` that is not a boolean, or a `leaseId` outside the
+form above, is `400 BAD_REQUEST`.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this
@@ -419,7 +515,8 @@ changed since — a request that failed with `NO_CAPACITY` stays failed. To
 try again, use a new key. Repeating works across a daemon restart, for
 `lease.requestRetentionMs` after the request finished (see
 [CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
-`platform`, `device`, `os`, `mode`, or `imageTag` is `409 IDEMPOTENCY_CONFLICT`. Keys
+`platform`, `device`, `os`, `mode`, `imageTag`, or `leaseId` (sent on one call and
+not the other counts as different) is `409 IDEMPOTENCY_CONFLICT`. Keys
 belong to your token: another token sending the same key starts a request of
 its own.
 
@@ -445,18 +542,22 @@ their models of the class pair with an installed runtime in fails at once with
 
 A gateway fails a request no worker can serve at once, with or without
 `noWait` and `timeoutMs`, instead of queueing it. A worker *takes requests*
-when it is connected, not drained, and the gateway has read its catalog since
-it connected; the gateway *knows* a worker once it has read a catalog from it
+when it is connected, not drained, and either it has reported its capacity and
+the gateway has read its catalog since it connected, or it answers that it is
+still starting and the gateway holds a catalog for it from an earlier read; the
+gateway *knows* a worker once it has read a catalog from it
 and the worker is not `incompatible`, so a drained or disconnected worker stays
 known and a reconnecting one stays known from its last catalog.
 
 | Situation | Result |
 |---|---|
-| No worker takes requests | `503 NO_CAPACITY` |
+| No worker takes requests, including a still-starting worker the gateway has never read a catalog from (gateway and workers restarted together) | `503 NO_CAPACITY` |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Queued until the worker is ready |
 | A worker takes requests, and no known worker has the platform | `422 NO_DRIVER` |
 | ... and no known worker lists the model | `422 UNKNOWN_MODEL` |
 | ... and no known worker has the runtime, or can pair it with the model | `422 RUNTIME_MISSING`, with `downloadable: false` and `osVersion: "default"` when `os` is absent |
 | A known worker could serve it, but none that takes requests can | `503 NO_CAPACITY` |
+| The request requires capabilities (not a body field; the programmatic client sends it), and no connected worker that could serve it has all of them available | `422 CAPABILITY_MISSING`, with `capabilities` naming the required ones |
 | A worker that takes requests can serve it but is busy | queues; `503 NO_CAPACITY` only with `noWait: true` |
 
 A request that is already waiting is held to the same table: when the only
@@ -468,7 +569,7 @@ On a single host, with `allowDownload: true` the `201` is returned as soon as
 the request is stored — resolving a downloadable runtime can take minutes, so progress and
 any later failure surface on the request resource instead of on the `POST`
 itself. A refusal that comes before the request is stored
-(`409 REQUESTER_ALREADY_LEASED`, `400` for a `ttlMs` above `lease.maxTtlMs`)
+(`409 REQUESTER_ALREADY_LEASED`, `409 LEASE_ID_TAKEN`, `400` for a `ttlMs` above `lease.maxTtlMs`)
 still fails the `POST`. Through a gateway the flag changes nothing about the
 `POST`: it never downloads, so a request no worker can serve fails it as
 above.
@@ -565,14 +666,17 @@ show it. `label` is display-only. A worker's network address is deliberately
 never here: clients reach the device through the gateway, with
 [`POST /v1/leases/{id}/exec`](#post-v1leasesidexec).
 
-The lease `id` names its worker (`<workerId>.<worker's own lease id>`, split
-on the **first** `.`), which is how a gateway routes renew, release, and
-reads with no state of its own to lose across a restart. A worker id is a
-UUID, so a real id reads
-`3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples here and
-elsewhere in these docs abbreviate it to its first segment for legibility.
-**Treat the whole id as opaque** — pass it back verbatim in paths and bodies,
-and read `worker.id` when you want the machine.
+A lease whose ID Simlock generated has an `id` that names its worker
+(`<workerId>.<worker's own lease id>`, split on the **first** `.`). A worker id is a UUID, so a
+real id reads `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples
+here and elsewhere in these docs abbreviate it to its first segment for
+legibility. A lease whose requester chose the ID (`leaseId` on
+[`POST /v1/lease-requests`](#post-v1lease-requests)) keeps exactly that ID,
+with no worker in front of it. A gateway routes every lease, generated or
+chosen, from a table it keeps in memory and rebuilds from its workers after a
+restart, so for a moment after a restart, renew and release of any lease can
+answer `404 UNKNOWN_LEASE` until its worker has reported. **Treat the whole id as opaque** — pass it back
+verbatim in paths and bodies, and read `worker.id` when you want the machine.
 
 `dataPlane` is **reserved** and always `null` in this version: streaming a
 device's screen, forwarding a port, or opening an interactive TTY is a
@@ -662,7 +766,7 @@ against an ended lease answers `404 UNKNOWN_LEASE`.
 ### `POST /v1/leases/{id}/exec`
 
 Role: `agent` (own lease); `operator` must name the lease's requester — see
-below. Runs one `simctl`/`adb` command **on the machine that owns the
+below. Runs one `simctl`, `adb` or `devicectl` command **on the machine that owns the
 device** and streams its output back. This is what makes a leased device
 drivable from here at all — over HTTP against a lone worker, and through a
 gateway to whichever worker holds the lease, with the same request and the
@@ -674,21 +778,31 @@ machine's filesystem.
 { "tool": "simctl", "args": ["list", "devices"], "stdin": "y\n" }
 ```
 
-`tool` names a driver passthrough — `simctl` or `adb` on the machines this
-version runs on. The contract does not close that set; the drivers installed
-there do, and one they do not claim is `422 UNKNOWN_PASSTHROUGH_TOOL`. `args`
-is the argument vector, passed through unchanged. The daemon that owns the
-device resolves it through the same driver passthrough logic `simlock
-simctl` / `simlock adb` use locally — the same root scoping (`--set` for
-iOS, `-P` for Android, supplied by simlock and refused from the caller), and
-the same refusal list for verbs that would change a device's lifecycle
-behind the registry's back (`create`/`erase`/`delete`, `shutdown all`,
-`runtime delete`, `kill-server`, `emu kill`, …). A refused verb is `422
-PASSTHROUGH_REFUSED` here too and nothing is spawned for it. Nothing else
-about the arguments is parsed, and the *device* is named by them, not by the
-lease: the lease id is the ownership proof. A gateway in the path parses
-none of this either — it proxies the call to the owning worker and relays
-the stream back unchanged.
+`tool` names a driver passthrough — `simctl`, `adb` or `devicectl` on the
+machines this version runs on. `devicectl` serves a physical iOS lease only,
+runs the reviewed `device …` commands, and gets `--device <UDID>` added for the
+leased device when the arguments name none; `simctl` on a physical lease and `devicectl` on a simulator
+lease are `422 PASSTHROUGH_REFUSED`. The contract does not close that set;
+the drivers installed there do, and one they do not claim is `422 UNKNOWN_PASSTHROUGH_TOOL`. `args`
+is the argument vector. The daemon that owns the device resolves it through
+the same driver passthrough logic `simlock simctl` / `simlock adb` use
+locally — the same root scoping (`--set` for iOS, `-P` for Android, supplied
+by simlock and refused from the caller), and the same refusal list for verbs
+that would change a device's lifecycle behind the registry's back
+(`create`/`erase`/`delete`, `shutdown all`, `runtime delete`, `kill-server`,
+`emu kill`, …). A refused verb is `422 PASSTHROUGH_REFUSED` here too and
+nothing is spawned for it. For `simctl` and `adb` on a virtual device nothing else about the
+arguments is parsed, they are passed through unchanged, and the *device* is
+named by them, not by the lease: the lease id is the ownership proof. For `adb`
+on a leased physical Android device the driver refuses an argument list that
+starts with a flag, the subcommands that would stop, start or move a server or
+transport (`kill-server`, `connect`, `tcpip`, `usb`, …) and a reboot into the
+bootloader, recovery or sideload, and it adds `-P 5037 -s <serial>` of the
+leased phone itself. For
+`devicectl` the driver checks the arguments against the reviewed list above
+and adds `--device <UDID>` of the leased device unless they name one. A
+gateway in the path parses none of this — it proxies the call to the owning
+worker and relays the stream back unchanged.
 
 `stdin` (optional) is a single string, sent with the request, written to the
 command once, and the pipe is then closed — there is no incremental stdin
@@ -789,6 +903,56 @@ Paths in `args` resolve on the daemon's filesystem
 (`{"tool":"simctl","args":["install","booted","/build/MyApp.app"]}` needs
 that path to exist *there*). Getting a file onto that machine is not part of
 this API in this version — see [Not implemented](#not-implemented).
+
+### `GET /v1/stream/leases/{leaseId}`
+
+Streams the screen of the device one lease holds, for as long as the
+connection stays open. Offered only where `capabilities.stream.enabled` is `true` (see
+[CONFIGURATION.md](CONFIGURATION.md)); a daemon without it never mounts this
+route and answers it like any path it has not heard of.
+
+The response has no declared length and does not end on its own. Its headers
+describe the picture before a byte of it is read:
+
+| Header | |
+|---|---|
+| `content-type` | `application/vnd.simlock.stream+h264`, or `+mjpeg` |
+| `simlock-stream-codec` | `h264` or `mjpeg` |
+| `simlock-stream-width` / `-height` | The encoded picture's size in pixels |
+| `simlock-stream-fps` | The frame rate the encoder was asked for |
+| `x-simlock-lease` | The lease id this stream is |
+
+The body is a sequence of frames, each one `4-byte big-endian length`, then a
+1-byte tag, then the payload. The length covers the tag byte. Tag `0x05` is a
+JSON frame naming the device's `codec`, `width`, `height` and `fps`, and it is
+always the first frame; `0x01` is the codec's parameter sets, `0x02` a key
+frame, `0x03` a delta. A key frame's and a delta's payload is length-prefixed
+AVCC NAL data, which is what a browser's `VideoDecoder` consumes directly, and
+the `0x01` payload is an `avcC` blob for its `configure` call — the bytes a
+capture wrote are the bytes a reader gets, re-framed by nothing on the way.
+
+**Closing the request is the only stop-command.** There is no stop endpoint and
+no stop frame: holding the connection open is what keeps the capture running,
+and a client that goes away — aborting the fetch, closing the tab, losing the
+network — ends it. A lease ending by any route stops it too, including while a
+viewer is still connected, so a stream cannot outlive the lease that authorises
+it. Nothing is captured before a request arrives, which is why this route is
+worth asking for twice rather than holding open in advance.
+
+Authorization is the same as every other lease route: a token sees its own
+leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTED`
+(415) means the device behind the lease can never produce a picture here — a
+physical phone. `STREAM_UNAVAILABLE` (503) means it could but cannot now: a
+capture program that is not installed, or a device that painted nothing within
+30 seconds; asking again is the right move. A stream that stops receiving frames
+for 30 seconds ends with an error rather than freezing on its last picture. `WORKER_UNREACHABLE` on
+a gateway means the worker that holds the lease is gone.
+
+The body is the same bytes on a gateway as on the worker: a gateway relays a
+stream rather than reading one, so a client pointed at a gateway needs no second
+code path. A refusal, by contrast, keeps the shape every other route uses and
+the worker's own code — a viewer told `STREAM_NOT_SUPPORTED` by a gateway
+learned that from the machine that looked at the device.
 
 ### `POST /v1/components/install`
 
@@ -1005,6 +1169,59 @@ platform. Each refusal removes nothing:
 { "error": { "code": "COMPONENT_IN_USE", "message": "...", "devices": 1, "foreignDevices": 2 } }
 ```
 
+### `POST /v1/devices`
+
+Role: `operator`. Enrols a phone or tablet plugged into the machine the
+daemon runs on, the same operation as `simlock device add`. The body is
+exactly `platform` and `id`; any other field is `400 BAD_REQUEST`.
+
+```json
+{ "platform": "ios", "id": "00008110-001A2B3C4D5E" }
+```
+
+→ `200`
+
+```json
+{ "id": "dev_8f2a", "driverDeviceId": "00008110-001A2B3C4D5E", "platform": "ios",
+  "model": "iPhone 15 Pro", "osVersion": "18.4", "class": "phone", "appCount": 12,
+  "reenrolled": false }
+```
+
+`id` is the registry id; `driverDeviceId` is the canonical ID, which
+`DELETE /v1/devices/{id}` takes. Enrolling an enrolled device again keeps its
+registry id and answers `reenrolled: true`.
+
+- `422 DEVICE_NOT_ENROLLABLE` — the driver refused, or the ID names a
+  simulator or emulator, or a device enrolled on the other platform. The body
+  carries `id` (as sent), `platform`, `reason` and, when known,
+  `canonicalId`.
+- `409 DEVICE_BUSY` — the device is leased, reclaiming or held by another
+  operation. The body carries `id` and `reason` (`leased`, `reclaiming` or
+  `busy`).
+- `422 NO_DRIVER` — no driver for the platform.
+- `403 FORBIDDEN` — an `agent` token.
+- `400 BAD_REQUEST` — an unknown field, a platform other than `ios` or
+  `android`, or an `id` over 200 characters, with whitespace or a control
+  character, or starting with `-`.
+- `501 UNSUPPORTED_IN_GATEWAY_MODE` — the daemon is a gateway; ask the worker
+  the device is plugged into.
+
+### `DELETE /v1/devices/{id}`
+
+Role: `operator`. Forgets an enrolled phone or tablet, the same operation as
+`simlock device remove`. `{id}` is the canonical ID (`driverDeviceId`),
+URL-encoded. Nothing is sent to the device.
+
+→ `200 { "id": "dev_8f2a", "driverDeviceId": "00008110-001A2B3C4D5E" }`
+
+`id` is the registry id, as `POST /v1/devices` answers it.
+
+- `404 UNKNOWN_DEVICE` — no enrolled device has that ID.
+- `409 DEVICE_BUSY` — the device is leased, reclaiming or held by another
+  operation.
+- `403 FORBIDDEN` — an `agent` token.
+- `501 UNSUPPORTED_IN_GATEWAY_MODE` — the daemon is a gateway.
+
 ### `DELETE /v1/leases/{id}`
 
 Role: `agent` (own lease); `operator` may release any lease.
@@ -1050,7 +1267,10 @@ host. A single host answers as a fleet of one: `GET /v1/workers` lists the
 host itself, and the other three answer `501 UNSUPPORTED_IN_WORKER_MODE`.
 
 - `GET /v1/workers` — every worker view the gateway currently holds, or the
-  host's own view on a single host.
+  host's own view on a single host. A worker whose `health` is `starting` has
+  not yet checked what it holds, so its view carries `health` and `host` and
+  none of `devices`, `leases`, `capacity`, `warmPool`, `queueDepth`, `physicalQueueDepth`, `catalog`, `installs`
+  or `waiting`: they are absent, not empty, until the worker answers `running`.
 - `POST /v1/workers/{id}/drain` — stop dispatching new requests to this
   worker; it keeps the leases it already has.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.
@@ -1097,6 +1317,7 @@ simulated (hence the thin Android catalog), trimmed to one worker:
       "downloads": {"policy": "on-request", "timeoutMs": 1200000},
       "lease": {"maxTtlMs": 14400000},
       "queueDepth": 0,
+      "physicalQueueDepth": 0,
       "leases": [],
       "devices": [],
       "installs": [
@@ -1130,11 +1351,28 @@ simulated (hence the thin Android catalog), trimmed to one worker:
         "osVersion": "26.6.1",
         "arch": "arm64",
         "tools": [{"platform": "ios", "name": "xcode", "version": "16.4", "build": "16F6"}]
+      },
+      "load": {
+        "readAt": 1790864078200,
+        "cpu": {"busyPercent": 34.2, "cores": 10, "limited": false},
+        "memory": {
+          "totalBytes": 34359738368,
+          "availableBytes": 10523000000,
+          "swapUsedBytes": 1288490188,
+          "pressure": "normal",
+          "limited": false
+        },
+        "disk": {"freeBytes": 120700000000, "totalBytes": 530800000000}
       }
     }
   ]
 }
 ```
+
+`load` is the worker's latest host load, from its own
+[`GET /v1/status`](#get-v1status), and `readAt` is when it was read, in
+milliseconds since the epoch on the gateway's clock. A disconnected or
+incompatible worker shows none, and so does a worker that does not send one.
 
 `catalogReadAt` is when the gateway last read that worker's catalog since the
 worker connected. It is absent until the first read, and again after the
@@ -1152,6 +1390,12 @@ worker starts, finishes or fails, and on every periodic refresh, so an
 install queued behind another may appear only then. A worker that does not
 send one shows an empty list; a disconnected or incompatible worker shows
 none.
+
+`capabilities` is the worker's own `capabilities` list from its
+[`GET /v1/status`](#get-v1status): which optional modules it serves, such as
+agent-device. It is re-read on every refresh, so a change shows at the next
+periodic refresh at the latest. A starting or incompatible worker shows none;
+a disconnected worker keeps the list it last read.
 
 `waiting` is the worker's own `waiting` list from its
 [`GET /v1/status`](#get-v1status): the requests waiting in that worker's
@@ -1299,15 +1543,17 @@ Every request still waiting for a device, oldest first, whoever sent it. An
 ```
 
 - `spec` is the device as the request named it: `platform` and `model`, and
-  `osVersion`, `mode` and `imageTag` only when the request named them.
+  `osVersion`, `mode` and `imageTag` only when the request named them, and
+  `physical: true` for a request for an enrolled physical device.
 - `createdAt` is when the daemon holding the request received it, in
   milliseconds since the epoch.
 - `stage` is `queued` while the request holds a place in the queue, and
   `starting` while the daemon is working on it: placing it as it arrives, or
   finding, creating, booting or downloading a device for it.
-- `queuePosition` is set only while `queued`: its place in the queue counting
-  from 1, the requests ahead of it that are already starting included. It is
-  the request's place now, not the one its `queued` progress first reported.
+- `queuePosition` is set only while `queued`: its place in the request's own
+  line, simulator and emulator requests or physical requests, counting from 1,
+  the requests ahead of it in that line that are already starting included. It
+  is the request's place now, not the one its `queued` progress first reported.
 - A request leaves the list as soon as it is granted, fails or is cancelled.
   The request's idempotency key and owner are never listed.
 
@@ -1316,6 +1562,181 @@ On a **gateway** the list is the gateway's own queue first, without
 from that worker's local agents, each with the **`workerId`** whose queue it
 is in. A request the gateway has sent to a worker is listed once, as the
 gateway's own. A worker's `createdAt` comes from that worker's clock.
+
+### `/v1/<module>/*`
+
+An optional module turned on with `capabilities.<module>.enabled` and
+`http.enabled` serves its own routes at `/v1/<module>` and `/v1/<module>/*`,
+behind the same agent token as every other route. A module cannot take the
+name of a route above (`status`, `leases`, `workers` and the rest). This build
+has no optional module of its own, so no such route exists yet.
+
+### `/v1/agent-device/*`
+
+A **worker** with `capabilities.agent-device.enabled` and `http.enabled` both `true` serves
+agent-device's proxy URL here. Point the agent-device CLI at it and give it
+your Simlock token:
+
+```bash
+export AGENT_DEVICE_DAEMON_AUTH_TOKEN=<simlock token>
+agent-device connect proxy --daemon-base-url http://<worker>:<port>/v1/agent-device
+agent-device open MyApp --platform ios --device "iPhone 17 Pro"
+agent-device snapshot
+agent-device close
+```
+
+With `capabilities.agent-device.enabled` `false` or unset, on a worker or a gateway, every
+`/v1/agent-device` URL answers `404`.
+
+Downloads (artifacts) up to 2 GB (2147483648 bytes) are carried. A download
+whose `content-length` is over that is answered `413` with
+`{"ok": false, "code": "INVALID_ARGS", "error": "..."}` before any byte is
+read. A download with no usable `content-length` that passes 2 GB is cut with
+a failed response, never one that ends as if it were whole.
+
+A **gateway** with `capabilities.agent-device.enabled` serves the same URL, and the CLI is
+pointed at the gateway the same way. `open` lands only on a worker whose
+agent-device is available, and the commands, heartbeats and `close` of that
+lease go to the same worker. An agent on a gateway never shares an
+agent-device session with an agent on a worker's own tokens. Through a gateway:
+
+- `GET /health` answers the proxy's health from a worker whose agent-device is
+  available. With no such worker it answers `agent-device is not available on
+  this simlock: no worker connected to this gateway can serve agent-device`
+  with status 200.
+- A worker that is draining takes no new `open`, and keeps serving the leases
+  it holds.
+- Uploads, artifact downloads and diagnostics name their lease in the
+  `x-agent-device-lease-id: <lease id>` header, which agent-device sends once
+  it holds a lease. The request goes to the worker holding that lease. An
+  upload ticket works through the gateway: it carries your own `authorization`
+  and `x-agent-device-token`, so the `PUT` that follows reaches the gateway
+  with them, and the worker never sees your token. A header that is not 32
+  lower-case hex characters is refused with `refused: the
+  x-agent-device-lease-id header is not a lease id` (status 400). `/health`
+  does not read the header.
+- A request that names no lease, or sends the header empty, other than
+  `/health`, is refused with
+  `refused: this agent-device is too old to use through a gateway; update it`.
+  That includes an upload, an artifact download or a diagnostics request with
+  no header, and the artifact list.
+- `devices` lists your devices across every worker that holds one of your
+  leases, and answers an empty list when you hold none.
+- A request that names a lease the token does not hold, or the gateway does not
+  know, is refused with `refused: lease <id> is not one of yours on this
+  gateway` (status 403). A lease `simlock release --all` ended stays known for
+  one `lease.maxTtlMs` afterwards, so its next heartbeat answers `lease ended
+  by simlock; run disconnect, then open`.
+
+- **Every route needs the Simlock token.** No token is `401`, a worker join
+  token is `403`, and so is an `operator` token, with
+  `refused: agent-device through simlock needs an agent token`.
+- **Each agent needs its own Simlock token.** Simlock tells agents apart by
+  token: two agents sharing one token share one agent-device session.
+- **`open` leases a device from Simlock.** The device is picked by Simlock,
+  and waits in Simlock's queue, up to 330 seconds, when every match is taken.
+  The lease is an ordinary Simlock lease: `simlock list` shows it, owned by the
+  token's principal, and the lease ID is the 32-hex ID the CLI chose. `close`
+  ends the agent-device lease and then frees the Simlock lease, so Simlock
+  wipes the device for the next agent.
+- **`devices` lists only the agent's own devices.** Before `open` it answers
+  an empty list; after, the devices Simlock leased to that token.
+- **Heartbeats keep the lease.** The CLI sends one before every command except
+  `devices`. Once agent-device answers it, Simlock renews the lease to now plus
+  its TTL, unless the lease already runs longer (a longer renewal by the agent
+  stands). A heartbeat's `ttlMs` changes that TTL, at least 5 seconds and at
+  most `capabilities.agent-device.leaseTtlCapMs` when that is set. While a command runs, the
+  lease is renewed every third of its TTL, and once more when the command ends.
+  An agent that stops sending heartbeats loses the device one TTL later.
+- **A lease Simlock ended is not replaced quietly.** When the lease is gone
+  because Simlock ended it (`simlock release`, `release --all`, expiry, a lost
+  device, a restart of the agent-device daemon or of Simlock), the next
+  heartbeat answers `lease ended by simlock; run disconnect, then open`, as an
+  `UNAUTHORIZED` error with `details.reason` `LEASE_ENDED_BY_HOST`. A lease the
+  agent ended through `close` or `disconnect` answers agent-device's own
+  `LEASE_NOT_FOUND`, so `close` then `open` works. A heartbeat Simlock cannot
+  renew for another reason answers `COMMAND_FAILED` with Simlock's message.
+- **An unreachable worker answers "try again".** Through a gateway, when the
+  worker holding the agent's device is not connected, or has reconnected and
+  the gateway has not read it yet, every request for that device (a command,
+  heartbeat, `close`, an upload naming the lease, and `devices`) answers
+  `agent-device is not available on this simlock: the worker holding this
+  device is not connected to the gateway; try again` with status 503. A
+  `/rpc` answer carries `details.reason` `WORKER_UNREACHABLE`. Nothing is sent
+  to the worker and the Simlock lease is untouched; once the worker is back and
+  read, before the lease ran out, the next request works. A command running
+  when the connection drops answers the same. The same answer covers a lease
+  the gateway does not know yet in the first 60 seconds after it starts.
+- **A gateway restart keeps the agent's device.** Once the worker reconnects,
+  the agent's next request of any kind works on the same device, with no
+  `open`. A lease the agent did not make through this front (another token's,
+  or one made under another requester) is not picked up. On a worker, a
+  restart of Simlock still ends the agent-device lease.
+
+What `open` asks Simlock for:
+
+| The agent passes | Simlock is asked for |
+| --- | --- |
+| `--platform ios` or `android` | that platform, any device Simlock grants |
+| `--target mobile`, `tv`, `desktop` | the class `phone`, `tv`, `desktop` |
+| `--device "iPhone 17 Pro"` | that model, and no class: the model wins over `--target` |
+| `ttlMs` | that TTL, at least 5 seconds and at most `capabilities.agent-device.leaseTtlCapMs` when set; none sent means that cap, or `lease.defaultTtlMs` without one |
+
+Messages the route prints. The agent-device CLI reads the message in the body
+(a JSON-RPC error on `/rpc`, `{ "ok": false, "error", "code" }` elsewhere), not
+the status.
+
+- `agent-device is not available on this simlock: <reason>`: agent-device is
+  turned on but missing, too old, starting or crashed (on a gateway: no
+  connected worker can serve it, or the worker holding the lease cannot). The rest of Simlock
+  works as before. `GET /health` answers it with status 200, because the
+  agent-device CLI treats a `/health` status of 500 or more as an unreachable
+  daemon and would print only `Remote daemon is unavailable`; the first
+  command then prints the reason.
+- `timed out waiting for a device; nothing was leased`.
+- `refused by simlock: <message>`: Simlock refused the lease request, for
+  example a model it does not know, or a `ttlMs` above `lease.maxTtlMs`.
+- `refused: only iOS and Android`, `refused: name --platform ios or android`,
+  and `refused: <platform> is not available on this simlock` for a platform
+  whose driver is off on this worker.
+- `refused: simlock picks the device`: a `--udid`, `--serial`, `--device` or
+  device key that is not the device Simlock leased to the agent. A
+  `--device` naming the leased device's model is sent on as that device's ID.
+- `refused: simlock chooses the device set; run disconnect, then connect proxy
+  without --ios-simulator-device-set` and `refused: simlock chooses the
+  devices; run disconnect, then connect proxy without
+  --android-device-allowlist`: on any command.
+- `refused: send the app from your machine as an upload`: `install` or
+  `reinstall` of a path on the worker.
+- `refused: no device leased; run open first`: a sharded `test` with no
+  `--device` from an agent holding no matching device. With a device leased,
+  Simlock adds the agent's leased devices as `--device`, each by the name
+  agent-device gave it (by its ID when it gave none or the name has a comma).
+- `refused: name the device with --udid <id>; run devices to see yours`:
+  `capabilities` or `doctor` that names no device from an agent not holding
+  exactly one.
+- `refused: run devices on its own`, `refused: devices does not stream through
+  simlock`, `refused: a batch step cannot name another lease`,
+  `refused: malformed <field>`, `refused: unknown method <method>`, and
+  `refused: unknown route <method> <path>` (answered `404`).
+- `could not check your leases; try again`: Simlock could not list the
+  agent's leases within 5 seconds.
+- `refused: this agent-device is too old for simlock; upgrade it`: the CLI
+  sent no lease ID.
+- `refused: send lease calls as lease RPCs`: a lease call inside
+  `agent_device.command`.
+- `refused: ttlMs must be a positive number of milliseconds`: on `open` and on
+  a heartbeat.
+- `lease ended by simlock; run disconnect, then open`: a heartbeat for a lease
+  Simlock ended.
+- `refused: simlock leases only plain devices`: a `backend` other than
+  `ios-instance` on iOS or `android-instance` on Android (the one
+  `connect proxy` sends), `retainOnClose: true`, a `provider*` or `aws*` key, or a `leaseProvider`
+  other than `proxy`.
+- `refused: agent-device through simlock needs an agent token`.
+- `refused: request body over 1 MiB` and `refused: send one JSON-RPC request`
+  (a body that is not JSON, a JSON array, or an object with no string
+  `method`); both answer with `id: null`.
 
 ## Errors
 
@@ -1330,10 +1751,10 @@ Every failure is the same shape the daemon protocol uses:
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
-| 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
-| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
-| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
+| 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid); also `GET /v1/stream/leases/{leaseId}` naming a lease unknown, released, or another requester's — a stream reveals no lease that asking could not already list), `UNKNOWN_DEVICE` (`DELETE /v1/devices/{id}` naming a device that is not enrolled) |
+| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `LEASE_ID_TAKEN` (a `leaseId` an active lease or a waiting request holds; body carries `leaseId`; on a gateway, one of the gateway's own leases or requests, or a worker that refused it), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device or `leaseId`), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`), `DEVICE_BUSY` (`POST /v1/devices`, `DELETE /v1/devices/{id}` of a leased, reclaiming or held device; body carries `id` and `reason`) |
+| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING` (a request required capabilities no worker able to serve it has available; body carries `capabilities`), `DEVICE_NOT_ENROLLABLE` (`POST /v1/devices`; body carries `id`, `platform`, `reason`, and `canonicalId` when known), `PASSTHROUGH_REFUSED` (a refused `exec` verb or `devicectl` command, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`, `POST /v1/devices`, `DELETE /v1/devices/{id}`), `UNSUPPORTED_IN_WORKER_MODE` (an operation on a gateway's workers, asked of a single host: `POST`/`DELETE /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}`, `POST /v1/components/install` with `workers`) |
 | 503 | `NO_CAPACITY` (with `noWait: true`, or, on a gateway, when no worker that takes requests can serve the request; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
@@ -1347,9 +1768,10 @@ behind this is not reachable right now" is the same answer in all four cases,
 and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
-`UNSUPPORTED_IN_GATEWAY_MODE` comes from three routes in this version,
-`POST /v1/components/install` without `workers`, `GET /v1/components` and
-`DELETE /v1/components/{platform}/{version}` asked of a gateway — `nuke`,
+`UNSUPPORTED_IN_GATEWAY_MODE` comes from five routes in this version,
+`POST /v1/components/install` without `workers`, `GET /v1/components`,
+`DELETE /v1/components/{platform}/{version}`, `POST /v1/devices` and
+`DELETE /v1/devices/{id}` asked of a gateway — `nuke`,
 `cleanup`, and
 `doctor` are absent from the HTTP surface (see
 [Not implemented](#not-implemented)), and the status is fixed so adding
@@ -1404,8 +1826,10 @@ and `message` — details are contract, message text is not.
   is treated as a new request. Leases survive it, on their workers, which
   reconnect on their own backoff and let the gateway rebuild every view and
   its lease index. So a client that repeats its request after a gateway
-  restart gets `409 REQUESTER_ALREADY_LEASED` naming the lease if one was
-  granted — `GET` that lease to recover it — or a new request if not. While a
+  restart gets a new lease request if `lease.maxPerRequester` leaves room for
+  another lease under its agent id, which can leave it holding two leases (`GET`
+  the earlier one to recover it); at the limit it gets
+  `409 REQUESTER_ALREADY_LEASED` naming a lease it already holds. While a
   worker's uplink is down, anything routed to it is
   `503 WORKER_UNREACHABLE`; the gateway never reports a lease as gone before
   the worker says so, and the lease meanwhile runs out its TTL on the
@@ -1414,8 +1838,11 @@ and `message` — details are contract, message text is not.
   connection, in-flight SSE streams included) before tearing down the lease
   engine, so no HTTP request can run against a stopping daemon. Stopping the
   daemon does not release anything: leases persist, and the next daemon
-  restores each one's TTL timer from its deadline. A lease whose deadline
-  passed while no daemon was running expires as soon as one is.
+  restores the TTL timer of each lease whose device is still running, from
+  its deadline. A lease whose device is not running at that start is ended
+  before the daemon serves a request, as `device-lost`; a renew of it answers
+  `404 UNKNOWN_LEASE`. A lease whose deadline passed while no daemon was
+  running expires as soon as one is.
 
 ## Not implemented
 

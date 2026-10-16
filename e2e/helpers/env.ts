@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -149,7 +149,7 @@ export interface TestEnv {
   cli(args: readonly string[], options?: CliOptions): Promise<CliResult>;
   cliBackground(args: readonly string[], options?: CliOptions): CliBackgroundHandle;
   mcpClient(options?: McpClientOptions): Promise<McpClientHandle>;
-  events(since?: string): Promise<RecordedEvent[]>;
+  events(since?: string, timeout?: number): Promise<RecordedEvent[]>;
   expectEvents(
     names: readonly string[],
     options?: { readonly since?: string; readonly timeout?: number },
@@ -178,15 +178,19 @@ export interface TestEnv {
  * it itself (e.g. `waitForLeaseCount(env, 0)`).
  */
 export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestEnv> {
-  const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
-  const socketPath = join(home, "daemon.sock");
-  const logPath = join(home, "daemon.log");
-  const configPath = join(home, "config.json");
-  const scriptPath = join(home, "fake-driver-script.json");
-  const logCallPath = join(home, "fake-driver-calls.jsonl");
+  const { testEnv, state } = await buildEnv(options);
+  activeEnvs.add(state);
+  return testEnv;
+}
 
+function processEnv(
+  options: WithDaemonOptions,
+  home: string,
+  scriptPath: string,
+  logCallPath: string,
+): NodeJS.ProcessEnv {
   const useFakeDriver = options.driver === undefined || options.driver === "fake";
-  const env: NodeJS.ProcessEnv = {
+  return {
     ...process.env,
     SIMLOCK_HOME: home,
     ...(useFakeDriver
@@ -201,13 +205,35 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
       : {}),
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
   };
+}
+
+function seedConfig(
+  options: WithDaemonOptions,
+  adbServerPort: number | undefined,
+): Record<string, unknown> | undefined {
+  if (options.driver === undefined || options.driver === "fake") {
+    return mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {});
+  }
+  if (options.driver === "real") {
+    return mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {});
+  }
+  return options.configOverrides;
+}
+
+async function buildEnv(
+  options: WithDaemonOptions,
+): Promise<{ testEnv: TestEnv; state: TeardownState }> {
+  const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
+  const socketPath = join(home, "daemon.sock");
+  const logPath = join(home, "daemon.log");
+  const configPath = join(home, "config.json");
+  const scriptPath = join(home, "fake-driver-script.json");
+  const logCallPath = join(home, "fake-driver-calls.jsonl");
+
+  const env = processEnv(options, home, scriptPath, logCallPath);
 
   const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
-  const seededConfig = useFakeDriver
-    ? mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {})
-    : options.driver === "real"
-      ? mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {})
-      : (options.configOverrides ?? {});
+  const seededConfig = seedConfig(options, adbServerPort);
   if (seededConfig !== undefined) {
     await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
@@ -235,17 +261,28 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
       mcpClients.add(handle);
       return handle;
     },
-    events: (since) => events(env, since),
+    events: (since, timeout) => events(env, since, timeout),
     expectEvents: (names, expectOptions) => expectEvents(env, names, expectOptions),
     async startDaemon() {
-      return cli(["daemon", "start"], env);
+      const started = await cli(["daemon", "start"], env);
+      // `daemon start` exits once the daemon answers `status.get`, which it does from its socket
+      // claim on, but the daemon writes `admin.token` only after that claim (ADR 0003 §5). A CLI
+      // that reads the file before it lands connects as agent, so an admin command run next
+      // (`token create`, the teardown's `daemon stop`) fails FORBIDDEN. After a first start,
+      // waiting for the file orders later CLI calls after the write; after a restart the previous
+      // run's file may still be there and passes the wait at once.
+      if (started.code === 0) {
+        await waitFor(() => existsSync(join(home, "admin.token")), {
+          label: "admin.token written",
+        });
+      }
+      return started;
     },
     async restartDaemon() {
       // Wait for the *process* to actually exit, not just its socket file to
       // disappear -- `daemon.stop()` unlinks the socket as part of shutdown, which
       // can land slightly before the process fully drains its event loop. Starting
-      // a new daemon while the old one is still mid-exit was a real, reproduced
-      // source of leaked daemon processes (see the module doc above `activeEnvs`).
+      // a new daemon while the old one is still mid-exit leaks daemon processes.
       const pidsBeforeStop = await pidsHoldingSocket(socketPath);
       await cli(["daemon", "stop"], env);
       await waitFor(() => !existsSync(socketPath), {
@@ -253,10 +290,8 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
         label: "daemon socket removed",
       });
       // Best-effort: under heavy system load a still-exiting process can
-      // legitimately take a while, and `teardown()`'s own grace-period check is the
-      // real backstop for a genuine leak -- this just reduces (not guarantees
-      // against) the ordinary-case race, so a timeout here must not abort the
-      // restart itself.
+      // legitimately take a while. This only reduces the ordinary-case race, so a
+      // timeout here must not abort the restart itself.
       await waitFor(
         async () => {
           const stillAlive = await Promise.all(pidsBeforeStop.map((pid) => isProcessAlive(pid)));
@@ -264,7 +299,7 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
         },
         { timeout: 10_000, label: "previous daemon process actually exited" },
       ).catch(() => undefined);
-      await cli(["daemon", "start"], env);
+      await testEnv.startDaemon();
     },
     async killDaemon(signal: NodeJS.Signals = "SIGKILL") {
       const pids = await pidsHoldingSocket(socketPath);
@@ -306,15 +341,82 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     await testEnv.startDaemon();
   }
 
-  activeEnvs.add({
-    backgroundProcesses,
-    env,
-    home,
-    mcpClients,
-    realDrivers: options.driver === "real",
-    socketPath,
-  });
-  return testEnv;
+  return {
+    testEnv,
+    state: {
+      backgroundProcesses,
+      env,
+      home,
+      mcpClients,
+      realDrivers: options.driver === "real",
+      socketPath,
+    },
+  };
+}
+
+export interface SharedTestEnv extends TestEnv {
+  readonly httpPort: number;
+  teardown(): Promise<void>;
+  restart(): Promise<void>;
+}
+
+export async function withSharedDaemon(options: WithDaemonOptions = {}): Promise<SharedTestEnv> {
+  const port = (options.configOverrides?.http as { port?: unknown } | undefined)?.port;
+  if (typeof port !== "number") {
+    throw new Error("withSharedDaemon needs configOverrides.http.port");
+  }
+  const { testEnv, state } = await buildEnv(options);
+  const restartSteps = async (): Promise<void> => {
+    const pids = await pidsHoldingSocket(state.socketPath);
+    await cli(["daemon", "stop"], state.env, { timeout: 30_000 });
+    await waitFor(
+      async () => !(await Promise.all(pids.map((pid) => isProcessAlive(pid)))).some(Boolean),
+      { timeout: 30_000, label: "previous daemon process exited" },
+    );
+    await testEnv.startDaemon();
+  };
+  const restart = async (): Promise<void> => {
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("shared daemon restart exceeded 90 s")), 90_000);
+    });
+    try {
+      await Promise.race([restartSteps(), limit]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  return {
+    ...testEnv,
+    httpPort: port,
+    restart,
+    async withConfig(overrides, fn) {
+      const previous = await readFileIfExists(testEnv.configPath);
+      const merged = mergeDeep(
+        previous === undefined ? {} : (JSON.parse(previous) as Record<string, unknown>),
+        overrides,
+      );
+      await writeFile(testEnv.configPath, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
+      await restart();
+      try {
+        return await fn();
+      } finally {
+        if (previous === undefined) await rm(testEnv.configPath, { force: true });
+        else await writeFile(testEnv.configPath, previous, "utf8");
+        await restart();
+      }
+    },
+    async teardown() {
+      // why: read before teardown deletes the home.
+      const pid = await readAgentDevicePid(state.home);
+      const resolved = await realpath(state.home).catch(() => state.home);
+      try {
+        await teardown(state);
+      } finally {
+        await killLeftoverAgentDevice(resolved, pid);
+      }
+    },
+  };
 }
 
 interface TeardownState {
@@ -348,7 +450,10 @@ async function teardown(state: TeardownState): Promise<void> {
   // unlinked its socket on the way out but never actually terminated.
   const pidsBeforeStop = await pidsHoldingSocket(socketPath);
   await cli(["daemon", "stop"], env).catch(() => undefined);
-  await waitFor(() => !existsSync(socketPath), { timeout: 5_000 }).catch(() => undefined);
+  // why: a daemon a test SIGKILLed leaves its socket file behind, and nobody will remove it.
+  if (pidsBeforeStop.length > 0) {
+    await waitFor(() => !existsSync(socketPath), { timeout: 5_000 }).catch(() => undefined);
+  }
 
   // A process can keep running for a little while after its socket is unlinked
   // (event-loop drain, especially under load) -- give `pidsBeforeStop` a real grace
@@ -388,6 +493,32 @@ async function teardown(state: TeardownState): Promise<void> {
     throw new Error(
       `withDaemon teardown found stray daemon process(es) that outlived \`daemon stop\` for ${socketPath}: ${strayPids.join(", ")}`,
     );
+  }
+}
+
+async function readAgentDevicePid(home: string): Promise<number | undefined> {
+  const text = await readFileIfExists(join(home, "agent-device-daemon.json"));
+  if (text === undefined) return undefined;
+  try {
+    const record = JSON.parse(text) as { pid?: unknown };
+    return typeof record.pid === "number" ? record.pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function killLeftoverAgentDevice(home: string, pid: number | undefined): Promise<void> {
+  if (pid === undefined || !(await isProcessAlive(pid))) return;
+  const { stdout } = await execFileAsync("ps", ["-ww", "-o", "args=", "-p", String(pid)]).catch(
+    () => ({ stdout: "" }),
+  );
+  // why: the supervisor puts the resolved home in the marker; the caller resolved it before the home was removed.
+  const marker = `--simlock-home=${home}`;
+  if (!stdout.trim().endsWith(marker)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // why: the process may have exited since the check.
   }
 }
 

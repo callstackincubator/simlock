@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -13,6 +13,8 @@ import { promiseState } from "../test-support/promise-state.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import {
   CapacityCoordinator,
+  capacityDevice,
+  capacityDevices,
   type Config,
   DeviceOperationClaims,
   DeviceProvisioner,
@@ -25,7 +27,7 @@ import {
   RuntimeMissingError,
   UnsupportedRequestOptionError,
   type DeviceMode,
-  type DeviceSpec,
+  type VirtualSpec,
   type Platform,
   specMode,
   type CatalogReader,
@@ -35,7 +37,11 @@ import {
 } from "../core/index.js";
 import { createCapacityStrategy, readyTransitionUpdate } from "../core/testing.js";
 import { FakeDriver } from "../core/testing.js";
-import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
+import {
+  LeaseAcquisitionCoordinator,
+  type LeaseAcquisitionCoordinatorOptions,
+  NoCapacityError,
+} from "./lease-acquisition-coordinator.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import {
   IdempotencyConflictError,
@@ -47,10 +53,16 @@ import { type LeaseRequestOptions, RequesterAlreadyLeasedError, WaitQueue } from
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
-const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const request = {
+  physical: false,
+  model: "iPhone 16",
+  osVersion: "26.5",
+  platform: "ios",
+} as const;
 
 function config(maxDevices = 1, maxRunning = 1): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -85,6 +97,8 @@ function config(maxDevices = 1, maxRunning = 1): Config {
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
     },
     capacity: {
       strategy: "resource",
@@ -105,6 +119,9 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -124,6 +141,15 @@ async function createHarness(
     readonly drivers?: readonly Driver[];
     /** Free disk the installer sees; unlimited unless a test says otherwise. */
     readonly freeDiskBytes?: number;
+    /** Stands between the coordinator and the real lifecycle, when a test interleaves other work. */
+    readonly lifecycle?: (
+      lifecycle: ManagedDeviceLifecycle,
+      collaborators: {
+        readonly capacity: CapacityCoordinator;
+        readonly claims: DeviceOperationClaims;
+        readonly registry: Registry;
+      },
+    ) => LeaseAcquisitionCoordinatorOptions["lifecycle"];
     readonly logger?: Logger;
     readonly maxDevices?: number;
     readonly maxRunning?: number;
@@ -163,6 +189,7 @@ async function createHarness(
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
   const provisioner = new DeviceProvisioner({
     catalog,
+    claims,
     clock,
     // Never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
     components: { claimProvision: () => () => undefined },
@@ -227,7 +254,7 @@ async function createHarness(
     eventBus: bus,
     idGenerator,
     leases,
-    lifecycle,
+    lifecycle: options.lifecycle?.(lifecycle, { capacity, claims, registry }) ?? lifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     modelPreferences: options.preferences ?? {},
     planner: new AcquisitionPlanner(capacity, claims),
@@ -246,6 +273,7 @@ async function createHarness(
   });
   return {
     bus,
+    capacity,
     claims,
     clock,
     components,
@@ -260,7 +288,7 @@ async function createHarness(
 
 async function seedReady(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  spec: DeviceSpec = request,
+  spec: VirtualSpec = request,
 ) {
   const driverDevice = await harness.driver.provision(spec);
   const provisioned = await harness.registry.registerDevice({
@@ -282,7 +310,7 @@ async function seedReady(
 }
 
 async function flush(): Promise<void> {
-  for (let count = 0; count < 20; count += 1) await Promise.resolve();
+  for (let count = 0; count < 50; count += 1) await Promise.resolve();
 }
 
 /** Lets fire-and-forget device work that crosses several registry writes run to rest. */
@@ -297,7 +325,7 @@ function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogS
 
 async function seedShutdown(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  spec: DeviceSpec = request,
+  spec: VirtualSpec = request,
 ) {
   const ready = await seedReady(harness, spec);
   await harness.driver.shutdown({
@@ -365,30 +393,6 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
     await settle();
     expect(installs(driver)).toEqual(["26.5", "27.0"]);
     await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
-  });
-
-  it("starts no install for a request that waited behind an install which made its runtime available, and grants it", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
-    driver.holdInstalls();
-    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
-
-    const byVersion = harness.coordinator.request(request, {
-      allowDownload: true,
-      ownerId: "a",
-      requesterId: "a",
-    });
-    // No version: the fake names its word for newest, a different component that waits its turn.
-    const newest = harness.coordinator.request(
-      { model: "iPhone 16", platform: "ios" },
-      { allowDownload: true, ownerId: "b", requesterId: "b" },
-    );
-    await flush();
-    driver.releaseInstalls();
-
-    await expect(byVersion).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
-    await expect(newest).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
-    expect(installs(driver)).toEqual(["26.5"]);
   });
 
   it("attributes the install a lease request starts to that request's requester", async () => {
@@ -561,31 +565,52 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     expect(installs(driver)).toEqual(["26.5"]);
   });
 
-  it("sends a percentage the driver reports twice to the requester once", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: [],
-      clock,
+  it.each([
+    {
+      name: "a percentage the driver reports twice is sent once",
       installProgress: [30, 30, 60],
-      platform: "ios",
-    });
-    const harness = await createHarness({ drivers: [driver] });
-    const progress: Progress[] = [];
+      percents: [undefined, 30, 60, 100],
+    },
+    {
+      name: "41.7 is sent as 41, and one that rounds down to the last sent is not sent",
+      installProgress: [41.7, 41.9],
+      percents: [undefined, 41, 100],
+    },
+    {
+      name: "a percentage outside 0 to 100 is sent as the nearest bound, and one that is not a number as no percent",
+      installProgress: [10, Number.NaN, -5, 150],
+      percents: [undefined, 10, undefined, 0, 100],
+    },
+  ])(
+    "maps the installer's progress to the percentages the requester sees: $name",
+    async ({ installProgress, percents }) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({
+        availableOsVersions: [],
+        clock,
+        installProgress,
+        platform: "ios",
+      });
+      const harness = await createHarness({ drivers: [driver] });
+      const progress: Progress[] = [];
 
-    await harness.coordinator.request(request, {
-      allowDownload: true,
-      onProgress: (report) => progress.push(report),
-      ownerId: "a",
-      requesterId: "a",
-    });
+      await harness.coordinator.request(request, {
+        allowDownload: true,
+        onProgress: (report) => progress.push(report),
+        ownerId: "a",
+        requesterId: "a",
+      });
 
-    expect(downloading(progress)).toEqual([
-      { component: "26.5", stage: "downloading", waiting: false },
-      { component: "26.5", percent: 30, stage: "downloading", waiting: false },
-      { component: "26.5", percent: 60, stage: "downloading", waiting: false },
-      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
-    ]);
-  });
+      expect(downloading(progress)).toEqual(
+        percents.map((percent) => ({
+          component: "26.5",
+          ...(percent === undefined ? {} : { percent }),
+          stage: "downloading",
+          waiting: false,
+        })),
+      );
+    },
+  );
 
   it("sends a request waiting on an install percent 100 once, before provisioning", async () => {
     const clock = new FakeClock(1_000);
@@ -617,58 +642,6 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     expect(progress.slice(provisioning).some((report) => report.stage === "downloading")).toBe(
       false,
     );
-  });
-
-  it("sends a percentage of 41.7 as 41, and one that rounds down to the last sent not at all", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: [],
-      clock,
-      installProgress: [41.7, 41.9],
-      platform: "ios",
-    });
-    const harness = await createHarness({ drivers: [driver] });
-    const progress: Progress[] = [];
-
-    await harness.coordinator.request(request, {
-      allowDownload: true,
-      onProgress: (report) => progress.push(report),
-      ownerId: "a",
-      requesterId: "a",
-    });
-
-    expect(downloading(progress)).toEqual([
-      { component: "26.5", stage: "downloading", waiting: false },
-      { component: "26.5", percent: 41, stage: "downloading", waiting: false },
-      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
-    ]);
-  });
-
-  it("sends a driver's percentage outside 0 to 100 as the nearest bound, and one that is not a number as no percent", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: [],
-      clock,
-      installProgress: [10, Number.NaN, -5, 150],
-      platform: "ios",
-    });
-    const harness = await createHarness({ drivers: [driver] });
-    const progress: Progress[] = [];
-
-    await harness.coordinator.request(request, {
-      allowDownload: true,
-      onProgress: (report) => progress.push(report),
-      ownerId: "a",
-      requesterId: "a",
-    });
-
-    expect(downloading(progress)).toEqual([
-      { component: "26.5", stage: "downloading", waiting: false },
-      { component: "26.5", percent: 10, stage: "downloading", waiting: false },
-      { component: "26.5", stage: "downloading", waiting: false },
-      { component: "26.5", percent: 0, stage: "downloading", waiting: false },
-      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
-    ]);
   });
 
   it("sends no downloading stage to a request whose runtime is installed", async () => {
@@ -727,7 +700,8 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     );
     await flush();
     driver.releaseInstalls();
-    await Promise.all([byVersion, newest]);
+    await expect(byVersion).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
+    await expect(newest).resolves.toMatchObject({ device: { spec: { osVersion: "26.5" } } });
 
     expect(installs(driver)).toEqual(["26.5"]);
     expect(progress[0]).toMatchObject({ stage: "downloading", waiting: true });
@@ -739,13 +713,14 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
 });
 
 describe("LeaseAcquisitionCoordinator", () => {
-  it("rejects a second request from a requester whose first is still pending, with lease.rejected already-leased", async () => {
+  it("rejects a second request from a requester whose first is still pending, under no key or a new idempotency key, with lease.rejected already-leased", async () => {
     // The one-lease-or-pending-request-per-requester rule is enforced here, inside the admission
     // decision, and nowhere below it: the queue keeps no check of its own. A requester holding a
     // lease is createLeasing's "enforces one active request or lease per requester" case.
     const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
     await harness.coordinator.request(request, { ownerId: "holder", requesterId: "holder" });
     const pending = harness.coordinator.request(request, {
+      idempotencyKey: "key-1",
       ownerId: "agent",
       requesterId: "agent",
     });
@@ -776,6 +751,20 @@ describe("LeaseAcquisitionCoordinator", () => {
         requestSpec: request,
       },
     ]);
+    expect(harness.queue.depth).toBe(1);
+
+    const otherKey = harness.coordinator.request(request, {
+      idempotencyKey: "key-2",
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+    const otherKeyState = promiseState(otherKey);
+    await flush();
+
+    expect(otherKeyState.state).toBe("rejected");
+    await expect(otherKey).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect(rejections).toHaveLength(2);
+    expect(rejections[1]).toMatchObject({ reason: "already-leased", requester: "agent" });
     expect(harness.queue.depth).toBe(1);
   });
 
@@ -898,6 +887,52 @@ describe("LeaseAcquisitionCoordinator", () => {
       secondGranted: secondDeviceId !== undefined,
       sameDevice: secondDeviceId === bootedGrant.device.id,
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
+  });
+
+  it("grants a request queued behind a request whose shut-down device failed to boot and then to be destroyed, when another shut-down device and a running slot are free, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const held = await Promise.all([
+      harness.coordinator.request(request, { ownerId: "x", requesterId: "x" }),
+      harness.coordinator.request(request, { ownerId: "y", requesterId: "y" }),
+    ]);
+    const failing = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    void failing.catch(() => undefined);
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    const secondState = promiseState(second);
+    await settle();
+    expect(harness.coordinator.queueDepth).toBe(2);
+    // Makeready calls 1 and 2 readied the held devices; call 3 is the head's boot. Its device
+    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
+    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+    // Both devices come back shut down without the release path, so only the kick below wakes
+    // the queue; its head is the request that fails.
+    for (const grant of held) {
+      await harness.registry.beginRelease(grant.lease.id);
+      await harness.registry.transitionDevice(grant.device.id, "shutdown", {
+        event: "device.reclaimed",
+        payload: { deviceId: grant.device.id, duration: 0, strategy: "wipe" },
+      });
+    }
+    harness.coordinator.kick();
+    await settle();
+    await expect(failing).rejects.toMatchObject({ name: "BootTimeoutError" });
+    const failedDeviceId = (
+      harness.driver.calls.filter((call) => call.operation === "destroy")[0]?.arguments[0] as
+        | { readonly deviceId: string }
+        | undefined
+    )?.deviceId;
+    const otherDevice = held
+      .map((grant) => grant.device)
+      .find((device) => device.driverDeviceId !== failedDeviceId);
+
+    expect({ queueDepth: harness.coordinator.queueDepth, second: secondState.state }).toEqual({
+      queueDepth: 0,
+      second: "fulfilled",
+    });
+    expect(failedDeviceId).toBeDefined();
+    expect(otherDevice).toBeDefined();
+    expect((await second).device.id).toBe(otherDevice?.id);
   });
 
   it("leaves a request that still cannot be served queued once, with no new work, when the device it queued behind is granted", async () => {
@@ -1111,7 +1146,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(harness.coordinator.cancelPending("nobody")).resolves.toBe("not-found");
   });
 
-  it("reports not-cancellable while device work is already in flight, matching the queue timeout's envelope", async () => {
+  it("reports not-cancellable while device work is already in flight", async () => {
     const harness = await createHarness();
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
@@ -1209,6 +1244,7 @@ describe("LeaseAcquisitionCoordinator", () => {
           drivers: [slimmingDriver()],
         });
         const spec = {
+          physical: false as const,
           model: "iPhone 17",
           osVersion: "26.5",
           platform: "ios" as const,
@@ -1224,11 +1260,33 @@ describe("LeaseAcquisitionCoordinator", () => {
         defaultModes: { ios: "slim" },
         drivers: [slimmingDriver()],
       });
-      const android = { model: "Pixel 9", osVersion: "35", platform: "android" as const };
+      const android = {
+        physical: false as const,
+        model: "Pixel 9",
+        osVersion: "35",
+        platform: "android" as const,
+      };
 
       expect(harness.coordinator.servesDefaultMode(android)).toBe(true);
       expect(harness.coordinator.servesDefaultMode({ ...android, mode: "slim" })).toBe(false);
     });
+
+    it.each(["ios", "android"] as const)(
+      "reports servesDefaultMode false for a physical spec on %s, though it names no mode and the platform's default is full",
+      async (platform) => {
+        const harness = await createHarness({ defaultModes: { [platform]: "full" } });
+
+        expect(
+          harness.coordinator.servesDefaultMode({
+            class: "phone",
+            model: "Some Phone",
+            osVersion: "1",
+            physical: true,
+            platform,
+          }),
+        ).toBe(false);
+      },
+    );
 
     it("passes the resolved mode to resolveSpec, the default filled in for a request that named none", async () => {
       const driver = slimmingDriver();
@@ -1244,7 +1302,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       class AlwaysSlimDriver extends FakeDriver {
         override async resolveSpec(
           ...args: Parameters<FakeDriver["resolveSpec"]>
-        ): Promise<DeviceSpec> {
+        ): Promise<VirtualSpec> {
           return { ...(await super.resolveSpec(...args)), mode: "slim" };
         }
       }
@@ -1265,31 +1323,27 @@ describe("LeaseAcquisitionCoordinator", () => {
       expect(provisioned?.arguments[0]).not.toHaveProperty("mode");
     });
 
-    it("does not give a full request an idle slim device of the same model and runtime", async () => {
-      const harness = await createHarness({ drivers: [slimmingDriver()], maxDevices: 2 });
-      const slim = await seedReady(harness, { ...request, mode: "slim" });
+    it.each([
+      { name: "full request an idle slim", seeded: "slim", requested: "full" },
+      { name: "slim request an idle full", seeded: "full", requested: "slim" },
+    ] as const)(
+      "does not give a $name device of the same model and runtime",
+      async ({ seeded, requested }) => {
+        const harness = await createHarness({ drivers: [slimmingDriver()], maxDevices: 2 });
+        const idle = await seedReady(
+          harness,
+          seeded === "slim" ? { ...request, mode: "slim" } : request,
+        );
 
-      const granted = await harness.coordinator.request(
-        { ...request, mode: "full" },
-        owner("agent"),
-      );
+        const granted = await harness.coordinator.request(
+          { ...request, mode: requested },
+          owner("agent"),
+        );
 
-      expect(granted.device.id).not.toBe(slim.id);
-      expect(granted.device.mode).toBe("full");
-    });
-
-    it("does not give a slim request an idle full device of the same model and runtime", async () => {
-      const harness = await createHarness({ drivers: [slimmingDriver()], maxDevices: 2 });
-      const full = await seedReady(harness, request);
-
-      const granted = await harness.coordinator.request(
-        { ...request, mode: "slim" },
-        owner("agent"),
-      );
-
-      expect(granted.device.id).not.toBe(full.id);
-      expect(granted.device.mode).toBe("slim");
-    });
+        expect(granted.device.id).not.toBe(idle.id);
+        expect(granted.device.mode).toBe(requested);
+      },
+    );
 
     it("resolves a slim request on a runtime the driver cannot slim to the full spec, reusing an idle full device", async () => {
       const oldRuntime = { ...request, osVersion: "17.5" };
@@ -1400,7 +1454,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(acquisition).rejects.toMatchObject({ name: "RequestCancelledError" });
   });
 
-  it("A failed destroy after a shut-down device fails to boot for a waiter logs the device id and the error.", async () => {
+  it("A failed destroy after a shut-down device fails to boot for a waiter logs the device id and the error, and fences the device under a boot claim owned by a request, not an ownerless one.", async () => {
     const { logger, sink } = capturingLogger();
     const harness = await createHarness({ logger });
     const shutdown = await seedShutdown(harness);
@@ -1422,13 +1476,18 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
+    // An ownerless boot claim is the warm pool's: a request would wait for it until its own timeout.
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.stringMatching(/^req_/),
+    });
   });
 
   it("A shut-down device that fails to boot for a waiter and then fails to be destroyed is quarantined, unclaimed, and counts once against running capacity.", async () => {
     // Two running slots: the failed device's and the one a second request needs.
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
     const shutdown = await seedShutdown(harness);
-    // Call 1 is seedReady's own boot; call 2 is the waiter's.
+    // Call 1 is seedShutdown's own boot; call 2 is the waiter's.
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
     harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
 
@@ -1452,28 +1511,156 @@ describe("LeaseAcquisitionCoordinator", () => {
     ).resolves.toMatchObject({ device: { spec: { model: "iPhone SE" }, state: "leased" } });
   });
 
-  it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
-    const { logger, sink } = capturingLogger();
-    const harness = await createHarness({ logger });
+  it("grants a request that arrives while a failed boot's device is being destroyed a device of its own, without waiting for the destroy.", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const shutdownId = (await seedShutdown(harness)).id;
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    let failDestroy: (error: Error) => void = () => undefined;
+    const realDestroy = harness.driver.destroy.bind(harness.driver);
+    let destroys = 0;
+    vi.spyOn(harness.driver, "destroy").mockImplementation(async (device) => {
+      destroys += 1;
+      if (destroys > 1) return realDestroy(device);
+      return new Promise<void>((_resolve, reject) => {
+        failDestroy = reject;
+      });
+    });
+
+    const booter = harness.coordinator.request(request, {
+      ownerId: "booter",
+      requesterId: "booter",
+    });
+    const booterOutcome = booter.catch((error: unknown) => error);
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondGranted = false;
+    void second.then(() => {
+      secondGranted = true;
+    });
+    await settle();
+
+    expect(secondGranted).toBe(true);
+    expect((await second).device.id).not.toBe(shutdownId);
+    expect(harness.claims.claim(shutdownId)).toEqual({ kind: "cleanup" });
+
+    failDestroy(new DriverCrashError("simulator would not die"));
+    await booterOutcome;
+  });
+
+  it("A device whose boot for a waiter failed is deleted by the lease engine, and its slot is freed.", async () => {
+    const harness = await createHarness();
     const shutdown = await seedShutdown(harness);
-    // Call 1 is seedReady's own boot; call 2 is the waiter's.
     harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
 
     await expect(
       harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
 
-    expect(sink.records.filter((record) => record.fields?.["step"] === "boot")).toEqual([
+    expect(harness.bus.replay().filter((event) => event.event === "device.deleted")).toEqual([
       expect.objectContaining({
-        level: "warn",
-        fields: {
-          deviceId: shutdown.id,
-          error: "DriverCrashError: simulator never booted",
-          requesterId: "booter",
-          step: "boot",
-        },
+        payload: expect.objectContaining({ deviceId: shutdown.id, initiator: "lease-engine" }),
       }),
     ]);
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+  });
+
+  it("A failed boot whose device the destroy can no longer claim frees the waiter's running slot and leaves no fence.", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    const realMakeReady = harness.driver.makeReady.bind(harness.driver);
+    vi.spyOn(harness.driver, "makeReady").mockImplementation(async (...args) => {
+      try {
+        return await realMakeReady(...args);
+      } finally {
+        // The record leaves `shutdown` while the boot fails, so the destroy finds nothing to claim.
+        await harness.registry.transitionDevice(shutdown.id, "deleted", {
+          event: "device.deleted",
+          payload: { deviceId: shutdown.id, initiator: "test" },
+        });
+      }
+    });
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+  });
+
+  it("A failed boot whose destroy throws keeps the waiter's running slot and fences the device under its waiter.", async () => {
+    const harness = await createHarness({
+      lifecycle: (lifecycle) => ({
+        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        dispose: (...args) => lifecycle.dispose(...args),
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
+      }),
+    });
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(harness.claims.claim(shutdown.id)).toEqual({
+      kind: "boot",
+      owner: expect.stringMatching(/^req_/),
+    });
+    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(1);
+  });
+
+  it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
+    // The warm pool's boot reserves its own slot and claims the device in one decision. Here it
+    // lands after the failed boot has released its claim and before the destroy claims the device.
+    let raced = false;
+    let warmBoot: { release(): void } | undefined;
+    const harness = await createHarness({
+      maxRunning: 2,
+      lifecycle: (lifecycle, { capacity, claims, registry }) => ({
+        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        dispose: (...args) => lifecycle.dispose(...args),
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: (device, initiator, operation, claim) => {
+          const reservation = capacity.tryReserveBoot(
+            capacityDevice(device),
+            capacityDevices(registry.snapshot.virtualDevices),
+          );
+          const warmClaim = claims.tryClaim(device.id, "boot");
+          raced = reservation.ok && warmClaim !== undefined;
+          warmBoot = {
+            release: () => {
+              warmClaim?.release();
+              if (reservation.ok) reservation.reservation.release();
+            },
+          };
+          return lifecycle.destroy(device, initiator, operation, claim);
+        },
+      }),
+    });
+    await seedShutdown(harness);
+    // Call 1 is seedShutdown's own boot; call 2 is the waiter's.
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+    expect(raced).toBe(true);
+
+    // The warm pool's boot ends and gives back its own claim and slot.
+    warmBoot?.release();
+    await settle();
+
+    const running = harness.capacity.runningCapacity(
+      capacityDevices(harness.registry.snapshot.virtualDevices),
+    );
+    expect({ global: running.global.reserved, ios: running.ios.reserved }).toEqual({
+      global: 0,
+      ios: 0,
+    });
   });
 });
 
@@ -1599,20 +1786,6 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     ]);
   });
 
-  it("answers REQUESTER_ALREADY_LEASED to a new key while the prior request is still open", async () => {
-    const harness = await createHarness();
-    await holdTheOnlyDevice(harness);
-    void harness.coordinator.request(request, keyed).catch(() => undefined);
-    await flush();
-
-    const second = harness.coordinator.request(request, { ...keyed, idempotencyKey: "key-2" });
-    const secondState = promiseState(second);
-    await flush();
-
-    expect(secondState.state).toBe("rejected");
-    await expect(second).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
-  });
-
   it("refuses the same key naming a different device as an idempotency conflict", async () => {
     const harness = await createHarness();
     await harness.coordinator.request(request, keyed);
@@ -1664,7 +1837,12 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
 });
 
 describe("LeaseAcquisitionCoordinator: image tags", () => {
-  const android = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+  const android = {
+    physical: false,
+    model: "Pixel 8",
+    osVersion: "34",
+    platform: "android",
+  } as const;
   const playstore = { ...android, imageTag: "google_apis_playstore" } as const;
   const owner = (id: string) => ({ ownerId: id, requesterId: id });
 
@@ -1724,34 +1902,22 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
     },
   );
 
-  it("does not give a request naming a tag an idle device of another tag", async () => {
+  it.each([
+    {
+      name: "of another tag",
+      seeded: { ...android, imageTag: "google_apis" },
+      requested: playstore,
+    },
+    { name: "with no tag", seeded: android, requested: playstore },
+    { name: "with a tag when it names none", seeded: playstore, requested: android },
+  ] as const)("does not give a request an idle device $name", async ({ seeded, requested }) => {
     const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
-    const other = await seedReady(harness, { ...android, imageTag: "google_apis" });
+    const idle = await seedReady(harness, seeded);
 
-    const granted = await harness.coordinator.request(playstore, owner("agent"));
+    const granted = await harness.coordinator.request(requested, owner("agent"));
 
-    expect(granted.device.id).not.toBe(other.id);
-    expect(granted.device.spec).toEqual(playstore);
-  });
-
-  it("does not give a request naming a tag an idle device with no tag", async () => {
-    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
-    const untagged = await seedReady(harness, android);
-
-    const granted = await harness.coordinator.request(playstore, owner("agent"));
-
-    expect(granted.device.id).not.toBe(untagged.id);
-    expect(granted.device.spec).toEqual(playstore);
-  });
-
-  it("does not give a request naming no tag an idle device with a tag", async () => {
-    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
-    const tagged = await seedReady(harness, playstore);
-
-    const granted = await harness.coordinator.request(android, owner("agent"));
-
-    expect(granted.device.id).not.toBe(tagged.id);
-    expect(granted.device.spec).toEqual(android);
+    expect(granted.device.id).not.toBe(idle.id);
+    expect(granted.device.spec).toEqual(requested);
   });
 
   it("gives a request naming a tag an idle device of that tag", async () => {
@@ -1767,7 +1933,7 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
     class NoTagsDriver extends FakeDriver {
       override async resolveSpec(
         ...args: Parameters<FakeDriver["resolveSpec"]>
-      ): Promise<DeviceSpec> {
+      ): Promise<VirtualSpec> {
         if (args[0].imageTag !== undefined) {
           throw new UnsupportedRequestOptionError(this.platform, "imageTag");
         }
@@ -1809,7 +1975,7 @@ describe("LeaseAcquisitionCoordinator: image tags", () => {
       class WrongTagDriver extends FakeDriver {
         override async resolveSpec(
           ...args: Parameters<FakeDriver["resolveSpec"]>
-        ): Promise<DeviceSpec> {
+        ): Promise<VirtualSpec> {
           return { ...(await super.resolveSpec(...args)), ...returned };
         }
       }
@@ -1847,7 +2013,12 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
     },
   };
   const phone = { class: "phone", platform: "ios" } as const;
-  const iphone15 = { model: "iPhone 15", osVersion: "18.4", platform: "ios" } as const;
+  const iphone15 = {
+    physical: false,
+    model: "iPhone 15",
+    osVersion: "18.4",
+    platform: "ios",
+  } as const;
 
   function iosDriver(options: Partial<ConstructorParameters<typeof FakeDriver>[0]> = {}) {
     return new FakeDriver({
@@ -1869,7 +2040,7 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
     return harness.bus
       .replay()
       .filter((event) => event.event === "device.provisioned")
-      .map((event) => (event.payload as { spec: DeviceSpec }).spec);
+      .map((event) => (event.payload as { spec: VirtualSpec }).spec);
   }
 
   async function classHarness(driver = iosDriver(), preferences = iosPreferences) {
@@ -1914,7 +2085,12 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
   });
 
   it("does not grant a request with no class a ready idle Apple Watch, and grants a watch request it", async () => {
-    const watch = { model: "Apple Watch", osVersion: "26.5", platform: "ios" } as const;
+    const watch = {
+      physical: false,
+      model: "Apple Watch",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
     const first = await classHarness();
     const warm = await seedReady(first, watch);
 
@@ -1959,38 +2135,32 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       expect(granted.device.mode).toBe("full");
     });
 
-    it("does not grant a request with no mode a slim device when the default mode is full", async () => {
+    it.each([
+      { defaultMode: "full", seeded: slim15, name: "a slim device when the default mode is full" },
+      { defaultMode: "slim", seeded: full15, name: "a full device when the default mode is slim" },
+    ] as const)("does not grant a request with no mode $name", async ({ defaultMode, seeded }) => {
       const harness = await createHarness({
-        defaultModes: { ios: "full" },
+        defaultModes: { ios: defaultMode },
         drivers: [slimming()],
         maxDevices: 2,
         preferences: iosPreferences,
       });
-      const slim = await seedReady(harness, slim15);
+      const idle = await seedReady(harness, seeded);
 
       const granted = await harness.coordinator.request(phone, owner("agent"));
 
-      expect(granted.device.id).not.toBe(slim.id);
-    });
-
-    it("does not grant a request with no mode a full device when the default mode is slim", async () => {
-      const harness = await createHarness({
-        defaultModes: { ios: "slim" },
-        drivers: [slimming()],
-        maxDevices: 2,
-        preferences: iosPreferences,
-      });
-      const full = await seedReady(harness, full15);
-
-      const granted = await harness.coordinator.request(phone, owner("agent"));
-
-      expect(granted.device.id).not.toBe(full.id);
-      expect(granted.device.mode).toBe("slim");
+      expect(granted.device.id).not.toBe(idle.id);
+      expect(granted.device.mode).toBe(defaultMode);
     });
   });
 
   describe("image tags", () => {
-    const pixel = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    const pixel = {
+      physical: false,
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    } as const;
     const androidPhone = { class: "phone", platform: "android" } as const;
     const androidPreferences: ModelPreferences = { android: { phone: ["Pixel 9", "Pixel 8"] } };
     const androidDriver = () =>
@@ -2062,7 +2232,7 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
   });
 
   describe("OS", () => {
-    it("fits a class request with no OS to a device on any runtime the catalog lists, and not one on a runtime no longer listed", async () => {
+    it("fits a class request with no OS to a device on a listed runtime, and not one on a runtime no longer listed", async () => {
       const listed = await classHarness();
       const old = await seedReady(listed, iphone15);
       const grantedListed = await listed.coordinator.request(phone, owner("agent"));
@@ -2147,6 +2317,7 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       const harness = await classHarness(rangeDriver());
       const other = await seedReady(harness, { ...iphone15, osVersion: "18.0" });
       const same = await seedReady(harness, {
+        physical: false,
         model: "iPhone 16",
         osVersion: "18.0",
         platform: "ios",
@@ -2179,7 +2350,7 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
 
     it("never installs for a range even when the driver then reports a downloadable runtime missing", async () => {
       class Racing extends FakeDriver {
-        override async resolveSpec(): Promise<DeviceSpec> {
+        override async resolveSpec(): Promise<VirtualSpec> {
           throw new RuntimeMissingError("ios", "18.4", { component: "18.4" });
         }
       }
@@ -2338,7 +2509,12 @@ describe("LeaseAcquisitionCoordinator: class requests", () => {
       const harness = await classHarness(driver, { android: { phone: ["Pixel 8"] } });
 
       const byModel = await harness.coordinator.request(
-        { imageTag: "google_apis", model: "Pixel 8", osVersion: ">=33", platform: "android" },
+        {
+          imageTag: "google_apis",
+          model: "Pixel 8",
+          osVersion: ">=33",
+          platform: "android",
+        },
         owner("agent"),
       );
       expect(byModel.device.spec).toMatchObject({ imageTag: "google_apis", osVersion: "34" });
@@ -2598,67 +2774,77 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
     return { events, requested };
   }
 
-  it("emits lease.granted with source warm and the request's id for a lease granted from a ready device", async () => {
-    const harness = await createHarness();
-    await seedReady(harness);
-    const { events, requested } = granted(harness);
+  it.each([
+    {
+      name: "warm for a lease granted from a ready device",
+      source: "warm",
+      seed: async (harness) => {
+        await seedReady(harness);
+      },
+    },
+    {
+      name: "booted for a lease granted after booting a shut-down device",
+      source: "booted",
+      seed: async (harness) => {
+        await seedShutdown(harness);
+      },
+    },
+    {
+      name: "provisioned for a lease granted on a device provisioned for it",
+      source: "provisioned",
+      seed: async () => undefined,
+    },
+    {
+      name: "provisioned when an eviction deleted a device and a new one was created",
+      source: "provisioned",
+      seed: async (harness) => {
+        await seedReady(harness, { ...request, model: "iPhone SE" });
+      },
+    },
+    {
+      // why: with one running slot taken by a ready device of another model, the shut-down device
+      // of the requested model can boot only after an eviction gives the slot back.
+      name: "booted when an eviction shut a device down and a shut-down device was then booted",
+      source: "booted",
+      limits: { maxDevices: 2, maxRunning: 1 },
+      seed: async (harness) => {
+        await seedShutdown(harness);
+        return seedReady(harness, { ...request, model: "iPhone SE" });
+      },
+      evictedLeavesReady: true,
+    },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    source: "warm" | "booted" | "provisioned";
+    limits?: { maxDevices: number; maxRunning: number };
+    seed: (harness: Awaited<ReturnType<typeof createHarness>>) => Promise<{ id: string } | void>;
+    evictedLeavesReady?: boolean;
+  }>)(
+    "emits lease.granted with exactly the grant's device, lease, requester and request, and source $name",
+    async ({ source, limits, seed, evictedLeavesReady }) => {
+      const harness = await createHarness(limits);
+      const evicted = await seed(harness);
+      const { events, requested } = granted(harness);
 
-    const grant = await harness.coordinator.request(request, owner("agent"));
+      const grant = await harness.coordinator.request(request, owner("agent"));
 
-    expect(events).toEqual([
-      expect.objectContaining({ leaseId: grant.lease.id, requestId: requested[0], source: "warm" }),
-    ]);
-    expect(requested[0]).toMatch(/^req_/);
-  });
-
-  it("emits lease.granted with source booted for a lease granted after booting a shut-down device", async () => {
-    const harness = await createHarness();
-    await seedShutdown(harness);
-    const { events, requested } = granted(harness);
-
-    await harness.coordinator.request(request, owner("agent"));
-
-    expect(events).toEqual([
-      expect.objectContaining({ requestId: requested[0], source: "booted" }),
-    ]);
-  });
-
-  it("emits lease.granted with source provisioned for a lease granted on a device provisioned for it", async () => {
-    const harness = await createHarness();
-    const { events, requested } = granted(harness);
-
-    await harness.coordinator.request(request, owner("agent"));
-
-    expect(events).toEqual([
-      expect.objectContaining({ requestId: requested[0], source: "provisioned" }),
-    ]);
-  });
-
-  it("emits lease.granted with source provisioned when an eviction deleted a device and a new one was created", async () => {
-    const harness = await createHarness();
-    await seedReady(harness, { ...request, model: "iPhone SE" });
-    const { events } = granted(harness);
-
-    await harness.coordinator.request(request, owner("agent"));
-
-    expect(events).toEqual([expect.objectContaining({ source: "provisioned" })]);
-  });
-
-  it("emits lease.granted with source booted when an eviction shut a device down and a shut-down device was then booted", async () => {
-    // One running slot, two devices allowed: a ready device of another model holds the slot, a
-    // shut-down device of the requested model waits. Booting the second needs the slot back.
-    const harness = await createHarness({ maxDevices: 2, maxRunning: 1 });
-    await seedShutdown(harness);
-    const evicted = await seedReady(harness, { ...request, model: "iPhone SE" });
-    const { events } = granted(harness);
-
-    await harness.coordinator.request(request, owner("agent"));
-
-    expect(
-      harness.registry.snapshot.devices.find((device) => device.id === evicted.id)?.state,
-    ).not.toBe("ready");
-    expect(events).toEqual([expect.objectContaining({ source: "booted" })]);
-  });
+      expect(requested[0]).toMatch(/^req_/);
+      expect(events).toEqual([
+        {
+          deviceId: grant.device.id,
+          leaseId: grant.lease.id,
+          requester: "agent",
+          requestId: requested[0],
+          source,
+        },
+      ]);
+      if (evictedLeavesReady === true) {
+        expect(
+          harness.registry.snapshot.devices.find((device) => device.id === evicted?.id)?.state,
+        ).not.toBe("ready");
+      }
+    },
+  );
 
   it("gives a request refused as already-leased the id its admission would have minted, and emits no lease.requested for it", async () => {
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
@@ -2710,6 +2896,63 @@ describe("LeaseAcquisitionCoordinator: what lease.granted reports", () => {
         requester: "agent",
       }),
     ]);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator probes (ADR 0021)", () => {
+  const probe = (requesterId: string) => ({
+    fleetRequestId: "req_gw1",
+    noWait: true,
+    ownerId: requesterId,
+    requesterId,
+  });
+
+  it("emits lease.declined, and no lease.rejected, for a probe refused killed at admission", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.beginMaintenance();
+    const declined: unknown[] = [];
+    const rejected: unknown[] = [];
+    harness.bus.subscribe("lease.declined", (envelope) => declined.push(envelope.payload));
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    await expect(harness.coordinator.request(request, probe("gw:one"))).rejects.toMatchObject({
+      name: "NukeCancelledError",
+    });
+
+    expect(declined).toEqual([
+      {
+        fleetRequestId: "req_gw1",
+        reason: "killed",
+        requestId: `req_${harness.requestIds[0]}`,
+        requestSpec: request,
+        requester: "gw:one",
+      },
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("emits lease.declined, and no lease.rejected, for a probe in progress when beginMaintenance runs", async () => {
+    const harness = await createHarness();
+    harness.driver.hangMakeReady();
+    const declined: unknown[] = [];
+    const rejected: unknown[] = [];
+    harness.bus.subscribe("lease.declined", (envelope) => declined.push(envelope.payload));
+    harness.bus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+    const acquisition = harness.coordinator.request(request, probe("gw:one"));
+    void acquisition.catch(() => undefined);
+    await settle();
+
+    const maintenance = harness.coordinator.beginMaintenance();
+    await flush();
+    harness.driver.releaseMakeReady();
+    await maintenance;
+
+    await expect(acquisition).rejects.toMatchObject({ name: "NukeCancelledError" });
+    expect(declined).toEqual([
+      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "killed", requester: "gw:one" }),
+    ]);
+    expect(rejected).toEqual([]);
+    await harness.coordinator.endMaintenance();
   });
 });
 
@@ -2785,5 +3028,250 @@ describe("LeaseAcquisitionCoordinator waiting demand", () => {
 
     await harness.coordinator.endMaintenance();
     expect(harness.coordinator.maintenanceActive).toBe(false);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: resolve", () => {
+  const installer = () => {
+    const asked: unknown[] = [];
+    return {
+      asked,
+      components: {
+        install: async (call: unknown) => {
+          asked.push(call);
+          return { outcome: "installed" as const, version: "26.5" };
+        },
+      },
+    };
+  };
+  const iphone17 = { model: "iPhone 17", platform: "ios" } as const;
+  const driverOf = (options: Partial<ConstructorParameters<typeof FakeDriver>[0]> = {}) =>
+    new FakeDriver({
+      availableOsVersions: ["18.0", "18.4", "26.0"],
+      clock: new FakeClock(1_000),
+      knownModels: ["iPhone 17"],
+      platform: "ios",
+      ...options,
+    });
+
+  it("resolves a target naming a model and an installed OS to the spec a request for it is granted a device of", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+    const granted = await harness.coordinator.request(
+      { ...iphone17, osVersion: "26.0" },
+      { ownerId: "a", requesterId: "a" },
+    );
+
+    expect(resolved).toEqual({
+      spec: { physical: false, model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+    });
+    expect(granted.device.spec).toEqual(
+      "spec" in resolved ? resolved.spec : { model: "never matches" },
+    );
+  });
+
+  it("resolves an OS range to the newest installed runtime in it", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: ">=18 <26" });
+
+    expect(resolved).toEqual({
+      spec: { physical: false, model: "iPhone 17", osVersion: "18.4", platform: "ios" },
+    });
+  });
+
+  it("queues nothing, reserves nothing and creates nothing", async () => {
+    const driver = driverOf();
+    const harness = await createHarness({ drivers: [driver] });
+
+    await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+
+    expect(harness.queue.depth).toBe(0);
+    expect(harness.registry.snapshot.devices).toEqual([]);
+    const running = harness.capacity.runningCapacity([]);
+    expect([running.global.reserved, running.ios.reserved, running.android.reserved]).toEqual([
+      0, 0, 0,
+    ]);
+    expect(
+      driver.calls.filter((call) => ["provision", "makeReady"].includes(call.operation)),
+    ).toEqual([]);
+  });
+
+  it("answers runtime-missing for an OS that is not installed, and never calls the installer though a request could download it", async () => {
+    const { asked, components } = installer();
+    const driver = driverOf({ availableOsVersions: [] });
+    const harness = await createHarness({ components, drivers: [driver] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "27.0" });
+
+    expect(resolved).toMatchObject({ refusal: "runtime-missing" });
+    expect(resolved).toHaveProperty("message", expect.stringContaining("27.0"));
+    expect(asked).toEqual([]);
+    expect(driver.calls.filter((call) => call.operation === "installComponent")).toEqual([]);
+  });
+
+  it("answers runtime-missing for an OS range no installed runtime is in", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: ">=30" });
+
+    expect(resolved).toMatchObject({ refusal: "runtime-missing" });
+  });
+
+  it("answers unknown-model for a model the catalog does not list, exact or in a range", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const exact = await harness.coordinator.resolve({
+      model: "iPhone 99",
+      osVersion: "26.0",
+      platform: "ios",
+    });
+    const ranged = await harness.coordinator.resolve({
+      model: "iPhone 99",
+      osVersion: ">=18",
+      platform: "ios",
+    });
+
+    expect(exact).toMatchObject({ refusal: "unknown-model" });
+    expect(ranged).toMatchObject({ refusal: "unknown-model" });
+  });
+
+  it("answers no-driver for a platform this machine has no driver for", async () => {
+    const harness = await createHarness({ drivers: [driverOf()] });
+
+    const resolved = await harness.coordinator.resolve({ model: "Pixel 9", platform: "android" });
+
+    expect(resolved).toMatchObject({ refusal: "no-driver" });
+    expect(resolved).toHaveProperty("message", expect.stringContaining("android"));
+  });
+
+  it("answers unresolvable with the driver's message when the driver throws any other error", async () => {
+    const driver = driverOf();
+    driver.failOn("resolveSpec", 1, new Error("the simulator service is down"));
+    const harness = await createHarness({ drivers: [driver] });
+
+    const resolved = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.0" });
+
+    expect(resolved).toEqual({
+      message: "the simulator service is down",
+      refusal: "unresolvable",
+    });
+  });
+
+  it("gives a slim target on a runtime the driver can slim a slim spec, and one it cannot a full spec", async () => {
+    const driver = driverOf({
+      availableOsVersions: ["17.5", "26.5"],
+      slimmableOsVersions: ["26.5"],
+    });
+    const harness = await createHarness({ drivers: [driver] });
+
+    const slimmable = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "slim",
+      osVersion: "26.5",
+    });
+    const below = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "slim",
+      osVersion: "17.5",
+    });
+
+    expect(slimmable).toEqual({
+      spec: {
+        physical: false,
+        mode: "slim",
+        model: "iPhone 17",
+        osVersion: "26.5",
+        platform: "ios",
+      },
+    });
+    expect(below).toEqual({
+      spec: { physical: false, model: "iPhone 17", osVersion: "17.5", platform: "ios" },
+    });
+  });
+
+  it("gives a target naming no mode the worker's default mode, and a full one a full spec", async () => {
+    const driver = driverOf({ availableOsVersions: ["26.5"], slimmableOsVersions: ["26.5"] });
+    const harness = await createHarness({ defaultModes: { ios: "slim" }, drivers: [driver] });
+
+    const defaulted = await harness.coordinator.resolve({ ...iphone17, osVersion: "26.5" });
+    const full = await harness.coordinator.resolve({
+      ...iphone17,
+      mode: "full",
+      osVersion: "26.5",
+    });
+
+    expect(defaulted).toMatchObject({ spec: { mode: "slim" } });
+    expect(full).toEqual({
+      spec: { physical: false, model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+    });
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: levels a model no longer pairs with", () => {
+  const pixel = { model: "Pixel 8", physical: false, platform: "android" } as const;
+  const owner = (id: string) => ({ ownerId: id, requesterId: id });
+
+  class PairingDriver extends FakeDriver {
+    override async resolveSpec(
+      ...args: Parameters<FakeDriver["resolveSpec"]>
+    ): Promise<VirtualSpec> {
+      const catalog = await this.listCatalog();
+      const { model, osVersion } = args[0];
+      if (osVersion !== undefined && !(catalog.modelRuntimes[model] ?? []).includes(osVersion)) {
+        throw new RuntimeMissingError("android", osVersion);
+      }
+      return super.resolveSpec(...args);
+    }
+  }
+
+  function pairing(): PairingDriver {
+    return new PairingDriver({
+      availableOsVersions: ["34", "35"],
+      clock: new FakeClock(1_000),
+      knownModels: ["Pixel 8"],
+      modelRuntimes: { "Pixel 8": ["35"] },
+      platform: "android",
+    });
+  }
+
+  it("reuses an idle device on a level the catalog pairs for an exact request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "35" });
+
+    const granted = await harness.coordinator.request(
+      { ...pixel, osVersion: "35" },
+      owner("agent"),
+    );
+
+    expect(granted.device.id).toBe(idle.id);
+  });
+
+  it("does not pick an idle device on a level the catalog no longer pairs for an exact request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "34" });
+
+    const outcome = await harness.coordinator
+      .request({ ...pixel, osVersion: "34" }, owner("agent"))
+      .then(
+        (granted) => ({ granted: granted.device.id }),
+        (error: unknown) => ({ failed: (error as Error).name }),
+      );
+
+    expect(outcome).toEqual({ failed: "RuntimeMissingError" });
+    expect(idle.state).toBe("ready");
+  });
+
+  it("still picks an idle device on a level the catalog no longer pairs for a range request", async () => {
+    const harness = await createHarness({ drivers: [pairing()], maxDevices: 2 });
+    const idle = await seedReady(harness, { ...pixel, osVersion: "34" });
+
+    const granted = await harness.coordinator.request(
+      { model: "Pixel 8", osVersion: ">=34", platform: "android" },
+      owner("agent"),
+    );
+
+    expect(granted.device.id).toBe(idle.id);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type DeviceRecord } from "../core/index.js";
+import { type VirtualDevice } from "../core/index.js";
 import {
   NoCapacityError,
   RequesterAlreadyLeasedError,
@@ -24,12 +24,6 @@ function buildTracker() {
 const identity = { requesterId: "tok_agent", role: "agent" as const };
 const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 
-/**
- * `submit`'s returned promise never settles until the `lease.request` dispatch's first
- * `onProgress` call (or its own grant/rejection) -- see `tracker.ts`'s class doc.
- * `FakeDispatcher.dispatch` runs synchronously enough that it's recorded before `submit`
- * returns, but a caller must still pump the microtask queue for it to show up in `calls`.
- */
 async function createTracked(
   tracker: LeaseRequestTracker,
   dispatcher: FakeDispatcher,
@@ -37,6 +31,7 @@ async function createTracked(
     readonly ttlMs?: number;
     readonly mode?: "slim" | "full";
     readonly imageTag?: string;
+    readonly physical?: boolean;
   } = body,
 ): Promise<{ readonly view: TrackedRequestView; readonly callIndex: number }> {
   const outcomePromise = tracker.submit(identity, requestBody);
@@ -333,8 +328,39 @@ describe("LeaseRequestTracker granted lease payload", () => {
     },
   );
 
+  it("leaves mode off the lease for a granted physical device, which has none", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const { view, callIndex } = await createTracked(tracker, dispatcher);
+    dispatcher.calls[callIndex]?.resolve({
+      ...makeGrant(),
+      device: {
+        createdAt: 0,
+        driverData: undefined,
+        driverDeviceId: "00008110-001A2B3C4D5E",
+        enrolledApps: [],
+        id: "dev_phys",
+        physical: true,
+        spec: {
+          class: "phone",
+          model: "iPhone 15 Pro",
+          osVersion: "18.4",
+          physical: true,
+          platform: "ios",
+        },
+        state: "leased",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    const state = tracker.get(view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+
+    expect(state.lease).toMatchObject({ device: "iPhone 15 Pro", udid: "00008110-001A2B3C4D5E" });
+    expect(state.lease).not.toHaveProperty("mode");
+  });
+
   it("shows the granted device's image tag on the lease, and none for a device without one", async () => {
-    const granted = async (spec: DeviceRecord["spec"]) => {
+    const granted = async (spec: VirtualDevice["spec"]) => {
       const { dispatcher, tracker } = buildTracker();
       const { view, callIndex } = await createTracked(tracker, dispatcher);
       dispatcher.calls[callIndex]?.resolve(makeGrant({ device: { spec } }));
@@ -344,7 +370,12 @@ describe("LeaseRequestTracker granted lease payload", () => {
       if (state?.stage !== "granted") throw new Error("expected granted");
       return state.lease;
     };
-    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    const spec = {
+      physical: false,
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    } as const;
 
     expect(await granted({ ...spec, imageTag: "google_apis_playstore" })).toMatchObject({
       imageTag: "google_apis_playstore",
@@ -362,6 +393,18 @@ describe("LeaseRequestTracker.submit with an image tag", () => {
     const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
     await createTracked(tracker2, dispatcher2);
     expect(dispatcher2.calls[0]?.input).not.toHaveProperty("imageTag");
+  });
+});
+
+describe("LeaseRequestTracker.submit with a physical request", () => {
+  it("passes physical through onto the dispatch input, and omits it when the body names none", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    await createTracked(tracker, dispatcher, { ...body, physical: true });
+    expect(dispatcher.calls[0]?.input).toMatchObject({ physical: true });
+
+    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
+    await createTracked(tracker2, dispatcher2);
+    expect(Object.keys(dispatcher2.calls[0]?.input ?? {})).not.toContain("physical");
   });
 });
 

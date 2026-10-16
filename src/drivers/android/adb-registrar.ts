@@ -1,10 +1,7 @@
 import type { TcpProbe } from "../../ports/index.js";
+import { ADB_FAIL, adbHostRequest } from "./adb-host-protocol.js";
 
-/** adb frames a host service as four hex digits of length, big-endian, then the service. */
-const LENGTH_PREFIX_DIGITS = 4;
 const SERVICE_PREFIX = "host:emulator:";
-/** An error reply is `FAIL<four hex digits><message>`; a success reply is `OKAY` or nothing. */
-const FAILURE_PREFIX = "FAIL";
 
 export interface AdbRegistrarOptions {
   readonly serverPort: number;
@@ -36,16 +33,12 @@ export class AdbRegistrar {
    */
   async register(adbPort: number): Promise<void> {
     const service = `${SERVICE_PREFIX}${adbPort}`;
-    const reply = await this.#options.tcp.send(this.#options.serverPort, frame(service));
+    const reply = await this.#options.tcp.send(this.#options.serverPort, adbHostRequest(service));
 
     // adb answers `OKAY`, or closes without answering at all ("we don't even need to send a
     // reply" in its own source), so silence is success here rather than a timeout to report.
-    if (reply.startsWith(FAILURE_PREFIX)) {
-      throw new Error(`adb refused ${service}: ${reply.slice(FAILURE_PREFIX.length)}`);
+    if (reply.startsWith(ADB_FAIL)) {
+      throw new Error(`adb refused ${service}: ${reply.slice(ADB_FAIL.length)}`);
     }
   }
-}
-
-function frame(service: string): string {
-  return `${service.length.toString(16).padStart(LENGTH_PREFIX_DIGITS, "0")}${service}`;
 }

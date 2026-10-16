@@ -1,4 +1,3 @@
-// Mutation testing for `pnpm mutate`, which passes the changed lines as --mutate.
 export default {
   testRunner: "vitest",
   plugins: ["@stryker-mutator/vitest-runner"],
@@ -10,7 +9,6 @@ export default {
   jsonReporter: { fileName: ".stryker-tmp/report/mutation.json" },
   tempDirName: ".stryker-tmp",
   cleanTempDir: true,
-  incremental: false,
   // Stryker rewrites tsconfig.json through the TypeScript JS API, which TypeScript 7 does not ship.
   // Vitest needs no rewrite (no extends or references point outside the sandbox), so name a
   // file that does not exist and the rewrite is skipped.

@@ -13,6 +13,7 @@ import {
   type LeaseRequestFailure,
   type ModelPreferences,
   type Platform,
+  type StartupRead,
 } from "../core/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { LeaseAcquisitionCoordinator } from "./lease-acquisition-coordinator.js";
@@ -23,99 +24,67 @@ import type {
   ClientReleaseReason,
   DeviceModeReader,
   LeaseCommands,
+  LeaseEndParticipant,
   QueueControl,
 } from "./lease-ports.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { LeaseRequestBook, type WaitingRequest } from "./lease-request-book.js";
+import { LeaseReconciler } from "./lease-reconciler.js";
+import { emitLeaseRefusal } from "./lease-refusal.js";
 import { LeaseStartup } from "./lease-startup.js";
+import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
 export interface LeasingOptions {
   readonly clock: Clock;
-  /**
-   * The daemon's one `ComponentInstaller`, built and closed by the composition root. Only the
-   * lease path installs through it (safety rule 4).
-   */
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
   readonly config: Config;
-  /** Device management, built first. */
   readonly core: Core;
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
   /**
-   * Where work leasing finishes off its callers' paths reports its failures. A backgrounded
-   * reclaim has no caller left to reject to, so without this its only trace is the device's own
-   * registry state.
+   * why: a backgrounded reclaim has no caller left to reject to; without this its only trace is the
+   * device's own registry state.
    */
   readonly logger?: Logger | undefined;
-  /**
-   * Turns the error a lease request failed with into the code and message stored for it. The
-   * daemon passes its contract error classifier; leasing never reads the code. Omitted, every
-   * failure is stored as `INTERNAL` with its own message.
-   */
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
   /**
    * The worker's default device mode per platform, built from config by the composition root
    * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
    */
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
-  /**
-   * ADR 0015 §4: the model names to try for each class, per platform, operator's list first.
-   * Absent means none, so the catalog names no class default.
-   */
   readonly modelPreferences?: ModelPreferences | undefined;
-  /**
-   * Whether the leased-device health monitor is wired. Built here but deliberately not started:
-   * the daemon arms it only once startup convergence has finished, so no health probe shells out
-   * while convergence is still doing so itself. See `DaemonServer#start`. Default: wired.
-   */
+  /** why: not started on build: a health probe would shell out while startup convergence does. */
   readonly healthMonitor?: boolean | undefined;
+  readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
 }
 
-/** What the daemon's request handlers and status reporting use leasing through. */
 export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader {
   /**
-   * The ports core declared, implemented by leasing. The composition root hands them to
-   * `core.connect` once, before any request is admitted (ADR 0018 §2); building leasing does not
-   * connect, so building one over a core never re-points that core's ports.
+   * why: building leasing does not connect them, so building one over a core never re-points that core's
+   * ports.
    */
   readonly corePorts: CorePorts;
-  /** Every lease request, stored in the registry; read by the HTTP request resource too. */
   readonly requests: LeaseRequestBook<LeaseGrant>;
-  /**
-   * Present when `createLeasing` wired the monitor. Not started; the daemon arms it after
-   * startup convergence.
-   */
   readonly healthMonitor: LeaseHealthMonitor | undefined;
-  /** Administrative lease expiry used by doctor reconciliation. */
+  /** why: wired whatever `health.enabled` says; the daemon arms it after startup convergence. */
+  readonly physicalDeviceWatcher: PhysicalDeviceWatcher;
   expire(leaseId: string): Promise<void>;
-  /**
-   * The lease half of startup, before core's `converge`: settles the requests a restart left
-   * open and restores every lease's expiry timer.
-   */
-  startup(): Promise<void>;
-  /** The queue's depth as a fact on the bus, once startup is done: every run begins with one. */
+  settleRequests(): Promise<void>;
+  /** why: runs before core's `converge`, so no device convergence picks a device this is about to release. */
+  reconcile(read: StartupRead): Promise<void>;
   announceQueueDepth(): void;
   /**
-   * Awaits the reclaims release left running in the background, so a graceful shutdown hands
-   * back the same settled pool an inline reclaim used to. Runs before `dispose`: a reclaim that
-   * settles into a purge failure arms a quarantine retry timer, and cancelling those first would
-   * strand it armed.
+   * why: runs before `dispose`: a reclaim that settles into a purge failure arms a quarantine retry
+   * timer, and cancelling first would strand it armed.
    */
   settle(): Promise<void>;
   /**
-   * Cancels every timer leasing armed, so the process can actually exit. A lease's TTL is a
-   * `setTimeout` that outlives the decision to shut down, so without this a daemon with an
-   * outstanding lease keeps running long after `daemon stop` -- up to that lease's whole TTL.
-   *
-   * Cancelling expires nothing early and loses nothing, and under ADR 0004 releases nothing
-   * either: `ttlDeadline` is persisted with the lease, and `LeaseExpiryScheduler.restore`
-   * re-arms it on the next start. That is exactly what makes a lease survive a daemon restart
-   * intact, and a lease whose deadline passed while no daemon was running expire as soon as
-   * one is there to expire it.
+   * why: cancelling expires nothing and releases nothing: `ttlDeadline` is persisted and
+   * re-armed on the next start. Without this a lease's TTL timer keeps the process alive after
+   * `daemon stop`.
    */
   dispose(): void;
-  /** Every request waiting for a device on this host, for `list.get` and `status.get`. */
   waitingRequests(): readonly WaitingRequest[];
 }
 
@@ -144,15 +113,21 @@ export function createLeasing(options: LeasingOptions): Leasing {
   const queue = new WaitQueue({
     clock: options.clock,
     idGenerator: options.idGenerator,
-    onDepthChange: (depth) => options.eventBus.emit("queue.changed", { depth }, "wait-queue"),
-    onTimeout: (waiter) => {
+    onDepthChange: (depth, line) =>
       options.eventBus.emit(
-        "lease.rejected",
+        "queue.changed",
+        line === "physical" ? { depth, physical: true } : { depth },
+        "wait-queue",
+      ),
+    onTimeout: (waiter) => {
+      emitLeaseRefusal(
+        options.eventBus,
         {
           requestId: waiter.id,
           requester: waiter.options.requesterId,
           requestSpec: waiter.request,
           reason: "timeout",
+          fleetRequestId: waiter.options.fleetRequestId,
         },
         "wait-queue",
       );
@@ -180,12 +155,22 @@ export function createLeasing(options: LeasingOptions): Leasing {
     provisioner: core.provisioner,
     queue,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    maxPerRequester: options.config.lease.maxPerRequester,
     registry,
     requests,
   });
   const releaseCoordinator: LeaseReleaseCoordinator = new LeaseReleaseCoordinator({
     claims: core.claims,
     decisions,
+    ...(options.leaseEndParticipants === undefined || options.leaseEndParticipants.length === 0
+      ? {}
+      : {
+          leaseEnd: {
+            clock: options.clock,
+            endWaitMs: options.config.lease.endWaitMs,
+            participants: options.leaseEndParticipants,
+          },
+        }),
     lifecycle: leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     // Called once a backgrounded reclaim has given up its claim; the warm pool can act on the
@@ -200,6 +185,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
   const startup = new LeaseStartup({
     decisions,
     eventBus: options.eventBus,
+    reconciler: new LeaseReconciler({ clock: options.clock, ender: releaseCoordinator, registry }),
     registry,
     timers: leases,
   });
@@ -209,6 +195,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       : new LeaseHealthMonitor({
           clock: options.clock,
           config: options.config,
+          decisions,
           drivers: core.drivers,
           eventBus: options.eventBus,
           lifecycle: core.deviceLifecycle,
@@ -220,6 +207,18 @@ export function createLeasing(options: LeasingOptions): Leasing {
           },
         });
 
+  const physicalDeviceWatcher = new PhysicalDeviceWatcher({
+    claims: core.claims,
+    clock: options.clock,
+    config: options.config,
+    decisions,
+    drivers: core.drivers,
+    kick: () => acquisition.kick(),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    registry,
+    releaser: releaseCoordinator,
+  });
+
   return {
     corePorts: {
       leaseExpirer: {
@@ -229,15 +228,19 @@ export function createLeasing(options: LeasingOptions): Leasing {
       },
       leaseMaintenance: { acquisition, leases: releaseCoordinator },
       notifyAvailability: () => acquisition.kick(),
+      physicalDeviceReady: (deviceId) => physicalDeviceWatcher.reset(deviceId),
       warmPoolDemand: {
         get maintenanceActive() {
           return acquisition.maintenanceActive;
         },
+        resolve: (request) => acquisition.resolve(request),
         waitingDemand: () => acquisition.waitingDemand(),
+        defaultMode: (platform) => acquisition.defaultMode(platform),
       },
     },
     requests,
     healthMonitor,
+    physicalDeviceWatcher,
     request: async (
       request: DeviceRequest,
       requestOptions: LeaseRequestOptions,
@@ -251,16 +254,28 @@ export function createLeasing(options: LeasingOptions): Leasing {
     expire: async (leaseId: string) => {
       await releaseCoordinator.expire(leaseId);
     },
-    startup: async () => startup.run(),
+    settleRequests: async () => startup.settleRequests(),
+    reconcile: async (read: StartupRead) => {
+      await startup.reconcile(read);
+      physicalDeviceWatcher.recordInterrupted();
+    },
     announceQueueDepth: () => {
       options.eventBus.emit("queue.changed", { depth: queue.depth }, "wait-queue");
     },
-    settle: async () => releaseCoordinator.settleBackgroundReclaims(),
+    settle: async () => {
+      await physicalDeviceWatcher.settle();
+      await releaseCoordinator.settleBackgroundReclaims();
+    },
     dispose: () => {
+      releaseCoordinator.dispose();
+      physicalDeviceWatcher.dispose();
       expiry.dispose();
     },
     get queueDepth(): number {
       return acquisition.queueDepth;
+    },
+    get physicalQueueDepth(): number {
+      return acquisition.physicalQueueDepth;
     },
     waitingRequests: () => requests.waiting(queue.places()),
     cancelPending: async (requesterId: string) => acquisition.cancelPending(requesterId),

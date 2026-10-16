@@ -8,8 +8,12 @@ import {
 } from "../ports/index.js";
 import type { Config } from "./config.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import { automaticCleanupRules } from "./cleanup/rules.js";
-import type { CleanupRule, Proposal, RegistryView } from "./cleanup/types.js";
+import {
+  automaticCleanupRules,
+  type CleanupRule,
+  type Proposal,
+  type RegistryView,
+} from "./cleanup/index.js";
 import type { Registry } from "./registry.js";
 import { stableError } from "./stable-error.js";
 
@@ -22,6 +26,8 @@ export interface CleanupReaperOptions {
   readonly logger?: Logger;
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
+  /** The devices a warm target keeps, read at each run; none when omitted. */
+  readonly targetedDevices?: () => Promise<ReadonlySet<string>>;
   readonly diskPath?: string;
   readonly tickMs?: number;
 }
@@ -186,10 +192,11 @@ export class CleanupReaper {
     if (observePressure) this.#notePressureCrossing(diskFreeBytes);
     return {
       config: this.options.config,
-      devices: snapshot.devices,
+      devices: snapshot.virtualDevices,
       diskFreeBytes,
       leases: snapshot.leases,
       now: this.options.clock.now(),
+      targeted: (await this.options.targetedDevices?.()) ?? new Set(),
     };
   }
 
@@ -240,15 +247,6 @@ function dedupe(proposals: readonly Proposal[]): readonly Proposal[] {
 function isSafeProposal(proposal: Proposal, view: RegistryView): boolean {
   const device = view.devices.find((candidate) => candidate.id === proposal.target);
   if (device === undefined || view.leases.some((lease) => lease.deviceId === device.id)) {
-    return false;
-  }
-
-  if (
-    device.state === "leased" ||
-    device.state === "provisioning" ||
-    device.state === "reclaiming" ||
-    device.state === "quarantined"
-  ) {
     return false;
   }
 

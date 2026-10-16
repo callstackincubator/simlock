@@ -4,6 +4,8 @@ import { catalogFixture, deviceFixture, statusFixture } from "../../test-support
 import type { WorkerView } from "../../worker-registry.js";
 import { warmHit } from "./warm-hit.js";
 
+type ViewDeviceSpec = NonNullable<WorkerView["devices"]>[number]["spec"];
+
 describe("warm-hit", () => {
   it("does not count a leased device as warm, only a ready one", () => {
     const view = (state: "ready" | "leased"): WorkerView => ({
@@ -27,9 +29,50 @@ describe("warm-hit", () => {
     expect(warmHit.score(view("ready"), request)).toBe(1);
   });
 
+  it("scores 0 for a worker whose only ready device that fits the request is physical", () => {
+    const physical = {
+      class: "phone" as const,
+      id: "dev_p",
+      physical: true,
+      // Everything else about it would make it a warm hit: it is the one thing that does not.
+      servesDefaultMode: true,
+      spec: { model: "iPhone 17", osVersion: "26.0", physical: true, platform: "ios" as const },
+      state: "ready" as const,
+    };
+    const view = (devices: NonNullable<WorkerView["devices"]>): WorkerView => ({
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      devices,
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+      leases: [],
+    });
+    const request = { model: "iPhone 17", platform: "ios" as const };
+
+    expect(warmHit.score(view([physical]), request)).toBe(0);
+    expect(warmHit.score(view([physical, deviceFixture("dev_v", "ready")]), request)).toBe(1);
+  });
+
+  it("counts no device as warm on a worker whose devices were never read", () => {
+    const unread: WorkerView = {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      drained: false,
+      id: "wrk_a",
+      lastSeenAt: 1,
+    };
+
+    expect(warmHit.score(unread, { model: "iPhone 17", platform: "ios" })).toBe(0);
+  });
+
   it("counts a ready device as warm only on the request's platform and the runtime it names", () => {
     const ready = deviceFixture("dev_1", "ready");
-    const view = (spec: Partial<WorkerView["devices"][number]["spec"]>): WorkerView => ({
+    const view = (spec: Partial<ViewDeviceSpec>): WorkerView => ({
       capacity: statusFixture().capacity,
       catalog: catalogFixture([
         {
@@ -103,6 +146,7 @@ describe("warm-hit", () => {
       leases: [],
     });
     const request = {
+      physical: false,
       model: "iPhone 17",
       osVersion: "26.0",
       platform: "ios" as const,
@@ -127,7 +171,12 @@ describe("warm-hit", () => {
       lastSeenAt: 1,
       leases: [],
     });
-    const request = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
+    const request = {
+      physical: false,
+      model: "iPhone 17",
+      osVersion: "26.0",
+      platform: "ios" as const,
+    };
 
     it("does not count a slim device as warm for a full request, nor a full device for a slim one", () => {
       expect(
@@ -217,14 +266,14 @@ describe("warm-hit", () => {
       expect(warmHit.score(view(catalog, "26.0"), request)).toBe(0);
     });
 
-    it("gives a request naming no runtime no warm hit when no default runtime pairs and several runtimes do", () => {
+    it("picks the newest paired runtime for a request naming no runtime when no default runtime pairs and several runtimes do", () => {
       const catalog = {
         models: ["iPhone 17"],
         platform: "ios" as const,
         runtimes: ["26.0", "18.0"],
       };
 
-      expect(warmHit.score(view(catalog, "26.0"), request)).toBe(0);
+      expect(warmHit.score(view(catalog, "26.0"), request)).toBe(1);
       expect(warmHit.score(view(catalog, "18.0"), request)).toBe(0);
     });
   });
@@ -238,7 +287,7 @@ describe("warm-hit", () => {
       runtimes: ["18.0", "26.0"],
     };
     const view = (
-      spec: Partial<WorkerView["devices"][number]["spec"]>,
+      spec: Partial<ViewDeviceSpec>,
       device: Partial<ReturnType<typeof deviceFixture>> = {},
     ): WorkerView => {
       const ready = deviceFixture("d", "ready");

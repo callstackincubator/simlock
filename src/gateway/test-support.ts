@@ -24,9 +24,9 @@ import type {
   LeaseRequestInput,
   InstallComponentOptions,
   RequestLeaseOptions,
-  SimlockAdminClient,
   StatusGetOutput,
 } from "../admin/index.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import { SimlockError } from "../admin/index.js";
 import { OPERATIONS, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import type { platformCatalogSchema } from "../contract/index.js";
@@ -59,7 +59,14 @@ export function hostFixture(
   };
 }
 
-export function statusFixture(overrides: Partial<StatusGetOutput> = {}): StatusGetOutput {
+/** What a running daemon answers `status.get` with: every field a starting daemon leaves out is
+ * present, so a test reads `statusFixture().capacity` without checking for it. */
+type RunningFields = "capacity" | "devices" | "leases" | "queueDepth";
+export type RunningStatus = StatusGetOutput & {
+  [Field in RunningFields]-?: NonNullable<StatusGetOutput[Field]>;
+};
+
+export function statusFixture(overrides: Partial<RunningStatus> = {}): RunningStatus {
   return {
     capacity: {
       android: { ...emptyPlatformCapacity },
@@ -81,6 +88,7 @@ export function leaseFixture(id: string, deviceId: string) {
     grantedAt: 1,
     id,
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "agent-1",
     requesterId: "agent-1",
     ttlDeadline: 900_001,
@@ -95,12 +103,45 @@ export function deviceFixture(
   servesDefaultMode: boolean = true,
 ) {
   return {
+    physical: false,
     id,
     mode,
     servesDefaultMode,
-    spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+    spec: { physical: false, model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
     state,
   };
+}
+
+export type PhysicalPresenceFixture =
+  | { readonly present: true }
+  | { readonly present: false; readonly reason: "locked" | "untrusted" | "not-present" };
+
+export function physicalDeviceFixture(
+  id: string,
+  state: "ready" | "leased" | "reclaiming" | "absent" | "quarantined" | "deleted" = "ready",
+  overrides: {
+    readonly presence?: PhysicalPresenceFixture;
+    readonly class?: "phone" | "tablet";
+    readonly model?: string;
+    readonly osVersion?: string;
+    readonly platform?: "ios" | "android";
+  } = {},
+) {
+  const { presence, class: deviceClass, model, osVersion, platform } = overrides;
+  return {
+    class: deviceClass ?? "phone",
+    id,
+    physical: true,
+    servesDefaultMode: false,
+    spec: {
+      model: model ?? "iPhone 15 Pro",
+      osVersion: osVersion ?? "18.4",
+      physical: true,
+      platform: platform ?? "ios",
+    },
+    state,
+    ...(presence === undefined ? {} : { presence }),
+  } as unknown as ReturnType<typeof deviceFixture>;
 }
 
 /**
@@ -135,8 +176,9 @@ export function grantFixture(overrides: Partial<LeaseGrant> = {}): LeaseGrant {
     device: {
       id: "dev_1",
       driverDeviceId: "udid-1",
-      spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+      spec: { model: "iPhone 17", osVersion: "26.0", physical: false, platform: "ios" },
       mode: "full",
+      physical: false,
     },
     environment: {},
     lease: leaseFixture("lse_1", "dev_1") as LeaseRecord,
@@ -165,6 +207,9 @@ export type RequestLeaseOutcome =
       readonly kind: "grant";
       readonly grant: LeaseGrant;
       readonly progress?: readonly LeaseProgressLike[];
+      /** Runs after the worker has decided to grant and before the answer reaches the gateway:
+       * what lands on the gateway while the grant is on its way. */
+      readonly beforeGrant?: () => void | Promise<void>;
     }
   | {
       readonly kind: "error";
@@ -330,10 +375,10 @@ export class ScriptedWorkerClient {
     return this.#eventListener !== undefined;
   }
 
-  asClient(): SimlockAdminClient {
+  asClient(): GatewayWorkerClient {
     // The cast is the point of this double: a `WorkerLink` only ever touches the members below,
     // and fabricating the other twenty would say less about what it depends on, not more.
-    return this as unknown as SimlockAdminClient;
+    return this as unknown as GatewayWorkerClient;
   }
 
   /** Holds every `status.get` until the returned function is called. */
@@ -358,7 +403,6 @@ export class ScriptedWorkerClient {
     return OPERATIONS["status.get"].output.parse(this.status);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async list(input: { readonly kind?: string }): Promise<unknown> {
     const name = `list.get:${input.kind ?? "devices"}`;
     this.calls.push(name);
@@ -369,7 +413,7 @@ export class ScriptedWorkerClient {
 
   /** #118: `FleetLeaseCoordinator#attempt` forwards every dispatch through this, always with
    * `noWait: true` (ADR §12) -- scripted per `requestLeaseQueue`/`requestLeaseDefault` above. */
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real lease.request.
   async requestLease(
     input: LeaseRequestInput,
     options: RequestLeaseOptions = {},
@@ -382,10 +426,10 @@ export class ScriptedWorkerClient {
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
+    await outcome.beforeGrant?.();
     return outcome.grant;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {
     this.calls.push(`lease.renew:${input.leaseId}`);
     this.#throwIfFailing();
@@ -394,7 +438,6 @@ export class ScriptedWorkerClient {
     return outcome?.record ?? (leaseFixture(input.leaseId, "dev_1") as LeaseRecord);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     this.calls.push(`lease.release:${input.leaseId}`);
     this.#throwIfFailing();
@@ -403,7 +446,6 @@ export class ScriptedWorkerClient {
     return { leaseId: input.leaseId };
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async cancelLease(_input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
     this.calls.push("lease.cancel");
     this.#throwIfFailing();
@@ -412,7 +454,7 @@ export class ScriptedWorkerClient {
 
   /** #118: `FleetLeaseCoordinator#exec` forwards here with the namespaced requester -- assert
    * on `calls` (test: "device.exec forwarding sends the namespaced requesterId"). */
-  // fallow-ignore-next-line unused-class-member complexity -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces, which the audit cannot follow; one scripted outcome per branch of a real exec.
+  // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real exec.
   async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
@@ -427,7 +469,6 @@ export class ScriptedWorkerClient {
   }
 
   /** ADR 0010 §7: the gateway's relay asks through this -- scripted by `installComponentHandler`. */
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async installComponent(
     input: ComponentInstallInput,
     options: InstallComponentOptions = {},
@@ -437,7 +478,6 @@ export class ScriptedWorkerClient {
     return this.installComponentHandler(input, options);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getCatalog(): Promise<CatalogOutput> {
     this.calls.push("catalog.get");
     if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
@@ -445,7 +485,6 @@ export class ScriptedWorkerClient {
     return this.catalog;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getConfig(): Promise<{
     readonly downloads: { readonly policy: DownloadPolicy; readonly timeoutMs: number };
     readonly lease: { readonly maxTtlMs: number };
@@ -471,7 +510,6 @@ export class ScriptedWorkerClient {
     };
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async close(): Promise<void> {
     this.closed = true;
   }

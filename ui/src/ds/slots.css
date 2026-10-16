@@ -1,0 +1,90 @@
+/* Slots: one square per device a worker can run, shaded by what the device is doing. */
+
+.slots {
+  display: flex;
+  min-width: 0;
+}
+
+.slots-sm {
+  gap: 2px;
+}
+
+.slots-sm .slot {
+  flex: 1 1 0;
+  min-width: 4px;
+  max-width: 9px;
+  height: 9px;
+}
+
+.slots-lg {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.slots-lg .slot {
+  height: 22px;
+}
+
+.slot {
+  display: inline-block;
+  box-sizing: border-box;
+}
+
+.slot-leased {
+  background: var(--slot-leased);
+}
+
+.slot-ready {
+  background: var(--status-ok);
+}
+
+.slot-busy {
+  background: var(--status-idle);
+}
+
+.slot-broken {
+  background: var(--status-error);
+}
+
+.slot-absent {
+  background: var(--status-warn);
+}
+
+.slot-free {
+  border: 1px dashed var(--border-strong);
+}
+
+.slot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.slot-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.slot-legend .slot {
+  width: 8px;
+  height: 8px;
+}
+
+.share-bar {
+  display: flex;
+  height: 10px;
+  background: var(--field);
+}
+
+.share {
+  display: block;
+  width: var(--share, 0%);
+  transition: width var(--duration-move) var(--ease);
+}

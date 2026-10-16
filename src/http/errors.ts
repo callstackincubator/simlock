@@ -9,14 +9,31 @@ import {
   type SimlockErrorCode,
 } from "../contract/index.js";
 
-/** Every status this frontend ever answers with; keeps `mapError` exhaustive by construction.
- * 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34) and `UNSUPPORTED_IN_WORKER_MODE`'s (ADR
- * 0012 §2): the request was well-formed and the daemon is healthy, this daemon's mode simply
- * does not implement that operation. 504 is
- * `EXEC_TIMEOUT`'s (ADR 0005 §19e): a `device.exec` command the daemon killed for outrunning
- * `exec.timeoutMs` is the one case where what this frontend was waiting on never finished,
- * which is exactly what a gateway timeout says. */
-export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 501 | 503 | 504;
+// why: every status this frontend ever answers with, which keeps `mapError` exhaustive by
+// construction. 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34) and
+// `UNSUPPORTED_IN_WORKER_MODE`'s (ADR 0012 §2): the request was well-formed and the daemon is
+// healthy, this daemon's mode simply does not implement that operation. 504 is `EXEC_TIMEOUT`'s
+// (ADR 0005 §19e): a `device.exec` command the daemon killed for outrunning `exec.timeoutMs` is the
+// one case where what this frontend was waiting on never finished, which is exactly what a gateway
+// timeout says. 405, 415 and 502 are answered only by the screen stream mount, which returns its own
+// response rather than raising an error for `errorResponse` -- a stream cannot refuse one once it has
+// begun, so it refuses with a status while the answer is still a status: 405 for a stream asked to be
+// written, 415 for a device that can never produce a picture, 502 for a worker that answered "200" to
+// its gateway with no picture at all.
+export type HttpStatus =
+  | 400
+  | 401
+  | 403
+  | 404
+  | 405
+  | 409
+  | 415
+  | 422
+  | 500
+  | 501
+  | 502
+  | 503
+  | 504;
 
 /**
  * Uniform `{status, code}` pair a route or middleware raises directly (auth, ownership,
@@ -28,8 +45,7 @@ export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 501 | 503 | 5
  * `SimlockErrorCode` union (`src/contract/errors.ts`) -- ADR §7's "a code the client does not
  * know wraps as `UNKNOWN_DAEMON_ERROR`" applies here: a typed client built against the contract
  * cannot narrow on any of these four today, only on the raw string inside
- * `UNKNOWN_DAEMON_ERROR`'s `details`. See `docs/internal/KNOWN-PITFALLS.md` ("HTTP error codes outside
- * the closed contract union") for the exact rows this needs.
+ * `UNKNOWN_DAEMON_ERROR`'s `details`. See the known gaps in https://github.com/callstackincubator/simlock/blob/main/src/http/AGENTS.md.
  */
 export class HttpApiError extends Error {
   constructor(
@@ -64,8 +80,7 @@ export function badRequest(message: string): HttpApiError {
  * meant a client branching on `error.code` alone could not tell "no such request id" from "no
  * such operation" -- ADR §7 makes codes contract, not message text (S8). `UNKNOWN_LEASE_REQUEST`
  * is outside the contract's closed union like `UNAUTHENTICATED`/`REQUEST_NOT_CANCELLABLE`/
- * `REQUEST_CANCELLED` below; see `docs/internal/KNOWN-PITFALLS.md` for what a closed-union fix would
- * need. */
+ * `REQUEST_CANCELLED` below; see the known gaps in https://github.com/callstackincubator/simlock/blob/main/src/http/AGENTS.md. */
 export function unknownRequest(id: string): HttpApiError {
   return new HttpApiError(404, "UNKNOWN_LEASE_REQUEST", `Unknown lease request: ${id}`);
 }

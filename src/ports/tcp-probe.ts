@@ -102,6 +102,7 @@ export class NodeTcpProbe implements TcpProbe {
 export interface FakeSend {
   readonly port: number;
   readonly payload: string;
+  readonly timeoutMs?: number;
 }
 
 export class FakeTcpProbe implements TcpProbe {
@@ -121,8 +122,8 @@ export class FakeTcpProbe implements TcpProbe {
     return this.#listening.has(port);
   }
 
-  async send(port: number, payload: string): Promise<string> {
-    this.sends.push({ payload, port });
+  async send(port: number, payload: string, timeoutMs?: number): Promise<string> {
+    this.sends.push(timeoutMs === undefined ? { payload, port } : { payload, port, timeoutMs });
 
     if (this.#sendFailure !== undefined) {
       throw this.#sendFailure;

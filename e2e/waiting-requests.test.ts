@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
 /**
  * `simlock list --requests`: every request waiting for a device, one line each, on a single host
@@ -55,11 +55,10 @@ describe("simlock list --requests", () => {
   });
 
   it("on a gateway, lists the fleet queue and a request in a worker's own queue with that worker", async () => {
-    const port = await freeLoopbackPort();
-    const gateway = await withDaemon({
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
       driver: "none",
-    });
+    }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     expect(minted.code).toBe(0);
     const worker = await withDaemon({

@@ -5,19 +5,21 @@ import {
   type DeviceOperationClaim,
 } from "./device-operation-claims.js";
 import {
+  assertVirtual,
   type DeviceRecord,
   type DeviceState,
   type DeviceTransitionUpdate,
   type LeaseRecord,
   specMode,
+  type VirtualDevice,
 } from "./domain.js";
-import { readyTransitionUpdate, type DriverDevice } from "./driver.js";
+import { readyTransitionUpdate, type DriverDevice, toDriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 export interface ManagedDeviceRegistry {
   readonly snapshot: {
-    readonly devices: readonly DeviceRecord[];
+    readonly virtualDevices: readonly VirtualDevice[];
     readonly leases: readonly LeaseRecord[];
   };
   transitionDevice(
@@ -42,14 +44,14 @@ export interface ManagedDeviceRegistry {
 
 interface ClaimedDevice {
   readonly claim: DeviceOperationClaim;
-  readonly device: DeviceRecord;
+  readonly device: VirtualDevice;
   readonly release: () => void;
 }
 
 /** An exclusively claimed ready device that must be leased or released. */
 export interface ReadyDeviceHandoff {
   readonly claim: DeviceOperationClaim;
-  readonly device: DeviceRecord;
+  readonly device: VirtualDevice;
 }
 
 /**
@@ -66,9 +68,8 @@ export class ManagedDeviceLifecycle {
   ) {}
 
   /** Makes a device ready while retaining its claim for an immediate lease handoff. */
-  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's lifecycle port.
   async bootForLease(
-    target: DeviceRecord,
+    target: VirtualDevice,
     claim: DeviceOperationClaim,
   ): Promise<ReadyDeviceHandoff | undefined> {
     return this.#makeReadyForLease(target, "shutdown", claim);
@@ -80,29 +81,30 @@ export class ManagedDeviceLifecycle {
    * a handoff to a lease, nothing follows this boot, so the device is released the moment it is
    * ready. `undefined` when the device is no longer a shut-down, unleased one.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's lifecycle port.
   async bootWarm(
-    target: DeviceRecord,
+    target: VirtualDevice,
     claim: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     const handoff = await this.#makeReadyForLease(target, "shutdown", claim);
     if (handoff === undefined) return undefined;
-    await this.#release({ claim, device: handoff.device, release: claim.release });
+    await this.#release({ release: claim.release });
     return handoff.device;
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
-  async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning");
+  async readyProvisionedForLease(
+    target: VirtualDevice,
+    claim?: DeviceOperationClaim,
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    return this.#makeReadyForLease(target, "provisioning", claim);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by cleanup, acquisition and nuke.
   async shutdown(
-    target: DeviceRecord,
+    target: VirtualDevice,
     initiator: string,
     operation: Exclude<DeviceOperation, "boot">,
     claim?: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     const claimed = await this.#claim(target, ["ready"], operation, claim);
     if (claimed === undefined) return undefined;
 
@@ -119,13 +121,12 @@ export class ManagedDeviceLifecycle {
     });
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by provisioning, acquisition and nuke.
   async destroy(
-    target: DeviceRecord,
+    target: VirtualDevice,
     initiator: string,
     operation: DeviceOperation,
     claim?: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     const claimed = await this.#claim(target, ["provisioning", "shutdown"], operation, claim);
     if (claimed === undefined) return undefined;
 
@@ -155,8 +156,7 @@ export class ManagedDeviceLifecycle {
    * be a second, unannounced reboot and a configuration change under an active lease, which is
    * exactly the broader privilege the rule says this exception does not grant.
    */
-  // fallow-ignore-next-line unused-class-member -- called through LeaseHealthMonitor's lifecycle port.
-  async recoverLeased(target: DeviceRecord, leaseId: string): Promise<DeviceRecord | undefined> {
+  async recoverLeased(target: VirtualDevice, leaseId: string): Promise<VirtualDevice | undefined> {
     const claimed = await this.#claimLeased(target, leaseId);
     if (claimed === undefined) return undefined;
 
@@ -192,13 +192,12 @@ export class ManagedDeviceLifecycle {
   }
 
   /** Shuts down a ready device when needed, then destroys it under one claim. */
-  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's lifecycle port when an unusable device must go.
   async dispose(
-    target: DeviceRecord,
+    target: VirtualDevice,
     initiator: string,
     operation: Exclude<DeviceOperation, "boot">,
     existingClaim?: DeviceOperationClaim,
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     const claimed = await this.#claim(target, ["ready", "shutdown"], operation, existingClaim);
     if (claimed === undefined) return undefined;
 
@@ -229,7 +228,7 @@ export class ManagedDeviceLifecycle {
   }
 
   async #makeReadyForLease(
-    target: DeviceRecord,
+    target: VirtualDevice,
     expectedState: "provisioning" | "shutdown",
     existingClaim?: DeviceOperationClaim,
   ): Promise<ReadyDeviceHandoff | undefined> {
@@ -272,7 +271,7 @@ export class ManagedDeviceLifecycle {
   }
 
   async #claim(
-    target: DeviceRecord,
+    target: VirtualDevice,
     expectedStates: readonly DeviceState[],
     operation: DeviceOperation,
     existingClaim?: DeviceOperationClaim,
@@ -295,7 +294,7 @@ export class ManagedDeviceLifecycle {
     });
   }
 
-  async #claimLeased(target: DeviceRecord, leaseId: string): Promise<ClaimedDevice | undefined> {
+  async #claimLeased(target: VirtualDevice, leaseId: string): Promise<ClaimedDevice | undefined> {
     return this.decisions.run(() => {
       const device = this.#leasedTarget(target, leaseId);
       if (device === undefined) return undefined;
@@ -309,12 +308,12 @@ export class ManagedDeviceLifecycle {
     expectedStates: readonly DeviceState[],
     to: DeviceState,
     event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     return this.decisions.run(async () => {
       try {
         const device = this.#registeredTarget(claimed.device, expectedStates);
         if (device === undefined) return undefined;
-        return await this.registry.transitionDevice(device.id, to, event);
+        return assertVirtual(await this.registry.transitionDevice(device.id, to, event));
       } finally {
         claimed.release();
       }
@@ -327,23 +326,25 @@ export class ManagedDeviceLifecycle {
     to: DeviceState,
     event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
     update?: DeviceTransitionUpdate,
-  ): Promise<DeviceRecord | undefined> {
+  ): Promise<VirtualDevice | undefined> {
     return this.decisions.run(async () => {
       const device = this.#registeredTarget(claimed.device, expectedStates);
       if (device === undefined) return undefined;
-      return this.registry.transitionDevice(device.id, to, event, update);
+      return assertVirtual(await this.registry.transitionDevice(device.id, to, event, update));
     });
   }
 
-  async #release(claimed: ClaimedDevice): Promise<void> {
+  async #release(claimed: Pick<ClaimedDevice, "release">): Promise<void> {
     await this.decisions.run(() => claimed.release());
   }
 
   #registeredTarget(
-    target: DeviceRecord,
+    target: VirtualDevice,
     expectedStates: readonly DeviceState[],
-  ): DeviceRecord | undefined {
-    const device = this.registry.snapshot.devices.find((candidate) => candidate.id === target.id);
+  ): VirtualDevice | undefined {
+    const device = this.registry.snapshot.virtualDevices.find(
+      (candidate) => candidate.id === target.id,
+    );
     if (
       device === undefined ||
       device.driverDeviceId !== target.driverDeviceId ||
@@ -364,25 +365,14 @@ export class ManagedDeviceLifecycle {
    * always returns undefined, which is what stops recovery from ever acting
    * on a device leased by someone else or on an unleased device.
    */
-  #leasedTarget(target: DeviceRecord, leaseId: string): DeviceRecord | undefined {
-    const device = this.registry.snapshot.devices.find((candidate) => candidate.id === target.id);
+  #leasedTarget(target: VirtualDevice, leaseId: string): VirtualDevice | undefined {
+    const device = this.registry.snapshot.virtualDevices.find(
+      (candidate) => candidate.id === target.id,
+    );
     if (device === undefined || device.driverDeviceId !== target.driverDeviceId) return undefined;
     if (device.state !== "leased") return undefined;
 
     const lease = this.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
     return lease === undefined || lease.deviceId !== device.id ? undefined : device;
   }
-}
-
-/**
- * `address` is never trusted by a driver's `shutdown` / `destroy` / `reclaim` / `makeReady` --
- * they derive whatever they need from `driverData` -- so a not-yet-booted device's absent
- * address is a harmless placeholder here, not a lie a driver could act on.
- */
-function toDriverDevice(device: DeviceRecord): DriverDevice {
-  return {
-    address: device.address ?? "",
-    deviceId: device.driverDeviceId,
-    driverData: device.driverData,
-  };
 }

@@ -53,6 +53,7 @@ describe("AdminSecretManager", () => {
       readdir: () => Promise.reject(new Error("unused by this test")),
       exists: () => Promise.reject(new Error("unused by this test")),
       diskFree: () => Promise.reject(new Error("unused by this test")),
+      diskSpace: () => Promise.reject(new Error("unused by this test")),
       directorySize: () => Promise.reject(new Error("unused by this test")),
       writeFileExclusive: () => Promise.reject(new Error("unused by this test")),
       rename: () => Promise.reject(new Error("unused by this test")),
@@ -136,6 +137,9 @@ describe("AdminSecretManager", () => {
       diskFree: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      diskSpace: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
       directorySize: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -210,6 +214,9 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       diskFree: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      diskSpace: () => {
         throw new Error("must not touch the filesystem");
       },
       directorySize: () => {

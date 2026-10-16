@@ -11,8 +11,10 @@ import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
 import { parseOsConstraint } from "./os-range.js";
+import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
+  capabilityNameSchema,
   cleanupRuleSummarySchema,
   configSchema,
   daemonHealthSchema,
@@ -23,6 +25,7 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   hostFactsSchema,
+  hostLoadSchema,
   imageTagSchema,
   leaseGrantSchema,
   leaseRecordSchema,
@@ -32,12 +35,14 @@ import {
   platformSchema,
   proposalSchema,
   statusCapacitySchema,
+  statusWarmPoolSchema,
   statusDeviceSchema,
   statusInstallsSchema,
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
   waitingRequestSchema,
+  capabilityListSchema,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -85,136 +90,105 @@ export const catalogGet = defineOperation({
 
 // ---- status.get ---------------------------------------------------------------------------
 
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const statusGet = defineOperation({
   name: "status.get",
   role: "agent",
   effect: "read",
   input: z.object({}),
   output: z.object({
-    // Agent-role, no ownership check (ADR §3) -- every device in the registry, not just ones
-    // the caller leases. `statusDeviceSchema`, not `deviceRecordSchema`, is what keeps
-    // `driverData` and reclamation/recovery bookkeeping off this response; see its doc comment
-    // in schemas.ts. `list.get` (admin-only) is the operation that returns the full record.
-    devices: z.array(statusDeviceSchema),
-    leases: z.array(statusLeaseSchema),
-    capacity: statusCapacitySchema,
+    // `devices`, `leases`, `capacity` and `queueDepth` are absent while `daemon.health` is
+    // `starting`: the registry has not been checked yet, so a reader sees a daemon that says
+    // it is starting and what host it runs on, and nothing it could mistake for an empty fleet.
+    devices: z.array(statusDeviceSchema).optional(),
+    leases: z.array(statusLeaseSchema).optional(),
+    capacity: statusCapacitySchema.optional(),
     /**
-     * What this daemon *is*, as opposed to what it currently holds: its health, and its run
-     * mode (ADR 0005 §1). `mode` is the one field that tells a client which kind of daemon
-     * answered -- a `worker` owns the devices it serves, a `gateway` owns none and fronts the
-     * workers that joined it -- which is what `simlock simctl` / `simlock adb` branch on
-     * (§19c). They live together in a block because they are both facts about the process and
-     * neither is a fact about a device; `health` moved in here from the top level with the
-     * same protocol bump that added `mode`. `consoleUrl` is where the daemon serves its web
-     * console (ADR 0011 §3), present only when HTTP is enabled; additive, so an older daemon
-     * simply sends none.
+     * The warm pool as its last pass left it: whether it is on, the reserve, and each kind of device
+     * the targets name with how many are ready and booting and why it is short. Absent only while `daemon.health`
+     * is `starting`, like the fields above: a started worker and a gateway always send it.
      */
+    warmPool: statusWarmPoolSchema.optional(),
+    capabilities: capabilityListSchema.optional(),
     daemon: z.object({
       health: daemonHealthSchema,
       mode: daemonModeSchema,
       // Bounded: a gateway parses every worker's answer (safety rule 10).
       consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
     }),
-    /**
-     * ADR 0008 §5: the machine, beside `daemon`, the process. Served from memory, so reading it
-     * never makes `status.get` wait.
-     */
     host: hostFactsSchema,
-    queueDepth: z.number(),
-    /**
-     * ADR 0010 §3: the component installs waiting or running, the oldest first. A worker always
-     * sends it, empty when nothing is installing; a gateway lists its connected workers'
-     * installs, each with its `workerId`. Optional because an older daemon sends none.
-     */
+    load: hostLoadSchema.optional(),
+    queueDepth: z.number().optional(),
+    physicalQueueDepth: z.number().optional(),
     installs: statusInstallsSchema.optional(),
-    /**
-     * The requests waiting for a device in this daemon's own queue, oldest first: a worker's
-     * local queue, a gateway's fleet queue. A gateway lists its workers' own queues on each
-     * worker view and in `list.get`'s `requests`, not here. Optional because an older daemon
-     * sends none.
-     */
     waiting: z.array(waitingRequestSchema).optional(),
-    /**
-     * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
-     * from a worker's answer -- a worker has no fleet, and an empty array would read as "a
-     * gateway with no workers".
-     */
+    /** Absent, not empty, from a worker: an empty array would read as a gateway with no workers. */
     workers: z.array(workerViewSchema).optional(),
   }),
 });
 
-// ---- lease.request --------------------------------------------------------------------------
-
 /**
- * No `device`/`os` legacy aliases and no nested `request` wrapper -- both accepted by the
- * pre-ADR-0003 daemon, neither carried forward. `.strict()` on top of dropping the fields: an
- * old client sending `device`/`os`/`request` gets a clear `BAD_REQUEST` instead of those keys
- * silently vanishing. `mode` is the device mode the request asks for (ADR 0007 §1), absent
- * when it names none so the worker's default applies; any value but `slim` or `full` -- the
- * lease mode ADR 0004 retired included -- is a `BAD_REQUEST`. `full` was replaced by `mode`
- * with no alias, so `.strict()` turns a request that still sends it into a `BAD_REQUEST` too.
- * `imageTag` names the type of installed image the device is created from, as the catalog lists
- * it; a request that names one never downloads, and a platform without image types refuses it.
+ * The lease ID a requester may choose (ADR 0020 §1): ASCII, 1 to 64 characters, starting with a
+ * letter or digit, then letters, digits, `-` and `_`, case-sensitive. It has no `.`, so it can
+ * never look like a gateway's `<worker>.<lease ID>`. The one definition: a gateway reads it too,
+ * to decide which reported lease it names bare.
  */
+export const LEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+export const leaseIdSchema = z.string().regex(LEASE_ID_PATTERN);
+
 const leaseRequestBaseSchema = z
   .object({
-    /**
-     * ADR 0015 §1: a request names an exact model, a device class, or neither, which means
-     * `phone`. Naming both is refused by the refinement below, so every transport answers alike.
-     */
     model: z.string().min(1).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
-    /**
-     * ADR 0015 §2: an exact version or a range. A plain string here, checked by
-     * `refuseBadOsVersion` beside it: a refined field would be checked by the MCP SDK before the
-     * handler, and its own error would stand in for `BAD_REQUEST`.
-     */
+    // A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
+    // before the handler, and its error would stand in for `BAD_REQUEST`.
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
+    physical: z.boolean().optional(),
     requesterId: z.string().optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
-    /**
-     * ADR 0004 §4: this lease's initial TTL, accepted on **every** request now (it used to be
-     * `BAD_REQUEST` for a held lease). Omitting it means `lease.defaultTtlMs`; a value above
-     * `lease.maxTtlMs` is `BAD_REQUEST`, enforced by the dispatcher's handler rather than here
-     * because the cap is a daemon config value this module deliberately cannot see. Wired
-     * through to `LeaseRequestOptions.ttlMs` (src/leasing/wait-queue.ts) by that same handler.
-     */
+    /** Capped by the dispatcher's handler, not here: the cap is daemon config this module cannot see. */
     ttlMs: z.number().finite().positive().optional(),
-    /**
-     * ADR 0005 §27a: the gateway's own forward of the lease's *owner* -- the principal it
-     * authorized the request against on its own side -- so the worker stores that verbatim as
-     * `ownerId` instead of deriving one from the connection that reached it (which, over the
-     * uplink, is always the gateway's own admin session, never the fleet client). Read **only
-     * on an admin session**; the dispatcher's `#leaseRequest` rejects the request outright if
-     * any other role's session sends it (see that handler's own comment) rather than silently
-     * ignoring it, because silently ignoring it is exactly the "guess or fail open" the ADR
-     * calls out as the alternative to rejecting. Omitting it keeps today's behaviour -- the
-     * owner is the calling connection -- so this is additive and no existing caller changes.
-     */
     owner: z.string().optional(),
     /**
      * Makes this request repeatable: the daemon stores it under `(requesterId, idempotencyKey)`,
      * and the same request sent again returns the stored result instead of a second lease --
      * the way a client that lost its answer, to a disconnect or a daemon restart, gets it back.
-     * The same key naming a different device is `IDEMPOTENCY_CONFLICT`; a repeat from another
+     * The same key naming a different device, or a different `leaseId` (a missing one on either
+     * side counts as different), is `IDEMPOTENCY_CONFLICT`; a repeat from another
      * principal is `FORBIDDEN`. Optional: a request without one is still stored, it just cannot
      * be repeated. Bounded because the daemon stores it.
      */
     idempotencyKey: z.string().min(1).max(200).optional(),
+    /**
+     * ADR 0020: the ID the granted lease gets, instead of one simlock generates. The requester
+     * guarantees it is unique for all time; simlock refuses one an active lease or a waiting
+     * request holds (`LEASE_ID_TAKEN`) and keeps no record of IDs already used. A request
+     * without one works as before. Like `idempotencyKey` it is an option of the request, not
+     * part of the device it names. Anything outside the pattern is `BAD_REQUEST`.
+     */
+    leaseId: leaseIdSchema.optional(),
+    /**
+     * ADR 0021: the gateway's own request id, sent on every dispatch to a worker. A request that
+     * carries it is a probe: the worker declines it (`lease.declined`) rather than rejecting it,
+     * never queues it, and names the id on the request's lease events. Only the gateway's uplink
+     * session may send it, and only with `noWait: true`; the dispatcher refuses it otherwise
+     * (`FORBIDDEN`, then `BAD_REQUEST`). Not part of the MCP lease tool or the HTTP lease body.
+     * Bounded as `idempotencyKey` is, because the worker stores it.
+     */
+    fleetRequestId: z.string().min(1).max(200).optional(),
+    requires: z
+      .array(capabilityNameSchema)
+      .max(8)
+      .refine((names) => new Set(names).size === names.length, "a capability name appears twice")
+      .optional(),
   })
   .strict();
 
-/**
- * Refuses a request that names both a model and a class (ADR 0015 §1); one place, one check.
- * `modelField` is what the caller's transport calls the model (HTTP's body says `device`), so
- * the message names the fields that caller can actually send.
- */
 export function refuseModelWithClass(
   modelField = "model",
 ): <T extends { readonly model?: unknown; readonly class?: unknown }>(
@@ -232,8 +206,54 @@ export function refuseModelWithClass(
   };
 }
 
-/** Refuses an `osVersion` that is neither an exact version nor a range (ADR 0015 §2); one place, one check. */
-export function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
+/** `allowDownload: false` passes because the CLI always sends it. */
+function refusePhysicalWithImageFields(): <
+  T extends {
+    readonly physical?: boolean | undefined;
+    readonly mode?: unknown;
+    readonly imageTag?: unknown;
+    readonly allowDownload?: boolean | undefined;
+  },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.physical !== true) return;
+    const refused = [
+      input.mode === undefined ? undefined : "mode",
+      input.imageTag === undefined ? undefined : "imageTag",
+      input.allowDownload === true ? "allowDownload" : undefined,
+    ];
+    for (const field of refused) {
+      if (field === undefined) continue;
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `\`${field}\` has no meaning for a physical device`,
+        path: [field],
+      });
+    }
+  };
+}
+
+// why: a replay would have to be checked against a capability state that changed since.
+function refuseRequiresWithIdempotencyKey(): <
+  T extends { readonly requires?: unknown; readonly idempotencyKey?: string | undefined },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.requires === undefined || input.idempotencyKey === undefined) return;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "requires cannot be combined with idempotencyKey",
+      path: ["requires"],
+    });
+  };
+}
+
+function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
 ) => void {
@@ -250,12 +270,13 @@ export function refuseBadOsVersion(): <T extends { readonly osVersion?: string |
   };
 }
 
-/** The fields of `lease.request` without the model-or-class refinement, for schemas derived from it. */
 export const leaseRequestFields = leaseRequestBaseSchema;
 
 const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseModelWithClass())
-  .superRefine(refuseBadOsVersion());
+  .superRefine(refuseBadOsVersion())
+  .superRefine(refusePhysicalWithImageFields())
+  .superRefine(refuseRequiresWithIdempotencyKey());
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({
@@ -264,31 +285,10 @@ export const leaseRequest = defineOperation({
   effect: "write",
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
-  /**
-   * Deliberately no `authorize` hook, and not an oversight to pair with `lease.cancel`'s: ADR
-   * §4 is explicit that any agent session may request a lease under an arbitrary
-   * `requesterId` -- that is the whole mechanism behind "one connection (the host, acting as
-   * a proxy for many agents) holds many leases by passing one requester id per session". The
-   * lease's actual `ownerId` is never client-supplied by an ordinary agent session (always
-   * `session.principal`, see the dispatcher's `#leaseRequest`) -- only an admin session's
-   * explicit `owner` above overrides that, and that gate is a role check on one field, not an
-   * ownership question about an existing resource, so it lives in the handler rather than as an
-   * `authorize` hook here (which runs against a resource this request has not created yet).
-   * Neither lets one session take over another's lease -- only choose the attribution label, or
-   * (admin only) the owner, on a lease it will itself cause to be granted. `lease.cancel` used
-   * to look inconsistent next to this (forbidding a `requesterId` that did not equal the
-   * principal, on an operation that has none of `lease.request`'s ownership protection to
-   * begin with) -- fixed by gating `lease.cancel` on the pending request's recorded owner
-   * (`pendingRequestOwner`, see its own `authorize` hook below) instead, which is consistent
-   * with this operation's design rather than in tension with it.
-   */
+  // No `authorize` hook on purpose: any agent session may request under an arbitrary
+  // `requesterId`, and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
-/**
- * The device a `lease.request` input names, with every field it left out left out: what a
- * daemon hands its lease path, as it arrived. A request that names no mode or image tag reaches
- * the lease path, and a worker behind a gateway, naming none (ADR 0007 §2).
- */
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
   return {
     ...(input.model === undefined ? {} : { model: input.model }),
@@ -297,14 +297,10 @@ export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) 
     ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
     ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
+    ...(input.physical === true ? { physical: true as const } : {}),
   };
 }
 
-/**
- * The class a request means (ADR 0015 §1): the one it names, `phone` when it names neither a
- * model nor a class, and none for an exact model. A constant of the contract, not a worker
- * setting; the worker's coordinator and the gateway both read it here.
- */
 export function requestedClass(request: {
   readonly model?: undefined;
   readonly class?: DeviceClass | undefined;
@@ -320,8 +316,6 @@ export function requestedClass(request: {
   if (request.class !== undefined) return request.class;
   return request.model === undefined ? "phone" : undefined;
 }
-
-// ---- lease.cancel (new, ADR §9) --------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseCancel = defineOperation({
@@ -408,9 +402,9 @@ export const driverPassthrough = defineOperation({
 // ---- device.exec (ADR 0005 §19a) -------------------------------------------------------------
 
 /**
- * Runs `simctl`/`adb` **on the machine that owns the device** and streams the output back
+ * Runs `simctl`, `adb` or `devicectl` **on the machine that owns the device** and streams the output back
  * (ADR 0005 §19a). The difference from `driver.passthrough` is where the process runs, not
- * what it is: the same driver resolves the same scoped command with the same refusal list --
+ * what it is: the same driver resolves the same scoped command with the same refusals --
  * the daemon then spawns it itself instead of handing the caller a command line it could only
  * run if it happened to be on that machine. That is what makes a leased device reachable from
  * a remote HTTP agent today, and through a gateway later, without a second network path.
@@ -418,8 +412,9 @@ export const driverPassthrough = defineOperation({
  * `role: "agent"`, gated on the lease's requester: driving a device is an agent's job, but --
  * unlike `driver.passthrough`, which only builds a string -- this one actually runs a command
  * against a machine, so it is gated on the caller being who the lease was granted to (see the
- * `authorize` hook below). `leaseId` is that proof and nothing more: the command's own
- * arguments still name the device (a udid, a serial), and the daemon parses none of them.
+ * `authorize` hook below). `leaseId` is that proof: for `simctl` and `adb` the command's own
+ * arguments still name the device (a udid, a serial) and the daemon parses none of them; for
+ * `devicectl` the driver adds the lease's `--device` unless the arguments name one.
  *
  * A bare `adb shell` (nothing to run) is refused by the driver on this path, because there is
  * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
@@ -574,24 +569,7 @@ export const leaseReleaseAll = defineOperation({
   output: z.object({ leaseIds: z.array(z.string()) }),
 });
 
-// ---- list.get -----------------------------------------------------------------------------
-
-/**
- * The union has four arms because two kinds of daemon answer it (ADR 0005 §32):
- *
- * - a **worker** returns its own registry records -- the full `deviceRecordSchema`, which an
- *   operator inspecting one machine legitimately wants;
- * - a **gateway** returns the fleet, and cannot return that shape: it has never held a
- *   `driverDeviceId` or a driver's private `driverData`, and fabricating either would be a
- *   lie about a device it does not own. It answers the narrower `statusDeviceSchema` (plus
- *   `workerId`) instead -- the same devices `status.get` reports.
- *
- * Arm order is load-bearing: a full record matches the first arm, so a worker's answer is
- * unchanged. `rules` is per-machine cleanup configuration, so a gateway answers it with an
- * empty list rather than inventing a fleet-wide rule set. `requests` lists the requests waiting
- * for a device: a worker's own, or on a gateway the fleet queue's and then each worker's, each
- * of those with its `workerId`.
- */
+/** Arm order is load-bearing: a full record matches the first arm, so a worker's answer is unchanged. */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const listGet = defineOperation({
   name: "list.get",
@@ -922,16 +900,6 @@ export const workerInstallComponent = defineOperation({
   output: z.object({ results: z.array(workerInstallResultSchema) }),
 });
 
-// ---- component.remove (ADR 0010 §8) ---------------------------------------------------------
-
-/**
- * Removes one component Simlock installed: refused with `COMPONENT_NOT_OWNED` when Simlock has
- * no record of installing exactly what is installed now, `COMPONENT_IN_USE` while any device
- * uses it, Simlock's or not, and `COMPONENT_BUSY` while an install or removal runs or waits on
- * that platform. `dryRun` runs every one of those checks and removes nothing, answering
- * `would-remove`. Admin-only. `sizeBytes` is the component's size as listed, when known;
- * `residue` says what stayed on disk after a removal and how to reclaim it.
- */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const componentRemove = defineOperation({
   name: "component.remove",
@@ -951,7 +919,103 @@ export const componentRemove = defineOperation({
   }),
 });
 
-// ---- the full registry ----------------------------------------------------------------------
+const ENROLLED_DEVICE_ID_MAX_LENGTH = 200;
+
+const enrollmentDeviceIdSchema = z
+  .string()
+  .min(1)
+  .max(ENROLLED_DEVICE_ID_MAX_LENGTH)
+  .refine(
+    (id) => [...id].every((character) => !/\s/u.test(character) && !isControlCharacter(character)),
+    "must not contain whitespace or control characters",
+  )
+  .refine((id) => !id.startsWith("-"), "must not start with -");
+
+function isControlCharacter(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+}
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const deviceAdd = defineOperation({
+  name: "device.add",
+  role: "admin",
+  effect: "write",
+  input: z.object({ platform: platformSchema, id: enrollmentDeviceIdSchema }).strict(),
+  output: z.object({
+    id: z.string(),
+    driverDeviceId: z.string(),
+    platform: platformSchema,
+    model: z.string(),
+    osVersion: z.string(),
+    class: z.enum(["phone", "tablet"]),
+    appCount: z.number().int().nonnegative(),
+    reenrolled: z.boolean(),
+  }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const deviceRemove = defineOperation({
+  name: "device.remove",
+  role: "admin",
+  effect: "write",
+  input: z.object({ id: enrollmentDeviceIdSchema }).strict(),
+  output: z.object({ id: z.string(), driverDeviceId: z.string() }),
+});
+
+const RELAY_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const;
+
+const relayUrlSchema = z
+  .string()
+  .max(4096)
+  .refine((value) => {
+    try {
+      const { protocol } = new URL(value);
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+
+/**
+ * One HTTP exchange a gateway hands to a module on a worker, over the gateway's uplink. The
+ * request body arrives, and the response body leaves, on the byte channel `channel` names (ADR 0028);
+ * the head leaves as a `relay-head` push keyed by this call's frame id. The
+ * answer comes once the response body has ended, or `{ cancelled: true }` once a `relay.cancel` took
+ * effect. Admin only, and on a worker only the gateway's own uplink session may call it.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const relayRequest = defineOperation({
+  name: "relay.request",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      relayId: relayIdSchema,
+      target: capabilityNameSchema,
+      method: z.enum(RELAY_METHODS),
+      url: relayUrlSchema,
+      headers: relayHeadersSchema,
+      tenant: z.string().min(1).max(300),
+      leaseId: leaseIdSchema.optional(),
+      hasBody: z.boolean(),
+      channel: relayChannelSchema,
+    })
+    .strict()
+    .refine((input) => !input.hasBody || (input.method !== "GET" && input.method !== "HEAD"), {
+      message: "hasBody is not allowed with GET or HEAD",
+    }),
+  output: z.object({ cancelled: z.literal(true).optional() }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const relayCancel = defineOperation({
+  name: "relay.cancel",
+  role: "admin",
+  effect: "write",
+  input: z.object({ relayId: relayIdSchema }).strict(),
+  output: z.object({}),
+});
 
 export const OPERATIONS = {
   "catalog.get": catalogGet,
@@ -984,6 +1048,10 @@ export const OPERATIONS = {
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,
   "component.remove": componentRemove,
+  "device.add": deviceAdd,
+  "device.remove": deviceRemove,
+  "relay.request": relayRequest,
+  "relay.cancel": relayCancel,
 } as const;
 
 export type OperationName = keyof typeof OPERATIONS;

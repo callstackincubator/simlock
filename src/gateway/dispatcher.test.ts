@@ -22,12 +22,14 @@ import {
   grantFixture,
   hostFixture,
   leaseFixture,
+  physicalDeviceFixture,
   ScriptedWorkerClient,
   statusFixture,
 } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const gatewayConfig = {
+  capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
   diskPressure: { freeBytesThreshold: 1 },
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
@@ -60,12 +62,17 @@ const gatewayConfig = {
     identity: { ios: "reusable" as const, android: "reusable" as const },
     requestRetentionMs: 600_000,
     maxRequestRecords: 10_000,
+    maxPerRequester: 1,
+    endWaitMs: 600_000,
   },
   log: { level: "info" as const, rotateBytes: 1 },
   mode: "gateway" as const,
   stalledTransition: { minimumThresholdMs: 1, thresholdMultiplier: 1 },
   warmPool: {
     enabled: true,
+    maxConcurrentBoots: 1,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 1,
       maxRetryBackoffMs: 1,
@@ -127,6 +134,9 @@ function harness(
     readonly eventHistory?: Pick<EventHistory, "replay">;
     /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
+    /** The gateway's own health; `running` by default. */
+    readonly health?: "starting" | "running" | "failed";
+    readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -182,8 +192,9 @@ function harness(
         logger: new NoopLogger(),
         path: "/events.jsonl",
       }),
-    health: () => "running",
+    health: () => options.health ?? "running",
     host: GATEWAY_HOST,
+    ...(options.load === undefined ? {} : { load: options.load }),
     leaseIndex,
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
@@ -273,6 +284,84 @@ describe("GatewayDispatcher", () => {
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
   });
 
+  it("status.get on a gateway carries a connected worker's warm pool block from its last refresh, none for an incompatible worker, and an empty block of its own", async () => {
+    const { dispatcher, workers } = harness();
+    const block = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios" as const,
+          ready: 0,
+          short: "runtime-missing" as const,
+        },
+      ],
+    };
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", { health: "running", warmPool: block });
+    workers.incompatible(
+      "wrk_2",
+      undefined,
+      { gateway: { min: 20, max: 20 }, worker: { min: 4, max: 4 } },
+      "0.2.0",
+    );
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
+    });
+    expect(status.workers?.find((worker) => worker.id === "wrk_1")?.warmPool).toEqual(block);
+    expect(status.workers?.find((worker) => worker.id === "wrk_2")).not.toHaveProperty("warmPool");
+  });
+
+  it("status.get on a gateway whose health is starting returns daemon and host and no other field", async () => {
+    const { dispatcher, workers } = harness({ health: "starting" });
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: statusFixture().capacity,
+      devices: [deviceFixture("dev_1", "leased")],
+      health: "running",
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 0,
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(status.daemon).toEqual({
+      consoleUrl: "http://127.0.0.1:4700/",
+      health: "starting",
+      mode: "gateway",
+    });
+    expect(status.host).toEqual(GATEWAY_HOST);
+  });
+
+  it("a gateway's status.get carries the gateway machine's own load, not its workers', on the starting answer and the running one", async () => {
+    const own = { ageMs: 3_000, disk: { freeBytes: 10, totalBytes: 100 } };
+    const workerLoad = { readAt: 500, disk: { freeBytes: 99, totalBytes: 100 } };
+    const askStatus = async (health: "starting" | "running") => {
+      const { dispatcher, workers } = harness({ health, load: () => own });
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", { health: "running", load: workerLoad });
+      return dispatcher.dispatch("status.get", {}, session());
+    };
+
+    const starting = await askStatus("starting");
+    const running = await askStatus("running");
+
+    expect(starting.load).toEqual(own);
+    expect(running.load).toEqual(own);
+    expect(running.workers?.[0]?.load).toEqual(workerLoad);
+  });
+
   it("status.get carries consoleUrl when HTTP is enabled and omits it when disabled", async () => {
     const enabled = harness({ http: { enabled: true, host: "0.0.0.0", port: 4711 } });
     const disabled = harness({ http: { enabled: false, host: "0.0.0.0", port: 4711 } });
@@ -339,9 +428,9 @@ describe("GatewayDispatcher", () => {
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
     ];
-    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
-    expect(status.workers?.[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
-    expect(list.workers[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.workers?.[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(list.workers[0]?.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
   });
 
   it("answers catalog.get as the union of the fleet's catalogs", async () => {
@@ -448,6 +537,71 @@ describe("GatewayDispatcher", () => {
     await expect(dispatcher.dispatch("list.get", { kind: "rules" }, session())).resolves.toEqual(
       [],
     );
+  });
+
+  it("lists no device or lease for a worker that is starting, whether the session is an admin or the owner of a lease the gateway indexed on it, and answers worker.list with the view as it is", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const lease = {
+      ...leaseFixture("lease_1", "dev_1"),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    };
+    workers.refresh("wrk_1", {
+      devices: [deviceFixture("dev_1", "leased")],
+      health: "running",
+      leases: [lease],
+    });
+    const owner = session({ principal: "agent-1", role: "agent" });
+    await expect(dispatcher.dispatch("lease.list", {}, owner)).resolves.toEqual({
+      leases: [expect.objectContaining({ id: "wrk_1.lease_1" })],
+    });
+
+    workers.refresh("wrk_1", { health: "starting", host: GATEWAY_HOST });
+
+    await expect(dispatcher.dispatch("lease.list", {}, session())).resolves.toEqual({
+      leases: [],
+    });
+    await expect(dispatcher.dispatch("lease.list", {}, owner)).resolves.toEqual({ leases: [] });
+    await expect(dispatcher.dispatch("list.get", { kind: "devices" }, session())).resolves.toEqual(
+      [],
+    );
+    const { workers: views } = await dispatcher.dispatch("worker.list", {}, session());
+    expect(views).toHaveLength(1);
+    expect(views[0]).toMatchObject({ health: "starting", host: GATEWAY_HOST, id: "wrk_1" });
+    expect(Object.keys(views[0] ?? {})).not.toContain("leases");
+  });
+
+  it("lists each of an owner's gateway-issued leases under its own record, and none whose worker has no view", async () => {
+    const { dispatcher, leaseIndex, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const owned = (id: string, deviceId: string) => ({
+      ...leaseFixture(id, deviceId),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+      ttlMs: id === "lease_1" ? 111 : 222,
+    });
+    workers.refresh("wrk_1", { leases: [owned("lease_1", "dev_1"), owned("lease_2", "dev_2")] });
+    // An entry for a worker the gateway holds no view of, as a race with a removal leaves it.
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_gone.lease_9",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_gone",
+      workerLeaseId: "lease_9",
+    });
+
+    const { leases } = await dispatcher.dispatch(
+      "lease.list",
+      {},
+      session({ principal: "agent-1", role: "agent" }),
+    );
+
+    expect(leases.map(({ id, ttlMs }) => ({ id, ttlMs }))).toEqual([
+      { id: "wrk_1.lease_1", ttlMs: 111 },
+      { id: "wrk_1.lease_2", ttlMs: 222 },
+    ]);
   });
 
   // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
@@ -726,14 +880,41 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("device.add and device.remove", () => {
+    it("answer UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying to run the command on the worker the device is plugged into", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch(
+          "device.add",
+          { id: "00008110-001A2B3C4D5E", platform: "ios" },
+          session({ role: "admin" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_IN_GATEWAY_MODE",
+        details: { operation: "device.add" },
+        message:
+          "device.add enrols a device plugged into one machine; run it on the worker the device is plugged into",
+      });
+      await expect(
+        dispatcher.dispatch(
+          "device.remove",
+          { id: "00008110-001A2B3C4D5E" },
+          session({ role: "admin" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "UNSUPPORTED_IN_GATEWAY_MODE",
+        details: { operation: "device.remove" },
+        message:
+          "device.remove unenrols a device plugged into one machine; run it on the worker the device is plugged into",
+      });
+    });
+  });
+
   describe("lease lifecycle and device.exec (#118)", () => {
     it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
       const { dispatcher } = harness();
 
-      // No worker connected at all: a `noWait` request has nowhere to go and is refused
-      // immediately, rather than the pre-#118 permanent `UNSUPPORTED_IN_GATEWAY_MODE`. A plain
-      // `DispatchError("NO_CAPACITY", ...)` (H9, round 2 review) -- no gateway-specific error
-      // class for `daemon/error-code.ts` to import and recognize.
       await expect(
         dispatcher.dispatch(
           "lease.request",
@@ -752,6 +933,28 @@ describe("GatewayDispatcher", () => {
         ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
       }
     });
+
+    it.each([
+      ["with noWait: true", { noWait: true }],
+      ["without noWait", {}],
+    ])(
+      "refuses a lease.request carrying fleetRequestId with FORBIDDEN from every session, even the uplink, %s",
+      async (_label, extra) => {
+        const { dispatcher } = harness();
+        const input = { fleetRequestId: "req_gw1", model: "iPhone 17", platform: "ios", ...extra };
+
+        for (const refused of [
+          session({ role: "agent" }),
+          session({ role: "admin" }),
+          session({ isGatewayUplink: true, role: "admin" }),
+        ]) {
+          await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
+          });
+        }
+      },
+    );
 
     it("answers not-found for lease.cancel and an empty result for lease.release-all with nothing queued or leased", async () => {
       const { dispatcher } = harness();
@@ -929,6 +1132,36 @@ describe("GatewayDispatcher", () => {
       );
 
       expect(client.lastRequestLeaseInput).toMatchObject({ imageTag: "google_apis_playstore" });
+    });
+
+    it("forwards a lease.request's leaseId to the worker, and answers the grant under that ID with no worker in front of it", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({
+        grant: grantFixture({
+          lease: { ...grantFixture().lease, id: "ad-7f3a", idChosenByRequester: true },
+        }),
+        kind: "grant",
+      });
+
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { leaseId: "ad-7f3a", model: "iPhone 17", noWait: true, platform: "ios" },
+        session({ role: "agent" }),
+      );
+
+      expect(client.lastRequestLeaseInput).toMatchObject({ leaseId: "ad-7f3a" });
+      expect(grant.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
     });
 
     it("forwards device.exec to the worker that holds the lease, gated on the caller owning it", async () => {
@@ -1292,5 +1525,53 @@ describe("GatewayDispatcher: waiting requests", () => {
       },
       { ...onWorker("req_local", "local-agent", 1), workerId: "wrk_1" },
     ]);
+  });
+});
+
+describe("GatewayDispatcher: the fleet queue's physical line", () => {
+  async function settle(): Promise<void> {
+    for (let count = 0; count < 20; count += 1) await Promise.resolve();
+  }
+
+  function options(requesterId: string) {
+    return { allowDownload: false, noWait: false, ownerId: requesterId, requesterId };
+  }
+
+  it("with two virtual requests and one physical request in the fleet queue, the gateway's status.get shows queueDepth 2 and physicalQueueDepth 1; the physical request has queuePosition 1 in waiting and in lease.queued; its queue.changed carries physical: true and depth 1", async () => {
+    const { coordinator, directory, dispatcher, eventBus, workers } = harness();
+    directory.add("wrk_1", new ScriptedWorkerClient());
+    const capacity = statusFixture().capacity;
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } },
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [physicalDeviceFixture("dev_p", "leased", { model: "iPhone 17" })],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+    const queued: { requestId: string; queuePosition: number }[] = [];
+    eventBus.subscribe("lease.queued", (envelope) => queued.push(envelope.payload));
+    const changed: unknown[] = [];
+    eventBus.subscribe("queue.changed", (envelope) => changed.push(envelope.payload));
+    const virtual = { model: "iPhone 17", platform: "ios" as const };
+    const physical = { ...virtual, physical: true as const };
+
+    void coordinator.request(virtual, options("agent-1")).catch(() => undefined);
+    await settle();
+    void coordinator.request(virtual, options("agent-2")).catch(() => undefined);
+    await settle();
+    void coordinator.request(physical, options("agent-3")).catch(() => undefined);
+    await settle();
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    expect(status).toMatchObject({ physicalQueueDepth: 1, queueDepth: 2 });
+    const waiting = status.waiting?.find((request) => request.requesterId === "agent-3");
+    expect(waiting).toMatchObject({ queuePosition: 1, stage: "queued" });
+    expect(queued.find((event) => event.requestId === waiting?.id)).toMatchObject({
+      queuePosition: 1,
+    });
+    expect(changed).toContainEqual(expect.objectContaining({ depth: 1, physical: true }));
   });
 });

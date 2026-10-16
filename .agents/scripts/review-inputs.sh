@@ -8,9 +8,15 @@
 #
 #   diff.patch             the PR's diff against its base, as GitHub shows it
 #   commit                 the PR head the directory was built from
+#   kind                   what .agents/scripts/diff-kind.mjs calls the diff: adr-only,
+#                          docs-only, comments-only, tests-only, full or large; it sets which
+#                          reviews run
 #   fix.patch              with a previous commit: the diff from it to the head
 #   stale-refs.txt         what .agents/scripts/stale-refs.sh finds for the PR: lines anywhere in
 #                          the repo that still name something the diff removed
+#   briefs/                every file in .agents/briefs/ as the base has it: each reviewer's
+#                          brief, and calibration.md, the findings reviews raised lately that
+#                          were rejected, which every reviewer reads first
 #   issue.md               the issue the PR closes: the second segment of a <kind>/<n> branch,
 #                          else the first "Closes #n" in the PR body
 #   feature.md             the issue's parent: its GitHub parent, else its "Part of #n" line
@@ -22,11 +28,12 @@
 #                          adr-index.md
 #   tests-after-red.patch  what changed in the files of the branch's first `test:` commit (the
 #                          red tests, or a bug's reproduction) between that commit and the head
-#   assumptions.md         the PR body's `Assumption:` lines (delivery rule 3)
+#   assumptions.md         the PR body's `Assumption:` lines (coding rule 2)
 #
-# Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules and
-# ADRs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
-# for and cannot find, it says on stderr, with one summary line at the end.
+# Nothing else: never the rest of the PR body, commit messages, or any other comment. Rules, ADRs
+# and briefs come from the base branch, so a PR cannot rewrite what it is judged by. Whatever it looks
+# for and cannot find, it says on stderr, with one summary line at the end. The repo is GH_REPO,
+# else the origin remote's owner/name.
 set -eu
 
 pr=${1:-}
@@ -39,10 +46,17 @@ case $pr in
 esac
 say() { echo "review-inputs: $*" >&2; }
 
-nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-head_ref=$(gh pr view "$pr" --json headRefName -q .headRefName)
-base_ref=$(gh pr view "$pr" --json baseRefName -q .baseRefName)
-pr_body=$(gh pr view "$pr" --json body -q .body | tr -d '\r')
+# why: a cloud session's GitHub proxy refuses GraphQL, which `gh pr`, `gh issue` and
+# `gh repo view` use, so this script calls repo-scoped REST only.
+nwo=${GH_REPO:-$(git remote get-url origin | sed -E 's#\.git$##; s#.*[/:]([^/:]+/[^/]+)$#\1#')}
+api() {
+  at=$1
+  shift
+  gh api -X GET "repos/$nwo/$at" "$@"
+}
+head_ref=$(api "pulls/$pr" -q .head.ref)
+base_ref=$(api "pulls/$pr" -q .base.ref)
+pr_body=$(api "pulls/$pr" -q '.body // ""' | tr -d '\r')
 
 # The PR head through GitHub's pull ref, which outlives a deleted branch. The temporary ref is
 # per PR, so two reviews running at once do not overwrite each other's.
@@ -59,6 +73,7 @@ mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"
 echo "$head" >"$out/commit"
+node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
   if git cat-file -e "$previous^{commit}" 2>/dev/null; then
     git diff "$previous" "$head" >"$out/fix.patch"
@@ -67,14 +82,18 @@ if [ -n "$previous" ]; then
   fi
 fi
 "$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
-[ -s "$out/stale-refs.txt" ] || rm -f "$out/stale-refs.txt"
+# Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
+[ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
+mkdir "$out/briefs"
+for f in $(git ls-tree --name-only "$base" .agents/briefs/); do
+  git show "$base:$f" >"$out/briefs/$(basename "$f")"
+done
 
 for f in $(git ls-tree --name-only "$base" docs/internal/agent-rules/); do
   git show "$base:$f" >"$out/rules/$(basename "$f")"
 done
 git show "$base:docs/internal/adr/README.md" >"$out/rules/adr-index.md"
 
-# The issue: the second segment of a <kind>/<n> branch, else the first issue the body closes.
 issue=
 case $head_ref in
   bug/* | feature/* | task/*)
@@ -90,24 +109,31 @@ fi
 
 parent= play= rules= assumed=0
 if [ -n "$issue" ]; then
-  gh issue view "$issue" --json body -q .body | tr -d '\r' >"$out/issue.md"
-  labels=$(gh issue view "$issue" --json labels -q '.labels[].name')
+  api "issues/$issue" -q '.body // ""' | tr -d '\r' >"$out/issue.md"
+  labels=$(api "issues/$issue" -q '.labels[].name')
 
-  parent=$(gh api graphql -F owner="${nwo%/*}" -F repo="${nwo#*/}" -F number="$issue" -f query='
-    query($owner:String!,$repo:String!,$number:Int!){
-      repository(owner:$owner,name:$repo){ issue(number:$number){ parent{ number } } } }' \
-    -q '.data.repository.issue.parent.number // empty' 2>/dev/null || true)
+  parent=$(api "issues/$issue" -q '.parent_issue_url // empty' 2>/dev/null || true)
+  parent=${parent##*/}
   if [ -z "$parent" ]; then
     parent=$(grep -m 1 -oE '^Part of #[0-9]+' "$out/issue.md" | grep -oE '[0-9]+' || true)
   fi
   if [ -n "$parent" ]; then
-    gh issue view "$parent" --json body -q .body | tr -d '\r' >"$out/feature.md"
+    api "issues/$parent" -q '.body // ""' | tr -d '\r' >"$out/feature.md"
   fi
 
   if printf '%s\n' "$labels" | grep -q '^bug:'; then
-    gh issue view "$issue" --json comments \
-      -q '[.comments[] | select(.body | test("(^|\n)## Simplest fix"))] | last | .body // empty' \
-      | tr -d '\r' >"$out/triage.md"
+    # why: `gh api --paginate` follows Link headers to numeric-ID repository URLs, which the
+    # proxy also refuses, so pages are requested by number. Each page prints its length first.
+    page=1 triage=
+    while :; do
+      got=$(api "issues/$issue/comments" -f per_page=100 -f page="$page" -q 'length,
+        ([.[] | select((.body // "") | test("(^|\n)## Simplest fix"))] | last | .body // empty)')
+      last=$(printf '%s\n' "$got" | tail -n +2)
+      [ -z "$last" ] || triage=$last
+      [ "$(printf '%s\n' "$got" | head -n 1)" -ge 100 ] || break
+      page=$((page + 1))
+    done
+    [ -z "$triage" ] || printf '%s\n' "$triage" | tr -d '\r' >"$out/triage.md"
     if [ ! -s "$out/triage.md" ]; then
       rm -f "$out/triage.md"
       say "bug #$issue has no triage report (no comment with a '## Simplest fix' section)"

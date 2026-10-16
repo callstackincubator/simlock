@@ -1,11 +1,11 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import { requestedClass } from "../contract/index.js";
 import {
   compareVersions,
   type OsRange,
   parseOsConstraint,
+  requestedClass,
   satisfies,
-} from "../contract/os-range.js";
+} from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
 import {
   type CapacityReservation,
@@ -19,8 +19,15 @@ import {
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
+  fitsPhysical,
+  noPhysicalMatch,
+  type PhysicalDevice,
+  type PhysicalRequest,
+  readPhysicalPresence,
+  type VirtualDevice,
   type DeviceRequirement,
   type DeviceSpec,
+  type VirtualSpec,
   exactRequirement,
   type LeaseGrant,
   type LeaseProgress,
@@ -46,14 +53,23 @@ import {
   type AcquisitionMaintenance,
   type ManagedDeviceLifecycle,
   type ReadyDeviceHandoff,
+  toDriverDevice,
   type SerializedDecision,
   stableError,
+  type TargetResolution,
   type WaitingDemand,
 } from "../core/index.js";
-import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
+import {
+  type AcquisitionPlan,
+  type AcquisitionPlanner,
+  type PhysicalPlanInput,
+} from "./acquisition-planner.js";
+import { emitLeaseRefusal } from "./lease-refusal.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
 import {
+  LeaseIdTakenError,
+  lineOf,
   type LeaseRequestOptions,
   RequestCancelledError,
   RequesterAlreadyLeasedError,
@@ -80,14 +96,15 @@ class NukeCancelledError extends Error {
 export interface LeaseAcquisitionRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
+    readonly virtualDevices: readonly VirtualDevice[];
     readonly leases: readonly LeaseRecord[];
   };
 }
 
-export type AcquisitionClaims = Pick<DeviceOperationClaims, "isClaimed" | "tryClaim">;
+export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive" | "isClaimed" | "tryClaim">;
 export type AcquisitionDecision = Pick<SerializedDecision, "run">;
 export type AcquisitionDrivers = Pick<DriverCatalog, "get">;
-export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan">;
+export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan" | "planPhysical">;
 export type AcquisitionQueue = Pick<
   WaitQueue,
   | "create"
@@ -102,24 +119,16 @@ export type AcquisitionQueue = Pick<
   | "markProcessing"
   | "notifyProgress"
   | "pending"
+  | "physicalDepth"
   | "reject"
   | "resolve"
 >;
 
 export interface LeaseAcquisitionCoordinatorOptions {
-  /** Read for a request that names a class: which models the host lists, and which runtimes. */
   readonly catalog: Pick<CatalogReader, "listCatalog">;
   readonly claims: AcquisitionClaims;
-  /**
-   * The one installer in the core (ADR 0010 §3). A request whose runtime is missing and that
-   * may download calls it directly (architecture rule 5); nothing else on this path installs.
-   */
   readonly components: Pick<ComponentInstaller, "install">;
   readonly decisions: AcquisitionDecision;
-  /**
-   * The worker's default device mode per platform, built from config at the composition root
-   * (ADR 0007 §2). A platform it does not name defaults to `"full"`.
-   */
   readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
@@ -140,33 +149,38 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly queue: AcquisitionQueue;
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
-  /** Stores each request before it is queued and answers repeats of it (`LeaseRequestBook`). */
-  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "replay">;
+  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "holdsLeaseId" | "replay">;
+  readonly maxPerRequester?: number;
 }
 
 interface AcquisitionWaiter extends Waiter {
   failures: number;
-  /** What an idle device must satisfy besides its pool mode, kept beside `spec` (ADR 0015 §5). */
   classOf?: ((model: string) => DeviceClass | undefined) | undefined;
   requirement?: DeviceRequirement | undefined;
-  spec?: DeviceSpec;
+  spec?: VirtualSpec;
   timing: LeaseTiming;
 }
 
-/** The kinds of plan that end in a grant. An eviction never does: the plan made after it does. */
-type GrantingPlanKind = "grant-ready" | "boot-shutdown" | "provision";
+type GrantingPlanKind = "grant-ready" | "grant-physical" | "boot-shutdown" | "provision";
 
-/** The one place a plan's kind becomes the `source` a `lease.granted` reports. */
 const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
   "boot-shutdown": "booted",
+  "grant-physical": "warm",
   "grant-ready": "warm",
   provision: "provisioned",
 };
 
 type OperationPlan = Exclude<
   AcquisitionPlan,
-  { readonly kind: "grant-ready" | "wait" | "no-capacity" }
+  { readonly kind: "grant-ready" | "grant-physical" | "wait" | "no-capacity" }
 >;
+
+class PhysicalUnknownModelError extends UnknownModelError {
+  constructor(request: PhysicalRequest) {
+    super(request.platform, request.model, request.model === undefined ? request.class : undefined);
+    this.message = noPhysicalMatch(request).message;
+  }
+}
 
 const noTiming: LeaseTiming = {
   estimatedBootMs: 0,
@@ -175,7 +189,6 @@ const noTiming: LeaseTiming = {
   estimatedReadyMs: 0,
 };
 
-/** Coordinates admission, planning, device work, and queue settlement for acquisition only. */
 export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #activeWorkflows = new Set<Promise<void>>();
   readonly #driving = new WeakSet<AcquisitionWaiter>();
@@ -191,29 +204,22 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.queue.depth;
   }
 
-  /**
-   * Whether a device with this spec is in the pool a request naming no mode draws from: its pool
-   * mode (the spec's mode, full when it names none) is the platform's default mode (ADR 0009 §6).
-   */
-  servesDefaultMode(spec: DeviceSpec): boolean {
-    return specMode(spec) === this.#defaultMode(spec.platform);
+  get physicalQueueDepth(): number {
+    return this.options.queue.physicalDepth;
   }
 
-  /** The one place a platform's default mode is read (ADR 0007 §2): full when none is set. */
-  #defaultMode(platform: Platform): DeviceMode {
+  servesDefaultMode(spec: DeviceSpec): boolean {
+    if (spec.physical) return false;
+    return specMode(spec) === this.defaultMode(spec.platform);
+  }
+
+  defaultMode(platform: Platform): DeviceMode {
     return this.options.defaultModes[platform] ?? "full";
   }
 
   /**
-   * The session principal a pending request was created under (ADR §4: `ownerId` on
-   * `LeaseRequestOptions`, always the session principal, never the caller-suppliable
-   * `requesterId`). `undefined` when no pending request exists for this requester id --
-   * `cancelPending`'s own `not-found` outcome is what surfaces that, not this lookup, so a
-   * caller cancelling a request that already settled (or never existed) is not authorized on
-   * a manufactured owner. A synchronous read like `queueDepth`, not routed through
-   * `decisions.run`: no state is asserted or mutated, and `#leaseCancel`'s contract-level
-   * `authorize` hook (ADR §2 step 3) runs before the handler, so it cannot go through the
-   * handler's own serialized decision anyway.
+   * Synchronous and not routed through `decisions.run`: `lease.cancel`'s `authorize` hook runs
+   * before the handler, so it cannot go through the handler's serialized decision.
    */
   pendingRequestOwner(requesterId: string): string | undefined {
     return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
@@ -233,37 +239,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         if (replay !== undefined) return { replay };
         const requestId = newLeaseRequestId(this.options.idGenerator);
         if (this.#admissionClosed) {
-          this.options.eventBus.emit(
-            "lease.rejected",
+          emitLeaseRefusal(
+            this.options.eventBus,
             {
               requestId,
               requester: options.requesterId,
               requestSpec: request,
               reason: "killed",
+              fleetRequestId: options.fleetRequestId,
             },
             "lease-acquisition-coordinator",
           );
           throw new NukeCancelledError();
         }
-        const activeLease = this.options.registry.snapshot.leases.find(
-          (lease) => lease.requesterId === options.requesterId,
-        );
-        if (
-          activeLease !== undefined ||
-          this.options.queue.hasPendingRequester(options.requesterId)
-        ) {
-          this.options.eventBus.emit(
-            "lease.rejected",
-            {
-              requestId,
-              requester: options.requesterId,
-              requestSpec: request,
-              reason: "already-leased",
-            },
-            "lease-acquisition-coordinator",
-          );
-          throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
-        }
+        this.#refuseIfRequesterAtLimit(request, options, requestId);
+        this.#refuseIfLeaseIdTaken(request, options, requestId);
         const { id, started: accepted } = await this.options.requests.admit(
           request,
           options,
@@ -277,6 +267,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
             requestSpec: request,
             requester: options.requesterId,
             waitPolicy: options.noWait ? "no-wait" : "wait",
+            ...(options.fleetRequestId === undefined
+              ? {}
+              : { fleetRequestId: options.fleetRequestId }),
           },
           "lease-acquisition-coordinator",
         );
@@ -292,19 +285,84 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return waiter.promise;
   }
 
+  #refuseIfRequesterAtLimit(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const held = this.options.registry.snapshot.leases.filter(
+      (lease) => lease.requesterId === options.requesterId,
+    );
+    const limit = this.options.maxPerRequester ?? 1;
+    const waiting = this.options.queue.hasPendingRequester(options.requesterId);
+    // why: a probe's held leases were counted by the gateway, fleet-wide; only its waiting
+    // request is checked here (ADR 0023 §2).
+    const atLimit = options.fleetRequestId === undefined && held.length >= limit;
+    if (!waiting && !atLimit) return;
+    emitLeaseRefusal(
+      this.options.eventBus,
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "already-leased",
+        fleetRequestId: options.fleetRequestId,
+      },
+      "lease-acquisition-coordinator",
+    );
+    throw new RequesterAlreadyLeasedError(options.requesterId, earliestGranted(held)?.id, {
+      held: held.length,
+      limit,
+      waiting,
+    });
+  }
+
+  /**
+   * ADR 0020: the one clash check on a host, inside the same admission section as the
+   * one-lease-per-requester check and after it. An ID is held by an active lease and by a
+   * request still waiting, so a restart, which fails every waiting request, frees it.
+   */
+  #refuseIfLeaseIdTaken(
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    requestId: string,
+  ): void {
+    const { leaseId } = options;
+    if (leaseId === undefined) return;
+    if (
+      !this.options.registry.snapshot.leases.some((lease) => lease.id === leaseId) &&
+      !this.options.requests.holdsLeaseId(leaseId)
+    ) {
+      return;
+    }
+    emitLeaseRefusal(
+      this.options.eventBus,
+      {
+        requestId,
+        requester: options.requesterId,
+        requestSpec: request,
+        reason: "lease-id-taken",
+        fleetRequestId: options.fleetRequestId,
+      },
+      "lease-acquisition-coordinator",
+    );
+    throw new LeaseIdTakenError(leaseId);
+  }
+
   /** Closes acquisition admission, settles all demand, and drains driver work. */
   async beginMaintenance(): Promise<void> {
     await this.options.decisions.run(async () => {
       this.#maintenanceDepth += 1;
       this.#admissionClosed = true;
       for (const waiter of this.options.queue.cancelAll(() => new NukeCancelledError())) {
-        this.options.eventBus.emit(
-          "lease.rejected",
+        emitLeaseRefusal(
+          this.options.eventBus,
           {
             requestId: waiter.id,
             requester: waiter.options.requesterId,
             requestSpec: waiter.request,
             reason: "killed",
+            fleetRequestId: waiter.options.fleetRequestId,
           },
           "lease-acquisition-coordinator",
         );
@@ -337,22 +395,17 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       });
       return;
     }
+    if (request.physical === true) {
+      await this.#drive(waiter);
+      return;
+    }
     try {
-      // The one place a request with no mode gets the worker's default (ADR 0007 §2).
-      const mode = request.mode ?? this.#defaultMode(request.platform);
-      const range = requestedRange(request);
-      const target =
-        range === undefined
-          ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
-          : await this.#resolveRanged(request, mode, range);
-      // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
-      const resolved = await this.#resolveOrInstall(waiter, driver, target.exact, {
-        ...options,
-        allowDownload: options.allowDownload === true && range === undefined,
-      });
-      waiter.spec = checkedSpec(resolved, request, mode);
-      waiter.requirement = target.requirement ?? exactRequirement(waiter.spec);
-      waiter.classOf = target.classOf;
+      const resolved = await this.#resolveSpec(driver, request, options, (progress) =>
+        this.options.queue.notifyProgress(waiter, progress),
+      );
+      waiter.spec = resolved.spec;
+      waiter.requirement = resolved.requirement;
+      waiter.classOf = resolved.classOf;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -361,6 +414,36 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
+  }
+
+  async #resolveSpec(
+    driver: Driver,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+    onProgress: (progress: DownloadingProgress) => void,
+  ): Promise<{
+    readonly spec: VirtualSpec;
+    readonly requirement: DeviceRequirement;
+    readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
+  }> {
+    // The one place a request with no mode gets the worker's default (ADR 0007 §2).
+    const mode = request.mode ?? this.defaultMode(request.platform);
+    const range = requestedRange(request);
+    const target =
+      range === undefined
+        ? (this.#exactTarget(request, mode) ?? (await this.#resolveClass(request, mode)))
+        : await this.#resolveRanged(request, mode, range);
+    // A range was settled against the catalog above, so it never installs (ADR 0015 §5).
+    const resolved = await this.#resolveOrInstall(onProgress, driver, target.exact, {
+      ...options,
+      allowDownload: options.allowDownload === true && range === undefined,
+    });
+    const spec = checkedSpec(resolved, request, mode);
+    return {
+      classOf: target.classOf,
+      requirement: target.requirement ?? exactRequirement(spec),
+      spec,
+    };
   }
 
   /**
@@ -477,11 +560,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
    * sent once per whole number.
    */
   async #resolveOrInstall(
-    waiter: AcquisitionWaiter,
+    onProgress: (progress: DownloadingProgress) => void,
     driver: Driver,
     request: ExactDeviceRequest,
     options: LeaseRequestOptions,
-  ): Promise<DeviceSpec> {
+  ): Promise<VirtualSpec> {
     try {
       return await driver.resolveSpec(request);
     } catch (error: unknown) {
@@ -501,7 +584,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           const next = downloadingProgress(component, progress);
           if (lastSent !== undefined && sameDownloadingProgress(lastSent, next)) return;
           lastSent = next;
-          this.options.queue.notifyProgress(waiter, next);
+          onProgress(next);
         },
         platform: request.platform,
         requesterId: options.requesterId,
@@ -519,13 +602,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Cancels a single pending request. Reuses the queue timeout's safety envelope exactly:
-   * only a waiter still in `queued` state is safe to reject here. `processing` means device
-   * work already claimed it (provision/boot/evict in flight, possibly never having touched
-   * the FIFO list at all on a first-attempt direct dispatch) -- the same state the timeout
-   * timer leaves untouched -- so this reports `not-cancellable` rather than inventing a new
-   * rule for tearing down in-flight driver work; nuke's `cancelAll` already owns that harder
-   * problem, with its own drain of `#activeWorkflows`.
+   * Only a `queued` waiter is safe to reject: `processing` means device work already claimed it,
+   * which `cancelAll` owns tearing down. A physical waiter's only in-flight step is a presence
+   * read, so it is cancellable in any live state.
    */
   async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.options.decisions.run(async () => {
@@ -533,19 +612,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         | AcquisitionWaiter
         | undefined;
       if (waiter === undefined) return "not-found";
-      if (waiter.state !== "queued") return "not-cancellable";
+      if (waiter.state !== "queued" && waiter.request.physical !== true) return "not-cancellable";
       this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
       return "cancelled";
     });
   }
 
-  /**
-   * The requests that have no device yet, oldest first, whose spec has resolved: those in state
-   * `new` or `queued` are waiting; one in `processing` has device work in flight, a provision, boot
-   * or eviction, and is marked `inFlight`. The warm pool's read port; the wire-shaped
-   * `Leasing#waitingRequests` is a different view and does not change.
-   */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
   waitingDemand(): readonly WaitingDemand[] {
     return (this.options.queue.pending() as readonly AcquisitionWaiter[]).flatMap((waiter) =>
       waiter.spec === undefined
@@ -562,13 +634,35 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     );
   }
 
-  /** Whether an administrative reset holds acquisition closed; the warm pool does nothing meanwhile. */
-  // fallow-ignore-next-line unused-class-member -- reached through the warm pool's acquisition port, which structural typing hides from the analyzer.
+  /**
+   * Resolves a request to the spec it would be granted a device of, with downloads off, or says
+   * why there is none. A read: nothing is queued, reserved or installed. The warm pool resolves
+   * its targets here, so a target and a request become a spec in one place.
+   */
+  async resolve(request: DeviceRequest): Promise<TargetResolution> {
+    let driver: Driver;
+    try {
+      driver = this.options.drivers.get(request.platform);
+    } catch (error: unknown) {
+      return { message: asError(error).message, refusal: "no-driver" };
+    }
+    try {
+      const { spec } = await this.#resolveSpec(
+        driver,
+        request,
+        { allowDownload: false, ownerId: "warm-pool", requesterId: "warm-pool" },
+        () => undefined,
+      );
+      return { spec };
+    } catch (error: unknown) {
+      return { message: asError(error).message, refusal: refusalOf(error) };
+    }
+  }
+
   get maintenanceActive(): boolean {
     return this.#admissionClosed;
   }
 
-  /** Direct availability notification for release, cleanup, and queue-timeout callers. */
   kick(): void {
     this.#wakeQueue();
   }
@@ -577,11 +671,115 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (this.#driving.has(waiter)) return;
     this.#driving.add(waiter);
     try {
+      if (waiter.request.physical === true) {
+        await this.#drivePhysical(waiter);
+        return;
+      }
       const action = await this.options.decisions.run(async () => this.#decide(waiter));
       await this.#perform(waiter, action);
     } finally {
       this.#driving.delete(waiter);
     }
+  }
+
+  async #drivePhysical(waiter: AcquisitionWaiter): Promise<void> {
+    const absent = new Set<string>();
+    for (;;) {
+      const plan = await this.options.decisions.run(async () =>
+        this.#decidePhysical(waiter, absent),
+      );
+      if (plan === undefined) return;
+      if (!(await this.#grantPhysical(waiter, plan, absent))) return;
+    }
+  }
+
+  #decidePhysical(
+    waiter: AcquisitionWaiter,
+    absent: ReadonlySet<string>,
+  ): Extract<AcquisitionPlan, { readonly kind: "grant-physical" }> | undefined {
+    const request = physicalRequestOf(waiter.request);
+    const enrolled = this.options.registry.snapshot.devices;
+    if (
+      !enrolled.some(
+        (device) => device.physical && device.state !== "deleted" && fitsPhysical(device, request),
+      )
+    ) {
+      this.#reject(waiter, new PhysicalUnknownModelError(request), "unresolvable-spec");
+      return undefined;
+    }
+    const plan = this.options.planner.planPhysical({
+      absent,
+      heldByOlder: this.#heldByOlder(waiter),
+      noWait: waiter.options.noWait ?? false,
+      owner: waiter.id,
+      request,
+      snapshot: this.options.registry.snapshot,
+    });
+    if (plan.kind !== "grant-physical") {
+      this.#defer(waiter);
+      return undefined;
+    }
+    if (!this.options.queue.markProcessing(waiter)) {
+      plan.claim.release();
+      return undefined;
+    }
+    return plan;
+  }
+
+  #heldByOlder(waiter: AcquisitionWaiter): PhysicalPlanInput["heldByOlder"] {
+    const older: PhysicalRequest[] = [];
+    for (const other of this.options.queue.pending()) {
+      if (other === waiter) break;
+      if (lineOf(other.request) === "physical" && other.state === "queued") {
+        older.push(physicalRequestOf(other.request));
+      }
+    }
+    return (device: PhysicalDevice) => older.some((request) => fitsPhysical(device, request));
+  }
+
+  async #grantPhysical(
+    waiter: AcquisitionWaiter,
+    plan: Extract<AcquisitionPlan, { readonly kind: "grant-physical" }>,
+    absent: Set<string>,
+  ): Promise<boolean> {
+    const { claim, device } = plan;
+    let present = false;
+    try {
+      const reads = await readPhysicalPresence(this.options.drivers.get(device.spec.platform), [
+        device.driverDeviceId,
+      ]);
+      present = reads.get(device.driverDeviceId) === true;
+    } catch (error: unknown) {
+      this.#logFailure(
+        "reading a physical device's presence failed",
+        waiter,
+        device,
+        "presence",
+        error,
+      );
+    }
+    let replan = false;
+    await this.options.decisions.run(async () => {
+      try {
+        if (!this.options.queue.markProcessing(waiter)) return;
+        const current = this.options.registry.snapshot.devices.find(
+          (candidate) => candidate.id === device.id,
+        );
+        if (!present || !this.options.claims.isActive(claim) || current?.state !== "ready") {
+          absent.add(device.id);
+          replan = true;
+          return;
+        }
+        await this.#grant(waiter, current, plan.kind);
+      } catch (error: unknown) {
+        this.#logFailure("granting a physical device failed", waiter, device, "grant", error);
+        this.#defer(waiter);
+      } finally {
+        claim.release();
+      }
+    });
+    if (!replan) this.#wakeQueue();
+    return replan;
   }
 
   async #perform(waiter: AcquisitionWaiter, action: OperationPlan | undefined): Promise<void> {
@@ -620,6 +818,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     let handoff: ReadyDeviceHandoff;
     try {
       handoff = await this.options.provisioner.provision(spec, {
+        claim: { kind: "boot", owner: waiter.id },
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -646,6 +845,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         if (waiter.failures === 1) {
           this.options.queue.markNew(waiter);
           return true;
+        }
+        // ADR 0021 §1: a probe is never queued on a worker. It is declined instead, and its
+        // caller (the gateway) walks on to another worker.
+        if (waiter.options.fleetRequestId !== undefined) {
+          this.#reject(waiter, new NoCapacityError(), "no-wait");
+          return false;
         }
         this.#enqueue(waiter);
         return false;
@@ -693,6 +898,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.planner.plan({
       failures: waiter.failures,
       noWait: waiter.options.noWait ?? false,
+      owner: waiter.id,
       snapshot: this.options.registry.snapshot,
       spec: waiter.spec,
       requirement: waiter.requirement,
@@ -700,12 +906,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
-  /**
-   * Hands the waiter the grant `LeaseLifecycle.grant` returns, which is why the lease
-   * environment is read here: every acquisition path -- ready device, fresh provision, boot,
-   * eviction -- funnels through it. The grant is built in `LeaseLifecycle.grant` from the same
-   * fields `Registry.createLease` stores for a repeat of the request, so the two must stay equal.
-   */
   async #grant(
     waiter: AcquisitionWaiter,
     device: DeviceRecord,
@@ -714,20 +914,26 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     // Built before the write: the grant a repeat of this request answers is stored with the lease.
     const granted = await this.options.leases.grant({
       deviceId: device.id,
-      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
+      environment: this.options.drivers
+        .get(device.spec.platform)
+        .leaseEnvironment(toDriverDevice(device)),
       ownerId: waiter.options.ownerId,
       requestId: waiter.id,
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
       timing: waiter.timing,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
+      ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
+      ...(waiter.options.fleetRequestId === undefined
+        ? {}
+        : { fleetRequestId: waiter.options.fleetRequestId }),
     });
     this.options.queue.resolve(waiter, granted);
   }
 
   async #evictRunning(
     waiter: AcquisitionWaiter,
-    device: DeviceRecord,
+    device: VirtualDevice,
     claim: DeviceOperationClaim,
   ): Promise<void> {
     try {
@@ -758,7 +964,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   async #evictManaged(
     waiter: AcquisitionWaiter,
-    device: DeviceRecord,
+    device: VirtualDevice,
     claim: DeviceOperationClaim,
   ): Promise<void> {
     try {
@@ -811,7 +1017,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   async #bootShutdown(
     waiter: AcquisitionWaiter,
-    device: DeviceRecord,
+    device: VirtualDevice,
     capacityReservation: CapacityReservation,
     claim: DeviceOperationClaim,
   ): Promise<void> {
@@ -835,8 +1041,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       let destroyed = true;
       try {
-        destroyed =
-          (await this.options.lifecycle.destroy(device, "lease-engine", "boot")) !== undefined;
+        // `undefined` means the device is no longer this waiter's (another boot claimed it, or it
+        // was deleted or leased), so its reservation is free to go. Only a throw keeps it.
+        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
       } catch (destroyError: unknown) {
         this.#logFailure(
           "destroying a device that failed to boot failed",
@@ -850,12 +1057,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.options.decisions.run(async () => {
         if (destroyed) capacityReservation.release();
         else if (!this.options.claims.isClaimed(device.id))
-          this.options.claims.tryClaim(device.id, "boot");
+          this.options.claims.tryClaim(device.id, "boot", waiter.id);
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
-      if (destroyed) this.#wakeQueue();
+      this.#wakeQueue();
       return;
     }
     await this.#grantHandoff(waiter, handoff, "boot-shutdown", capacityReservation);
@@ -922,7 +1129,13 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (this.options.queue.enqueue(waiter) && !alreadyQueued) {
       this.options.eventBus.emit(
         "lease.queued",
-        { queuePosition: this.options.queue.depth, requestId: waiter.id },
+        {
+          queuePosition:
+            lineOf(waiter.request) === "physical"
+              ? this.options.queue.physicalDepth
+              : this.options.queue.depth,
+          requestId: waiter.id,
+        },
         "lease-acquisition-coordinator",
       );
     }
@@ -941,13 +1154,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       | "cancelled",
   ): void {
     if (this.options.queue.reject(waiter, error)) {
-      this.options.eventBus.emit(
-        "lease.rejected",
+      emitLeaseRefusal(
+        this.options.eventBus,
         {
           requestId: waiter.id,
           requester: waiter.options.requesterId,
           requestSpec: waiter.request,
           reason,
+          fleetRequestId: waiter.options.fleetRequestId,
         },
         "lease-acquisition-coordinator",
       );
@@ -958,6 +1172,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     void this.options.decisions.run(async () => {
       const next = this.options.queue.head as AcquisitionWaiter | undefined;
       if (next !== undefined && next.state === "queued") this.#track(this.#drive(next));
+      for (const waiter of this.options.queue.pending() as readonly AcquisitionWaiter[]) {
+        if (lineOf(waiter.request) === "physical") {
+          this.#track(this.#drive(waiter));
+        }
+      }
     });
   }
 
@@ -1012,24 +1231,30 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   };
 }
 
-/**
- * What this device's reclaim will cost once the lease is released -- the one part of a
- * grant's timing that describes work still ahead of the holder rather than work already
- * done. `standard` because that is what every release path asks for (`ReclaimCoordinator
- * #reclaim`, `QuarantineCoordinator`); a holder cannot request a different clean level.
- */
+/** `standard`: every release path asks for it; a holder cannot request another clean level. */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
   return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
 }
 
 function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
-  return plan.kind === "grant-ready" || plan.kind === "wait" || plan.kind === "no-capacity"
+  return plan.kind === "grant-ready" ||
+    plan.kind === "grant-physical" ||
+    plan.kind === "wait" ||
+    plan.kind === "no-capacity"
     ? undefined
     : plan;
 }
 
-/** The spec without a planned mode: the full spec of the same model and runtime. */
-function fullSpec(spec: DeviceSpec): DeviceSpec {
+function physicalRequestOf(request: DeviceRequest): PhysicalRequest {
+  return {
+    platform: request.platform,
+    ...(request.model === undefined ? {} : { model: request.model }),
+    ...(request.class === undefined ? {} : { class: request.class }),
+    ...(request.osVersion === undefined ? {} : { osVersion: request.osVersion }),
+  };
+}
+
+function fullSpec(spec: VirtualSpec): VirtualSpec {
   if (spec.mode === undefined) return spec;
   const { mode: _mode, ...full } = spec;
   return full;
@@ -1037,11 +1262,6 @@ function fullSpec(spec: DeviceSpec): DeviceSpec {
 
 type DownloadingProgress = Extract<LeaseProgress, { readonly stage: "downloading" }>;
 
-/**
- * The installer's report in the requester's words. `waiting` is a request still behind another
- * install; `downloading` is its own install running, with the installer's percentage (already
- * within 0..100) rounded down to a whole number.
- */
 function downloadingProgress(
   component: string,
   progress: ComponentInstallerProgress,
@@ -1065,7 +1285,7 @@ function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingPr
  * accepted only for a slim request, so a driver that returns the wrong thing still cannot put a
  * full request on a slim device.
  */
-function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceMode): DeviceSpec {
+function checkedSpec(resolved: VirtualSpec, request: DeviceRequest, mode: DeviceMode): VirtualSpec {
   if (resolved.imageTag !== request.imageTag) {
     throw new Error(
       `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
@@ -1073,6 +1293,13 @@ function checkedSpec(resolved: DeviceSpec, request: DeviceRequest, mode: DeviceM
     );
   }
   return mode === "slim" ? resolved : fullSpec(resolved);
+}
+
+/** What a target's refusal is called: the kinds a pool can act on, and any other as is. */
+function refusalOf(error: unknown): Exclude<TargetResolution, { spec: VirtualSpec }>["refusal"] {
+  if (error instanceof RuntimeMissingError) return "runtime-missing";
+  if (error instanceof UnknownModelError) return "unknown-model";
+  return "unresolvable";
 }
 
 /** What `#resolveClass` settles on; an exact request has only `exact`. */
@@ -1132,4 +1359,14 @@ function requestedRange(request: DeviceRequest): OsRange | undefined {
   if (request.osVersion === undefined) return undefined;
   const parsed = parseOsConstraint(request.osVersion);
   return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
+}
+
+function earliestGranted<Lease extends { readonly grantedAt: number }>(
+  leases: readonly Lease[],
+): Lease | undefined {
+  let earliest: Lease | undefined;
+  for (const lease of leases) {
+    if (earliest === undefined || lease.grantedAt < earliest.grantedAt) earliest = lease;
+  }
+  return earliest;
 }

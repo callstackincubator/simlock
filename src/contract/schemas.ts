@@ -22,10 +22,6 @@ import { z } from "zod";
 export const platformSchema = z.enum(["ios", "android"]);
 export type Platform = z.infer<typeof platformSchema>;
 
-/**
- * ADR 0015 §3: the kind of device a model is. The contract and the core name the classes; which
- * product family or tag of a platform's tools is which class lives in that platform's driver.
- */
 export const deviceClassSchema = z.enum([
   "phone",
   "tablet",
@@ -43,14 +39,61 @@ const deviceStateSchema = z.enum([
   "leased",
   "reclaiming",
   "quarantined",
+  "absent",
   "shutdown",
   "deleted",
 ]);
 
-/** The mode a device actually has (ADR 0007 §9) -- the same two words on every surface. */
+const absentReasonSchema = z.enum(["locked", "untrusted", "not-present"]);
+
+const devicePresenceSchema = z.discriminatedUnion("present", [
+  z.object({ present: z.literal(true) }),
+  z.object({ present: z.literal(false), reason: absentReasonSchema }),
+]);
+
 const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
+
+const physicalClassSchema = z.enum(["phone", "tablet"]);
+
+function checkDeviceType(
+  device: { readonly physical: boolean; readonly mode?: unknown; readonly class?: unknown },
+  context: z.RefinementCtx,
+  requireClass: boolean,
+): void {
+  if (device.physical) {
+    if (device.mode !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A physical device has no mode",
+        path: ["mode"],
+      });
+    }
+    if (requireClass && device.class === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A physical device has a class",
+        path: ["class"],
+      });
+    }
+    return;
+  }
+  if (device.mode === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A virtual device has a mode",
+      path: ["mode"],
+    });
+  }
+  if (device.class !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A virtual device has no class",
+      path: ["class"],
+    });
+  }
+}
 
 /** The longest image tag a lease request may name. */
 const IMAGE_TAG_MAX = 64;
@@ -70,146 +113,100 @@ export const imageTagSchema = z
  * device's `mode` is the one mode a response reports. `imageTag` is shown on a device whose
  * request named one. */
 const deviceSpecSchema = z.object({
+  /** `true` for an enrolled physical device, `false` for a simulator or emulator. */
+  physical: z.boolean(),
   platform: platformSchema,
   model: z.string(),
   osVersion: z.string(),
   imageTag: imageTagSchema.optional(),
 });
 
-/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
- * decoration's derived `transitionAgeMs` (see `DaemonServer#decorateDevice`). */
-export const deviceRecordSchema = z.object({
-  id: z.string(),
-  driverDeviceId: z.string(),
-  spec: deviceSpecSchema,
-  state: deviceStateSchema,
-  driverData: z.unknown(),
-  createdAt: z.number(),
-  lastLeaseEndedAt: z.number().optional(),
-  foreignStateDetectedAt: z.number().optional(),
-  foreignProvenanceDetectedAt: z.number().optional(),
-  recoveringSince: z.number().optional(),
-  recoveryAttempts: z.number().optional(),
-  quarantinedAt: z.number().optional(),
-  quarantineAttempts: z.number().optional(),
-  quarantineNextRetryAt: z.number().optional(),
-  address: z.string().optional(),
-  mode: deviceModeSchema,
-  leaseIdentity: leaseIdentitySchema.optional(),
-  /** Decoration added by `status.get`/`list.get`; absent for a device not mid-transition. */
-  transitionAgeMs: z.number().optional(),
-  /** Decoration added by `status.get`/`list.get`: `true` for a device whose transition is a
-   * stall by the rule `doctor` reports; absent otherwise. */
-  stalled: z.boolean().optional(),
-  /** Decoration added by `status.get`/`list.get` (ADR 0009 §6): whether the device's pool mode is
-   * the worker's default mode for its platform. Absent on a record the registry holds. */
-  servesDefaultMode: z.boolean().optional(),
-});
+export const deviceRecordSchema = z
+  .object({
+    id: z.string(),
+    driverDeviceId: z.string(),
+    spec: deviceSpecSchema,
+    state: deviceStateSchema,
+    driverData: z.unknown(),
+    createdAt: z.number(),
+    lastLeaseEndedAt: z.number().optional(),
+    foreignStateDetectedAt: z.number().optional(),
+    foreignProvenanceDetectedAt: z.number().optional(),
+    recoveringSince: z.number().optional(),
+    recoveryAttempts: z.number().optional(),
+    quarantinedAt: z.number().optional(),
+    quarantineAttempts: z.number().optional(),
+    quarantineNextRetryAt: z.number().optional(),
+    address: z.string().optional(),
+    absentReason: absentReasonSchema.optional(),
+    physical: z.boolean(),
+    /** Present exactly when `physical` is `false`. */
+    mode: deviceModeSchema.optional(),
+    class: physicalClassSchema.optional(),
+    leaseIdentity: leaseIdentitySchema.optional(),
+    transitionAgeMs: z.number().optional(),
+    stalled: z.boolean().optional(),
+    servesDefaultMode: z.boolean().optional(),
+    presence: devicePresenceSchema.optional(),
+  })
+  .superRefine((device, context) => checkDeviceType(device, context, true));
 
 /**
- * The device shape `status.get` returns (ADR §3: `status.get` is `role: "agent"`, with no
- * ownership check -- it reports on every device in the registry, not just ones the caller
- * leases). Deliberately narrower than `deviceRecordSchema`, for the same reason
- * `grantedDeviceSchema` is narrower than it: an agent is not an operator inspecting the
- * registry, and `deviceRecordSchema`'s `driverData` is an opaque, driver-defined blob whose
- * contents this contract cannot bound -- handing it to every agent for every device
- * (including devices other principals hold) is exactly the leak this schema exists to close.
- *
- * What stays, and why: `status.get` is what `simlock status` renders for a human (ADR §11,
- * "Human-readable status ... formatting stays"), and that rendering legitimately surfaces
- * device health, not just identity --
- *
- * - `id`, `spec`: which device this is.
- * - `state`: the human-status line's primary content (`Device <id>: <state>`).
- * - `foreignStateDetectedAt`, `foreignProvenanceDetectedAt`: surfaced as "foreign state/
- *   provenance change" markers -- an agent legitimately wants to know a device it might be
- *   about to request was tampered with outside simlock.
- * - `quarantineAttempts`, `quarantineNextRetryAt`: surfaced as purge-retry progress for a
- *   quarantined device, so a caller waiting on capacity can see why a slot isn't freeing up.
- * - `transitionAgeMs`: the mid-transition decoration, surfaced as "mid-transition <ms>".
- * - `stalled`: the stall decoration, surfaced as "stalled": a caller waiting on capacity can see
- *   that a slot is held by a transition that is not finishing.
- *
- * What stays off, and why: `driverDeviceId` (the driver address of a device the caller does
- * not hold is not actionable -- a non-owning agent cannot drive it, and a holder already gets
- * it on their grant), `driverData` (opaque driver-private blob, unbounded contents),
- * `createdAt`/`lastLeaseEndedAt` (internal bookkeeping timestamps the human formatter never
- * reads), `recoveringSince`/`recoveryAttempts` (crash-recovery bookkeeping -- `safety.md` rule
- * 2 scopes that privilege narrowly, and broadcasting its progress to every agent is not part of
- * that scope), `quarantinedAt` (superseded by `quarantineAttempts`/`quarantineNextRetryAt` for
- * what a caller needs), and `address` (only meaningful to whoever is driving the device, i.e.
- * the lease holder, who gets it on the grant). `mode` stays: which kind of device it is matters
- * to anyone reading the fleet.
+ * `driverDeviceId` is here only for a physical device: its canonical ID is how an operator names
+ * it to `device remove`, so every role may see it; a virtual device's driver address is not
+ * actionable for a caller that does not hold it, so it is dropped.
  */
-export const statusDeviceSchema = z.object({
-  id: z.string(),
-  spec: deviceSpecSchema,
-  state: deviceStateSchema,
-  /** The device mode (see `DeviceRecord.mode`) -- not the daemon's own `worker`/`gateway` mode. */
-  mode: deviceModeSchema,
-  /**
-   * ADR 0009 §6: whether the device's pool mode (its spec's mode, full when it names none) is the
-   * worker's default mode for the device's platform -- the pool a request naming no mode draws
-   * from. The gateway reads it to tell a warm hit for such a request. Not `mode`: `mode` is what
-   * the device actually is, this is what a request with no mode would get.
-   */
-  servesDefaultMode: z.boolean(),
-  foreignStateDetectedAt: z.number().optional(),
-  foreignProvenanceDetectedAt: z.number().optional(),
-  quarantineAttempts: z.number().optional(),
-  quarantineNextRetryAt: z.number().optional(),
-  /** Decoration added by `status.get`; absent for a device not mid-transition. */
-  transitionAgeMs: z.number().optional(),
-  /**
-   * Decoration added by `status.get`: `true` for a device stuck `provisioning` or `reclaiming`
-   * past its threshold, by the rule `doctor`'s `stalled-transition` finding uses; absent for
-   * every other device. A worker view copies it, so a gateway reports a worker's stall as the
-   * worker does.
-   */
-  stalled: z.boolean().optional(),
-  /**
-   * ADR 0005 §20: which worker this device lives on. Additive and gateway-only -- a worker
-   * answers `status.get` about its own devices and has no second machine to name, so it never
-   * sets this; a gateway sets it on every device in the aggregate, because "device dev_7" is
-   * ambiguous across a fleet in a way it never is on one host.
-   */
-  workerId: z.string().optional(),
-});
+export const statusDeviceSchema = z
+  .object({
+    id: z.string(),
+    spec: deviceSpecSchema,
+    state: deviceStateSchema,
+    physical: z.boolean(),
+    mode: deviceModeSchema.optional(),
+    class: physicalClassSchema.optional(),
+    driverDeviceId: z.string().optional(),
+    servesDefaultMode: z.boolean(),
+    foreignStateDetectedAt: z.number().optional(),
+    foreignProvenanceDetectedAt: z.number().optional(),
+    quarantineAttempts: z.number().optional(),
+    quarantineNextRetryAt: z.number().optional(),
+    absentReason: absentReasonSchema.optional(),
+    transitionAgeMs: z.number().optional(),
+    stalled: z.boolean().optional(),
+    presence: devicePresenceSchema.optional(),
+    workerId: z.string().optional(),
+  })
+  .superRefine((device, context) => checkDeviceType(device, context, true))
+  // `list.get` records carry a virtual device's driver address, and a worker view parses them
+  // through this schema: it drops the address of a device whose canonical ID is not shown.
+  .transform((device): typeof device => {
+    if (device.physical || device.driverDeviceId === undefined) return device;
+    const { driverDeviceId: _address, ...rest } = device;
+    return rest;
+  });
 
-/**
- * The device a `lease.request`/`lease.renew` grant carries -- deliberately narrower than
- * `deviceRecordSchema` (ADR 0003 §1: "the daemon maps [core records] onto contract types in
- * exactly one place"). A grant is agent-facing, not an admin inspection of the registry, so it
- * carries only what a caller needs to drive the device it was just handed:
- *
- * - `id`: the lease-facing device identity (what `lease.list`/`lease.renew` correlate against).
- * - `driverDeviceId`: the driver address a caller actually drives (simctl UDID / adb serial).
- * - `spec`, `address`, `mode`: same meanings as on `DeviceRecord` (src/core/domain.ts).
- *
- * Everything else on `DeviceRecord` -- `driverData` (opaque driver-private blob), `state`,
- * `createdAt`, every `quarantine*`/`foreign*`/`recovering*` field, and the `status`/`list`
- * decoration's `transitionAgeMs` -- is internal reclamation/health bookkeeping a grant recipient
- * has no business seeing, and stays off this shape. `list.get` (admin-only) still returns the
- * full `deviceRecordSchema` -- an operator inspecting the registry legitimately wants the whole
- * record. `status.get` (agent-role, ADR §3) is narrower still -- see `statusDeviceSchema` below,
- * which is what it actually returns.
- */
-export const grantedDeviceSchema = z.object({
-  id: z.string(),
-  driverDeviceId: z.string(),
-  spec: deviceSpecSchema,
-  /**
-   * The driver-reported address (see `DriverDevice.address`), current as of this device's
-   * last `ready` transition. Undefined for a device still `provisioning` (never made ready
-   * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
-   * from before this field existed loads without one rather than failing to start. It becomes
-   * defined the next time the device is made ready (`bootForLease`/`readyProvisionedForLease`);
-   * nothing here ever guesses at a value it wasn't told.
-   */
-  address: z.string().optional(),
-  /** The mode the device actually has (see `DeviceRecord.mode`). */
-  mode: deviceModeSchema,
-});
+export const grantedDeviceSchema = z
+  .object({
+    id: z.string(),
+    driverDeviceId: z.string(),
+    spec: deviceSpecSchema,
+    /**
+     * The driver-reported address (see `DriverDevice.address`), current as of this device's
+     * last `ready` transition. Undefined for a device still `provisioning` (never made ready
+     * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
+     * from before this field existed loads without one rather than failing to start. It becomes
+     * defined the next time the device is made ready (`bootForLease`/`readyProvisionedForLease`);
+     * nothing here ever guesses at a value it wasn't told.
+     */
+    address: z.string().optional(),
+    /** Always present: see `checkDeviceType`. */
+    physical: z.boolean(),
+    /** The mode the device actually has (see `DeviceRecord.mode`); absent exactly when `physical`. */
+    mode: deviceModeSchema.optional(),
+    /** Carried by a physical device, but a grant does not require it (see `checkDeviceType`). */
+    class: physicalClassSchema.optional(),
+  })
+  .superRefine((device, context) => checkDeviceType(device, context, false));
 
 /**
  * Mirrors `LeaseRecord` (src/core/domain.ts) field for field -- there is no decoration on top
@@ -234,6 +231,11 @@ export const leaseRecordSchema = z.object({
   ttlMs: z.number(),
   ttlDeadline: z.number(),
   lastRenewedAt: z.number(),
+  /**
+   * ADR 0020: whether the requester chose `id` (`lease.request`'s `leaseId`) rather than simlock
+   * generating it. A gateway rebuilding its routing table reads it to name such a lease bare.
+   */
+  idChosenByRequester: z.boolean(),
   /**
    * ADR 0005 §18: "the lease object gains `worker: { id, label }` (additive) so a client and
    * the console can tell where the device lives. A worker's network address is never exposed."
@@ -273,22 +275,17 @@ export const leaseGrantSchema = z.object({
   timing: leaseTimingSchema,
 });
 
-/** The device a lease request named, with every field it left out left out. */
 const requestedDeviceSchema = z.object({
   platform: platformSchema,
-  /** Present only when the request named a model; one that named a class or nothing has none. */
   model: z.string().optional(),
   class: deviceClassSchema.optional(),
   osVersion: z.string().optional(),
   mode: deviceModeSchema.optional(),
   imageTag: imageTagSchema.optional(),
+  physical: z.literal(true).optional(),
 });
 
-/**
- * One stored lease request (`LeaseRequestRecord`, src/core/domain.ts): the shape a frontend reads
- * a request back in, whichever frontend sent it. `grant` is the grant the request was answered
- * with, stored as granted -- a later renew does not move its `ttlDeadline`.
- */
+/** `grant` is stored as granted -- a later renew does not move its `ttlDeadline`. */
 export const leaseRequestRecordSchema = z.object({
   id: z.string(),
   requesterId: z.string(),
@@ -382,6 +379,46 @@ export const statusCapacitySchema = z.object({
     .optional(),
 });
 
+/** Bounds on the warm pool block: a gateway parses it off the wire from every worker. */
+/** The most targets the block carries, and the longest model or OS version it names. The config load enforces the same. */
+export const WARM_POOL_TARGETS_MAX = 256;
+export const WARM_POOL_NAME_MAX = 256;
+
+/** Why a warm target is short, in the order the first that applies is the one reported. */
+const warmPoolShortSchema = z.enum([
+  "disabled",
+  "no-driver",
+  "runtime-missing",
+  "unknown-model",
+  "unresolvable",
+  "boot-failed",
+  "device-limit",
+  "running-limit",
+  "reserve",
+  "ram-budget",
+]);
+
+const warmPoolTargetSchema = z.object({
+  platform: platformSchema,
+  model: z.string().max(WARM_POOL_NAME_MAX),
+  osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
+  mode: z.enum(["slim", "full"]),
+  count: z.number().int().nonnegative(),
+  ready: z.number().int().nonnegative(),
+  booting: z.number().int().nonnegative(),
+  short: warmPoolShortSchema.optional(),
+});
+
+/** The warm pool as `status.get` and a worker's view report it. */
+export const statusWarmPoolSchema = z.object({
+  enabled: z.boolean(),
+  reserveRunning: z.object({
+    ios: z.number().int().nonnegative(),
+    android: z.number().int().nonnegative(),
+  }),
+  targets: z.array(warmPoolTargetSchema).max(WARM_POOL_TARGETS_MAX),
+});
+
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
 
 /**
@@ -467,6 +504,60 @@ export function fitHostFacts<Host extends HostFactsShape>(host: Host): Host {
     osVersion: fit(host.osVersion),
     tools: host.tools.filter((entry) => tool.safeParse(entry).success).slice(0, MAX_HOST_TOOLS),
   };
+}
+
+const MAX_LOAD_AGE_MS = 86_400_000;
+const loadNumber = z.number().finite().nonnegative();
+const loadCpuSchema = z.object({
+  busyPercent: loadNumber.max(100),
+  cores: loadNumber.positive(),
+  limited: z.boolean(),
+});
+const loadMemorySchema = z.object({
+  totalBytes: loadNumber,
+  availableBytes: loadNumber,
+  swapUsedBytes: loadNumber,
+  pressure: z.enum(["normal", "warn", "critical"]).optional(),
+  limited: z.boolean(),
+});
+const loadDiskSchema = z.object({ freeBytes: loadNumber, totalBytes: loadNumber });
+
+export const hostLoadSchema = z.object({
+  ageMs: z.number().int().min(0).max(MAX_LOAD_AGE_MS),
+  cpu: loadCpuSchema.optional(),
+  memory: loadMemorySchema.optional(),
+  disk: loadDiskSchema.optional(),
+});
+
+// why: a view stores when the load was read (`readAt`, the viewer's clock), not its age, so the age stays right as the view sits.
+const workerLoadSchema = z.object({
+  readAt: z.number().int().min(0),
+  cpu: loadCpuSchema.optional(),
+  memory: loadMemorySchema.optional(),
+  disk: loadDiskSchema.optional(),
+});
+
+/** ADR 0029 §4: what `status.get` carries about the machine's load, as old as its last read. */
+export type StatusLoad = z.infer<typeof hostLoadSchema>;
+
+/**
+ * Brings a reading within `hostLoadSchema`'s bounds, so an odd figure cannot fail the daemon's own
+ * `status.get` output check (ADR 0029 §4): `ageMs` is capped at one day and a part whose figures
+ * break the schema is left out, as one that could not be read.
+ */
+export function fitHostLoad<Load extends StatusLoad>(load: Load | undefined): Load | undefined {
+  if (load === undefined) return undefined;
+  const { cpu, memory, disk, ...rest } = load;
+  const ageMs = Number.isFinite(load.ageMs)
+    ? Math.min(MAX_LOAD_AGE_MS, Math.max(0, Math.round(load.ageMs)))
+    : MAX_LOAD_AGE_MS;
+  return {
+    ...rest,
+    ageMs,
+    ...(cpu !== undefined && loadCpuSchema.safeParse(cpu).success && { cpu }),
+    ...(memory !== undefined && loadMemorySchema.safeParse(memory).success && { memory }),
+    ...(disk !== undefined && loadDiskSchema.safeParse(disk).success && { disk }),
+  } as Load;
 }
 
 export const platformCatalogSchema = z.object({
@@ -591,7 +682,9 @@ const driverDeviceSchema = z.object({
   mode: deviceModeSchema.optional(),
 });
 
-/** Mirrors the `DoctorFinding` discriminated union (src/core/doctor.ts) field for field. */
+export const capabilityNameSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+
+// why: mirrors the `DoctorFinding` union (src/core/doctor.ts) field for field, so a new member lands in both.
 const doctorFindingSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("registry-device-missing"),
@@ -641,6 +734,20 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("prerequisite-missing"),
     platform: platformSchema,
     prerequisite: z.string(),
+    message: z.string(),
+    remedy: z.string(),
+  }),
+  z.object({
+    kind: z.literal("warm-pool-target-unreachable"),
+    platform: platformSchema.optional(),
+    target: z.string(),
+    reason: z.enum(["runtime-missing", "unknown-model", "over-limit"]),
+    message: z.string(),
+    remedy: z.string(),
+  }),
+  z.object({
+    kind: z.literal("module-unavailable"),
+    module: capabilityNameSchema,
     message: z.string(),
     remedy: z.string(),
   }),
@@ -733,6 +840,10 @@ export const configSchema = z.object({
    * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
    * agent-role answer to the same question. */
   mode: z.enum(["worker", "gateway"]),
+  capabilities: z.record(
+    capabilityNameSchema,
+    z.object({ enabled: z.boolean() }).catchall(z.unknown()),
+  ),
   capacity: capacityConfigSchema,
   downloads: z.object({
     policy: z.enum(["never", "on-request", "always"]),
@@ -745,6 +856,17 @@ export const configSchema = z.object({
   }),
   warmPool: z.object({
     enabled: z.boolean(),
+    reserveRunning: z.object({ ios: z.number(), android: z.number() }),
+    maxConcurrentBoots: z.number(),
+    targets: z.array(
+      z.object({
+        platform: z.enum(["ios", "android"]),
+        model: z.string(),
+        osVersion: z.string().optional(),
+        mode: z.enum(["slim", "full"]).optional(),
+        count: z.number(),
+      }),
+    ),
     quarantine: z.object({
       maxRetries: z.number(),
       retryBackoffMs: z.number(),
@@ -761,6 +883,8 @@ export const configSchema = z.object({
     }),
     requestRetentionMs: z.number(),
     maxRequestRecords: z.number(),
+    maxPerRequester: z.number(),
+    endWaitMs: z.number(),
   }),
   exec: z.object({ timeoutMs: z.number() }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),
@@ -929,6 +1053,38 @@ export const statusInstallsSchema = boundedInstalls(
  */
 export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
 
+// why: \p{Cc} is exactly U+0000-U+001F and U+007F-U+009F, the spec's control characters.
+const CONTROL_CHARACTERS = /[\p{Cc}\u2028\u2029]/gu;
+const CAPABILITY_REASON_MAX = 500;
+
+export const capabilitySchema = z
+  .object({
+    name: capabilityNameSchema,
+    state: z.enum(["available", "unavailable", "off"]),
+    reason: z
+      .string()
+      .min(1)
+      .max(CAPABILITY_REASON_MAX)
+      .refine((text) => !/[\p{Cc}\u2028\u2029]/u.test(text))
+      .optional(),
+  })
+  .refine((entry) => (entry.state === "unavailable") === (entry.reason !== undefined));
+
+/** The most capabilities one daemon reports. */
+export const MAX_CAPABILITIES = 16;
+
+export const capabilityListSchema = z
+  .array(capabilitySchema)
+  .max(MAX_CAPABILITIES)
+  .refine((list) => new Set(list.map((entry) => entry.name)).size === list.length);
+
+export function capabilityReason(text: string): string {
+  let cut = text.replace(CONTROL_CHARACTERS, " ").trim().slice(0, CAPABILITY_REASON_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return cut === "" ? "unknown" : cut;
+}
+
 /**
  * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).
  * Rebuilt over the uplink, never persisted: a gateway restart re-derives every field from the
@@ -939,12 +1095,19 @@ export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
  * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
  * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
  * different facts, and a console that dims one must not read the other as a full machine.
+ * The same holds for a worker whose health is `starting`: it answers `status.get` with `daemon`
+ * and `host` only, so its view has `health` and `host` and none of `capabilities`,
+ * `capacity`, `catalog`, `catalogReadAt`, `devices`, `installs`, `leases`, `physicalQueueDepth`,
+ * `queueDepth`, `waiting` or `warmPool` -- never empty ones, which would
+ * read as "nothing is leased" about a registry nobody has checked yet.
  *
  * A worker answers `worker.list` with one of these about itself (ADR 0012 §1): `connected`,
  * never drained, `lastSeenAt` the time of the call, and every reported field filled from its
  * own reads by `workerViewFields` (`worker-view.ts`), the same builder a gateway uses.
  */
 export const workerViewSchema = z.object({
+  capabilities: capabilityListSchema.optional(),
+  load: workerLoadSchema.optional(),
   /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
    * restarts, unique by construction, opaque to clients. Never a host name or an address. */
   id: z.string(),
@@ -965,6 +1128,8 @@ export const workerViewSchema = z.object({
     .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
     .optional(),
   capacity: statusCapacitySchema.optional(),
+  /** The worker's warm pool as its last `status.get` read it; absent until one was read. */
+  warmPool: statusWarmPoolSchema.optional(),
   /**
    * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
    * connects. Display only: routing counts installed runtimes and never reads it, and the
@@ -975,54 +1140,24 @@ export const workerViewSchema = z.object({
   downloads: z
     .object({
       policy: z.enum(["never", "on-request", "always"]),
-      /** The worker's own `downloads.timeoutMs`, read with the policy (ADR 0010 §7). Optional
-       * so a gateway on an older build still parses a view. */
+      /** Optional so a gateway on an older build still parses a view. */
       timeoutMs: z.number().optional(),
     })
     .optional(),
-  /**
-   * The worker's own `lease.maxTtlMs`, read once with `config.get` when the uplink connects
-   * (and again on the periodic backstop tick, alongside the catalog and `downloads.policy`
-   * above -- see `WorkerLink#rebuildView`). ADR 0005 §15: a fleet lease's width is decided at
-   * the gateway's own `lease.maxTtlMs`, but what the gateway dispatches is an ordinary
-   * `lease.request`, so a worker whose own cap is lower still refuses a request the gateway
-   * already accepted -- this field is what lets the gateway notice that at the worker, rather
-   * than only in the operator's documentation. Absent for a worker whose `config.get` the
-   * gateway could not read (an incompatible worker, a call that failed, or one older than this
-   * field).
-   */
+  /** A worker whose own cap is lower still refuses a request the gateway accepted; this lets the gateway notice. */
   lease: z.object({ maxTtlMs: z.number() }).optional(),
-  /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
-   * is reported separately by `status.get` and arrives with #118. */
   queueDepth: z.number().optional(),
-  leases: z.array(leaseRecordSchema),
-  devices: z.array(statusDeviceSchema),
-  catalog: z.array(platformCatalogSchema),
-  /**
-   * ADR 0009 §4: when the gateway last read `catalog` from this worker in its current session.
-   * Cleared when the worker connects and set again by the first refresh that reads a catalog, so
-   * a worker that has just connected has none: its `catalog` is the last session's, or empty.
-   * It is what tells a catalog read and found empty from one that has not arrived. Absent on a
-   * view no gateway built.
-   */
+  physicalQueueDepth: z.number().optional(),
+  leases: z.array(leaseRecordSchema).optional(),
+  devices: z.array(statusDeviceSchema).optional(),
+  catalog: z.array(platformCatalogSchema).optional(),
+  /** Cleared on connect, so a just-connected worker has none: it tells a catalog read and found empty from one not yet arrived. */
   catalogReadAt: z.number().optional(),
-  /** ADR 0008 §8: the `host` block of the worker's last `status.get`. Absent for a worker the
-   * gateway has not read status from, and for an `incompatible` one. */
   host: hostFactsSchema.optional(),
-  /** ADR 0010 §7: the `installs` of the worker's last `status.get`. Empty for a worker whose
-   * status lists none, including one too old to list them. */
   installs: workerInstallsSchema.optional(),
-  /** The `waiting` of the worker's last `status.get`: the requests waiting in its own queue,
-   * copied as `installs` is. Empty for a worker too old to list them; absent for a
-   * disconnected or incompatible one, which the gateway cannot ask. */
   waiting: z.array(waitingRequestSchema).optional(),
 });
 
-/**
- * `status.get`'s lease shape. Identical to `leaseRecordSchema` plus the gateway's additive
- * `workerId` (ADR 0005 §20) -- an extension rather than a change to `leaseRecordSchema` itself,
- * so `lease.renew`/`lease.list`'s shapes are untouched by this PR.
- */
 export const statusLeaseSchema = leaseRecordSchema.extend({
   /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
   workerId: z.string().optional(),

@@ -55,13 +55,26 @@ export function resolveUplinkUrl(baseUrl: string): string {
   return new URL(UPLINK_PATH.slice(1), base).toString();
 }
 
+export interface UplinkTransportConnection extends IpcConnection {
+  writeBinary(bytes: Uint8Array): Promise<void>;
+  onBinary(listener: (bytes: Uint8Array) => void): () => void;
+  readonly unsentBytes: number;
+  onSent(listener: () => void): () => void;
+}
+
+export interface MemoryTransportConnection extends UplinkTransportConnection {
+  hold(): void;
+  release(): void;
+  fail(error: Error): void;
+}
+
 /** One accepted uplink: who opened it, and the frames it carries. */
 export interface AcceptedUplink {
   /** The worker's instance id, from `WORKER_ID_HEADER`. */
   readonly workerId: string;
   /** `gateway.label`, when the worker sent one. Display only. */
   readonly label?: string;
-  readonly connection: IpcConnection;
+  readonly connection: UplinkTransportConnection;
   /**
    * The join token record's own id, when `authenticate` reported one alongside `accept`
    * (C-2, ADR 0005 §8: "revoking closes the uplink"). Recorded here so `GatewayService` can
@@ -154,7 +167,7 @@ export interface UplinkDialOptions {
 }
 
 export interface UplinkConnector {
-  connect(options: UplinkDialOptions): Promise<IpcConnection>;
+  connect(options: UplinkDialOptions): Promise<UplinkTransportConnection>;
 }
 
 /**
@@ -199,7 +212,7 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
     };
   }
 
-  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+  async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     const handlers = this.#handlers;
     if (handlers === undefined) {
       throw new UplinkError("unreachable", `No gateway is listening at ${options.url}`);
@@ -230,7 +243,7 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
  * that needs a bare pair (a scripted worker on one end, a real `DaemonServer` on the other)
  * does not have to build one.
  */
-export function createConnectionPair(): [IpcConnection, IpcConnection] {
+export function createConnectionPair(): [MemoryTransportConnection, MemoryTransportConnection] {
   const left = new PairedConnection();
   const right = new PairedConnection();
   left.pair(right);
@@ -238,12 +251,22 @@ export function createConnectionPair(): [IpcConnection, IpcConnection] {
   return [left, right];
 }
 
-class PairedConnection implements IpcConnection {
+type PairedMessage =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "binary"; readonly bytes: Uint8Array };
+
+class PairedConnection implements MemoryTransportConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
   /** Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
    * socket does: the peer may write before this end has been handed to whoever reads it. */
   readonly #pending: string[] = [];
+  readonly #errorListeners = new Set<(error: Error) => void>();
+  readonly #binaryListeners = new Set<(bytes: Uint8Array) => void>();
+  readonly #sentListeners = new Set<() => void>();
+  readonly #queue: Array<{ message: PairedMessage; resolve: () => void; size: number }> = [];
+  #unsent = 0;
+  #held = false;
   #peer: PairedConnection | undefined;
   #closed = false;
 
@@ -274,20 +297,76 @@ class PairedConnection implements IpcConnection {
     return subscribeListener(this.#closeListeners, listener);
   }
 
-  onError(): () => void {
-    // An in-memory pair has no transport to fail; nothing ever emits here. Returning an inert
-    // unsubscriber keeps the port's shape honest rather than pretending errors are possible.
-    return () => {};
+  onError(listener: (error: Error) => void): () => void {
+    return subscribeListener(this.#errorListeners, listener);
+  }
+
+  get unsentBytes(): number {
+    return this.#unsent;
+  }
+
+  onBinary(listener: (bytes: Uint8Array) => void): () => void {
+    return subscribeListener(this.#binaryListeners, listener);
+  }
+
+  onSent(listener: () => void): () => void {
+    return subscribeListener(this.#sentListeners, listener);
+  }
+
+  hold(): void {
+    this.#held = true;
+  }
+
+  release(): void {
+    this.#held = false;
+    while (this.#queue.length > 0) {
+      const entry = this.#queue.shift();
+      if (entry === undefined) break;
+      this.#unsent -= entry.size;
+      this.#deliver(entry.message);
+      entry.resolve();
+    }
+    this.#unsent = 0;
+    for (const listener of this.#sentListeners) listener();
+  }
+
+  fail(error: Error): void {
+    for (const listener of this.#errorListeners) listener(error);
+    void this.close();
   }
 
   async write(contents: string): Promise<void> {
-    const peer = this.#peer;
-    if (this.#closed || peer === undefined || peer.#closed) return;
-    if (peer.#dataListeners.size === 0) {
-      peer.#pending.push(contents);
+    await this.#send({ kind: "text", text: contents }, Buffer.byteLength(contents));
+  }
+
+  async writeBinary(bytes: Uint8Array): Promise<void> {
+    await this.#send({ kind: "binary", bytes }, bytes.length);
+  }
+
+  async #send(message: PairedMessage, size: number): Promise<void> {
+    if (this.#closed) return;
+    if (!this.#held) {
+      this.#deliver(message);
       return;
     }
-    for (const listener of peer.#dataListeners) listener(contents);
+    this.#unsent += size;
+    await new Promise<void>((resolve) => {
+      this.#queue.push({ message, resolve, size });
+    });
+  }
+
+  #deliver(message: PairedMessage): void {
+    const peer = this.#peer;
+    if (this.#closed || peer === undefined || peer.#closed) return;
+    if (message.kind === "binary") {
+      for (const listener of peer.#binaryListeners) listener(message.bytes);
+      return;
+    }
+    if (peer.#dataListeners.size === 0) {
+      peer.#pending.push(message.text);
+      return;
+    }
+    for (const listener of peer.#dataListeners) listener(message.text);
   }
 
   async close(): Promise<void> {
@@ -299,6 +378,8 @@ class PairedConnection implements IpcConnection {
   #close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#unsent = 0;
+    for (const entry of this.#queue.splice(0)) entry.resolve();
     for (const listener of this.#closeListeners) listener();
   }
 }

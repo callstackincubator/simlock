@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceFixture, leaseFixture, statusFixture } from "../test-support.js";
+import {
+  deviceFixture,
+  leaseFixture,
+  physicalDeviceFixture,
+  type PhysicalPresenceFixture,
+  statusFixture,
+} from "../test-support.js";
 import type { WorkerView } from "../worker-registry.js";
 import { viewLoadKey } from "./view-state.js";
 
@@ -45,6 +51,37 @@ describe("viewLoadKey", () => {
     for (const other of changed) expect(viewLoadKey(other)).not.toBe(base);
   });
 
+  it("gives two views that differ only in physicalQueueDepth different keys", () => {
+    const withPhysical = (depth: number) =>
+      view({ physicalQueueDepth: depth } as Partial<WorkerView>);
+    const starting = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      id: "wrk_a",
+      lastSeenAt: 1_000,
+      physicalQueueDepth: 2,
+    } as WorkerView;
+
+    expect(viewLoadKey(withPhysical(1))).not.toBe(viewLoadKey(withPhysical(0)));
+    expect(viewLoadKey(starting)).toBe(
+      '{"devices":[],"health":"starting","leases":[],"physicalQueueDepth":2}',
+    );
+  });
+
+  it("gives a starting view, which has no devices, leases or capacity, a key of its own", () => {
+    const starting: WorkerView = {
+      connection: "connected",
+      drained: false,
+      health: "starting",
+      id: "wrk_a",
+      lastSeenAt: 1_000,
+    };
+
+    expect(viewLoadKey(starting)).toBe('{"devices":[],"health":"starting","leases":[]}');
+    expect(viewLoadKey(starting)).not.toBe(viewLoadKey(view()));
+  });
+
   it("does not depend on the order the capacity fields were written in", () => {
     const base = view();
     const capacity = Object.fromEntries(
@@ -52,5 +89,25 @@ describe("viewLoadKey", () => {
     ) as WorkerView["capacity"];
 
     expect(viewLoadKey(view({ capacity }))).toBe(viewLoadKey(base));
+  });
+  it("gives two views that differ only in one physical device's presence, from not present to present or from one reason to another, different keys", () => {
+    const withPresence = (presence?: PhysicalPresenceFixture) =>
+      view({
+        devices: [
+          physicalDeviceFixture("dev_p", "ready", presence === undefined ? {} : { presence }),
+        ],
+      });
+    const keys = [
+      viewLoadKey(withPresence({ present: false, reason: "not-present" })),
+      viewLoadKey(withPresence({ present: true })),
+      viewLoadKey(withPresence({ present: false, reason: "locked" })),
+      viewLoadKey(withPresence({ present: false, reason: "untrusted" })),
+      viewLoadKey(withPresence()),
+    ];
+
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(viewLoadKey(withPresence({ present: true }))).toBe(
+      viewLoadKey(withPresence({ present: true })),
+    );
   });
 });

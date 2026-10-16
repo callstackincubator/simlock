@@ -1,7 +1,6 @@
 /**
- * Watches a specific process and notifies once when it exits, so a
- * process-held CLI lease self-terminates instead of surviving reparenting
- * after the agent that launched it dies. See docs/internal/KNOWN-PITFALLS.md.
+ * why: a process-held CLI lease must end when the agent that launched it
+ * dies, and a TTL cannot bound a holder that was reparented and keeps renewing.
  */
 export interface ParentWatch {
   /**

@@ -38,6 +38,26 @@ iOS (macOS only):
 - The Xcode license accepted (`sudo xcodebuild -license accept`).
 - Xcode's first-launch setup done (`sudo xcodebuild -runFirstLaunch`).
 
+Physical iOS devices (an iPhone or iPad you enroll with `device add`):
+
+- Xcode 15 or later (it ships `devicectl`); checked with Xcode 27 (devicectl 642.16).
+- iOS or iPadOS 17 or later.
+- The device trusts this Mac ("Trust This Computer").
+- Developer Mode on.
+- Connected by USB.
+- Unlocked: a device whose passcode is needed counts as not present, and
+  `status` shows it `absent (locked)`, so set Auto-Lock to Never or use no
+  passcode.
+
+Android physical devices (a phone you enroll with `device add`):
+
+- Connected by USB, with USB debugging authorized for this host.
+- Reached through the host's default adb server (port 5037), which Simlock
+  starts if none runs and never stops. Its adb protocol version must match the
+  `adb` Simlock finds in the SDK's `platform-tools`; `simlock doctor` reports
+  an `adb-protocol-mismatch` finding when it does not.
+- Simlock cannot see an Android lock screen: a locked phone stays in rotation.
+
 Android:
 
 - An Android SDK, found at `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or
@@ -66,15 +86,17 @@ command starts it again) to bring the platform up.
 | 2 | `UNSUPPORTED_IN_WORKER_MODE` | this command acts on a gateway's workers (`worker drain`, `undrain`, `remove`, or `component install --worker`/`--all-workers`) and the daemon answering is a single host; run it against the gateway, or for `component install` drop the worker flag to install on this host |
 | 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
 | 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — usually a client newer than the daemon |
-| 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
+| 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb`/`devicectl` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
 | 2 | `UNKNOWN_PASSTHROUGH_TOOL` | a passthrough tool simlock does not wrap |
-| 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device; use a new key |
+| 2 | `IDEMPOTENCY_CONFLICT` | a lease request reused an idempotency key its requester already sent for a different device or `--lease-id`; use a new key |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
-| 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
+| 10 | `EXEC_TIMEOUT` | a `simctl`/`adb`/`devicectl` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
 | 10 | `DOWNLOAD_TIMEOUT` | a runtime download, including the time spent waiting for another download on the same platform, outlived `downloads.timeoutMs` |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set, or, through a gateway, no worker that takes requests can serve the request |
+| 11 | `DEVICE_BUSY` | `device add` or `device remove` of a device that is leased, being reclaimed or held by another operation, such as another `device add`; try again once that ends |
 | 11 | `COMPONENT_BUSY` | `component remove` while a component install or removal runs or waits on that platform; try again once it ends |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
+| 12 | `CAPABILITY_MISSING` | through a gateway, no worker that could serve the request has every capability it requires available; direct to a worker, that worker lacks one (a request names capabilities only through the programmatic client) |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download`, or no installed image of the `--image-tag` asked for |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
@@ -82,8 +104,11 @@ command starts it again) to bring the platform up.
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
 | 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
+| 12 | `DEVICE_NOT_ENROLLABLE` | `device add` of a device that cannot be enrolled; the message says why |
+| 12 | `UNKNOWN_DEVICE` | `device remove` of an ID that is not an enrolled device |
 | 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
-| 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
+| 13 | `REQUESTER_ALREADY_LEASED` | requester already holds `lease.maxPerRequester` leases (default 1) or has a pending request; release the named lease first |
+| 13 | `LEASE_ID_TAKEN` | `lease --lease-id` named an ID an active lease or a waiting request already holds |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 | 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
 
@@ -111,9 +136,9 @@ implement them:
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
-  `nuke`, `cleanup`, `doctor`, `driver.passthrough`, `component list` and
-  `component remove` stay per-worker operations rather than waiting on some
-  later fleet-wide version. `component install` without a worker flag answers
+  `nuke`, `cleanup`, `doctor`, `driver.passthrough`, `component list`,
+  `component remove`, `device add` and `device remove` stay per-worker
+  operations rather than waiting on some later fleet-wide version. `component install` without a worker flag answers
   it too; with `--worker` or `--all-workers` it installs on the workers you
   name.
 - `UNSUPPORTED_IN_WORKER_MODE` is the same refusal from the other side, and
@@ -128,7 +153,7 @@ implement them:
   listed here because `device.exec` is a new way to reach them.
 - `EXEC_TIMEOUT` joins `QUEUE_TIMEOUT` on `10`, the number that already means
   "a deadline elapsed". The two can never be confused, since only `lease`
-  produces one and only `simctl`/`adb` produce the other. What *can* collide
+  produces one and only `simctl`/`adb`/`devicectl` produce the other. What *can* collide
   is a passthrough tool that itself exits `10` — `simlock simctl` and
   `simlock adb` exit with the tool's own status — so for those two commands
   branch on the stderr `{"error":{"code":...}}` line, which only simlock
@@ -138,8 +163,8 @@ implement them:
 
 ## Agent identity
 
-Leases are keyed by requester: at most one active lease per agent id,
-enforced by the daemon. Each agent session needs a **stable** id for this to
+Leases are keyed by requester: at most `lease.maxPerRequester` active leases
+per agent id (default 1), enforced by the daemon. Each agent session needs a **stable** id for this to
 constrain anything — a fresh id on every CLI invocation makes the constraint a
 no-op, since every invocation looks like a different requester.
 
@@ -176,7 +201,7 @@ a timer and releasing it when it exits.
 ```
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
-              [--timeout <duration>]
+              [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
 ```
@@ -209,6 +234,15 @@ granted.
   [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
   agent tool's session id, then a pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
+- `--lease-id <id>` — the ID the granted lease gets, in place of one Simlock
+  generates, for a caller that already has its own ID for the lease. 1 to 64
+  ASCII letters, digits, `-` and `_`, starting with a letter or digit, and
+  case-sensitive; anything else is a `BAD_REQUEST` (exit 2). The ID is yours
+  to keep unique for all time: use it for one lease and do not send it again
+  once that lease has ended. An ID an active lease or a waiting request
+  already holds is `LEASE_ID_TAKEN` (exit 13); a requester that already holds
+  a lease gets `REQUESTER_ALREADY_LEASED` first. `renew`, `release` and
+  `list` then name the lease by this ID, through a gateway too.
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
@@ -217,6 +251,18 @@ granted.
   leases for the same missing runtime share one download. The whole wait,
   queued download included, counts against `downloads.timeoutMs`; running out
   is `DOWNLOAD_TIMEOUT` (exit 10). Through a gateway the flag has no effect.
+  On Android it downloads only a level with no image installed at all, and
+  only when the `google_apis` image for the host would fit the model: a lease
+  for a TV at an uninstalled level, or for any model at an installed level
+  whose images do not fit it, fails with `RUNTIME_MISSING` (exit 12,
+  `downloadable` `false`) and downloads nothing. The message is `No installed
+  system image fits <model> at Android <level>: <reason>` (without ` at Android
+  <level>` when `--os` is not given). The reason is the first of these that rules
+  out every image: `it needs Android <n> or newer` (or `older`), `it needs a TV
+  image` (or Wear OS, automotive, desktop, XR, AI glasses, `phone or tablet`, or
+  `an image tagged <tag>`), `<model> does not take Play Store images`, `<model>
+  does not take tablet images`, else `none of the installed images fit it`; or
+  `Android <level> is not installed`, or `no system image is installed`.
 - `--ttl <duration>` — the lease's initial TTL, replacing
   `lease.defaultTtlMs` (15m) for this lease. Asking for more than
   `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
@@ -265,12 +311,19 @@ granted.
   the host's ABI first; without `--os` the lease gets the newest API level
   that has one. A lease with `--image-tag` never downloads: if no image of that
   tag is installed for the API level it fails with `RUNTIME_MISSING` (exit 12),
-  `--allow-download` or not. Install other image types with `sdkmanager`. A
-  lease only reuses an idle device created for the same tag, or for no tag
+  `--allow-download` or not. The image must also fit the model: if the image
+  of that tag does not, the lease fails with `RUNTIME_MISSING`, `downloadable`
+  `false`, saying `the <tag> image does not fit it` and why. Install other image
+  types with `sdkmanager`. A lease only reuses an idle device created for the same tag, or for no tag
   when it names none. On iOS the flag is a `BAD_REQUEST` (exit 2). A tag is 1
   to 64 letters, digits, `_`, `.` or `-`. Through a gateway, a lease whose tag
   no worker lists for that API level, an iOS one included, fails at once with
   `RUNTIME_MISSING` (exit 12), with or without `--no-wait`.
+- `--physical` — ask for an enrolled physical phone or tablet instead of a
+  simulator or emulator. See [Leasing a physical device](#leasing-a-physical-device).
+  A lease without it never gets one. `--mode`, `--image-tag` and
+  `--allow-download` mean nothing for a physical device, so naming any of them
+  with `--physical` is a `BAD_REQUEST` (exit 2) whose message names the request field (`imageTag`, `allowDownload`).
 - `--detach` — print the lease result (the same JSON shape as the grant line
   below, including `device.mode`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
@@ -284,9 +337,11 @@ granted.
   the owning agent is still very much alive; point this at the agent's own
   pid instead.
 
-One lease per requester in v1: leasing while you already hold a lease or
-have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
-error message names the existing lease id to release first.
+One lease per requester by default (`lease.maxPerRequester`, default 1): leasing
+while you already hold that many leases, or have a request queued, fails with
+`REQUESTER_ALREADY_LEASED` (exit 13); the error message names your earliest
+lease to release first. With the limit above 1, `simlock simctl` and `simlock adb`
+through a gateway need `--lease <id>` when you hold more than one lease.
 
 **Staying alive (the default):** intended to be run in the background by the
 agent. As soon as the device is ready, one JSON line is printed on stdout — the
@@ -355,7 +410,10 @@ admin credential (see [Admin credential
 resolution](#admin-credential-resolution)), since the lease's owner is the
 session that was granted it. This is not exit `14`: `14` means the
 daemon ended the lease while the connection was alive, which is a different
-thing to have to handle.
+thing to have to handle. The lease stands only while its device does: a lease
+whose device is not running when a daemon starts again is ended at that start,
+with the reason `device-lost`, and a `renew` of it then fails with
+`UNKNOWN_LEASE`.
 
 `device` is a **projection** of the registry's device record — `id`,
 `driverDeviceId`, `spec`, `address?`, `mode` — not the full
@@ -439,7 +497,10 @@ a signal, and it does not try to release a lease the daemon has already taken
 back. `lease-lost` is a push from a live daemon connection — a connection
 that simply died is exit `1` and a `DAEMON_CONNECTION_LOST` line instead, and
 leaves the lease standing. The `reason` is whatever ended it — `device-lost`
-here, but equally `expired` or `killed`. A reboot cannot bring back
+here, but equally `expired` or `killed`. (A lease whose device was not running
+at a daemon start is ended with `device-lost` too, but no push reaches its
+holder: a connection to that daemon did not survive the stop. It finds the lease
+gone the next time it renews.) A reboot cannot bring back
 anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
@@ -449,13 +510,17 @@ forward) is gone whether or not recovery succeeds.
 A lease names its device in one of three ways:
 
 - `--device <model>` asks for exactly that model. It is granted an idle device
-  of that model, OS, mode and image tag, as always.
+  of that model, OS, mode and image tag, as always. On Android an idle device on
+  a level that no longer fits the model (a TV made on a phone image) is not
+  reused by a lease that names the model; a class or `--os` range lease can
+  still pick it until idle cleanup removes it.
 - `--class <class>` asks for any model of that class.
 - With neither, the lease asks for a `phone`.
 
 A class lease is served by the first of these that applies: an idle device
-that is already running and fits, then an idle device that is shut down and
-fits (it is booted), then a new device. A device fits when its platform,
+that is already running and fits, then (unless `--no-wait`) a device the warm
+pool is already booting that fits, which it waits for, then an idle device that
+is shut down and fits (it is booted), then a new device. A device fits when its platform,
 class, OS, mode and image tag all satisfy the request: with no `--os` a class
 lease fits a device on any installed runtime, with `--os` a device whose OS
 satisfies it, `--mode full` and `--image-tag`
@@ -476,12 +541,97 @@ without `--allow-download`.
 The grant always names the model, OS, mode and image tag of the device you
 got. A class is a claim about the device type the platform's tools report:
 on iOS the product family, on Android the profile's tag, and every untagged
-Android profile is a `phone`, so `tablet` holds no Android model.
+Android profile is a `phone`, except Medium Tablet, the one Android `tablet`.
 
 Through a gateway the same requests work: a class, no model at all, and an
 `--os` range are served by any worker that has something fitting, and the
 gateway passes them on to that worker as they arrived (see
 [Against a gateway](#against-a-gateway)).
+
+### Leasing a physical device
+
+`--physical` asks for a phone or tablet an admin enrolled with
+[`simlock device add`](#simlock-device-add---platform-iosandroid-id--device-remove-id).
+The request matches an enrolled device of its platform by model, class and OS:
+
+- `--device` compares the model name ignoring letter case.
+- With neither `--device` nor `--class`, the lease asks for a `phone`. An iPad
+  is a `tablet`; every Android device is a `phone`.
+- `--os` is exact, as for a simulator: `--os 18.4` matches `18.4` only, and
+  `--os 18` matches no device on `18.4.1`. For any 18.x write a range:
+  `--os ">=18 <19"` or `--os "18 - 18"`. On Android the OS is the API level, a
+  whole number matched exactly (`--os 34`).
+
+A request that no enrolled device of the platform could match, whatever its
+state, fails at once with `UNKNOWN_MODEL` (exit 12), and never queues. When
+`--os` is one or two numbers joined by a dot on iOS, the message also names
+the range that covers it (`--os ">=18 <19"` for `18`). If a device could
+match but is leased, being reclaimed or quarantined, the request waits for
+it, or fails with `NO_CAPACITY` (exit 11) under `--no-wait`. A device that is
+not plugged in, trusted and usable at that moment is not granted: the request
+waits. If it stays gone, the device becomes `absent` and is reclaimed once it
+is back. The grant is checked against the device
+when it is made, so nothing is granted that is unplugged.
+
+Physical and simulator requests wait in separate lines. A simulator request is
+never held behind a physical one, nor the reverse, and a physical request for one
+model never waits behind a physical request for another. `queuePosition` and the
+`queued at` place count within the request's own line, `queueDepth` in
+`status` counts the simulator line, and `physicalQueueDepth` the physical one.
+A physical request in `list --requests` is marked `physical`.
+
+The grant is the same JSON line as any other, with `device.physical` `true`,
+`device.class` and no `device.mode`, and its `environment` is described in
+[Reaching a leased device](#reaching-a-leased-device).
+
+**What a release does.** Releasing, or letting the lease expire, uninstalls
+every app Simlock can see that is not on the device's enrollment app list
+(the apps recorded when it was enrolled), and the device is leasable again.
+On Android those are the user-installed apps; on iOS, the apps installed by
+Xcode or `devicectl`. `device.reclaimed` names any app on the list that is no
+longer installed: it is reported and not reinstalled. A reclaim that fails
+while the device is plugged in leaves it `quarantined` and is retried in the
+background; when its retries run out the device is unenrolled, never
+destroyed. A reclaim that fails while the device is not there leaves it
+`absent` instead (see below).
+
+**What a release does not do.** It does not touch App Store or TestFlight apps
+on iOS, which are never recorded. It does not reset settings, files,
+accounts, keychain items or system apps, nor the data of an app on the list.
+If you install an app on a device on purpose and want it kept, run
+`simlock device add` for the device again afterwards, so the app joins its
+list.
+
+Enrolled devices are not isolated the way simulators are: every tool on the
+host sees them, so an agent can reach a device it did not lease. Enroll a
+device in one Simlock instance only: a second instance would uninstall the
+first one's apps when it releases.
+
+`simlock nuke` ends a physical lease like any other and its apps are
+uninstalled; the device stays enrolled, and `--delete-devices` never deletes
+it. A physical lease survives a daemon restart.
+
+**When a device goes away.** Every `health.probeIntervalMs`, whatever
+`health.enabled` says, Simlock reads which enrolled devices are connected. A
+device that is not connected for `health.stableObservations` reads in a row
+(60 seconds by default) becomes `absent`, and `simlock status` says why:
+`absent (locked)` for a device that needs its passcode, `absent (untrusted)`
+for one not paired with this Mac (or an Android device whose USB debugging is
+not authorized), and `absent (not-present)` for one that is not listed. A
+lease on it ends with reason `device-lost` and its holder gets the
+`lease-lost` message. After a daemon restart, a lease on a device that is not
+connected ends once the new daemon has read it that many times. One read that
+finds the device again starts the count over.
+
+When the device is read connected again, Simlock reclaims it
+(`device.returned`, then `device.reclaimed`) and it is leasable. A request
+that waits for an `absent` device is granted once it is back. A quarantined
+device that is not connected keeps its retries until it is back. `simlock
+device add` makes an `absent` device that is connected `ready` again, and
+`simlock device remove` unenrolls it.
+
+Before rolling back to a Simlock without physical devices, release every
+lease on a physical device: the older version cannot end one.
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
@@ -522,6 +672,14 @@ Every grant carries an `environment` object with what that platform needs:
 |---|---|---|
 | `SIMLOCK_IOS_DEVICE_SET` | ios | Device-set path to pass as `simctl --set` |
 | `ANDROID_ADB_SERVER_PORT` | android | Port of Simlock's adb server; `adb` reads it natively |
+| `SIMLOCK_DEVICE_UDID` | ios, physical device | The UDID of the leased device; the only variable a physical iOS lease carries |
+| `ANDROID_SERIAL` | android, physical device | The serial of the leased device; `adb` reads it natively |
+
+A physical device is different: a lease on one carries `SIMLOCK_DEVICE_UDID` on iOS,
+and on Android `ANDROID_SERIAL` with `ANDROID_ADB_SERVER_PORT=5037`, the default
+adb server, so a plain `adb` reaches the device and never one of Simlock's
+emulators. `SIMLOCK_IOS_DEVICE_SET` is not set for a physical iOS lease, since
+a device set cannot see a phone.
 
 Two ways to use it.
 
@@ -542,6 +700,16 @@ or not, the path has to reach the command line:
 ```bash
 xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
 ```
+
+For a physical iPhone or iPad, name the device with its UDID:
+
+```bash
+xcrun devicectl device info apps --device "$SIMLOCK_DEVICE_UDID"
+```
+
+A remote agent runs `devicectl` through `device.exec` over HTTP or the client,
+which adds `--device <UDID>` for the leased device unless your arguments already
+name a device. There is no `simlock devicectl` command.
 
 Both ways describe paths and ports **on the machine that owns the device**.
 That is your own machine when you lease from a local worker, and somebody
@@ -711,6 +879,22 @@ gateway's own fleet-wide FIFO queue, reporting `queued` with a `queuePosition`
 exactly as a worker's queue does. A request no worker can serve does not wait;
 see [A request no worker can serve](#a-request-no-worker-can-serve) below.
 
+A `--physical` request is judged against the physical devices enrolled on
+each worker, not against a worker's catalog or free simulator capacity. It
+fails at once with `UNKNOWN_MODEL` when no worker has an enrolled device that
+matches (platform, `--device` in any letter case or else `--class`, and `--os`
+as an exact version or a range), and with `NO_CAPACITY` when the only match is
+on a drained or disconnected worker. Otherwise it is sent to a worker with a
+matching device that is `ready` and that the worker did not last read as not
+present, and waits in the gateway's queue until there is one (`NO_CAPACITY`
+under `--no-wait`). A worker that refused a request because its device was not
+present is asked again at the first worker-view refresh after the worker reads
+the device present: within one `health.probeIntervalMs` of that worker plus one
+30-second view refresh. A waiting request fails with `UNKNOWN_MODEL` once
+`simlock device remove`, run on the worker, removes its last enrolled match.
+The gateway's queue has a physical line of its own too, and its `status`
+carries `physicalQueueDepth` beside `queueDepth`.
+
 The gateway sends a request only to a worker that can serve it. `--device`
 matches a worker's model in any letter case and by any other name that
 worker's catalog lists for it, such as an Android AVD id (`pixel_7`). When
@@ -726,9 +910,7 @@ matches when its model and runtime fit and its mode fits the request: with
 `--mode full` it must be a `full` device, with `--mode slim` a `slim` one, and
 with no `--mode` it must be one that `status` shows as serving the default mode
 (see [`simlock status`](#simlock-status)). With no `--os`, the runtime must be the one
-the worker would pick: its default runtime when the model pairs with it,
-otherwise the model's only paired runtime. A worker whose model pairs with
-several runtimes and no default has no warm match for such a request. A request
+the worker would pick: the newest runtime the model pairs with. A request
 with no warm match goes to a machine with free capacity, which boots a device.
 Otherwise a
 worker with no free running slot is passed over (a running device nobody has leased counts as free), a worker under its RAM budget
@@ -749,8 +931,10 @@ rules, so the grant names what you got.
 ### A request no worker can serve
 
 A lease through a gateway never waits for something that cannot arrive. A
-worker *takes requests* when it is connected, not drained, and the gateway has
-read its catalog since it connected. The gateway *knows* a worker once it has
+worker *takes requests* when it is connected, not drained, and either it has
+reported its capacity and the gateway has read its catalog since it connected,
+or it answers that it is still starting and the gateway holds a catalog for it
+from an earlier read. The gateway *knows* a worker once it has
 read a catalog from it and the worker is not `incompatible`: a drained or
 disconnected worker stays known, and a worker that reconnects stays known from
 its last catalog. A worker that has just connected for the first time, whose
@@ -758,11 +942,13 @@ catalog has not arrived, is neither.
 
 | Situation | Result |
 | --- | --- |
-| No worker takes requests | `NO_CAPACITY` (exit 11) at once |
+| No worker takes requests, including a worker that is still starting and that the gateway has never read a catalog from (for example after the gateway and its workers restart together) | `NO_CAPACITY` (exit 11) at once |
+| The only worker that could serve it is still starting, and the gateway holds a catalog for it from an earlier read | Waits in the queue until the worker is ready |
 | At least one worker takes requests, and no known worker has the platform | `NO_DRIVER` (exit 12) at once |
 | ... and no known worker lists the model, or, for a class, a model of it | `UNKNOWN_MODEL` (exit 12) at once |
 | ... and no known worker has the runtime, or can pair it with the model (or with a model of the class) | `RUNTIME_MISSING` (exit 12) at once; `downloadable` is `false`, and `osVersion` is the range as you typed it, or `default` when you named none |
 | A known worker could serve it, but none that takes requests can | `NO_CAPACITY` (exit 11) at once |
+| The request requires capabilities (programmatic client only), and no connected worker that could serve it has all of them available | `CAPABILITY_MISSING` (exit 12) at once; `capabilities` names the required ones |
 | A worker that takes requests can serve it but is busy | Waits in the queue; `NO_CAPACITY` only with `--no-wait` |
 
 "At once" holds with and without `--no-wait` and `--timeout`, and the same
@@ -779,9 +965,13 @@ The grant carries one additional block so you can see where it landed:
 {"lease":{"id":"3f81a2c4.lse_9f2c","worker":{"id":"3f81a2c4","label":"mac-studio-2"}}}
 ```
 
-The lease id names its worker (that is how renew, release, and reads route
-with no gateway-side state to lose), but it is **opaque** — do not parse it.
-`worker.label` is display-only.
+A lease Simlock named has an id that names its worker, but it is **opaque**
+— do not parse it. A lease you named with `--lease-id` keeps exactly that ID
+through a gateway, with no worker in front of it. The gateway finds the
+worker of every lease, either kind, from a table it keeps in memory and
+rebuilds from its workers after a restart, so a renew or release in the
+moment after a restart can answer `UNKNOWN_LEASE` until the worker has
+reported. `worker.label` is display-only.
 
 **`lease renew`, `release`, and lease reads are forwarded** to the worker
 that owns the lease, and the `ttlDeadline` you see is that worker's own.
@@ -790,18 +980,18 @@ nothing: a `simlock lease` left running renews on its timer as always, and a
 client that stops renewing loses the lease on the worker's clock whether or
 not a gateway is in the path.
 
-**One lease per requester is fleet-wide.** Leasing while you already hold a
-gateway-issued lease on *any* worker in the fleet is `REQUESTER_ALREADY_LEASED`
-(exit 13) naming that lease, the same rule and the same code as on one
-machine.
+**The lease limit per requester is fleet-wide.** Leasing while you already hold
+`lease.maxPerRequester` gateway-issued leases (default 1), counted across *all*
+workers in the fleet, is `REQUESTER_ALREADY_LEASED` (exit 13) naming your
+earliest lease, the same rule and the same code as on one machine. The limit
+that counts is the gateway's.
 
 One thing an operator sees only from the other side: the requester id the
 gateway forwards to a worker is **namespaced**,
 `gw:<gateway instance id>:<requester>`. So `simlock status` on the *worker*
 shows a fleet lease as `gw:7c1e…:agent-1` while the gateway shows it as
 plain `agent-1`. That is what keeps a local `agent-1` on that machine and a
-remote `agent-1` behind the gateway from colliding on the worker's own
-one-lease rule — and it means a lease's attribution says which fleet it came
+remote `agent-1` behind the gateway from being mistaken for each other on the worker — and it means a lease's attribution says which fleet it came
 from, not just who asked.
 
 **`simlock status` and `simlock list`** answer for the whole fleet: capacity
@@ -852,8 +1042,9 @@ reaches the same operation as `POST /v1/leases/{id}/exec`; see
 [HTTP-API.md](HTTP-API.md).) Three consequences:
 
 - **It needs a lease**, because `device.exec` is scoped to one. The CLI uses
-  your own lease, which the one-lease-per-requester rule makes unambiguous;
-  `--lease <lease-id>` names one explicitly (and is required if you hold none
+  your own lease, which is unambiguous while you hold one (the default limit);
+  `--lease <lease-id>` names one explicitly (and is required if you hold more
+  than one, or none
   under the identity you are running as — see [Agent
   identity](#agent-identity)). An **agent-role** invocation sends no
   `requesterId` at all and is gated the ordinary way, its principal against
@@ -879,15 +1070,18 @@ reaches the same operation as `POST /v1/leases/{id}/exec`; see
   authoritative) is killed and the command fails with `EXEC_TIMEOUT`
   (exit 10). Output is streamed, never buffered, so there is no size cap.
 
-Files do not travel with the command: `simctl install <path>` and `adb
-install <apk>` resolve their path on the **worker's** filesystem, so the
+Files do not travel with the command: `simctl install <path>`, `adb
+install <apk>` and `devicectl device install app <path>` resolve their path on the **worker's** filesystem, so the
 artifact has to be there already (a shared volume, a CI checkout on that
 machine).
 
-**Three commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
-2): `simlock nuke`, `simlock cleanup`, and `simlock doctor`. Each acts on one
-machine's devices as a whole, and in v1 they stay per-worker, direct
-operations — run them against that worker's own daemon. A fleet-wide
+**Seven commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
+2): `simlock nuke`, `simlock cleanup`, `simlock doctor`, `simlock component
+list`, `simlock component remove`, `simlock device add` and `simlock device
+remove`. The first five act on one machine's devices or components as a
+whole, and the last two name a device plugged into one
+worker; in v1 all of them stay per-worker, direct operations — run them
+against that worker's own daemon. A fleet-wide
 destructive command from one endpoint is not something v1 offers.
 `driver.passthrough`, the operation behind the *local* form of `simlock
 simctl` / `simlock adb`, answers the same way for the same reason: a
@@ -915,8 +1109,11 @@ release, a `simctl`/`adb`, or a request that had already been dispatched to
 it. The gateway does not guess that the lease is gone; the worker's own TTL
 ends it on the worker's clock, and the loss reaches you once the uplink is
 back. The recovery is the ordinary one: re-request, and if the worker had in
-fact granted you a lease, the fleet-wide one-lease rule names it once the
-gateway has rebuilt its index.
+fact granted you a lease, the fleet-wide lease limit names it once the
+gateway has rebuilt its index. With `lease.maxPerRequester` above 1, a client
+that lost its grant and asks again without an `idempotencyKey` gets a new
+lease, not a refusal naming the lost one; the lost lease stays until its TTL
+runs out.
 
 ## `simlock worker <list|drain|undrain|remove>`
 
@@ -926,7 +1123,11 @@ resolution](#admin-credential-resolution)). A single host answers as a fleet
 of one: `list` shows the host itself, and `drain`, `undrain` and `remove`
 answer `UNSUPPORTED_IN_WORKER_MODE` (exit 2), because there is no gateway to
 take the host out of rotation or forget it. `list`
-prints one line per worker, or the views as JSON with `--json`; `drain`,
+prints one line per worker, or the views as JSON with `--json`. Each line
+ends with one suffix per capability the worker reports, before any install
+lines: ` -- agent-device available`, ` -- agent-device off` or
+` -- agent-device unavailable: <reason>`. A worker that reports none, such as
+one that is starting, gets no suffix; `drain`,
 `undrain` and `remove` print JSON on stdout, unconditionally — `--json` is a
 usage error (exit 2) for those three.
 
@@ -978,6 +1179,7 @@ why its Android catalog looks thin, trimmed to one worker:
       "downloads": {"policy": "on-request", "timeoutMs": 1200000},
       "lease": {"maxTtlMs": 14400000},
       "queueDepth": 0,
+      "physicalQueueDepth": 0,
       "leases": [],
       "devices": [],
       "installs": [
@@ -1130,7 +1332,7 @@ Codex session. An agent that leases through both the CLI and MCP in one Codex
 session can therefore hold two leases. To avoid that, use one interface per
 session, or set the same `SIMLOCK_AGENT_ID` for both. Under any other client,
 set a distinct `SIMLOCK_AGENT_ID` per MCP server process (one per agent
-session) so the one-lease-per-agent rule is meaningful.
+session) so the per-agent lease limit is meaningful.
 
 ### Breaking in 0.3.0: tool schemas are now the contract's own field names
 
@@ -1169,16 +1371,47 @@ schema's source of truth.
 
 ## `simlock status`
 
+In `status --json`, an enrolled physical device's entry carries `driverDeviceId`,
+its canonical ID, to every session including an agent's: it is the ID
+`simlock device remove` takes. A simulator or emulator's entry has none.
+
+Below the capacity lines, `status` prints the warm pool: whether it is on, the
+running slots it holds back per platform, and a line for each kind of device the
+targets name, with how many devices it wants, how many are ready and how many
+are booting or being created. Entries that resolve to the same device are one
+line, their counts added. An entry the last pass could not resolve is a line of
+its own, and so is every entry while the pool is off or before its first pass. A target the last pass could do nothing for ends with the reason:
+
+```
+warm pool: enabled, reserve ios 1 android 0
+  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1
+  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing
+```
+
+`short` is one of `disabled` (the pool is off: every target shows it in `status`),
+`no-driver`, `runtime-missing`, `unknown-model`, `unresolvable`, `boot-failed`,
+`device-limit`, `running-limit`, `reserve` or `ram-budget`; when several apply,
+the first of that list is shown. A target that is filling, held back by
+`warmPool.maxConcurrentBoots` or waiting behind a queued request is not short.
+In `--json` the block is `warmPool`: `enabled`, `reserveRunning` (`ios`,
+`android`) and `targets`, each with `platform`, `model`, `osVersion` (the one
+the target resolved to, or the one it names when it did not resolve; absent
+when it names none and did not resolve), `mode`, `count`, `ready`, `booting` and `short` when it is short.
+A gateway prints no such block of its own; with `--json` each worker's is on its
+entry in `workers`.
+
 Human and JSON status include derived warm counts globally and per platform.
 `ready` devices contribute to those counts; `reclaiming` and `quarantined`
-devices remain visible as busy running capacity and never contribute to warm
-inventory. A `quarantined` device is one whose release-time purge failed, one
+virtual devices remain visible as busy running capacity (a physical device never counts as running capacity) and never contribute to warm
+inventory. A `quarantined` device is one whose release-time purge failed, a returned
+physical device whose reclaim failed while it was present, one
 created under `lease.identity` `fresh` whose lease-end delete failed (it is
 retried as a delete, never returned to the pool), or one
 whose `provisioning`/`reclaiming` transition stalled past its driver-derived
 threshold (see `simlock doctor` below): it stays visible in `status` and
-`list --devices` with that state while `QuarantineCoordinator` retries it in
-the background, and is never handed to a new requester.
+`list --devices` with that state while `QuarantineCoordinator` retries a virtual device in
+the background (a physical device included, which is unenrolled, never destroyed, when its
+retries run out), and is never handed to a new requester.
 
 A device currently `provisioning` or `reclaiming` carries a derived
 `transitionAgeMs` — how long it has been in that state — visible in `status`
@@ -1190,16 +1423,44 @@ and `--json` and `list --devices` carry `"stalled": true` on it. These are the
 devices `doctor` reports as `stalled-transition`; no other device carries the
 field.
 
+While the daemon is starting, `simlock status` prints the daemon and host
+lines, the `Load:` line once a reading exists, and one more line in place of everything else, because the daemon has not
+yet checked what it holds:
+
+```
+Daemon: starting (worker)
+Host: macOS 15.5 arm64; xcode 16.4 (16F6)
+Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago
+Devices, leases and capacity appear once startup finishes.
+```
+
+The `Load:` line is the machine's load, read every 15 seconds and shown as of
+the last read (`read 4s ago`), so `simlock status` never waits for a reading.
+CPU is busy time since the previous read, so it reads `CPU unavailable` for the
+first 15 seconds after a start. A part that could not be read says
+`unavailable`. `pressure` is shown where the operating system reports one
+(macOS). Until the first reading finishes the line is absent, and `--json`
+carries no `load`.
+
+`--json` prints the answer as the daemon sent it, with `devices`, `leases`,
+`capacity`, `queueDepth` and `physicalQueueDepth` absent. On a gateway, a worker that is still starting
+shows `starting` after its connection state and `leases unknown` in place of a
+lease count, in the same way.
+
 Human-oriented overview: daemon health *and mode*, the web console's address
 when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
 [CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on
-(`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
+(`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), its load
+(`Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · ...`; `load` in `--json`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
 managed device with its state and device mode
 (`Device dev_7: ready, mode slim, serves default mode: no`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
-renewed), the component installs in progress, and queue depth. `--json` for
+renewed), the component installs in progress, and queue depth. `Queue depth`
+is the simulator and emulator line; requests waiting for a physical device are
+in their own line, which is `physicalQueueDepth` in `--json` and the requests
+themselves show in `list --requests`. `--json` for
 the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
@@ -1211,6 +1472,16 @@ for Android and for iOS unless configured), `no` when it is the other one. A
 device's `mode` is what it is; this is what a lease with no `--mode` would
 get. In `--json` it is `servesDefaultMode`, a boolean on every device, next to
 `mode`; `list --devices --json` carries it too.
+
+In `--json`, every device also carries `physical`: `false` for a simulator or
+emulator Simlock created, `true` for a real phone or tablet. A physical device
+has a `class` (`phone` or `tablet`) and no `mode`, and its line reads
+`Device dev_9: ready, physical phone` with the same markers after it.
+`list --devices --json` carries both too. A physical device that has been read
+at least once also carries `presence` in `--json`: `{ "present": true }`, or
+`{ "present": false, "reason": "locked" | "untrusted" | "not-present" }`, the
+latest read of whether it is plugged in. Capacity figures, limits and the RAM
+budget count simulators and emulators only.
 
 Each platform's capacity line ends in `(at RAM budget)` when creating one more
 full device of that platform would be refused for RAM. In `--json` it is
@@ -1300,7 +1571,9 @@ Each line names the request, the agent that sent it, the device it asked for
 (only the fields it named; a request that named no model shows its class,
 `phone` when it named none), where it stands, and how long it has waited.
 `queued at 2` is its place in the queue, counting from 1, the requests ahead
-of it that are already starting included. `starting` means the daemon is working
+of it that are already starting included. It counts within the request's own
+line: a physical request, which the line marks `physical`, waits apart from
+simulator and emulator requests. `starting` means the daemon is working
 on it: placing it as it arrives, or finding, creating, booting or downloading
 a device for it. With nothing waiting it prints
 `No requests are waiting.` A granted, failed or cancelled request is not
@@ -1322,8 +1595,18 @@ installed, which installed runtime is the default (the newest), and for each
 model the installed runtimes it pairs with (`modelRuntimes`). A model and a
 runtime that are both listed can still fail to pair — on iOS, a runtime can
 drop an older model — so pick a pair from `modelRuntimes`. A model with an
-empty list pairs with nothing installed. On Android every model pairs with
-every installed API level.
+empty list pairs with nothing installed. On Android a model pairs with an
+installed API level only when an image there fits the model, as Android Studio
+would offer it: the image is for the same kind of device (a TV takes `android-tv`
+or `google-tv`, a phone takes none of the TV, Wear OS, automotive, desktop, XR
+(except `android-xr-ost`), glasses or ChromeOS images), its API level is in the model's range (Pixel 9
+needs Android 35 or newer), a Play Store image only goes with a model that
+allows Play Store (Pixel 6 does not), and a `tablet` image only with a tablet
+model. `runtimes`, `defaultRuntime` and `images` still list every installed
+image, so a level can be listed there and absent from every `modelRuntimes`
+list. A custom model made in Android Studio but not listed by `avdmanager` fits an
+image by the tag, API range, Play Store setting and screen size Android Studio
+saved for it.
 
 `modelAliases` lists, for a model, the other names `--device` accepts for it
 on that machine; a model with no other name has no entry. On Android a
@@ -1341,8 +1624,9 @@ device it is: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or
 (iPhone, iPad, Apple Watch, Apple TV, Apple Vision). On Android it comes
 from the device profile's tag: `android-tv` is `tv`, `android-wear` is
 `watch`, `android-automotive` and its variants are `auto`, `android-desktop`
-is `desktop`, and a profile with no tag, or a custom profile from
-`devices.xml`, is `phone`. A model whose tooling reports nothing usable has
+is `desktop`, and a profile with no tag is `phone`. A custom profile
+found only in `devices.xml` takes its class from the tag Android Studio saved
+for it, and is `phone` when it saved none. A profile Simlock ships carries its own class. A model whose tooling reports nothing usable has
 no entry, and is still listed and leasable by name.
 
 `classDefaults` says, for a class, which model Simlock would create for it on
@@ -1411,8 +1695,14 @@ own name for it.
 
 ### Where Android models come from
 
-Simlock reads Android device models from two places and writes to neither:
+Simlock reads Android device models from three places and writes to none of
+them:
 
+- **Simlock's own profiles** ship with Simlock (16 models, from Pixel 9 to Large Desktop). They are
+  read first, so a device made from one has the same hardware on every
+  host, and the model is there even when your `cmdline-tools` is too old to
+  have it. A name Simlock's own profiles have wins over the same name in the
+  SDK and in `devices.xml`.
 - **Built-in profiles** ship with the Android SDK's `cmdline-tools`. A
   model newer than your `cmdline-tools` is not there; update
   `cmdline-tools` to get it.
@@ -1422,10 +1712,23 @@ Simlock reads Android device models from two places and writes to neither:
   so in a fleet only the worker that has it can lease it. To add one, create
   it with Android Studio's device manager on that machine.
 
+  Simlock finds `devices.xml` where `avdmanager` does: in
+  `$ANDROID_USER_HOME`, else `$ANDROID_PREFS_ROOT/.android`, else
+  `$ANDROID_SDK_HOME/.android`, else `.android` in your home directory.
+
+  A custom profile's API range, Play Store setting and screen size from
+  Android Studio decide which images it gets, with its device type. A
+  profile that needs API 31 or newer is never paired with an image below 31;
+  one with Play Store turned off gets no Play Store image (a Wear profile
+  always can); a profile with no device type and a screen of 7 inches or more
+  that does not fold also gets tablet images. A profile with none of these set
+  gets the phone images, as before.
+
 `avdmanager list device` prints both kinds; it shows a custom profile with
 `OEM : User`. Simlock also reads `devices.xml` itself. When a custom profile
 has the same name as a built-in one, the built-in profile wins and the model
-is not custom. If `devices.xml` cannot be read, the built-in models are still
+is not custom. Simlock's own models are listed first, then the SDK's, then
+the custom ones. If `devices.xml` cannot be read, the built-in models are still
 listed. A custom model is marked `(custom)` in the human view of `simlock
 catalog` and listed in `customModels` in `--json`.
 
@@ -1687,6 +1990,62 @@ Simlock counts only the devices it can see. A device you create while a
 removal runs, or a device of another Simlock instance on the same machine,
 is not counted.
 
+## `simlock device add --platform <ios|android> <id>` / `device remove <id>`
+
+Enrols a phone or tablet plugged into this machine, and forgets it again.
+Admin only: an agent session gets `FORBIDDEN`. Both run on the machine the
+device is plugged into, a single host or a worker. A gateway answers
+`UNSUPPORTED_IN_GATEWAY_MODE`: run the command on the worker the device is
+plugged into.
+
+```sh
+simlock device add --platform ios 00008110-001A2B3C4D5E
+# Enrolled iPhone 15 Pro (iOS 18.4) as 00008110-001A2B3C4D5E, 12 user apps recorded.
+simlock device remove 00008110-001A2B3C4D5E
+# Removed 00008110-001A2B3C4D5E. It is no longer enrolled; nothing on the device changed.
+```
+
+`device add` asks the platform's driver to read the device and writes a
+record only when the driver says the device can be enrolled. The record is
+kept under the device's one canonical ID, whatever ID you typed: for an
+iPhone it is the UDID, even when you typed its CoreDevice identifier.
+`--platform` is required, because the platform decides which driver reads the
+device. `--json` prints the operation's output instead of the line:
+
+```text
+{"id":"dev_8f2a","driverDeviceId":"00008110-001A2B3C4D5E","platform":"ios","model":"iPhone 15 Pro","osVersion":"18.4","class":"phone","appCount":12,"reenrolled":false}
+```
+
+Running `device add` again on an enrolled device, by any ID it answers to,
+enrols it again: the record and its `id` stay, and the model, OS version,
+class and app list are read anew (`reenrolled` is `true`, and the line says
+`again`). A device in quarantine comes back `ready`. A device you removed and
+add again gets a new record.
+
+`device add` fails, and writes nothing, with:
+
+- `DEVICE_NOT_ENROLLABLE` (exit 12), with a reason: `not-connected`,
+  `network-only`, `untrusted`, `developer-mode-off`, `os-too-old`,
+  `unsupported-kind`, `locked`, `unreadable`, `virtual-device` (a simulator or
+  emulator, including every one Simlock manages) or
+  `enrolled-on-other-platform`. The message says why.
+- `DEVICE_BUSY` (exit 11): the device is `leased`, is `reclaiming`, or
+  another operation holds it, such as another `device add` (`busy`).
+- `NO_DRIVER` (exit 12): this machine has no driver for the platform.
+
+`device remove` takes the canonical ID, which `simlock status --json` and
+`simlock list --devices` show as `driverDeviceId`. It asks for no
+confirmation and takes no `--yes`: it only makes Simlock forget the device,
+and sends nothing to it. An ID that is not enrolled is `UNKNOWN_DEVICE`
+(exit 12); a device that is leased, is reclaiming, or is held by another
+operation (`busy`) is `DEVICE_BUSY`.
+
+Enrolling emits `device.enrolled` and removing emits `device.deleted` with
+`initiator` `operator`; see [EVENTS.md](EVENTS.md). The iOS driver reads a
+wired iPhone or iPad through `devicectl` and enrols it; the Android driver reads
+a USB-connected phone through `adb` and enrols it. A missing `--platform`, a
+second ID or an unknown option is a usage error (exit 2).
+
 ## `simlock cleanup [--dry-run] [--rule <name>]`
 
 Run the cleanup reconciliation immediately. `--dry-run` prints the actions
@@ -1774,6 +2133,27 @@ cannot be read), and the one supported way to get the space back: remove the
 platform in Xcode's Settings → Platforms. Advisory only, like the finding
 above — reclaiming this space is outside anything `--fix` may do.
 
+`doctor` also reports a `driver-advisory` finding (code
+`adb-protocol-mismatch`) when the adb server on port 5037, the one plain `adb`
+and Android Studio use, speaks a different protocol version than the `adb`
+Simlock runs, or when either version cannot be read. The finding names both
+versions, or says which one is unreadable. Until they match, Simlock sends no
+command to physical Android devices: they read as not present and
+`device add` and `device.exec` on a phone are refused. Simlock does not
+restart that server. The fix is running that server with an `adb` of the same
+protocol version, for example the one in the SDK's `platform-tools`. Nothing
+is reported when no server is listening on that port. Advisory only, like the
+findings above — there is no `--fix` for it.
+
+`doctor` also reports a `driver-advisory` finding (code
+`device-profile-hidden`) for each profile in your Android `devices.xml` whose
+name one of Simlock's own Android profiles answers to, in the file's order. The
+message names the `devices.xml` profile and the Simlock profile that is used
+instead; Simlock reads its own profile first, so the one in `devices.xml` is
+never used. An SDK profile that a Simlock profile hides is not reported, only
+a `devices.xml` one. Rename the profile in `devices.xml` to use it. Advisory
+only — there is no `--fix` for it.
+
 `doctor` also checks the [prerequisites](#prerequisites) of each platform
 this host can run (iOS only on macOS), every time it runs. Each one missing is
 a `prerequisite-missing` finding with `platform`, `prerequisite` (for example
@@ -1793,11 +2173,54 @@ findings say so; once everything it needs is present, it gets one
 tell — a command that times out, say — reports nothing. These findings never
 change the exit code, and `--fix` never installs anything.
 
+`doctor` also reports a `warm-pool-target-unreachable` finding for a
+[`warmPool.targets`](CONFIGURATION.md) entry that cannot be met as configured:
+one whose runtime is not installed (`reason` `runtime-missing`, with the
+`simlock component install` command that adds it, or, for an `osVersion` that is
+a range, the command that lists the versions to install one from) or whose model does not exist
+(`unknown-model`), and, with `reason` `over-limit`, one finding for each platform
+whose targets add up to more than its running limit leaves after
+`warmPool.reserveRunning`, and one when all targets together add up to more than
+the machine's running limit leaves after both reserves. An over-limit finding
+names the sum the targets want, the running limit, the reserve held back and the
+room left. A target that is short
+only because the machine is full, out of RAM or retrying a failed boot is not
+reported: that passes, or is a choice of limit. The finding carries `target`,
+`reason`, `message` and `remedy` (and `platform`, except for the sum over every
+platform), and is printed to stderr as one line:
+
+```text
+warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0
+```
+
+It never changes the exit code, and `--fix` never acts on it. With
+`warmPool.enabled` `false` there is none.
+
+With `capabilities.agent-device.enabled` `true`, `doctor` reports a `module-unavailable`
+finding (its `module` is `agent-device`) when the agent-device daemon is not
+running: agent-device is not on `PATH`, is too old or speaks another RPC protocol, is not agent-device at all,
+cannot use its state folder, or failed to start. It carries what was found, what
+is needed, and what to do, and is printed to stderr as one line, cut to 500
+characters for each of the two texts:
+
+```text
+agent-device  fail  found 0.20.3, need 0.21.28 or later; install agent-device 0.21.28 or later, then restart the daemon (`simlock daemon stop`, then `simlock daemon start`)
+```
+
+While agent-device is still starting, or running, or switched off, there is
+none. The check runs when the daemon starts agent-device, so after fixing the
+cause, restart the daemon, except when agent-device failed to start: the
+daemon retries a failed start every 30 seconds, so the finding clears by
+itself once the cause is fixed. It never changes the exit code, and `--fix`
+never acts on it.
+
 ## `simlock nuke [--delete-devices] [--yes]`
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
 simlock started, clear the queue. With `--delete-devices`, also destroy every
-registry-managed device. Never touches devices outside the registry. It stays
+registry-managed device. Never touches devices outside the registry. A lease on
+an enrolled physical device ends like any other, and its apps are uninstalled;
+the device stays enrolled, and `--delete-devices` never deletes one. It stays
 a per-machine command: a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit
 2), because a fleet-wide wipe from one endpoint is a footgun v1 does not
 offer.
@@ -1856,7 +2279,16 @@ exists for operators and debugging. `start` starts whichever mode
 as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
 print the web console's address on a `Console:` line (see
 [CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
-and the next daemon restores each one's TTL timer from its deadline. What a
+and the next daemon restores each one's TTL timer from its deadline, for every
+lease whose device is still running. A lease whose device is not running at a
+daemon start — shut down, still booting, gone, or on a platform the daemon
+could not list — is ended before the daemon serves a request, with the reason
+`device-lost`; its holder finds the lease gone when it renews, as for any
+`device-lost`. The device of an ended lease is wiped and returned to the pool
+(a `fresh` device is shut down and deleted instead), or marked missing if it is
+gone; on a platform the daemon could not list it waits, and the first start that
+can list the platform wipes it and returns it to the pool, in the background (a `fresh` one is shut
+down and deleted instead). What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is
@@ -1878,13 +2310,14 @@ A daemon that refuses to boot because of its configuration — a
 either, `mode: "gateway"` with `http.enabled: false`, or, in worker mode,
 `gateway.url` without `gateway.token` or the reverse; see
 [CONFIGURATION.md](CONFIGURATION.md) for the full set — fails the start
-rather than picking a value the operator did not write. That validation runs
-before the socket is claimed, so a command that auto-starts the daemon
-(`simlock lease`, the MCP server) never gets a daemon to talk to: the launch
-times out and the command fails with exit 1 (`INTERNAL`). The error line says nothing
-about the config, because nothing ever answered — the reason is in `simlock
-daemon logs`, which reads the log file directly and so works even though the
-daemon never came up.
+rather than picking a value the operator did not write. A command that
+would auto-start the daemon (`simlock daemon start`, `simlock lease`) loads
+`config.json` first. When the config is invalid it starts no daemon, prints the
+error line with the config message (for example `Invalid config value for
+"capacity.config.limits.android.maxDevices": expected a positive integer`), and
+exits 1 (`INTERNAL`). A daemon that is already running is not affected. The
+daemon logs the same reason, and `simlock daemon logs` reads it even when no
+daemon is up.
 
 The daemon writes one JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields). The log says what the
@@ -1949,9 +2382,15 @@ gateway to take it out of rotation or forget it.
 ```console
 $ simlock worker list
 wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9
+  Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 12s ago
   Install ios 26.4: downloading for 42s, 1 waiter
 wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s) -- macOS 14.7 x64; xcode 16.2 (16C5032a)
+  Load: no reading while disconnected
 ```
+
+A connected worker's `Load:` line is its latest host load and how long ago it
+was read; `load` in `--json` carries the same with `readAt`. A worker that
+sends none shows no line, and neither does an incompatible one.
 
 ## `simlock config [get <key>|set <key> <value>]`
 
@@ -1993,7 +2432,7 @@ simlock daemon stop && simlock daemon start
 
 Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
 `daemon stop`, `token create|list|revoke`,
-`worker list|drain|undrain|remove`, and cross-process `lease renew`
+`device add|remove`, `worker list|drain|undrain|remove`, and cross-process `lease renew`
 and `release`) need the daemon's `admin` role. The CLI resolves a credential
 to send at handshake, in order:
 

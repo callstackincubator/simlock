@@ -79,8 +79,6 @@ export type WorkerDrainOutput = OpOutput<"worker.drain">;
 export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
 export type WorkerRemoveOutput = OpOutput<"worker.remove">;
 
-// ---- components (ADR 0010 §6) ---------------------------------------------------------------
-
 export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;
 export type ComponentListInput = OpInput<"component.list">;
@@ -89,8 +87,10 @@ export type WorkerInstallComponentInput = OpInput<"worker.install-component">;
 export type WorkerInstallComponentOutput = OpOutput<"worker.install-component">;
 export type ComponentRemoveInput = OpInput<"component.remove">;
 export type ComponentRemoveOutput = OpOutput<"component.remove">;
-
-// ---- pushes ---------------------------------------------------------------------------------
+export type DeviceAddInput = OpInput<"device.add">;
+export type DeviceAddOutput = OpOutput<"device.add">;
+export type DeviceRemoveInput = OpInput<"device.remove">;
+export type DeviceRemoveOutput = OpOutput<"device.remove">;
 
 export type LeaseProgress = z.infer<typeof leaseProgressSchema>;
 export type EventPush = z.infer<(typeof PUSH_SCHEMAS)["event"]>;

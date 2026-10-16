@@ -8,13 +8,14 @@ const device = (
   state: "ready" | "leased" | "reclaiming" | "shutdown",
   lastLeaseEndedAt: number,
 ) => ({
+  physical: false as const,
   createdAt: 0,
   driverData: {},
   driverDeviceId: id,
   id,
   lastLeaseEndedAt,
   mode: "full" as const,
-  spec: { model: id, osVersion: "1", platform },
+  spec: { physical: false as const, model: id, osVersion: "1", platform },
   state,
 });
 

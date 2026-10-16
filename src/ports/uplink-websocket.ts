@@ -19,7 +19,7 @@ import type { Duplex } from "node:stream";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import { subscribeListener, type IpcConnection } from "./ipc.js";
+import { subscribeListener } from "./ipc.js";
 import {
   resolveUplinkUrl,
   uplinkOutcome,
@@ -33,15 +33,15 @@ import {
   type UplinkHandlers,
   type UplinkListener,
   type UplinkListenerFactory,
+  type UplinkTransportConnection,
 } from "./uplink.js";
 
-/**
- * Wraps one WebSocket as the `IpcConnection` the daemon protocol expects. Each protocol frame
- * is sent as its own text message; frames are already newline-terminated by `serializeFrame`
- * and every reader buffers by newline, so a message boundary that does not line up with a
- * frame boundary is harmless either way.
- */
-class WebSocketUplinkConnection implements IpcConnection {
+function rawBytes(data: RawData): Buffer {
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+}
+
+class WebSocketUplinkConnection implements UplinkTransportConnection {
   readonly #socket: WebSocket;
   readonly #dataListeners = new Set<(chunk: string) => void>();
   readonly #closeListeners = new Set<() => void>();
@@ -59,19 +59,20 @@ class WebSocketUplinkConnection implements IpcConnection {
    * every other `IpcConnection` in the tree already does.
    */
   readonly #pending: string[] = [];
+  readonly #binaryListeners = new Set<(bytes: Uint8Array) => void>();
+  readonly #sentListeners = new Set<() => void>();
   #closed = false;
 
   constructor(socket: WebSocket) {
     this.#socket = socket;
     socket.on("message", (data: RawData, isBinary: boolean) => {
-      // Binary frames are not part of this protocol. Ignoring one is the same treatment
-      // `SimlockWire` gives a malformed line: a peer's bad frame is not this side's crash.
-      if (isBinary) return;
-      const chunk = Array.isArray(data)
-        ? Buffer.concat(data).toString("utf8")
-        : Buffer.isBuffer(data)
-          ? data.toString("utf8")
-          : Buffer.from(data as ArrayBuffer).toString("utf8");
+      const bytes = rawBytes(data);
+      if (isBinary) {
+        // why: with no listener the message is dropped, so nothing piles up before a link subscribes.
+        for (const listener of this.#binaryListeners) listener(bytes);
+        return;
+      }
+      const chunk = bytes.toString("utf8");
       if (this.#dataListeners.size === 0) {
         this.#pending.push(chunk);
         return;
@@ -112,6 +113,28 @@ class WebSocketUplinkConnection implements IpcConnection {
     return subscribeListener(this.#errorListeners, listener);
   }
 
+  get unsentBytes(): number {
+    return this.#socket.bufferedAmount;
+  }
+
+  onBinary(listener: (bytes: Uint8Array) => void): () => void {
+    return subscribeListener(this.#binaryListeners, listener);
+  }
+
+  onSent(listener: () => void): () => void {
+    return subscribeListener(this.#sentListeners, listener);
+  }
+
+  async writeBinary(bytes: Uint8Array): Promise<void> {
+    if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) return;
+    await new Promise<void>((resolve) => {
+      this.#socket.send(bytes, { binary: true }, () => {
+        for (const listener of this.#sentListeners) listener();
+        resolve();
+      });
+    });
+  }
+
   async write(contents: string): Promise<void> {
     if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) return;
     await new Promise<void>((resolve) => {
@@ -120,7 +143,10 @@ class WebSocketUplinkConnection implements IpcConnection {
       // A send error is not rethrown -- the `error` event above already reports it to every
       // listener, and a rejected `write` would tear down a caller that has nothing to do
       // about it.
-      this.#socket.send(contents, () => resolve());
+      this.#socket.send(contents, () => {
+        for (const listener of this.#sentListeners) listener();
+        resolve();
+      });
     });
   }
 
@@ -147,6 +173,12 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   readonly #server = new WebSocketServer({ noServer: true });
   #handlers: UplinkHandlers | undefined;
   #detach: (() => void) | undefined;
+  readonly #links = new Map<string, WebSocketUplinkConnection>();
+
+  /** why: test-only, closes one worker's socket from the gateway side, as a network drop does. */
+  async closeWorkerLink(workerId: string): Promise<void> {
+    await this.#links.get(workerId)?.close();
+  }
 
   async listen(handlers: UplinkHandlers): Promise<UplinkListener> {
     this.#handlers = handlers;
@@ -226,8 +258,13 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     // later `token.revoke` of it can find and close this exact link (ADR 0005 §8).
     const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
+      const connection = new WebSocketUplinkConnection(client);
+      this.#links.set(workerId, connection);
+      connection.onClose(() => {
+        if (this.#links.get(workerId) === connection) this.#links.delete(workerId);
+      });
       handlers.accept({
-        connection: new WebSocketUplinkConnection(client),
+        connection,
         workerId,
         ...(label === undefined ? {} : { label }),
         ...(tokenId === undefined ? {} : { tokenId }),
@@ -238,7 +275,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
 
 /** The worker's half: dials `gateway.url` with the join token and its instance id. */
 export class WebSocketUplinkConnector implements UplinkConnector {
-  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+  async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
     // `options.url` is `gateway.url`, the gateway's base URL; the endpoint is this worker's to
     // derive (ADR 0005 §4), so an operator configures one URL and never an internal path.
     const socket = new WebSocket(resolveUplinkUrl(options.url), {

@@ -4,6 +4,7 @@ import type { RankStage } from "../pipeline.js";
  * A rank, so a worker at its budget is still asked when it is the only one left. Reads the flag
  * the worker reports; the gateway knows nothing about how a worker counts RAM. */
 export const ramBudget: RankStage = {
+  appliesToPhysical: false,
   kind: "rank",
   name: "ram-budget",
   score(worker, request) {

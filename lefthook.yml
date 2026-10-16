@@ -1,22 +1,33 @@
 pre-commit:
   parallel: true
   commands:
+    # Formats what is staged and stages the result, so nobody runs a formatter by hand.
     format:
       glob: "*.{ts,tsx,js,mjs,json,md,yml,yaml}"
       exclude: "docs/**"
-      run: pnpm exec oxfmt --check {staged_files}
-      fail_text: "Run 'pnpm format' to fix formatting."
+      run: pnpm exec oxfmt {staged_files}
+      stage_fixed: true
     lint:
       glob: "*.{ts,tsx,js,mjs,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+    # Which file may import which path is a whole-graph question, so this checks every import; it takes seconds.
+    boundaries:
+      glob: "*.{ts,tsx,js,mjs,mts,cts,json}"
+      run: pnpm exec depcruise src e2e ui --ignore-known
+      fail_text: "An import crosses a component's index or a direction rule (architecture rule 14, ADR 0027)."
+    # A comment the commit adds or edits starts with "why:" or goes (architecture rule 17).
+    comments:
+      glob: "*.{ts,tsx,js,mjs,mts,cts,sh}"
+      run: node .agents/scripts/comment-lint.mjs --base HEAD {staged_files}
+      fail_text: "Delete the comment, or start it with 'why:' when it says why the code does something unexpected."
     # A change can break the files that call it, so this checks the whole project; it takes seconds.
     typecheck:
       glob: "*.{ts,tsx,mts,cts}"
       run: pnpm run typecheck
 
-# These audit the whole branch against main and take minutes, so they run once per push
-# rather than on every checkpoint commit, in order: fallow, the e2e typecheck, then mutants.
+# These audit the whole branch against main, so they run once per push rather than on every
+# checkpoint commit.
 pre-push:
   piped: true
   commands:
@@ -27,8 +38,3 @@ pre-push:
     typecheck-e2e:
       priority: 2
       run: pnpm run typecheck:e2e
-    # Mutants only on the source lines this branch changed. A survivor does not block the push:
-    # an equivalent mutant cannot be killed, so each survivor is killed or explained in the PR body.
-    mutate:
-      priority: 3
-      run: pnpm run mutate || echo "Mutants survived (listed above). Kill each one, or explain it in the PR body."

@@ -49,18 +49,12 @@ describe("daemon lifecycle & recovery", () => {
     expect(status.json).toMatchObject({ daemon: { health: "running" } });
   });
 
-  // Suspected bug: `simlock daemon status` always writes raw JSON via `writeResult`
-  // (src/cli/index.ts `runDaemon`, the "status" branch) regardless of `--json`,
-  // unlike its siblings `daemon start`/`daemon stop` which both branch on
-  // `values.json` to print "Daemon running"/"Daemon stopping" in human mode. This
-  // contradicts docs/CLI.md ("`daemon <start|stop|status|logs>` ... default to a
-  // human-oriented view ... and accept `--json`"). See final report.
-  it.fails("daemon status prints a human-oriented view by default", async () => {
+  it("daemon status prints a human-oriented view by default", async () => {
     const env = await withDaemon({ mode: "running" });
 
     const statusHuman = await env.cli(["daemon", "status"]);
     expect(statusHuman.code).toBe(0);
-    expect(statusHuman.stdout).toContain("Daemon running");
+    expect(statusHuman.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
   });
 
   it("stops while a detached lease is still outstanding", async () => {

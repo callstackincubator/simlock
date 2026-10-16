@@ -1,19 +1,3 @@
-/**
- * The fleet's one FIFO (ADR 0005 §10/§11): a thin composition over `src/leasing/wait-queue.ts`'s
- * `WaitQueue`, not a fork of it. `WaitQueue` already owns exactly the state a fleet queue needs
- * -- FIFO membership, per-request timeout/cancellation, and settlement promises -- and its
- * `LeaseRequestOptions` (`requesterId`, `ownerId`, `timeoutMs`, `noWait`, `allowDownload`,
- * `onProgress`, `ttlMs`) are already the fields a fleet request carries. This module only
- * narrows `WaitQueue`'s generic `Waiter`/`LeaseGrant` shapes to what the fleet actually produces
- * (a `DeviceRequest` for the request, and a lease record that may additionally carry `worker`
- * once it names a machine) and forwards every method through.
- *
- * `WaitQueue` and its types come from `../leasing/index.js`. `DeviceRequest`/`DeviceRecord`/
- * `LeaseRecord`/`WaiterState` are `wait-queue.js`'s own transitive type imports
- * (`core/domain.js`, `core/driver.js`) -- on core's index, and
- * allowed to the gateway by name in `.oxlintrc.json` -- not a reach into the registry, capacity, or lifecycle engine ADR 0005
- * §33 keeps off limits.
- */
 import type { Clock, IdGenerator } from "../ports/index.js";
 import { type LeaseRecord, type DeviceRequest, type LeaseProgress } from "../core/index.js";
 import {
@@ -24,25 +8,16 @@ import {
 } from "../leasing/index.js";
 
 export type { LeaseProgress } from "../core/index.js";
+export { lineOf } from "../leasing/index.js";
 export type { LeaseRequestOptions } from "../leasing/index.js";
 export { RequestCancelledError, RequesterAlreadyLeasedError } from "../leasing/index.js";
 
-/**
- * The lease record a fleet grant carries. Identical to a worker's own `LeaseRecord` plus the
- * additive `worker` (ADR 0005 §18) `FleetLeaseCoordinator` stamps once it knows which machine
- * granted it -- absent on nothing this queue itself ever produces (it never grants; the
- * coordinator does), so the type says `?` rather than the coordinator having to fabricate one.
- */
+/** `worker` is optional because this queue never grants; the coordinator stamps it later. */
 export type FleetLeaseRecord = LeaseRecord & {
   readonly worker?: { readonly id: string; readonly label?: string };
 };
 
-/**
- * A fleet grant: the worker's own device/environment/timing, forwarded verbatim (the gateway
- * never interprets either -- it is not the driver that produced them), plus the lease record
- * above. Untyped (`unknown`) on `device`/`timing` for the same reason: this module has no
- * business knowing their shape, only relaying it.
- */
+/** `device` and `timing` are `unknown`: the gateway only relays them. */
 export interface FleetLeaseGrant {
   readonly device: unknown;
   readonly environment: Readonly<Record<string, string>>;
@@ -61,26 +36,12 @@ export interface FleetWaiter {
 export interface FleetQueueOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
-  /** Called after a timed-out waiter has been removed and rejected -- the rejection itself
-   * already happened inside `WaitQueue#armTimeout` by the time this fires; `FleetLeaseCoordinator`
-   * uses it only to report the gateway's own `lease.rejected` fact for that already-committed
-   * timeout (H10, round 2 review: this comment used to say it wakes the dispatch loop the same
-   * way a release or worker-view change does -- it does not; the timed-out waiter is already
-   * terminal and gone from the queue, and nothing here re-runs `#dispatch` for the *other*
-   * waiters still behind it). */
+  /** Reports the timeout only; it does not wake the dispatch loop for the waiters behind. */
   readonly onTimeout?: (waiter: FleetWaiter) => void;
-  /** Called with the new depth each time a waiter joins or leaves the queue. */
-  readonly onDepthChange?: ((depth: number) => void) | undefined;
+  readonly onDepthChange?: ((depth: number, line: "virtual" | "physical") => void) | undefined;
 }
 
-/**
- * Casts a `WaitQueue`-native value to its fleet-shaped counterpart. `WaitQueue` itself has no
- * fleet awareness (by design -- it stays platform-agnostic and worker-agnostic alike), so the
- * cast is this module's whole job: every fleet-facing method below either takes a `FleetWaiter`
- * and hands `WaitQueue` back exactly what it minted (never a waiter from a different `FleetQueue`
- * or from the worker's own acquisition path, so the shapes always agree at runtime even though
- * `WaitQueue`'s own types do not know that).
- */
+/** `WaitQueue` has no fleet awareness; every waiter reaching here was minted by this queue, so the cast holds. */
 function asFleet<Value>(value: Value): Value extends undefined ? undefined : FleetWaiter {
   return value as never;
 }
@@ -103,13 +64,14 @@ export class FleetQueue {
     return this.#queue.depth;
   }
 
-  /** Every waiter still holding a slot, oldest first (ADR 0005 §11's dispatch order). See
-   * `WaitQueue#list`. */
+  get physicalDepth(): number {
+    return this.#queue.physicalDepth;
+  }
+
   list(): readonly FleetWaiter[] {
     return this.#queue.list().map((waiter) => asFleet(waiter));
   }
 
-  /** Where each waiter not yet settled stands. See `WaitQueue#places`. */
   places(): readonly QueuePlace[] {
     return this.#queue.places();
   }

@@ -24,11 +24,12 @@ describe("simlock/client smoke test", () => {
     const requestFrame = connection.lastSentOf("lease.request")!;
     connection.reply(requestFrame.id, {
       device: {
+        physical: false,
         createdAt: 0,
         driverData: null,
         driverDeviceId: "sim-1",
         id: "device_1",
-        spec: { model: "iPhone 17", osVersion: "18.0", platform: "ios" },
+        spec: { physical: false, model: "iPhone 17", osVersion: "18.0", platform: "ios" },
         state: "leased",
       },
       lease: {

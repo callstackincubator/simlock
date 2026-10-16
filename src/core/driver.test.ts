@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import type { PhysicalDevice, PhysicalSpec, VirtualDevice } from "./domain.js";
 import {
   DiskSpaceGuard,
+  type Driver,
+  type DriverDevice,
+  type DriverRefusalReason,
   InsufficientDiskSpaceError,
+  type PhysicalInspection,
   sameReceipt,
+  toDriverDevice,
   UnknownModelError,
+  uninstallPlan,
 } from "./driver.js";
+import { FakeDriver } from "./fake-driver.js";
+import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -123,5 +132,206 @@ describe("UnknownModelError", () => {
       "No android model of class tablet is listed on this host; name one in android.defaultModels.tablet",
     );
     expect(error).toMatchObject({ class: "tablet", model: undefined, platform: "android" });
+  });
+});
+
+declare const driver: Driver;
+declare const lifecycle: ManagedDeviceLifecycle;
+declare const physicalDevice: PhysicalDevice;
+declare const virtualDevice: VirtualDevice;
+
+describe("the virtual-only driver and lifecycle calls (ADR 0022 §4, §5)", () => {
+  const physicalDriverDevice = {
+    address: "00008110-001A2B3C4D5E",
+    deviceId: "00008110-001A2B3C4D5E",
+    driverData: {},
+    physical: true,
+  } satisfies DriverDevice & { readonly physical: true };
+  const physicalSpec: PhysicalSpec = {
+    class: "phone",
+    model: "iPhone 15 Pro",
+    osVersion: "18.4",
+    physical: true,
+    platform: "ios",
+  };
+  const prepare = { mode: "full", purpose: "prepare" } as const;
+
+  /** Never run: every line must fail to compile, or its `@ts-expect-error` is itself an error. */
+  function physicalCallsDoNotCompile(): void {
+    // @ts-expect-error a physical driver device is not a VirtualDriverDevice
+    void driver.makeReady(physicalDriverDevice, prepare);
+    // @ts-expect-error a physical driver device is not a VirtualDriverDevice
+    void driver.reclaim(physicalDriverDevice, { clean: "standard" });
+    // @ts-expect-error a physical driver device is not a VirtualDriverDevice
+    void driver.shutdown(physicalDriverDevice);
+    // @ts-expect-error a physical driver device is not a VirtualDriverDevice
+    void driver.destroy(physicalDriverDevice);
+    // @ts-expect-error a physical driver device is not a VirtualDriverDevice
+    void driver.destroyLegacy?.(physicalDriverDevice);
+    // @ts-expect-error a physical spec is not a VirtualSpec
+    void driver.provision(physicalSpec);
+    // @ts-expect-error a resolved spec is virtual, so it is not assignable to a physical one
+    const _resolved: Promise<PhysicalSpec> = driver.resolveSpec({ model: "m", platform: "ios" });
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.bootForLease(physicalDevice, undefined as never);
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.bootWarm(physicalDevice, undefined as never);
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.readyProvisionedForLease(physicalDevice);
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.shutdown(physicalDevice, "test", "cleanup");
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.destroy(physicalDevice, "test", "cleanup");
+    // @ts-expect-error a physical record is not a VirtualDevice
+    void lifecycle.recoverLeased(physicalDevice, "lse_1");
+  }
+
+  /** Never run: the same calls with the virtual types are the ones that compile. */
+  function virtualCallsCompile(): void {
+    void lifecycle.bootForLease(virtualDevice, undefined as never);
+    void lifecycle.bootWarm(virtualDevice, undefined as never);
+    void lifecycle.readyProvisionedForLease(virtualDevice);
+    void lifecycle.shutdown(virtualDevice, "test", "cleanup");
+    void lifecycle.destroy(virtualDevice, "test", "cleanup");
+    void lifecycle.recoverLeased(virtualDevice, "lse_1");
+  }
+
+  it("take a VirtualDriverDevice, a VirtualSpec and a VirtualDevice, and a resolved spec goes to provision as it is", async () => {
+    const fake: Driver = new FakeDriver({
+      availableOsVersions: ["18.4"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+
+    const spec = await fake.resolveSpec({ model: "iPhone 16", osVersion: "18.4", platform: "ios" });
+    const provisioned = await fake.provision(spec);
+    const device = { ...provisioned, physical: false } as const;
+    const ready = await fake.makeReady(device, prepare);
+    await fake.shutdown({ ...ready, physical: false });
+    await fake.destroy({ ...ready, physical: false });
+
+    expect(spec.physical).toBe(false);
+    expect(physicalCallsDoNotCompile).toBeTypeOf("function");
+    expect(virtualCallsCompile).toBeTypeOf("function");
+  });
+});
+
+describe("PhysicalInspection (ADR 0022 §5)", () => {
+  function otherPlatformDoesNotCompile(): void {
+    const otherPlatform: PhysicalInspection = {
+      enrollable: false,
+      message: "enrolled as iOS",
+      // @ts-expect-error only the core can know a device is enrolled on the other platform
+      reason: "enrolled-on-other-platform",
+    };
+    void otherPlatform;
+  }
+
+  it("lets a driver refuse with every reason but enrolled-on-other-platform", () => {
+    const reasons: Record<DriverRefusalReason, true> = {
+      "developer-mode-off": true,
+      locked: true,
+      "network-only": true,
+      "not-connected": true,
+      "os-too-old": true,
+      unreadable: true,
+      "unsupported-kind": true,
+      untrusted: true,
+      "virtual-device": true,
+    };
+
+    const refusals = (Object.keys(reasons) as DriverRefusalReason[]).map(
+      (reason): PhysicalInspection => ({ enrollable: false, message: `refused ${reason}`, reason }),
+    );
+
+    expect(refusals).toHaveLength(9);
+    expect(refusals.map((refusal) => !refusal.enrollable && refusal.reason)).not.toContain(
+      "enrolled-on-other-platform",
+    );
+    expect(otherPlatformDoesNotCompile).toBeTypeOf("function");
+  });
+});
+
+describe("toDriverDevice", () => {
+  const recordFields = {
+    address: "emulator-5554",
+    createdAt: 1_000,
+    driverData: { opaque: true },
+    driverDeviceId: "driver_1",
+    id: "dev_1",
+  };
+
+  it("carries physical: true and its enrollment app list for a physical record", () => {
+    const record: PhysicalDevice = {
+      ...recordFields,
+      enrolledApps: ["com.example.kept", "com.example.other"],
+      physical: true,
+      spec: {
+        class: "phone",
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        physical: true,
+        platform: "ios",
+      },
+      state: "leased",
+    };
+
+    expect(toDriverDevice(record)).toEqual({
+      address: "emulator-5554",
+      deviceId: "driver_1",
+      driverData: { opaque: true },
+      enrolledApps: ["com.example.kept", "com.example.other"],
+      physical: true,
+    });
+  });
+
+  it("gives an empty address for a record that has none", () => {
+    const record: VirtualDevice = {
+      createdAt: 1_000,
+      driverData: {},
+      driverDeviceId: "driver_1",
+      id: "dev_1",
+      mode: "full",
+      physical: false,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+      state: "provisioning",
+    };
+
+    expect(toDriverDevice(record).address).toBe("");
+  });
+
+  it("gives a virtual record's address, deviceId, driverData and physical: false", () => {
+    const record: VirtualDevice = {
+      ...recordFields,
+      mode: "full",
+      physical: false,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+      state: "reclaiming",
+    };
+
+    expect(toDriverDevice(record)).toEqual({
+      address: "emulator-5554",
+      deviceId: "driver_1",
+      driverData: { opaque: true },
+      physical: false,
+    });
+  });
+});
+
+describe("uninstallPlan", () => {
+  it("returns the listed-now apps not on the enrollment list, and the enrollment apps not listed now", () => {
+    expect(
+      uninstallPlan(
+        ["com.example.kept", "com.example.stray", "com.example.another"],
+        ["com.example.kept", "com.example.gone"],
+      ),
+    ).toEqual({
+      missing: ["com.example.gone"],
+      uninstall: ["com.example.stray", "com.example.another"],
+    });
+  });
+
+  it("returns nothing to uninstall and nothing missing when the two lists name the same apps", () => {
+    expect(uninstallPlan(["a", "b"], ["b", "a"])).toEqual({ missing: [], uninstall: [] });
   });
 });

@@ -1,0 +1,98 @@
+/* Panels: a card with a title and actions over its body. A table, a chart or a list sits in one. */
+
+.panel,
+.card {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.card {
+  padding: var(--space-4);
+}
+
+.panel {
+  position: relative;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 52px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.panel-body {
+  padding: var(--space-4);
+}
+
+.panel-flush > .panel-body {
+  padding: 0;
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.grid-sm {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.grid-md {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.grid-lg {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.row {
+  display: grid;
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+@media (min-width: 1024px) {
+  .row {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+
+  .row-even {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.empty {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.id {
+  display: inline-block;
+  max-width: min(100%, 16rem);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}

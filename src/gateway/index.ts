@@ -19,9 +19,8 @@ export { GatewayDispatcher } from "./dispatcher.js";
 // fallow-ignore-next-line unused-type -- public option shape for anyone composing a gateway; `main.ts` builds one inline.
 export type { GatewayTokenStore } from "./dispatcher.js";
 export { GatewayService, type GatewayServiceOptions } from "./service.js";
-// fallow-ignore-next-line unused-type -- public seam types (WorkerLink/WorkerRegistry/GatewayService satisfy them); #118's FleetLeaseCoordinator imports them directly from fleet-ports.js rather than through this barrel, so a custom implementation is this re-export's only consumer.
 export type { FleetViews } from "./fleet-ports.js";
-// fallow-ignore-next-line unused-type -- see FleetViews above.
+export type { WorkerRegistry } from "./worker-registry.js";
 export type { WorkerDirectory } from "./fleet-ports.js";
 // fallow-ignore-next-line unused-type -- see FleetViews above.
 export type { WorkerDispatchTarget } from "./fleet-ports.js";
@@ -33,3 +32,5 @@ export { createRoutingPolicy } from "./routing.js";
 // fallow-ignore-next-line unused-type -- public shape for a caller implementing its own routing policy; no current one exists outside routing.ts.
 export type { RoutingPolicy, RoutingPolicyName } from "./routing.js";
 export { GatewayOwnerRoutedFacts } from "./owner-routed-facts.js";
+export { GatewayRelay } from "./relay.js";
+export type { GatewayWorkerClient } from "./worker-client.js";

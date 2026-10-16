@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import { waitFor, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
  * `GET /v1/tokens` answers `token.list` over HTTP, so the console can name a lease's holder by
@@ -30,16 +30,13 @@ interface HttpDaemon {
 
 /** A daemon in `mode` with HTTP on, once its listener answers. */
 async function httpDaemon(mode: "worker" | "gateway"): Promise<HttpDaemon> {
-  const port = await freeLoopbackPort();
-  const http = { enabled: true, host: "127.0.0.1", port };
-  const env = await withDaemon(
-    mode === "gateway"
+  const { env, port } = await withHttpDaemon((port) => {
+    const http = { enabled: true, host: "127.0.0.1", port };
+    return mode === "gateway"
       ? { configOverrides: { http, mode: "gateway" }, driver: "none" }
-      : { configOverrides: { http } },
-  );
+      : { configOverrides: { http } };
+  });
   const baseUrl = `http://127.0.0.1:${port}`;
-  // Any CLI call starts the daemon; the listener comes up with it.
-  expect((await env.cli(["status", "--json"])).code).toBe(0);
   await waitFor(
     async () => {
       try {

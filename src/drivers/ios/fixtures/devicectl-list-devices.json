@@ -1,0 +1,381 @@
+{
+  "info": {
+    "arguments": ["devicectl", "list", "devices", "--json-output", "devicectl.json"],
+    "commandType": "devicectl.list.devices",
+    "environment": {
+      "CLICOLOR": "1",
+      "TERM": "xterm-256color"
+    },
+    "jsonVersion": 2,
+    "outcome": "success",
+    "version": "642.16"
+  },
+  "result": {
+    "devices": [
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "sameMachine",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "iPhone 16 Simulator",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "6F1E7A3B-8D5C-4A29-9B7E-0C1D2E3F4A51",
+          "reality": "simulated",
+          "platform": "iOS",
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 16",
+          "productType": "iPhone17,3",
+          "ecid": 0,
+          "serialNumber": "SIMULATOR0001",
+          "hardwareModel": "D47AP",
+          "supportedDeviceFamilies": [1, 2]
+        },
+        "identifier": "5C0C5E3F-0000-4000-8000-000000000001",
+        "properties": {
+          "hardware": {
+            "udid": "6F1E7A3B-8D5C-4A29-9B7E-0C1D2E3F4A51",
+            "reality": "simulated",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "marketingName": "iPhone 16",
+            "productType": "iPhone17,3",
+            "ecid": 0,
+            "serialNumber": "SIMULATOR0001"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "sameMachine",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "sameMachine",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "iPad Pro 11-inch (M4) Simulator",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "7A2B8C4D-9E6D-4B3A-8C8F-1D2E3F4A5B62",
+          "platform": "iOS",
+          "deviceType": "iPad",
+          "marketingName": "iPad Pro 11-inch (M4)",
+          "productType": "iPad16,3",
+          "ecid": 0,
+          "serialNumber": "SIMULATOR0002",
+          "hardwareModel": "J717AP",
+          "supportedDeviceFamilies": [2]
+        },
+        "identifier": "5C0C5E3F-0000-4000-8000-000000000002",
+        "properties": {
+          "hardware": {
+            "udid": "7A2B8C4D-9E6D-4B3A-8C8F-1D2E3F4A5B62",
+            "platform": "iOS",
+            "deviceType": "iPad",
+            "marketingName": "iPad Pro 11-inch (M4)",
+            "productType": "iPad16,3",
+            "ecid": 0,
+            "serialNumber": "SIMULATOR0002"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "sameMachine",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "localNetwork",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "Wi-Fi iPhone",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "00008130-000A11112222801C",
+          "reality": "physical",
+          "platform": "iOS",
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 15 Pro",
+          "productType": "iPhone16,1",
+          "ecid": 3150211884056605,
+          "serialNumber": "WFIPHONE0001",
+          "hardwareModel": "D83AP",
+          "supportedDeviceFamilies": [1, 2]
+        },
+        "identifier": "A7D3E1C0-4B5F-4E6A-9C2D-1F0E8B7A6C51",
+        "properties": {
+          "hardware": {
+            "udid": "00008130-000A11112222801C",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "marketingName": "iPhone 15 Pro",
+            "productType": "iPhone16,1",
+            "ecid": 3150211884056605,
+            "serialNumber": "WFIPHONE0001"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "localNetwork",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "localNetwork",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "Wi-Fi iPad",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4"
+        },
+        "hardwareProperties": {
+          "udid": "00008112-000B3344556677AB",
+          "platform": "iOS",
+          "deviceType": "iPad",
+          "marketingName": "iPad Pro 11-inch (M4)",
+          "productType": "iPad16,3",
+          "ecid": 3150211884056606,
+          "serialNumber": "WFIPAD000001",
+          "hardwareModel": "J717AP",
+          "supportedDeviceFamilies": [2]
+        },
+        "identifier": "B8E4F2D1-5C6A-4F7B-8D3E-2A1F9C8B7D62",
+        "properties": {
+          "hardware": {
+            "udid": "00008112-000B3344556677AB",
+            "platform": "iOS",
+            "deviceType": "iPad",
+            "marketingName": "iPad Pro 11-inch (M4)",
+            "productType": "iPad16,3",
+            "ecid": 3150211884056606,
+            "serialNumber": "WFIPAD000001"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {},
+          "connection": {
+            "transportType": "localNetwork",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "wired",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "Szymon's iPhone",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "00008110-001A2B3C4D5E",
+          "reality": "physical",
+          "platform": "iOS",
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 15 Pro",
+          "productType": "iPhone16,1",
+          "ecid": 6368729128779814,
+          "serialNumber": "F4GXYZ1234",
+          "hardwareModel": "D83AP",
+          "supportedDeviceFamilies": [1, 2]
+        },
+        "identifier": "C9F5A3E2-6D7B-4A8C-9E4F-3B2A0D9C8E73",
+        "properties": {
+          "hardware": {
+            "udid": "00008110-001A2B3C4D5E",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "marketingName": "iPhone 15 Pro",
+            "productType": "iPhone16,1",
+            "ecid": 6368729128779814,
+            "serialNumber": "F4GXYZ1234"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "wired",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "wired",
+          "pairingState": "unpaired"
+        },
+        "deviceProperties": {
+          "name": "Spare iPhone",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.4",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "00008101-000C99887766001E",
+          "reality": "physical",
+          "platform": "iOS",
+          "deviceType": "iPhone",
+          "marketingName": "iPhone 14",
+          "productType": "iPhone14,7",
+          "ecid": 3150211884056607,
+          "serialNumber": "F4GSPARE001",
+          "hardwareModel": "D27AP",
+          "supportedDeviceFamilies": [1, 2]
+        },
+        "identifier": "D0A6B4F3-7E8C-4B9D-8F5A-4C3B1E0D9F84",
+        "properties": {
+          "hardware": {
+            "udid": "00008101-000C99887766001E",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "marketingName": "iPhone 14",
+            "productType": "iPhone14,7",
+            "ecid": 3150211884056607,
+            "serialNumber": "F4GSPARE001"
+          },
+          "software": {
+            "osVersionNumber": "18.4"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "wired",
+            "pairingState": "unpaired"
+          }
+        },
+        "visibilityClass": "default"
+      },
+      {
+        "connectionProperties": {
+          "authenticationType": "manualPairing",
+          "isMobileDeviceOnly": false,
+          "tunnelState": "disconnected",
+          "tunnelTransportProtocol": "tcp",
+          "transportType": "wired",
+          "pairingState": "paired"
+        },
+        "deviceProperties": {
+          "name": "Desk iPad",
+          "bootState": "booted",
+          "passcodeLocked": false,
+          "osVersionNumber": "18.2",
+          "developerModeStatus": "enabled"
+        },
+        "hardwareProperties": {
+          "udid": "00008027-00112233445566AA",
+          "reality": "physical",
+          "platform": "iOS",
+          "deviceType": "iPad",
+          "marketingName": "iPad Pro 11-inch (M4)",
+          "productType": "iPad16,3",
+          "ecid": 3150211884056608,
+          "serialNumber": "DMPDESKIPAD1",
+          "hardwareModel": "J717AP",
+          "supportedDeviceFamilies": [2]
+        },
+        "identifier": "E1B7C5A4-8F9D-4CAE-9A6B-5D4C2F1E0A95",
+        "properties": {
+          "hardware": {
+            "udid": "00008027-00112233445566AA",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPad",
+            "marketingName": "iPad Pro 11-inch (M4)",
+            "productType": "iPad16,3",
+            "ecid": 3150211884056608,
+            "serialNumber": "DMPDESKIPAD1"
+          },
+          "software": {
+            "osVersionNumber": "18.2"
+          },
+          "state": {
+            "developerModeStatus": "enabled"
+          },
+          "connection": {
+            "transportType": "wired",
+            "pairingState": "paired"
+          }
+        },
+        "visibilityClass": "default"
+      }
+    ]
+  }
+}

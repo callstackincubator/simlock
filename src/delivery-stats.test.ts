@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,12 +24,17 @@ const input = {
     {
       number: 10,
       title: "this week, two rounds",
+      createdAt: "2026-10-03T03:00:00Z",
       mergedAt: "2026-10-03T09:00:00Z",
+      additions: 100,
+      deletions: 20,
+      changedFiles: 3,
       body:
         "### Status\nImplement: done  Review: round 2, 0 open\n\n" +
         review(
           [
             "Spec review: 4 findings, 1 fixed. Code review: 2 findings, 2 fixed.",
+            "Rounds: 2. Tokens: 12.5M.",
             "Mutate: 12 mutants, 1 alive.",
             "",
             "Rejected:",
@@ -95,6 +100,20 @@ const input = {
       ),
     },
     {
+      number: 22,
+      title: "this week, only the comment review led to a fix",
+      mergedAt: "2026-10-02T15:00:00Z",
+      body: review(
+        [
+          "Spec review: 0 blocking, 0 fixed, 0 notes. Code review: 0 blocking, 0 fixed, 0 notes. Claims review: 0 blocking, 0 fixed, 0 notes. Comment review: 4 blocking, 3 fixed, 1 note.",
+          "",
+          "Rejected:",
+          "",
+          "- comments: a why comment — it names an upstream bug",
+        ].join("\n"),
+      ),
+    },
+    {
       number: 16,
       title: "this week, a Review heading with no counts",
       mergedAt: "2026-10-02T11:00:00Z",
@@ -146,7 +165,6 @@ function row(output: string, day: string): string[] {
     .map((cell) => cell.trim());
 }
 
-/** The bullet lines under the heading that starts with `heading`, up to the next heading. */
 function section(output: string, heading: string): string[] {
   const lines = output.split("\n");
   const start = lines.findIndex((l) => l.startsWith(heading));
@@ -156,24 +174,22 @@ function section(output: string, heading: string): string[] {
 }
 
 describe("delivery-stats.mjs", () => {
-  it("counts each week's merged PRs, their review findings, fixes, notes, second rounds, alive mutants and handoffs", () => {
+  it("counts each week's merged PRs, their review findings (comment findings under claims), fixes, notes, second rounds, median hours, rounds and tokens, and handoffs", () => {
     const output = run(["--weeks", "2"]);
 
-    // Week from | Merged | Reviewed | Spec review | Code review | Claims review | Notes | No fix | Round 2 | Mutants alive | Handoffs
-    // #16's Review heading has no counts line, so it is merged but not reviewed; #15 had a code fix
-    // and #19 a claims fix, so neither is "No fix". #10, #11 and #15 count every finding they
-    // raised; #17, #18 and #19 their blocking ones, and notes.
     expect(row(output, "2026-09-27")).toEqual([
       "2026-09-27",
-      "8",
-      "6",
+      "9",
+      "7",
       "2/10 (20%)",
       "4/4 (100%)",
-      "2/3 (67%)",
-      "7",
+      "5/7 (71%)",
+      "8",
       "2",
       "1",
-      "1/12",
+      "6.0",
+      "1",
+      "12.5",
       "1",
     ]);
     expect(row(output, "2026-09-20")).toEqual([
@@ -186,7 +202,9 @@ describe("delivery-stats.mjs", () => {
       "0",
       "0",
       "0",
-      "0/0",
+      "-",
+      "1",
+      "-",
       "1",
     ]);
     expect(output, "a PR merged before the first week counts nowhere").not.toContain("9 findings");
@@ -203,7 +221,41 @@ describe("delivery-stats.mjs", () => {
     ]);
     expect(section(output, "### code")).toEqual(["- #10 a code claim — its reason"]);
     expect(section(output, "### claims")).toEqual(["- #19 a stale claim — the doc is right"]);
+    expect(section(output, "### comments")).toEqual([
+      "- #22 a why comment — it names an upstream bug",
+    ]);
     expect(section(output, "### untagged")).toEqual(["- #10 an untagged claim — its reason"]);
+  });
+
+  it("lists one row per PR merged this week with its hours, size, rounds and tokens, and their medians", () => {
+    const output = run(["--weeks", "2"]);
+    const rows = output.split("\n").filter((l) => l.startsWith("| #"));
+
+    expect(rows).toContain("| #10 | 6.0 | 3 | 120 | 2 | 12.5M | this week, two rounds |");
+    expect(rows).toContain("| #12 | - | - | - | - | - | this week, a person's PR |");
+    expect(rows, "a PR merged the week before is not a row").not.toContainEqual(
+      expect.stringContaining("| #13 |"),
+    );
+    expect(output).toContain("Medians: 6.0 hours, 120 lines, 1 rounds, 12.5M tokens.");
+  });
+
+  it("with --calibration, prints the last four weeks' rejected findings by review, comment ones under claims, and no table", () => {
+    const output = run(["--calibration"]);
+
+    expect(section(output, "## spec review")).toEqual([
+      "- #10 first spec claim — first reason",
+      "- #10 second spec claim — second reason",
+      "- #17 a blocking spec claim — not blocking: nothing breaks",
+    ]);
+    expect(section(output, "## code review")).toEqual([
+      "- #10 a code claim — its reason",
+      "- #13 last week's claim — reason",
+    ]);
+    expect(section(output, "## claims review")).toEqual([
+      "- #19 a stale claim — the doc is right",
+      "- #22 a why comment — it names an upstream bug",
+    ]);
+    expect(output).not.toContain("| Week from |");
   });
 
   it("lists this week's handoffs by what they are blocked on, and the open PRs waiting on hardware", () => {
@@ -215,5 +267,51 @@ describe("delivery-stats.mjs", () => {
     expect(section(output, "## Open PRs waiting on hardware")).toEqual([
       "- #30 feat(ios): boot a watch",
     ]);
+  });
+
+  it("reads GitHub by numbered pages, so a second page of comments is read and no --paginate is passed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "delivery-stats-gh-"));
+    const handoff = (issue: number): object => ({
+      issue_url: `https://api.github.com/repos/o/r/issues/${issue}`,
+      created_at: new Date().toISOString(),
+      body: `## Handoff\n\n### Blocked on\n\nmaintainer ${issue}`,
+    });
+    const chatter = { issue_url: "https://api.github.com/repos/o/r/issues/1", body: "hello" };
+    const pages = {
+      "repos/o/r/issues/comments": [
+        [handoff(7), ...Array.from({ length: 99 }, () => chatter)],
+        [handoff(8)],
+      ],
+      "repos/o/r/issues": [
+        [
+          { number: 30, title: "waits", pull_request: {} },
+          { number: 31, title: "plain issue" },
+        ],
+      ],
+    } as Record<string, object[][]>;
+    writeFileSync(join(dir, "pages.json"), JSON.stringify(pages));
+    writeFileSync(
+      join(dir, "gh"),
+      `#!${process.execPath}
+const { readFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args.includes("--paginate")) { console.error("HTTP 403: numeric-ID path"); process.exit(1); }
+const pages = JSON.parse(readFileSync(${JSON.stringify(join(dir, "pages.json"))}, "utf8"));
+const page = Number((args.find((a) => a.startsWith("page=")) ?? "page=1").slice(5));
+for (const item of (pages[args[3]] ?? [])[page - 1] ?? []) console.log(JSON.stringify(item));
+`,
+    );
+    chmodSync(join(dir, "gh"), 0o755);
+
+    const output = execFileSync(process.execPath, [SCRIPT, "--repo", "o/r", "--weeks", "1"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    });
+
+    expect(section(output, "## Handoffs this week")).toEqual([
+      "- #7 blocked on: maintainer 7",
+      "- #8 blocked on: maintainer 8",
+    ]);
+    expect(section(output, "## Open PRs waiting on hardware")).toEqual(["- #30 waits"]);
   });
 });

@@ -2,6 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
 import {
   type CapacityReader,
+  type WarmPoolReader,
   type CatalogReader,
   type ComponentInstaller,
   type Config,
@@ -20,7 +21,12 @@ import {
   type SerializedDecision,
 } from "../core/index.js";
 import { createLeasing, type Leasing } from "./create-leasing.js";
-import type { DeviceModeReader, LeaseCommands, QueueControl } from "./lease-ports.js";
+import type {
+  DeviceModeReader,
+  LeaseCommands,
+  LeaseEndParticipant,
+  QueueControl,
+} from "./lease-ports.js";
 import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
 
 /**
@@ -42,6 +48,7 @@ export interface TestEngineOptions {
   readonly describeFailure?: ((error: unknown) => LeaseRequestFailure) | undefined;
   readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>> | undefined;
   readonly modelPreferences?: ModelPreferences | undefined;
+  readonly leaseEndParticipants?: readonly LeaseEndParticipant[] | undefined;
 }
 
 /**
@@ -54,6 +61,7 @@ export interface TestEngine
     QueueControl,
     DeviceModeReader,
     CapacityReader,
+    WarmPoolReader,
     CatalogReader,
     PassthroughResolver,
     LeaseExpirer,
@@ -64,7 +72,7 @@ export interface TestEngine
   readonly cleanup: Core["cleanup"];
   readonly healthMonitor: LeaseHealthMonitor;
   readonly requests: Leasing["requests"];
-  /** The daemon's startup order: leasing's steps, core's device steps, then the first queue depth. */
+  /** The daemon's startup order: settle requests, read, reconcile leases (timers for the rest), converge devices, then the first queue depth. */
   convergeRunningCapacity(): Promise<void>;
   settle(): Promise<void>;
   /** Cancels leasing's timers: the lease expiry timers a test leaves armed. */
@@ -94,6 +102,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     describeFailure: options.describeFailure,
     eventBus: options.eventBus,
     idGenerator: options.idGenerator,
+    leaseEndParticipants: options.leaseEndParticipants,
     logger: options.logger,
     modelPreferences: options.modelPreferences,
   });
@@ -113,8 +122,10 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     expire: (leaseId) => leasing.expire(leaseId),
     nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),
     async convergeRunningCapacity() {
-      await leasing.startup();
-      await core.converge();
+      await leasing.settleRequests();
+      const read = await core.readStartup();
+      await leasing.reconcile(read);
+      await core.converge(read);
       leasing.announceQueueDepth();
     },
     async settle() {
@@ -128,10 +139,14 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     get queueDepth() {
       return leasing.queueDepth;
     },
+    get physicalQueueDepth() {
+      return leasing.physicalQueueDepth;
+    },
     waitingRequests: () => leasing.waitingRequests(),
     cancelPending: (requesterId) => leasing.cancelPending(requesterId),
     pendingRequestOwner: (requesterId) => leasing.pendingRequestOwner(requesterId),
     servesDefaultMode: (spec: DeviceSpec) => leasing.servesDefaultMode(spec),
+    figures: () => core.warmPoolReader.figures(),
     get runningCapacity() {
       return core.capacityReader.runningCapacity;
     },
@@ -141,6 +156,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
       return core.capacityReader.ramBudget;
     },
     listCatalog: (platform) => core.catalog.listCatalog(platform),
-    passthrough: (tool, args, context) => core.catalog.passthrough(tool, args, context),
+    passthrough: (tool, device, args, context) =>
+      core.catalog.passthrough(tool, device, args, context),
   };
 }

@@ -1,6 +1,12 @@
 import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/index.js";
+import type { WarmPoolFigures } from "./warm-pool/index.js";
 import type { Platform } from "./domain.js";
-import type { PassthroughCommand, PassthroughContext } from "./driver.js";
+import type {
+  PassthroughCommand,
+  PassthroughContext,
+  PhysicalDriverDevice,
+  VirtualDriverDevice,
+} from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 
 /** Read-only capacity view used by daemon status. */
@@ -13,6 +19,12 @@ export interface CapacityReader {
   /** Whether creating one more full device of `platform` would be refused for RAM, by the same
    * check the planner makes. */
   atRamBudget(platform: CapacityPlatform): boolean;
+}
+
+/** Read-only view of the warm pool, used by daemon status and doctor. */
+export interface WarmPoolReader {
+  /** The pool as its last pass left it. */
+  figures(): WarmPoolFigures;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */
@@ -33,9 +45,10 @@ export interface CatalogReader {
 export interface PassthroughResolver {
   passthrough(
     tool: string,
+    device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
     args: readonly string[],
     context?: PassthroughContext,
-  ): PassthroughCommand;
+  ): Promise<PassthroughCommand>;
 }
 
 /** Operator reset capability used by the nuke command facade. */

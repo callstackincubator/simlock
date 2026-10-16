@@ -1,11 +1,13 @@
 # Design guide
 
 How Simlock looks. The web console follows it today, and the landing page will
-follow it when it is built. The tokens live in `ui/src/styles.css`; change this
-guide and that file together.
+follow it when it is built. The tokens live in `ui/src/ds/foundation.css`; change
+this guide and that file together.
 
 The style is Callstack's console style, the one Apex uses: an off-white page,
 square cards a shade darker, mono labels in capitals, and one accent colour.
+Few words: a page says what it shows with its numbers, its statuses and its
+shape, not with sentences about them.
 Simlock's accent is orange where Apex's is green.
 
 ## Type
@@ -25,11 +27,11 @@ Simlock's accent is orange where Apex's is green.
 
   | Token | Size | Use |
   | --- | --- | --- |
-  | `--text-xs` | 12px | labels on cards and tables, the chip, a tab's count |
-  | `--text-sm` | 14px | tabs, buttons, captions, descriptions, table cells |
+  | `--text-xs` | 12px | labels, units, a row's second line, a link's count |
+  | `--text-sm` | 14px | links in the sidebar, buttons, table cells, facts |
   | `--text-md` | 16px | body text, page subtitles, card and panel titles |
-  | `--text-lg` | 20px | the wordmark |
-  | `--text-xl` | 28px | a page's title (`h1`), a stat card's number |
+  | `--text-lg` | 20px | a list's title, an inspector title that is an id |
+  | `--text-xl` | 28px | a page's and an inspector's title, a tile's number |
   | `--text-2xl` | 32px | the landing page's headings only |
 
 - Weights: 400 for text, 500 for labels and big numbers, 600 for titles, 700
@@ -54,8 +56,8 @@ have the same structure; only the values change.
 | `--border` | `#dededb` | `#2b2b2f` | card edges, dividers, grid lines |
 | `--border-strong` | `#85857f` | `#75757d` | an input's border, an outlined button |
 | `--text` | `#111110` | `#f2f2f0` | text |
-| `--text-muted` | `#5a5a55` | `#a1a1a8` | subtitles, captions, labels, inactive tabs |
-| `--accent` | `#f76b15` | `#ff7a1a` | orange fills: the wordmark, filled buttons, the tab underline, charts |
+| `--text-muted` | `#5a5a55` | `#a1a1a8` | units, second lines, labels, inactive links and tabs |
+| `--accent` | `#f76b15` | `#ff7a1a` | orange fills: the wordmark, filled buttons, the current page's and row's bar, the tab underline, charts |
 | `--accent-hover` | `#e2560a` | `#ff9442` | a hovered filled button |
 | `--on-accent` | `#111110` | `#0e0e0f` | text on an orange fill |
 | `--accent-text` | `#b93d0b` | `#ff8c42` | orange as text or a line: links, the focus ring |
@@ -68,8 +70,9 @@ links and the focus ring use `--accent-text`, which passes AA there.
 ### Orange is for brand and interaction only
 
 Use the accent the way Apex uses its green: the wordmark's block, the current
-tab's underline, filled buttons, links, the focus ring, selection, and the
-line or columns of a chart. Never use it to say something about state: not
+page's bar in the sidebar, the chosen row's bar, the current tab's underline,
+filled buttons, links, the focus ring, selection, and the line or columns of a
+chart. Never use it to say something about state: not
 for "busy", not for "warning", not for "new". A reader who sees orange should
 think "this is Simlock" or "I can act here", nothing else.
 
@@ -78,18 +81,27 @@ think "this is Simlock" or "I can act here", nothing else.
 | Token | Light | Dark | Means |
 | --- | --- | --- | --- |
 | `--status-ok` | `#15803d` | `#4ade80` | healthy, connected, ready |
-| `--status-warn` | `#a16207` | `#facc15` | needs a look soon: drained, stalled, over a limit |
+| `--status-warn` | `#92570a` | `#facc15` | needs a look soon: drained, stalled, over a limit, absent (a physical device that is enrolled and not there) |
 | `--status-error` | `#b91c1c` | `#f87171` | broken: disconnected, incompatible, quarantined, a refused sign-in |
 | `--status-idle` | `#57534e` | `#a8a29e` | neither: shut down, waiting, unknown |
 
-**A status always shows a word.** The colour is a second signal, never the only
-one: `● connected`, not a green dot. Use the daemon's own word for the state
-(`leased`, `quarantined`, `drained`), so the console and the CLI agree. In the
-console a status is an 8px square of its colour, then the word in `--text`
-(`Status` in `ui/src/status.tsx`). A word the console does not know, from a
-newer daemon, shows as itself in `--status-idle`. A count, such as the one on
-the Attention tab, is a number, not a status: it has neither a status colour
-nor the accent.
+One more fill is a neutral, not a status: `--slot-leased` (`#3f3f3b` light,
+`#d6d6d0` dark), for a leased device's slot and a share of leased capacity. A
+leased device is neither healthy nor in trouble; it is in use.
+
+**A status always has a word.** The colour is a second signal, never the only
+one. Use the daemon's own word for the state (`leased`, `quarantined`,
+`drained`), so the console and the CLI agree. In the console a status is an 8px
+square of its colour, then the word in `--text` (`Status` in
+`ui/src/ds/status.tsx`). In a list row, where there is room for the square
+alone (`StatusDot`), the word is the square's accessible name and its tooltip,
+and the chosen row's inspector shows it in full. A worker's square shows the
+worst of what is wrong with it: red for a lost or failed worker, amber for a
+drained or starting one, one over its RAM budget, or a load figure past its
+threshold, green otherwise (`workerHealth` in `ui/src/model/fleet.ts`). A word
+the console does not know, from a newer daemon, shows as itself in
+`--status-idle`. A count, such as the one on the Attention link, is a number,
+not a status: it has neither a status colour nor the accent.
 
 Every pair of text and background colour in both themes meets WCAG AA: 4.5:1
 for text, and 3:1 for the focus ring and an input's border against what is
@@ -116,38 +128,60 @@ scale; never a value between.
 
 ## Components
 
-- **Header.** Left: the "SIMLOCK" wordmark, `--on-accent` on an `--accent`
-  block, then the "By Callstack" chip. Right: the connection in a bordered box,
-  as a status (its word and its colour), then **Sign out** as a secondary
-  button. The sign-in screen has the same header, without the right side.
-- **Tab bar.** Under the header, one tab per view in a fixed order: Workers,
-  Leases, Waiting, Attention, Events. A tab is a label in `--text-muted`; the
-  current one is `--text` with a 2px `--accent` underline and
-  `aria-current="page"`. A 1px `--border` line runs under the bar. Attention
-  carries its count in a small bordered box, and none at zero.
-- **Page header.** The view's title, a one-line subtitle in `--text-muted`
-  under it, and the view's actions on the right, such as **All workers** on a
-  worker's page.
-- **Stat cards.** A row of cards under the page header: a label, a big number
-  (`--text-xl`), and a caption in `--text-muted` saying what it counts. A
-  card shows only numbers the view already has; it never makes a request of
-  its own.
-- **Panel.** A card with a header: a title, a description in
-  `--text-muted`, actions on the right, and a 1px line between the header and
-  its body. A table, a chart or a list sits in a panel. A panel is a region
-  named by its title.
+The components live in `ui/src/ds/` (the design system); `ui/AGENTS.md` lists them. A screen is
+put together from them and draws nothing of its own that one of them already draws.
+
+- **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
+  wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
+  Workers, Leases, Waiting, Attention, Events), then at the bottom the connection as a status,
+  **Sign out** and the collapse button. A link is an icon and its label in `--text-muted`; the
+  current one is `--text` on `--field` with a 2px `--accent` bar on its left and
+  `aria-current="page"`. Attention carries its count in a small bordered box, and none at zero.
+  Collapsed, the sidebar is 64px wide: the labels go, every icon sits on its centre line, each
+  link keeps its name (and a tooltip), the wordmark becomes "S" and the connection its square.
+  Only the operator collapses or widens it, with the button at its bottom; the browser keeps the
+  choice, and changing pages never changes it. With no choice made, a window under 1280px starts
+  it collapsed. Under 768px it is a bar along the top: the wordmark and a **menu** button that
+  opens the links and the bottom block under it.
+- **Page.** A page that is not a list, as the overview: its title (`h1`) and its actions on the
+  right, then its content. No subtitle: the title and what is under it say what the page is.
+- **List and inspector.** Every page of things (workers, leases, waiting requests, attention
+  items, events) is a list on the left, 260–360px wide (wider for events), and the chosen thing in
+  an inspector filling the rest. The list has a header (the page's title as `h1`, a short count
+  in mono beside it, then its filters), its rows, and the pager under them. A row is one or two
+  short lines: a status square, a title, one figure on the right, and at most one muted line or
+  bar under them; the chosen row is `--surface` with a 2px `--accent` bar on its left and
+  `aria-current="page"`. The address names the chosen thing (`/workers/<id>`). The inspector
+  has a breadcrumb, the thing's title (`h2`), one muted line under it, actions on the right, and
+  then cards, facts, tabs and panels.
+- **Stat tiles.** A row of tiles: a label, a big number (`--text-xl`), and a short unit in mono
+  beside it ("of 48", "last hour"). A tile that leads somewhere is a link as a whole. A tile
+  shows only numbers its page already has; it never makes a request of its own.
+- **Panel.** A card with a header: a title and, on the right, its actions. No description: a
+  panel's title says what it holds. A panel is a region named by its title.
+- **Facts.** A label and its value side by side, the label as a label. Facts that show a
+  payload keep the keys as the daemon spelled them (`leaseId`), in mono, not in capitals.
+- **Filters.** A row of chips, one choice of several: a radio group drawn as small mono boxes,
+  the chosen one filled `--field` with a `--border-strong` edge.
+- **Tabs.** Labels in a row over a 1px `--border` line; the current one `--text` with a 2px
+  `--accent` underline.
+- **Slots.** One square per device a worker may run, shaded by what the device is doing:
+  leased (a neutral fill, `--slot-leased`), ready (`--status-ok`), booting (`--status-idle`),
+  quarantined (`--status-error`), absent (`--status-warn`), free (a dashed `--border-strong`
+  outline). A group of slots carries its counts as words in its accessible name ("2 leased, 1
+  ready, 3 free") and each square its device in a tooltip; a legend names the shades.
 - **Table.** Fills its panel edge to edge. Headers are labels in
   `--text-muted`. Rows are roomy, 16px above and below, with a 1px line
   between them. Numbers, durations included, are mono and right-aligned.
-  Every table of a view's items is the one table component
-  (`ui/src/table.tsx`), so every such table pages the same way. A chart's
+  Every table of a page's items is the one table component
+  (`ui/src/ds/table.tsx`), so every such table pages the same way. A chart's
   "Minute by minute" table is not one: it always has its 60 rows.
 - **Pager.** Under a table, edge to edge in its panel, with a 1px `--border`
   line above it like a row's: the rows shown of how many in mono (`26–50 of
   1,240`), **Per page** as a select, then **Previous**, the page number in
   mono `--text-muted` (`Page 2 of 50`), and **Next**, as secondary buttons.
-  It wraps on a phone. Under a grid of cards it is a bar of its own, a
-  `--surface` card with a `--border` edge. It is hidden when every row fits
+  It wraps on a phone. Under a list it sits in the list's footer, its parts
+  stacked to fit the list's width. It is hidden when every row fits
   on one page. At either end, the button that would leave the list keeps its
   place and its focus, says so with `aria-disabled`, and goes quiet: its text
   `--text-muted`, its edge `--border`.
@@ -174,27 +208,34 @@ scale; never a value between.
   `--accent`, an area with a faint fill of it (8%), horizontal grid lines in
   `--border`, axis labels in Geist Mono `--text-muted`. Every colour comes from
   the stylesheet by class. Nothing moves: animation is off. Every chart has a
-  title, a caption saying what it counts, its numbers as a line of text under
-  it, and every minute as a table behind a "Minute by minute" disclosure, so
+  title saying what it counts, its numbers as a line of text under it, and every minute as a table behind a "Minute by minute" disclosure, so
   nothing is visible only in the picture. A chart can be focused, and the
   arrow keys step through it. Its focus ring goes round the whole chart, for
   keyboard focus only: a click on a chart draws none.
+- **Meters.** A bar under or beside a figure it shades: `--field` track, square, never the
+  accent. Its fill takes a status colour by class, or a neutral one; its level arrives inline as
+  a CSS custom property: `style-src 'self'` refuses a style attribute in markup, and the level
+  arrives anyway because React writes styles through the CSSOM, where the policy does not reach.
+  ADR 0011 allows the `style` prop because it creates no `<style>` element. A meter is never the
+  only place its number is, so it carries no accessible name and takes no focus. A load figure —
+  CPU, memory, disk — takes `LOAD_THRESHOLDS` from `ui/src/model/load-thresholds.ts`: amber at
+  85% full, red at 95%, neutral below, the current reading only; where the worker sends a memory
+  pressure, that word decides memory's colour instead. A worker sends no thresholds, so these are
+  the console's opinion alone and `simlock status` reports the same figures without one.
 
 ## Layout
 
-- Phone first. Every page works at 360px wide with no sideways scrolling of the
-  page. When the tabs do not fit, as on a phone, the tab bar scrolls sideways inside itself. Under 768px a
-  table's rows stack into blocks, each cell a line with its column's name
-  beside it (`data-label`). A wide table, of six columns or more, stacks the
-  same way under 1100px. Otherwise a table has a fixed layout: a column of
-  numbers is 8rem wide, the others share the rest, and a long cell wraps or,
-  for an id, is cut, so a table is never wider than its panel.
-- Stat cards fill the row, each at least 200px wide, and wrap.
-- From 768px a chart and the panel beside it share a row, two thirds and one
-  third; two panels of the same weight share it half and half.
-- A list of things that each carry several facts, such as workers, is a grid
-  of cards, each a title and its facts as label and value pairs. It pages at
-  24, 48 or 96 cards, whole rows of the grid at two, three or four columns.
+- Phone first. Every page works at 360px wide with no sideways scrolling of the page. Under 768px
+  the sidebar is a bar on top with a menu, and a list page shows its list until something is
+  chosen and the inspector after (the address says which). Under 768px a table's rows stack into
+  blocks, each cell a line with its column's name beside it (`data-label`). A wide table, of six
+  columns or more, stacks the same way under 1100px. Otherwise a table has a fixed layout: a
+  column of numbers is 8rem wide, the others share the rest, and a long cell wraps or, for an id,
+  is cut, so a table is never wider than its panel.
+- Stat tiles fill the row, each at least 170px wide, and wrap.
+- From 1024px a chart and the panel beside it share a row, two thirds and one third; two panels
+  of the same weight share it half and half.
+- A list page with nothing in its address shows its first row in the inspector on a wide screen.
 
 ## Focus and keyboard
 
@@ -207,9 +248,13 @@ scale; never a value between.
 
 ## Motion
 
-Almost none. Colour changes on hover take 120ms (`--duration`). Nothing slides,
-fades or bounces, charts included. With `prefers-reduced-motion: reduce`, there
-are no transitions at all.
+Short, and only where it says where something came from. Colour changes on hover take 120ms
+(`--duration`). Moves take 220ms (`--duration-move`) on one easing (`--ease`): the sidebar
+widens and narrows; a page rises 10px as it opens; a list slides in from the left and an
+inspector from the right, again each time another thing is chosen; the chosen row's bar and a
+meter or share bar slide to their new place. Nothing loops, nothing moves on its own, and
+charts never animate. With `prefers-reduced-motion: reduce`, there are no transitions and no
+animations at all.
 
 ## Voice
 
@@ -219,6 +264,7 @@ are no transitions at all.
   cannot be reached." Never blame the reader.
 - No exclamation marks, no emoji, no "please", no "oops".
 - Buttons are verbs: "Sign in", "Sign out".
-- A subtitle or a caption says what is shown, in one line: "Every worker in
-  the fleet: its connection, its devices and its leases."
+- Fewer words beat more. No subtitles under page titles, no descriptions under
+  panel titles, no column that repeats one value on every row. A figure's unit
+  is a word or two in mono beside it ("of 48", "last hour").
 - An empty or unfinished page says so in one line: "Coming soon.", "No leases."

@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     tags: [{ name: "slow" }, { name: "ios" }, { name: "android" }],
     include: ["src/**/*.test.ts", "ui/**/*.test.{ts,tsx}"],
+    // why: timing files move GiB through a daemon pair: far too slow to run once per mutant.
+    exclude: ["**/node_modules/**", "src/**/*.timing.test.ts"],
     // Stryker runs every test file in a worker thread, and this test sets process.env.TZ, which
     // a worker thread ignores: it is left out so it cannot abort every mutation run.
     testNamePattern: /^(?!.*on the browser's clock face).*$/,

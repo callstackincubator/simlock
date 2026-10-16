@@ -42,7 +42,7 @@ describe("Nuke", () => {
       driverData: { fakeDeviceId: "managed" },
       driverDeviceId: "managed",
       provisionDuration: 0,
-      spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
     });
     await registry.transitionDevice(device.id, "ready", {
       event: "device.ready",
@@ -156,6 +156,7 @@ function sequence() {
 
 function config(): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 1 },
@@ -190,6 +191,8 @@ function config(): Config {
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
     },
     capacity: {
       strategy: "resource",
@@ -210,6 +213,9 @@ function config(): Config {
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,

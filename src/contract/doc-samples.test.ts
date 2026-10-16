@@ -38,4 +38,16 @@ describe("worker list samples in the docs", () => {
       expect(OPERATIONS["worker.list"].output.parse(sample)).toEqual(sample);
     }
   });
+
+  it('every { "workers": [...] } sample in the docs parses as a worker list, and one in HTTP-API.md shows a worker\'s load', () => {
+    const samples = workerListSamples(readFileSync(join(docsDir, "HTTP-API.md"), "utf8"));
+
+    for (const sample of samples) {
+      expect(OPERATIONS["worker.list"].output.parse(sample)).toEqual(sample);
+    }
+    const shown = samples.flatMap(
+      (sample) => (sample as { workers: { load?: unknown }[] }).workers,
+    );
+    expect(shown.some((worker) => worker.load !== undefined)).toBe(true);
+  });
 });

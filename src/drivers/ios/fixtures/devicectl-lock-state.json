@@ -1,0 +1,17 @@
+{
+  "info": {
+    "arguments": ["devicectl", "device", "info", "lockState", "--json-output", "devicectl.json"],
+    "commandType": "devicectl.device.info.lockState",
+    "environment": {
+      "CLICOLOR": "1",
+      "TERM": "xterm-256color"
+    },
+    "jsonVersion": 2,
+    "outcome": "success",
+    "version": "642.16"
+  },
+  "result": {
+    "passcodeRequired": false,
+    "unlockedSinceBoot": true
+  }
+}

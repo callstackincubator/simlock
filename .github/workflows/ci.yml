@@ -16,8 +16,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Quality
+  # why: `pnpm check` runs these one after another in ~5 min; split, the slowest part (one e2e
+  # shard) sets the wall time. Keep the steps below in step with `pnpm check`.
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # why: the comment lint diffs against origin/main.
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Typecheck
+        run: pnpm run typecheck && pnpm run typecheck:e2e
+      - name: Lint
+        run: pnpm run lint && pnpm run lint:comments
+      - name: Format
+        run: pnpm run format:check
+
+  unit:
+    name: Unit tests
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -35,11 +65,135 @@ jobs:
           corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Quality checks
-        run: pnpm check
+      - name: Unit tests
+        run: pnpm run test:unit
+
+  timing:
+    name: Timing tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Timing tests
+        run: pnpm run test:timing
+
+  e2e:
+    name: E2E (${{ matrix.shard }}/3)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    strategy:
+      # why: one red shard must not cancel the others, or their failures go unreported.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build
+        run: pnpm run build && pnpm run build:e2e
+      - name: E2E tests
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm exec vitest run --project e2e --tags-filter='!slow' --shard="$SHARD/3"
+
+  # why: branch protection requires the check named Quality, so this job stands for all of the
+  # above. `always()` makes it report a failure when a job it needs fails, where a job skipped
+  # by a failed need would count as passed.
+  quality:
+    name: Quality
+    needs: [static, unit, timing, e2e]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            case $result in
+              success | skipped) ;;
+              *) echo "a job Quality needs ended $result" >&2; exit 1 ;;
+            esac
+          done
+
+  # Decides whether the Console job has work to do. A workflow-level `paths` filter would leave
+  # the required Console check pending forever on a PR it skips; a job skipped by `if` reports
+  # success instead. Pushes to main always run the console lane.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      console: ${{ steps.filter.outputs.console }}
+      browsers: ${{ steps.filter.outputs.browsers }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull_request run checks out the merge commit; its first parent is the base.
+          fetch-depth: 2
+      - name: Files the console lane depends on
+        id: filter
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "console=true" >>"$GITHUB_OUTPUT"
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The daemon and the CLI the console fixtures start reach almost all of src/, so any
+          # source file counts; so do the UI, the console specs, their helpers and the build
+          # config. Unit tests, docs, agent config and the other e2e files do not.
+          # --no-renames lists a moved file's old path too.
+          changed=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          if printf '%s\n' "$changed" | grep -v -E '^(src|ui)/.*\.test\.tsx?$' | grep -q -E \
+            '^(src/|ui/|e2e/(console|fake-driver|helpers)/|playwright\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig[^/]*\.json$|\.github/workflows/ci\.yml$)'; then
+            echo "console=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "console=false" >>"$GITHUB_OUTPUT"
+          fi
+          # Most console failures are Firefox- or WebKit-only, so a change to the UI or its
+          # specs runs every browser; any other change runs Chromium.
+          if printf '%s\n' "$changed" | grep -q -E '^(ui/|e2e/console/|playwright\.config\.ts$)'; then
+            echo "browsers=all" >>"$GITHUB_OUTPUT"
+          else
+            echo "browsers=chromium" >>"$GITHUB_OUTPUT"
+          fi
 
   console:
     name: Console
+    needs: changes
+    # Runs unless Changes said there is nothing to test, so a broken Changes job runs the lane.
+    if: ${{ !cancelled() && needs.changes.outputs.console != 'false' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -58,9 +212,23 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium firefox webkit
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
+        run: |
+          if [ "$BROWSERS" = chromium ]; then
+            pnpm exec playwright install --with-deps chromium
+          else
+            pnpm exec playwright install --with-deps chromium firefox webkit
+          fi
       - name: Browser lane
-        run: pnpm test:console
+        env:
+          BROWSERS: ${{ needs.changes.outputs.browsers }}
+        run: |
+          if [ "$BROWSERS" = chromium ]; then
+            pnpm test:console --project=chromium
+          else
+            pnpm test:console
+          fi
 
   fallow:
     name: Fallow

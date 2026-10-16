@@ -32,6 +32,11 @@ for operators, signed in with an operator token (see
   configurable capacity limit derived from the machine's CPU and RAM.
 - If the limit is reached, the CLI **blocks and waits** in a fair queue until a
   device frees up (with `--timeout` and `--no-wait` escape hatches).
+- A phone or tablet an admin enrolled is leased the same way, with
+  `simlock lease --physical`: one agent at a time, and on release every app
+  that is not on the device's enrollment list is uninstalled, so the next agent
+  starts from the apps it was enrolled with. Simlock never creates, erases or
+  destroys such a device.
 - Devices that sit unused are **cleaned up in tiers**: shut down after a short
   idle period (reclaim RAM), deleted after a longer one (reclaim disk).
 
@@ -66,7 +71,7 @@ registry, and every safety invariant stay on the worker.
   frees the device at once; `--detach` skips the staying alive and leaves the
   renewing to you. A holder that dies without releasing costs its device only
   until the TTL runs out.
-- **One lease per agent** (v1) — fleet-wide when a gateway issued it.
+- **One lease per agent by default** — raise `lease.maxPerRequester` to allow more; fleet-wide when a gateway issued it.
 - **Managed-device registry.** Simlock only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
   read-only to it.

@@ -26,7 +26,7 @@ const binaries = {
   sdkmanager: `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
 } as const;
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
-const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+const spec = { physical: false, model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
 interface Instance {
   readonly adbServerPid: number;

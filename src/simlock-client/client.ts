@@ -24,6 +24,7 @@ import {
   type OperationName,
   type Role,
 } from "../contract/index.js";
+import type { LinkChannel, LinkConnection } from "../link/index.js";
 import type { IpcConnection, IpcConnector } from "../ports/index.js";
 import { SimlockWire, WireCallError, type CallHooks, type LeaseScopedPush } from "./wire.js";
 import type {
@@ -38,7 +39,11 @@ import type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DeviceAddInput,
+  DeviceAddOutput,
   DeviceRecoveredPush,
+  DeviceRemoveInput,
+  DeviceRemoveOutput,
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
@@ -97,7 +102,11 @@ export type {
   ComponentRemoveInput,
   ComponentRemoveOutput,
   DaemonStopOutput,
+  DeviceAddInput,
+  DeviceAddOutput,
   DeviceRecoveredPush,
+  DeviceRemoveInput,
+  DeviceRemoveOutput,
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
@@ -197,8 +206,8 @@ export interface SimlockClient {
    * 7). Resolution only -- the caller is the process with a terminal, so it runs it. */
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand>;
   /**
-   * Runs `simctl`/`adb` **on the daemon's machine** against a device this client's principal
-   * leases, streaming the output to `options.onOutput` as it arrives and resolving with the
+   * why: runs `simctl`, `adb` or `devicectl` **on the daemon's machine** against a device this
+   * client's principal leases, streaming the output to `options.onOutput` as it arrives and resolving with the
    * command's exit code (ADR 0005 §19a). The counterpart to `resolvePassthrough`: that one
    * hands back a command line for a caller sharing the machine, this one is for a caller that
    * does not. `stdin` is written once and closed -- there is no pseudo-terminal, so
@@ -277,12 +286,39 @@ export interface SimlockAdminClient extends SimlockClient {
    * counts as details) or `COMPONENT_BUSY`.
    */
   removeComponent(input: ComponentRemoveInput): Promise<ComponentRemoveOutput>;
+
+  /**
+   * Enrols the physical device plugged into the host this daemon runs on, named by
+   * any ID the platform's driver reads. A device it cannot enrol is `DEVICE_NOT_ENROLLABLE` with
+   * a reason; a leased, reclaiming or busy one is `DEVICE_BUSY`. A device already
+   * enrolled is enrolled again: its record is kept and its model, OS version, class and apps are
+   * read anew (`reenrolled: true`). A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`.
+   */
+  addDevice(input: DeviceAddInput): Promise<DeviceAddOutput>;
+
+  /**
+   * Forgets an enrolled physical device, named by its canonical ID. Nothing is sent
+   * to the device. `UNKNOWN_DEVICE` for an ID with no enrolled device, `DEVICE_BUSY` for a leased,
+   * reclaiming or busy one (another operation holds it). A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`.
+   */
+  removeDevice(input: DeviceRemoveInput): Promise<DeviceRemoveOutput>;
 }
 
-/** Internal: builds either client. `admin` toggles only which methods the returned object
- * carries (an object literal with/without the extra methods) -- the daemon's own role check is
- * what actually stops an agent-role session from calling one of them; this flag exists purely
- * so `simlock/client` doesn't even show the admin methods in a caller's editor. */
+type OperationInput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["input"]>;
+type OperationOutput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
+
+// why: not part of `SimlockAdminClient`, so `simlock/admin` does not export it (ADR 0026).
+
+export interface RelayClientMethods {
+  relayRequest(
+    input: OperationInput<"relay.request">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayInvalid">,
+  ): Promise<OperationOutput<"relay.request">>;
+  // why: rejects on a connection that holds no link, since a channel is a link's (ADR 0028).
+  openChannel(options: { readonly signal: AbortSignal }): Promise<LinkChannel>;
+  relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">>;
+}
+
 export async function connectSimlockClient(
   options: ConnectOptions,
   admin: false,
@@ -317,7 +353,13 @@ export async function connectSimlockClient(
     await connection.close();
     throw error;
   }
-  const impl = new SimlockClientImpl(wire, hello.role, hello.principal, hello.daemonVersion);
+  const impl = new SimlockClientImpl(
+    wire,
+    hello.role,
+    hello.principal,
+    hello.daemonVersion,
+    isLinkConnection(connection) ? connection : undefined,
+  );
   return admin ? impl.asAdmin() : impl;
 }
 
@@ -345,7 +387,7 @@ function buildDegradedClient(
   admin: boolean,
 ): SimlockClient | SimlockAdminClient {
   const rejected = <T>(): Promise<T> => Promise.reject(error);
-  const client: SimlockAdminClient = {
+  const client: SimlockAdminClient & RelayClientMethods = {
     principal,
     role: admin ? "admin" : "agent",
     daemonVersion: error.details.daemonVersion,
@@ -407,8 +449,17 @@ function buildDegradedClient(
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
     removeComponent: () => rejected(),
+    addDevice: () => rejected(),
+    removeDevice: () => rejected(),
+    relayRequest: () => rejected(),
+    openChannel: () => rejected(),
+    relayCancel: () => rejected(),
   };
   return client;
+}
+
+function isLinkConnection(connection: IpcConnection): connection is LinkConnection {
+  return typeof (connection as Partial<LinkConnection>).openChannel === "function";
 }
 
 async function resolveConnection(options: ConnectOptions): Promise<IpcConnection> {
@@ -421,16 +472,9 @@ async function resolveConnection(options: ConnectOptions): Promise<IpcConnection
   );
 }
 
-/**
- * The single implementation both `SimlockClient` and `SimlockAdminClient` are backed by --
- * `asAdmin()` returns the same instance typed with the extra methods, since every admin
- * operation is a plain operation call like any other and there is nothing role-specific to
- * duplicate. It tracks no leases at all: ADR 0004 §3 deleted the one reason it used to
- * (synthesizing `onLeaseLost` on connection death), because a lease outlives the connection
- * that asked for it.
- */
 class SimlockClientImpl {
   readonly #wire: SimlockWire;
+  readonly #link: LinkConnection | undefined;
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
   readonly #deviceRecoveredListeners = new Set<(push: DeviceRecoveredPush) => void>();
@@ -442,8 +486,10 @@ class SimlockClientImpl {
     readonly role: Role,
     readonly principal: string,
     readonly daemonVersion: string,
+    link?: LinkConnection,
   ) {
     this.#wire = wire;
+    this.#link = link;
     wire.onLeaseScopedPush((push) => this.#handleLeaseScopedPush(push));
     wire.onDeath((error) => this.#handleConnectionLost(error));
   }
@@ -543,6 +589,24 @@ class SimlockClientImpl {
 
   async close(): Promise<void> {
     await this.#wire.close();
+  }
+
+  async relayRequest(
+    input: OperationInput<"relay.request">,
+    hooks: Pick<CallHooks, "onRelayHead" | "onRelayInvalid">,
+  ): Promise<OperationOutput<"relay.request">> {
+    const payload = await this.#callRaw("relay.request", input, hooks);
+    return this.#parseOutput("relay.request", payload);
+  }
+
+  openChannel(options: { readonly signal: AbortSignal }): Promise<LinkChannel> {
+    const link = this.#link;
+    if (link === undefined) return Promise.reject(new Error("The connection carries no link"));
+    return link.openChannel(options);
+  }
+
+  relayCancel(input: OperationInput<"relay.cancel">): Promise<OperationOutput<"relay.cancel">> {
+    return this.#call("relay.cancel", input);
   }
 
   // ---- admin-only operations ------------------------------------------------------------------
@@ -653,18 +717,14 @@ class SimlockClientImpl {
     return this.#call("component.remove", input);
   }
 
-  // ---- abort (ADR §10) ------------------------------------------------------------------------
+  addDevice(input: DeviceAddInput): Promise<DeviceAddOutput> {
+    return this.#call("device.add", input);
+  }
 
-  /**
-   * The four behaviours, all funneled through one function once we know the request was sent
-   * and a signal was given:
-   *
-   * - already resolved by the time abort fires -> `#requestDone` guards the raw promise's own
-   *   `.then` from resolving twice; the abort handler itself never runs any cancellation logic
-   *   because `#requestDone` is also checked there.
-   * - queued / in-flight / not-found are all resolved by `#cancelOnAbort`, driven entirely by
-   *   `lease.cancel`'s own three-way result.
-   */
+  removeDevice(input: DeviceRemoveInput): Promise<DeviceRemoveOutput> {
+    return this.#call("device.remove", input);
+  }
+
   #requestLeaseWithAbort(
     requestPromise: Promise<LeaseGrant>,
     signal: AbortSignal,

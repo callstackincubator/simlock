@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
 /**
@@ -15,11 +15,10 @@ import type { RecordedEvent } from "./helpers/events.js";
  */
 
 async function gatewayWithWorker() {
-  const port = await freeLoopbackPort();
-  const gateway = await withDaemon({
+  const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
     driver: "none",
-  });
+  }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);
   const { secret } = minted.json as { secret: string };
   const worker = await withDaemon({
@@ -87,6 +86,109 @@ describe("gateway event relay", () => {
       workerId: expect.stringMatching(/\S/),
     });
     expect(own?.payload).not.toHaveProperty("workerId");
+
+    held.kill("SIGTERM");
+    await held.waitForExit(15_000);
+  });
+
+  it("a granted request leaves one gateway request.granted and a relayed lease.requested and lease.granted whose fleetRequestId is the gateway's own request id", async () => {
+    const { gateway } = await gatewayWithWorker();
+
+    const lease = await gateway.cli([...leaseArgs("fleet-granted"), "--detach"], {
+      timeout: 30_000,
+    });
+    expect(lease.code, lease.stderr).toBe(0);
+    const gatewayLeaseId = (lease.json as { lease: { id: string } }).lease.id;
+
+    let events: RecordedEvent[] = [];
+    await waitFor(
+      async () => {
+        events = await gateway.events();
+        return events.some(
+          (event) => event.event === "lease.granted" && "workerId" in (event.payload as object),
+        );
+      },
+      { label: "the worker's lease.granted reached the gateway", timeout: 20_000 },
+    );
+    const own = (name: string) =>
+      events.filter((event) => event.event === name && !("workerId" in (event.payload as object)));
+    const relayed = (name: string) =>
+      events.filter((event) => event.event === name && "workerId" in (event.payload as object));
+    const gatewayRequested = own("lease.requested");
+    expect(gatewayRequested).toHaveLength(1);
+    const requestId = (gatewayRequested[0]?.payload as { requestId?: string } | undefined)
+      ?.requestId;
+
+    expect(own("request.granted").map((event) => event.payload)).toEqual([
+      {
+        leaseId: gatewayLeaseId,
+        requestId,
+        worker: expect.stringMatching(/\S/),
+        workerLeaseId: expect.stringMatching(/^lse_/),
+      },
+    ]);
+    expect(relayed("lease.requested").map((event) => event.payload)).toEqual([
+      expect.objectContaining({ fleetRequestId: requestId }),
+    ]);
+    expect(relayed("lease.granted").map((event) => event.payload)).toEqual([
+      expect.objectContaining({ fleetRequestId: requestId }),
+    ]);
+
+    await gateway.cli(["release", gatewayLeaseId], { timeout: 30_000 });
+  });
+
+  it("a gateway request whose chosen leaseId a local client already holds on the worker ends in one gateway lease.rejected worker-failed and one relayed lease.declined with the same fleetRequestId, and no relayed lease.rejected", async () => {
+    const { gateway, worker } = await gatewayWithWorker();
+    const held = worker.cliBackground([...leaseArgs("local-holder"), "--lease-id", "taken-1"]);
+    await held.firstStdoutLine();
+
+    const clash = await gateway.cli(
+      [...leaseArgs("fleet-clash"), "--lease-id", "taken-1", "--detach"],
+      { timeout: 30_000 },
+    );
+    expect(clash.error).toMatchObject({ code: "LEASE_ID_TAKEN" });
+
+    let events: RecordedEvent[] = [];
+    await waitFor(
+      async () => {
+        events = await gateway.events();
+        return events.some((event) => event.event === "lease.declined");
+      },
+      { label: "the worker's lease.declined reached the gateway", timeout: 20_000 },
+    );
+    const gatewayRejections = events.filter(
+      (event) => event.event === "lease.rejected" && !("workerId" in (event.payload as object)),
+    );
+    const requested = events.find(
+      (event) =>
+        event.event === "lease.requested" &&
+        !("workerId" in (event.payload as object)) &&
+        (event.payload as { requester: string }).requester === "fleet-clash",
+    );
+    const requestId = (requested?.payload as { requestId?: string } | undefined)?.requestId;
+
+    expect(gatewayRejections.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        code: "LEASE_ID_TAKEN",
+        reason: "worker-failed",
+        requestId,
+        worker: expect.stringMatching(/\S/),
+      }),
+    ]);
+    expect(
+      events.filter((event) => event.event === "lease.declined").map((event) => event.payload),
+    ).toEqual([
+      expect.objectContaining({
+        fleetRequestId: requestId,
+        reason: "lease-id-taken",
+        workerId: expect.stringMatching(/\S/),
+      }),
+    ]);
+    expect(
+      events.filter(
+        (event) => event.event === "lease.rejected" && "workerId" in (event.payload as object),
+      ),
+    ).toEqual([]);
 
     held.kill("SIGTERM");
     await held.waitForExit(15_000);

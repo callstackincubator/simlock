@@ -1,10 +1,11 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, signIn, startDaemon, test } from "./fixtures.js";
+import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
 
 /** What `GET /v1/lease-requests` answers, as far as these tests read. */
 interface WaitingRequest {
+  readonly id: string;
   readonly requesterId: string;
   readonly queuePosition?: number;
   readonly workerId?: string;
@@ -46,21 +47,21 @@ async function untilTheDaemonSays(
   });
 }
 
-async function openWaiting(page: Page, daemon: RunningDaemon): Promise<void> {
-  await page.goto(new URL("/waiting", daemon.url).toString());
+async function openWaiting(page: Page, daemon: RunningDaemon, path = "/waiting"): Promise<void> {
+  await page.goto(new URL(path, daemon.url).toString());
   await signIn(page, daemon.tokens.operator);
   await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
 }
 
-/** A waiting request's row, by its requester. */
 function row(page: Page, requester: string): Locator {
   return page
-    .getByRole("row")
-    .filter({ has: page.getByRole("cell", { name: requester, exact: true }) });
+    .getByRole("list", { name: "Waiting requests" })
+    .getByRole("link")
+    .filter({ hasText: requester });
 }
 
-function cell(scope: Locator, label: string): Locator {
-  return scope.locator(`td[data-label="${label}"]`);
+function inspectorOf(page: Page, requester: string): Locator {
+  return page.getByRole("region", { name: requester, exact: true });
 }
 
 /** Whether the page itself scrolls sideways. */
@@ -70,8 +71,8 @@ async function hasHorizontalScroll(page: Page): Promise<boolean> {
   );
 }
 
-test.describe("the Waiting view", () => {
-  test("a request waiting for a device appears with its requester, spec, time waited and queue position", async ({
+test.describe("the Waiting page", () => {
+  test("a request waiting for a device appears in the list with its place, device and stage, and opens with its time waited", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -84,23 +85,34 @@ test.describe("the Waiting view", () => {
 
       await openWaiting(page, host);
 
-      const b = row(page, "agent-b");
-      await expect(cell(b, "Device")).toHaveText("iOS iPhone 16, runtime 18.4");
-      await expect(cell(b, "Stage")).toHaveText("queued");
-      await expect(cell(b, "Place in queue")).toHaveText("1");
-      await expect(cell(b, "Waiting for")).toHaveText(/^\d+ s$/);
-      const c = row(page, "agent-c");
-      await expect(cell(c, "Device")).toHaveText("iOS iPhone 16, runtime 18.4, mode slim");
-      await expect(cell(c, "Place in queue")).toHaveText("2");
+      await expect(row(page, "agent-b")).toContainText("#1");
+      await expect(row(page, "agent-b")).toContainText("iOS iPhone 16, runtime 18.4");
+      await expect(row(page, "agent-b")).toContainText("queued");
+      await expect(row(page, "agent-c")).toContainText("#2");
+      await expect(row(page, "agent-c")).toContainText("iOS iPhone 16, runtime 18.4, mode slim");
+      await expect(page.getByText("2 waiting")).toBeVisible();
+
+      // why: With no request named, the first row is the one shown, and the URL stays as it was.
+      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe("/waiting");
+
+      await row(page, "agent-c").click();
+      await expect(page.getByRole("heading", { level: 2, name: "agent-c" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toMatch(/^\/waiting\/.+/);
+      const inspector = inspectorOf(page, "agent-c");
+      await expect(inspector).toContainText("wants iOS iPhone 16, runtime 18.4, mode slim");
+      await expect(inspector).toContainText("2 of 2");
+      await expect(inspector.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
       // The time waited counts on in the browser, with no reload.
-      const before = await cell(c, "Waiting for").textContent();
-      await expect(cell(c, "Waiting for")).not.toHaveText(before ?? "", { timeout: 3_000 });
+      const waited = inspector.locator(".waiting-card-value").first();
+      const before = await waited.textContent();
+      await expect(waited).not.toHaveText(before ?? "", { timeout: 3_000 });
     } finally {
       await host.dispose();
     }
   });
 
-  test("on a gateway, the fleet queue's requests and a worker's own appear, the worker's with that worker", async ({
+  test("on a gateway, a worker's request links to that worker and the fleet queue's request names the gateway's queue", async ({
     page,
   }) => {
     const gateway = await startDaemon("gateway");
@@ -131,26 +143,34 @@ test.describe("the Waiting view", () => {
 
       await openWaiting(page, gateway);
 
-      await expect(cell(row(page, "local-b"), "Worker")).toHaveText("worker-a");
-      await expect(cell(row(page, "local-b"), "Place in queue")).toHaveText("1");
-      await expect(cell(row(page, "fleet-c"), "Device")).toHaveText("iOS iPhone 16, runtime 18.4");
-      await expect(cell(row(page, "fleet-c"), "Stage")).toHaveText("queued");
-      await expect(cell(row(page, "fleet-c"), "Place in queue")).toHaveText("1");
-      await expect(cell(row(page, "fleet-c"), "Worker")).toHaveText("—");
+      await row(page, "local-b").click();
+      const local = inspectorOf(page, "local-b");
+      await expect(local.getByRole("link", { name: "worker-a" })).toBeVisible();
+      await expect(local).toContainText("1 of 1");
+
+      await row(page, "fleet-c").click();
+      const fleet = inspectorOf(page, "fleet-c");
+      await expect(fleet).toContainText("the gateway's queue");
+      await expect(fleet).toContainText("iOS iPhone 16, runtime 18.4");
+      await expect(fleet).toContainText("queued");
+      await expect(fleet).toContainText("1 of 1");
     } finally {
       await worker?.dispose();
       await gateway.dispose();
     }
   });
 
-  test("a waiting request leaves the view within a second of being granted", async ({ page }) => {
+  test("a waiting request leaves the list within a second of being granted, and its own page says it is not waiting", async ({
+    page,
+  }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       const held = await holdTheDevice(host, "holder");
       const waiter = host.cliBackground([...LEASE, "--agent-id", "agent-b"]);
       await untilTheDaemonSays(host, (requests) => requests.length === 1);
       await openWaiting(page, host);
-      await expect(row(page, "agent-b")).toBeVisible();
+      await row(page, "agent-b").click();
+      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
 
       expect((await host.cli(["release", held])).code).toBe(0);
       const grant = JSON.parse(await waiter.firstStdoutLine(10_000)) as {
@@ -161,12 +181,30 @@ test.describe("the Waiting view", () => {
 
       await expect(row(page, "agent-b")).toHaveCount(0, { timeout: 1_000 });
       await expect(page.getByText("No requests are waiting.")).toBeVisible();
+      await expect(page.getByText("Request not waiting.")).toBeVisible();
+
+      await page.getByRole("link", { name: "Back to waiting" }).click();
+      expect(new URL(page.url()).pathname).toBe("/waiting");
+      await expect(page.getByText("Request not waiting.")).toHaveCount(0);
+      await expect(page.getByRole("heading", { level: 2 })).toHaveCount(0);
     } finally {
       await host.dispose();
     }
   });
 
-  test("the Waiting view has no horizontal scroll at 360px wide", async ({ page }) => {
+  test("a request id that was never waiting says it is not waiting", async ({ page }) => {
+    const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
+    try {
+      await openWaiting(page, host, "/waiting/req_none");
+
+      await expect(page.getByText("Request not waiting.")).toBeVisible();
+      await expect(page.getByRole("link", { name: "Back to waiting" })).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("the Waiting page has no horizontal scroll at 360px wide", async ({ page }) => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       await holdTheDevice(host, "holder");
@@ -182,14 +220,20 @@ test.describe("the Waiting view", () => {
 
       await openWaiting(page, host);
 
-      await expect(page.locator("tbody tr")).toHaveCount(1);
+      await expect(
+        page.getByRole("list", { name: "Waiting requests" }).getByRole("link"),
+      ).toHaveCount(1);
+      expect(await hasHorizontalScroll(page)).toBe(false);
+      await page.getByRole("list", { name: "Waiting requests" }).getByRole("link").click();
+      await expect(page.getByRole("heading", { level: 2 })).toBeVisible();
+      await settled(page);
       expect(await hasHorizontalScroll(page)).toBe(false);
     } finally {
       await host.dispose();
     }
   });
 
-  test("the Waiting view is usable with the keyboard alone", async ({ browserName, page }) => {
+  test("the Waiting page is usable with the keyboard alone", async ({ browserName, page }) => {
     // Safari moves focus to links with Option-Tab; plain Tab reaches only form controls there.
     const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
@@ -197,31 +241,27 @@ test.describe("the Waiting view", () => {
       await holdTheDevice(host, "holder");
       host.cliBackground([...LEASE, "--agent-id", "agent-b"]);
       await untilTheDaemonSays(host, (requests) => requests.length === 1);
-      const listed = await host.cli(["worker", "list", "--json"]);
-      const hostId = (listed.json as { workers: { id: string }[] }).workers[0]?.id ?? "";
-      /** Tabs forward until the link named `label` has focus, and follows it with Enter. */
-      const follow = async (label: string) => {
-        const link = page.getByRole("link", { name: label, exact: true });
-        for (let step = 0; step < 20; step += 1) {
+      const follow = async (link: Locator) => {
+        for (let step = 0; step < 30; step += 1) {
           if (await link.evaluate((element) => element === document.activeElement)) break;
           await page.keyboard.press(tab);
         }
         await expect(link).toBeFocused();
         await page.keyboard.press("Enter");
       };
-      await page.goto(host.url);
+      await page.goto(new URL("/waiting", host.url).toString());
       await page.keyboard.press(tab);
       await page.keyboard.type(host.tokens.operator);
       await page.keyboard.press("Enter");
-      await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
-
-      await follow("Waiting");
       await expect(page.getByRole("heading", { level: 1, name: "Waiting" })).toBeVisible();
-      await expect(row(page, "agent-b")).toBeVisible();
+
+      await follow(row(page, "agent-b"));
+      await expect(page.getByRole("heading", { level: 2, name: "agent-b" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toMatch(/^\/waiting\/.+/);
 
       // The request's worker opens that worker's page.
-      await follow(hostId);
-      await expect(page.getByRole("heading", { level: 1, name: hostId })).toBeVisible();
+      await follow(inspectorOf(page, "agent-b").getByRole("link").last());
+      expect(new URL(page.url()).pathname).toMatch(/^\/workers\/.+/);
     } finally {
       await host.dispose();
     }

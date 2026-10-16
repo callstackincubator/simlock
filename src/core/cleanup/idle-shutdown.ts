@@ -6,6 +6,7 @@ export const idleShutdownRule: CleanupRule = {
       if (
         device.state !== "ready" ||
         device.lastLeaseEndedAt === undefined ||
+        view.targeted.has(device.id) ||
         hasActiveLease(view, device.id)
       ) {
         return [];

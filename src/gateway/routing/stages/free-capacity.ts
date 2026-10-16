@@ -5,6 +5,7 @@ import { freeRunning } from "./free-running.js";
  * (`maxRunning - running - reserved`). A worker with none scores zero, so a fleet with no free
  * slot anywhere makes this stage abstain. */
 export const freeCapacity: RankStage = {
+  appliesToPhysical: false,
   kind: "rank",
   name: "free-capacity",
   score(worker, request) {

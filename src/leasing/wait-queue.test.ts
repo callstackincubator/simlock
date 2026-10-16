@@ -9,7 +9,12 @@ import {
   WaitQueue,
 } from "./wait-queue.js";
 
-const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const request = {
+  physical: false,
+  model: "iPhone 16",
+  osVersion: "26.5",
+  platform: "ios",
+} as const;
 
 function createQueue(onTimeout?: (waiter: import("./wait-queue.js").Waiter) => void) {
   const clock = new FakeClock(1_000);
@@ -103,13 +108,52 @@ describe("WaitQueue", () => {
       { id: unqueued.id },
     ]);
 
-    // The waiter ahead is granted: the ones behind it move up, and a settled one is gone.
     queue.resolve(starting, grant());
     await starting.promise;
     expect(queue.places()).toEqual([
       { id: second.id, queuePosition: 1 },
       { id: third.id, queuePosition: 2 },
       { id: unqueued.id },
+    ]);
+  });
+
+  it("counts head, depth and places() over virtual waiters only, and physicalDepth and a physical waiter's place over physical waiters only, in arrival order", async () => {
+    const { queue } = createQueue();
+    const physicalRequest = {
+      model: "iPhone 15 Pro",
+      physical: true,
+      platform: "ios",
+    } as const satisfies DeviceRequest;
+    const createPhysical = (requesterId: string) =>
+      queue.create(physicalRequest, { ownerId: requesterId, requesterId });
+    const firstPhysical = createPhysical("first-physical");
+    const firstVirtual = createWaiter(queue, "first-virtual");
+    const secondPhysical = createPhysical("second-physical");
+    const secondVirtual = createWaiter(queue, "second-virtual");
+    for (const waiter of [firstPhysical, firstVirtual, secondPhysical, secondVirtual]) {
+      queue.enqueue(waiter);
+    }
+
+    expect(queue.depth).toBe(2);
+    expect(queue.physicalDepth).toBe(2);
+    expect(queue.head).toBe(firstVirtual);
+    expect(queue.places()).toEqual([
+      { id: firstPhysical.id, queuePosition: 1 },
+      { id: firstVirtual.id, queuePosition: 1 },
+      { id: secondPhysical.id, queuePosition: 2 },
+      { id: secondVirtual.id, queuePosition: 2 },
+    ]);
+
+    queue.resolve(firstVirtual, grant());
+    await firstVirtual.promise;
+
+    expect(queue.depth).toBe(1);
+    expect(queue.physicalDepth).toBe(2);
+    expect(queue.head).toBe(secondVirtual);
+    expect(queue.places()).toEqual([
+      { id: firstPhysical.id, queuePosition: 1 },
+      { id: secondPhysical.id, queuePosition: 2 },
+      { id: secondVirtual.id, queuePosition: 1 },
     ]);
   });
 
@@ -277,6 +321,7 @@ describe("WaitQueue", () => {
     expect(queue.reject(rejected, new Error("first rejection"))).toBe(true);
     expect(queue.reject(rejected, new Error("late rejection"))).toBe(false);
     expect(queue.resolve(rejected, grant())).toBe(false);
+    expect(clock.pendingTimerCount).toBe(0);
     clock.advance(10);
 
     await expect(waiter.promise).resolves.toEqual(grant());

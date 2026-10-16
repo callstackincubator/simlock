@@ -1153,7 +1153,7 @@ async function addDevice(
     driverData: {},
     driverDeviceId: `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`,
     provisionDuration: 0,
-    spec: { model: "Phone", osVersion, platform },
+    spec: { physical: false, model: "Phone", osVersion, platform },
   });
   return device.id;
 }
@@ -1540,12 +1540,13 @@ describe("ComponentInstaller.remove", () => {
     "refuses a component a %s registry device uses with ComponentInUseError naming the count, and never calls removeComponent",
     async (state) => {
       const device: DeviceRecord = {
+        physical: false,
         createdAt: 0,
         driverData: {},
         driverDeviceId: "udid-1",
         id: "dev_1",
         mode: "full",
-        spec: { model: "Phone", osVersion: "27.0", platform: "ios" },
+        spec: { physical: false, model: "Phone", osVersion: "27.0", platform: "ios" },
         state,
       };
       const harness = await withSimlockInstall();
@@ -1562,7 +1563,7 @@ describe("ComponentInstaller.remove", () => {
             harness.registry.deleteComponent(platform, version),
           recordComponent: (record) => harness.registry.recordComponent(record),
           get snapshot() {
-            return { ...harness.registry.snapshot, devices: [device] };
+            return { ...harness.registry.snapshot, devices: [device], virtualDevices: [device] };
           },
         },
         timeoutMs,
@@ -1576,6 +1577,47 @@ describe("ComponentInstaller.remove", () => {
       expect(harness.registry.snapshot.components).toHaveLength(1);
     },
   );
+
+  it("does not count a physical device on the runtime's OS as using it, so removal is not refused for it", async () => {
+    const physical: DeviceRecord = {
+      createdAt: 0,
+      driverData: {},
+      driverDeviceId: "00008110-001A2B3C4D5E",
+      enrolledApps: [],
+      id: "dev_physical",
+      physical: true,
+      spec: {
+        class: "phone",
+        model: "iPhone 15 Pro",
+        osVersion: "27.0",
+        physical: true,
+        platform: "ios",
+      },
+      state: "ready",
+    };
+    const harness = await withSimlockInstall();
+    const installer = new ComponentInstaller({
+      clock: harness.clock,
+      decisions: new SerializedDecision(),
+      diskSpace: new DiskSpaceGuard(),
+      drivers: new DriverCatalog(harness.drivers),
+      eventBus: harness.bus,
+      filesystem: new MemoryFilesystem(),
+      registry: {
+        deleteComponent: (platform, version) => harness.registry.deleteComponent(platform, version),
+        recordComponent: (record) => harness.registry.recordComponent(record),
+        get snapshot() {
+          return { ...harness.registry.snapshot, devices: [physical], virtualDevices: [] };
+        },
+      },
+      timeoutMs,
+    });
+
+    await expect(installer.remove(removeIos("27.0"))).resolves.toMatchObject({
+      outcome: "removed",
+    });
+    expect(removals(harness.ios)).toHaveLength(1);
+  });
 
   it("refuses a component a foreign device uses with ComponentInUseError naming the count, and never calls removeComponent", async () => {
     const harness = await withSimlockInstall({ foreignDevices: { "27.0": 2 } });

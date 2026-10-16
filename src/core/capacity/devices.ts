@@ -1,4 +1,4 @@
-import type { DeviceRecord, DeviceSpec } from "../domain.js";
+import type { VirtualDevice, VirtualSpec } from "../domain.js";
 import type { PlannedCapacityDevice, RegisteredCapacityDevice } from "./strategy.js";
 
 /**
@@ -9,7 +9,7 @@ import type { PlannedCapacityDevice, RegisteredCapacityDevice } from "./strategy
  * record reports. A device quarantined straight from `provisioning` still carries
  * the `full` placeholder `registerDevice` wrote, so it counts at the full size too.
  */
-export function capacityDevice(record: DeviceRecord): RegisteredCapacityDevice {
+export function capacityDevice(record: VirtualDevice): RegisteredCapacityDevice {
   return {
     id: record.id,
     mode: record.state === "provisioning" ? "full" : record.mode,
@@ -19,12 +19,12 @@ export function capacityDevice(record: DeviceRecord): RegisteredCapacityDevice {
 }
 
 export function capacityDevices(
-  records: readonly DeviceRecord[],
+  records: readonly VirtualDevice[],
 ): readonly RegisteredCapacityDevice[] {
   return records.map(capacityDevice);
 }
 
 /** A device about to be created counts at its platform's full size, whatever its spec plans. */
-export function plannedCapacityDevice(spec: DeviceSpec): PlannedCapacityDevice {
+export function plannedCapacityDevice(spec: VirtualSpec): PlannedCapacityDevice {
   return { mode: "full", platform: spec.platform };
 }

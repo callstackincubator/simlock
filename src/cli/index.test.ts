@@ -29,7 +29,7 @@ import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { AdminSecretManager } from "../daemon/admin-secret.js";
 import { createCredentialRoleResolver } from "../daemon/session.js";
-import { SimlockError, type AnySimlockError } from "../contract/index.js";
+import { fromWireError, SimlockError, type AnySimlockError } from "../contract/index.js";
 import type {
   CatalogGetOutput,
   DeviceRecoveredPush,
@@ -69,9 +69,10 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 /** A minimal daemon lease response, for the tests that only care what the CLI prints. */
 const detachedGrant: LeaseGrant = {
   device: {
+    physical: false,
     id: "device-1",
     driverDeviceId: "ABCD",
-    spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     mode: "full",
   },
   environment: {},
@@ -82,6 +83,7 @@ const detachedGrant: LeaseGrant = {
     ownerId: "test-requester",
     grantedAt: 0,
     lastRenewedAt: 0,
+    idChosenByRequester: false,
     ttlMs: 60_000,
     ttlDeadline: 61_000,
   },
@@ -391,6 +393,7 @@ describe("CLI: exit codes", () => {
       grantedAt: 0,
       id: "lse_mine",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "some-other-principal",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -530,6 +533,33 @@ describe("CLI: exit codes", () => {
       ).resolves.toBe(10);
       expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
         error: { code: "EXEC_TIMEOUT", message: expect.stringContaining("exec.timeoutMs") },
+      });
+    });
+
+    it("without --lease, for a requester holding two leases, fails with a usage error naming both leases and --lease", async () => {
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["simctl", "list"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () =>
+                  Promise.resolve({
+                    leases: [ownLease, { ...ownLease, deviceId: "dev_2", id: "lse_other" }],
+                  }),
+                exec: () => Promise.reject(new Error("must not run")),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: {
+          code: "USAGE",
+          message: expect.stringMatching(/lse_mine.*lse_other.*--lease <id>/s),
+        },
       });
     });
 
@@ -1178,6 +1208,32 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
     expect(output.stderr).not.toContain("notice");
   });
 
+  it("daemon start reports the config error and launches nothing when config.json is invalid", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(
+      "/simlock/config.json",
+      JSON.stringify({ capacity: { config: { limits: { android: { maxDevices: 0 } } } } }),
+    );
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: new MemoryIpcTransport(),
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(["daemon", "start"], output.environmentWith());
+    expect(exitCode).toBe(1);
+    expect(launcher.launches).toBe(0);
+    expect(output.stderr).toContain("limits.android.maxDevices");
+    expect(output.stderr).not.toContain("Timed out");
+  });
+
   it("B1: a stale admin.token degrades to an agent session instead of bricking the invocation", async () => {
     const filesystem = new MemoryFilesystem();
     const ipcTransport = new MemoryIpcTransport();
@@ -1278,6 +1334,19 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(launched).toBe(false);
   });
 
+  it("prints the human view for daemon status when --json is absent", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        output.environmentWith({ connectExistingAdmin: async () => fakeClient() }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
+  });
+
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
@@ -1337,6 +1406,125 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       "Missing [ios] xcode: Xcode is not installed. Run `xcode-select`.",
     ]);
     expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
+  it("simlock doctor prints a driver-advisory finding to stderr as `Warning [<platform>] <code>: <message>`", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        code: "device-profile-hidden",
+        kind: "driver-advisory" as const,
+        message: '"Pixel 9" in devices.xml is not used',
+        platform: "android" as const,
+      },
+    ];
+
+    await expect(
+      runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stderr.split("\n")).toContain(
+      'Warning [android] device-profile-hidden: "Pixel 9" in devices.xml is not used',
+    );
+  });
+
+  it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        kind: "module-unavailable" as const,
+        module: "agent-device",
+        message: `found 0.20.3,\n  need ${"x".repeat(600)}`,
+        remedy: `install agent-device 0.21.28 or later,\nthen ${"y".repeat(600)}`,
+      },
+      {
+        kind: "warm-pool-target-unreachable" as const,
+        message: "iOS 27.0 is not installed",
+        platform: "ios" as const,
+        reason: "runtime-missing" as const,
+        remedy: "run simlock component install ios 27.0",
+        target: "iPhone 17 / 27.0 / full",
+      },
+      {
+        kind: "prerequisite-missing" as const,
+        message: "Xcode is not installed.",
+        platform: "ios" as const,
+        prerequisite: "xcode",
+        remedy: "Run `xcode-select`.",
+      },
+      {
+        code: "slim-runtime-unsupported",
+        kind: "driver-advisory" as const,
+        message: "detail",
+        platform: "ios" as const,
+      },
+    ];
+
+    await expect(
+      runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    const lines = output.stderr.split("\n");
+    const index = lines.findIndex((line) => line.startsWith("agent-device  fail  "));
+    expect(index).toBeGreaterThan(-1);
+    expect(lines[index]).toBe(
+      `agent-device  fail  found 0.20.3, need ${"x".repeat(500 - "found 0.20.3, need ".length)}; ${("install agent-device 0.21.28 or later, then " + "y".repeat(600)).slice(0, 500)}`,
+    );
+    expect(lines.filter((line) => line.startsWith("agent-device"))).toHaveLength(1);
+    for (const earlier of ["Warning [ios]", "Missing [ios]", "warm-pool-target-unreachable"]) {
+      expect(lines.findIndex((line) => line.startsWith(earlier))).toBeLessThan(index);
+      expect(lines.findIndex((line) => line.startsWith(earlier))).toBeGreaterThan(-1);
+    }
+    expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
+  it("simlock doctor writes <module>  fail  … for a finding of another module", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        kind: "module-unavailable" as const,
+        message: "needs\n  tmux",
+        module: "other-mod",
+        remedy: "install tmux",
+      },
+    ];
+
+    await runCli(
+      ["doctor"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+      }),
+    );
+
+    expect(output.stderr.split("\n")).toContain("other-mod  fail  needs tmux; install tmux");
+    expect(output.stderr).not.toContain("agent-device");
+  });
+
+  it("simlock doctor writes no agent-device line when the report has no such finding", async () => {
+    const output = outputCapture();
+    const findings = [{ deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" }];
+
+    await runCli(
+      ["doctor"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+      }),
+    );
+
+    expect(output.stderr).not.toContain("agent-device");
   });
 
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
@@ -1422,8 +1610,159 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
   });
 });
 
+describe("CLI: device add and device remove (ADR 0022 §2)", () => {
+  async function runDevice(argv: string[]) {
+    const output = outputCapture();
+    let connected = false;
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+      }),
+    );
+    return { code, connected, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it.each([
+    ["an unknown subcommand", ["device", "enroll", "X"]],
+    ["two IDs", ["device", "add", "--platform", "ios", "A", "B"]],
+    ["--yes, which remove does not take", ["device", "remove", "--yes", "X"]],
+    ["no --platform", ["device", "add", "X"]],
+  ])("exits 2 with USAGE and contacts nobody for %s", async (_case, argv) => {
+    const result = await runDevice(argv);
+
+    expect(result.code).toBe(2);
+    expect(result.connected).toBe(false);
+    expect(JSON.parse(result.stderr)).toEqual({
+      error: { code: "USAGE", message: expect.any(String) },
+    });
+  });
+
+  it("device --help prints both forms", async () => {
+    const result = await runDevice(["device", "--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("simlock device add --platform <ios|android> <id> [--json]");
+    expect(result.stdout).toContain("simlock device remove <id> [--json]");
+  });
+
+  it("prints one line for an enrollment, naming the platform's OS, and the JSON with --json", async () => {
+    const line = await runDevice(["device", "add", "--platform", "ios", "UDID-1"]);
+    const json = await runDevice(["device", "add", "--platform", "android", "SER-1", "--json"]);
+
+    expect(line.stdout).toBe(
+      "Enrolled iPhone 15 Pro (iOS 18.4) as UDID-1, 2 user apps recorded.\n",
+    );
+    expect(JSON.parse(json.stdout)).toMatchObject({ driverDeviceId: "SER-1", platform: "android" });
+  });
+
+  it.each([
+    ["device", ["device"]],
+    ["device -h", ["device", "-h"]],
+    ["device add --help", ["device", "add", "--help"]],
+    ["device remove -h", ["device", "remove", "-h"]],
+  ])("prints the usage and contacts nobody for %s", async (_case, argv) => {
+    const result = await runDevice(argv);
+
+    expect(result.code).toBe(0);
+    expect(result.connected).toBe(false);
+    expect(result.stdout).toBe(
+      "Usage: simlock device add --platform <ios|android> <id> [--json]\n" +
+        "       simlock device remove <id> [--json]\n",
+    );
+  });
+
+  it("says what is wrong with a usage error, and refuses --platform on remove", async () => {
+    const messages = async (argv: string[]) => {
+      const result = await runDevice(argv);
+      expect(result.code).toBe(2);
+      return (JSON.parse(result.stderr) as { error: { message: string } }).error.message;
+    };
+
+    expect(await messages(["device", "enroll", "X"])).toContain("Unknown device command: enroll");
+    expect(await messages(["device", "add", "--platform", "ios"])).toContain(
+      "device add takes exactly one <id>",
+    );
+    expect(await messages(["device", "remove", "A", "B"])).toContain(
+      "device remove takes exactly one <id>",
+    );
+    expect(await messages(["device", "add", "--platform", "windows", "X"])).toContain(
+      "device add needs --platform ios or --platform android",
+    );
+    await messages(["device", "remove", "--platform", "ios", "X"]);
+  });
+
+  it("closes the connection after an enrollment and after a removal", async () => {
+    const closed: string[] = [];
+    for (const argv of [
+      ["device", "add", "--platform", "ios", "U"],
+      ["device", "remove", "U"],
+    ]) {
+      const output = outputCapture();
+      await runCli(
+        argv,
+        output.environmentWith({
+          connectAdmin: async () => ({
+            ...fakeClient(),
+            close: () => {
+              closed.push(argv[1] ?? "");
+              return Promise.resolve();
+            },
+          }),
+        }),
+      );
+    }
+
+    expect(closed).toEqual(["add", "remove"]);
+  });
+
+  it("says again for a re-enrollment, one user app in the singular, and the Android OS name", async () => {
+    const output = outputCapture();
+    await runCli(
+      ["device", "add", "--platform", "android", "SER-1"],
+      output.environmentWith({
+        connectAdmin: async () => ({
+          ...fakeClient(),
+          addDevice: () =>
+            Promise.resolve({
+              appCount: 1,
+              class: "tablet" as const,
+              driverDeviceId: "SER-1",
+              id: "dev_1",
+              model: "Pixel Tablet",
+              osVersion: "15",
+              platform: "android" as const,
+              reenrolled: true,
+            }),
+        }),
+      }),
+    );
+
+    expect(output.stdout).toBe(
+      "Enrolled Pixel Tablet (Android 15) as SER-1 again, 1 user app recorded.\n",
+    );
+  });
+
+  it("prints the operation's output for remove with --json", async () => {
+    const result = await runDevice(["device", "remove", "UDID-1", "--json"]);
+
+    expect(JSON.parse(result.stdout)).toEqual({ driverDeviceId: "UDID-1", id: "UDID-1" });
+  });
+
+  it("prints one line for a removal, with no confirmation", async () => {
+    const result = await runDevice(["device", "remove", "UDID-1"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe(
+      "Removed UDID-1. It is no longer enrolled; nothing on the device changed.\n",
+    );
+  });
+});
+
 describe("CLI: component remove (ADR 0010 §8)", () => {
-  /** A client that records every removal it is asked for and answers it. */
   function removingClient(asked: unknown[]) {
     return fakeClient({
       removeComponent: async (input) => {
@@ -2584,6 +2923,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
         grantedAt: 1,
         id: "lease_1",
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ownerId: "agent-1",
         requesterId: "agent-1",
         ttlDeadline: 2,
@@ -2601,8 +2941,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
 
-    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
-    expect(output.stdout).toContain("ios 1/2");
+    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected -- ios 1/2");
     // No host facts on this view yet, so the line ends at the lease count.
     expect(output.stdout).toContain("1 lease(s)\n");
   });
@@ -2636,6 +2975,173 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain(
       "1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9",
+    );
+  });
+
+  describe("a worker's Load line", () => {
+    const GIB = 2 ** 30;
+    const PARTS = {
+      cpu: { busyPercent: 34.2, cores: 10, limited: false },
+      disk: { freeBytes: 120_688_581_018, totalBytes: 530_857_957_786 },
+      memory: {
+        availableBytes: 10_522_669_875,
+        limited: false,
+        pressure: "normal" as const,
+        swapUsedBytes: 1_288_490_189,
+        totalBytes: 32 * GIB,
+      },
+    };
+    const READING =
+      "CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free";
+    const NOW = 61_000;
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 1_000,
+      state: "downloading" as const,
+      waiters: 2,
+    };
+    const printWorkers = async (workers: unknown[]) => {
+      const output = outputCapture();
+      await runCli(
+        ["worker", "list"],
+        output.environmentWith({
+          clock: new FakeClock(NOW),
+          connectAdmin: async () =>
+            fakeClient({ listWorkers: () => Promise.resolve({ workers } as never) }),
+        }),
+      );
+      return output.stdout;
+    };
+
+    it("simlock worker list prints a connected or starting worker's Load line after its own line and before its install lines", async () => {
+      const stdout = await printWorkers([
+        {
+          ...connectedWorker,
+          installs: [install],
+          load: { ...PARTS, readAt: NOW - 12_000 },
+        },
+        {
+          connection: "connected",
+          drained: false,
+          health: "starting",
+          id: "wrk_2",
+          lastSeenAt: 1,
+          load: { memory: PARTS.memory, readAt: NOW - 3_000 },
+        },
+      ]);
+
+      const lines = stdout.trimEnd().split("\n");
+      expect(lines[0]).toMatch(/^wrk_1 \(mac-mini-1\): connected -- /);
+      expect(lines[1]).toBe(`  Load: ${READING} · read 12s ago`);
+      expect(lines[2]).toMatch(/^ {2}Install ios 26\.4: downloading for 60s, 2 waiters$/);
+      expect(lines[3]).toMatch(/^wrk_2: connected, starting/);
+      expect(lines[4]).toBe(
+        "  Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk unavailable · read 3s ago",
+      );
+    });
+
+    it("simlock worker list prints `no reading while disconnected` for a disconnected worker, and no Load line for an incompatible one or one that sent none", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, connection: "disconnected", drained: true, id: "wrk_a" },
+        {
+          connection: "incompatible",
+          drained: false,
+          id: "wrk_b",
+          lastSeenAt: 1,
+          protocol: { gateway: { max: 35, min: 35 }, worker: { max: 4, min: 4 } },
+        },
+        { ...connectedWorker, id: "wrk_c" },
+        { ...connectedWorker, id: "wrk_d", load: { ...PARTS, readAt: NOW - 1_000 } },
+      ]);
+
+      const lines = stdout.trimEnd().split("\n");
+      const loadAfter = (id: string) => {
+        const index = lines.findIndex(
+          (line) => line.startsWith(`${id}:`) || line.startsWith(`${id} (`),
+        );
+        const next = lines[index + 1];
+        return next?.startsWith("  Load:") === true ? next : undefined;
+      };
+      expect(loadAfter("wrk_d")).toBe(`  Load: ${READING} · read 1s ago`);
+      expect(loadAfter("wrk_a")).toBe("  Load: no reading while disconnected");
+      expect(loadAfter("wrk_b")).toBeUndefined();
+      expect(loadAfter("wrk_c")).toBeUndefined();
+    });
+
+    it("simlock worker list prints `read 0s ago` for a readAt ahead of its clock", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, load: { ...PARTS, readAt: NOW + 9_000 } },
+      ]);
+
+      expect(stdout).toContain(`  Load: ${READING} · read 0s ago\n`);
+    });
+
+    it("simlock worker list rounds a reading's age up to whole seconds", async () => {
+      const stdout = await printWorkers([
+        { ...connectedWorker, load: { ...PARTS, readAt: NOW - 1_001 } },
+      ]);
+
+      expect(stdout).toContain(`  Load: ${READING} · read 2s ago\n`);
+    });
+
+    it("simlock status against a gateway prints the gateway's own Load line, and each worker's Load line aged from the status time", async () => {
+      const output = outputCapture();
+      const status: StatusGetOutput = {
+        ...EMPTY_STATUS,
+        daemon: { health: "running", mode: "gateway" },
+        load: { ageMs: 4_000, ...PARTS },
+        workers: [
+          {
+            catalog: [],
+            connection: "connected",
+            devices: [],
+            drained: false,
+            id: "wrk_1",
+            lastSeenAt: 1,
+            leases: [],
+            load: { ...PARTS, readAt: NOW - 12_000 },
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          clock: new FakeClock(NOW),
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+
+      expect(output.stdout).toContain(`\nLoad: ${READING} · read 4s ago\n`);
+      expect(output.stdout).toContain(`\n  Load: ${READING} · read 12s ago\n`);
+    });
+  });
+
+  it("prints a starting worker as starting, with its leases unknown rather than none", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  connection: "connected" as const,
+                  drained: true,
+                  health: "starting" as const,
+                  id: "wrk_1",
+                  lastSeenAt: 1,
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toBe(
+      "wrk_1: connected, starting, drained -- capacity unknown, leases unknown\n",
     );
   });
 
@@ -2846,8 +3352,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       devices: [
         {
+          physical: false,
           id: "dev_1",
-          spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+          spec: {
+            physical: false,
+            model: "iPhone 17",
+            osVersion: "26.0",
+            platform: "ios" as const,
+          },
           mode: "full" as const,
           servesDefaultMode: true,
           state: "leased" as const,
@@ -2860,6 +3372,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           grantedAt: 1,
           id: "lease_1",
           lastRenewedAt: 1,
+          idChosenByRequester: false,
           ownerId: "agent-1",
           requesterId: "agent-1",
           ttlDeadline: 2,
@@ -2897,6 +3410,289 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
+  describe("the warm pool block", () => {
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios" as const,
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios" as const,
+          ready: 0,
+          short: "runtime-missing" as const,
+        },
+      ],
+    };
+    const statusWith = (block: StatusGetOutput["warmPool"]) =>
+      fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, warmPool: block }) });
+
+    it("simlock status prints whether the pool is on, the reserve, and each target with how many are wanted, ready and booting, and why it is short", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 1 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 1  booting 1\n" +
+          "  iPhone 17 / 27.0 / full   wanted 1  ready 0  booting 0  short: runtime-missing\n",
+      );
+    });
+
+    it("simlock status leaves the runtime out of a target that names none", async () => {
+      const output = outputCapture();
+      const unversioned = {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [
+          {
+            booting: 0,
+            count: 1,
+            mode: "slim" as const,
+            model: "iPhone 17",
+            platform: "ios" as const,
+            ready: 0,
+          },
+        ],
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(unversioned) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: enabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / slim   wanted 1  ready 0  booting 0\n",
+      );
+    });
+
+    it("simlock status prints a pool that is off as disabled, with every target short disabled", async () => {
+      const output = outputCapture();
+      const off = {
+        enabled: false,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: warmPool.targets.slice(0, 1).map((target) => ({
+          ...target,
+          booting: 0,
+          ready: 0,
+          short: "disabled" as const,
+        })),
+      };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(off) }),
+      );
+
+      expect(output.stdout).toContain(
+        "warm pool: disabled, reserve ios 0 android 0\n" +
+          "  iPhone 17 / 26.0 / full   wanted 2  ready 0  booting 0  short: disabled\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for an answer without the block", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status"],
+        output.environmentWith({ connectAdmin: async () => statusWith(undefined) }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it("simlock status prints no warm pool line for a gateway, whose own block is empty", async () => {
+      const output = outputCapture();
+      const empty = { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] };
+
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              getStatus: () =>
+                Promise.resolve({
+                  ...EMPTY_STATUS,
+                  daemon: { health: "running" as const, mode: "gateway" as const },
+                  warmPool: empty,
+                }),
+            }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: running (gateway)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Running global: 0 + 0 reserved/2, warm 0\n" +
+          "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+          "Queue depth: 0\n",
+      );
+    });
+
+    it.each(["worker", "gateway"] as const)(
+      "simlock status of a %s with queueDepth 2 and physicalQueueDepth 1 prints Queue depth: 2",
+      async (mode) => {
+        const output = outputCapture();
+        const answer = {
+          ...EMPTY_STATUS,
+          daemon: { health: "running", mode },
+          physicalQueueDepth: 1,
+          queueDepth: 2,
+        } as unknown as StatusGetOutput;
+
+        await runCli(
+          ["status"],
+          output.environmentWith({
+            connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(answer) }),
+          }),
+        );
+
+        expect(output.stdout).toBe(
+          `Daemon: running (${mode})\n` +
+            "Host: macOS 15.5 arm64\n" +
+            "Running global: 0 + 0 reserved/2, warm 0\n" +
+            "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+            "Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
+            "Queue depth: 2\n",
+        );
+      },
+    );
+
+    it("simlock status --json carries the block as the daemon sent it", async () => {
+      const output = outputCapture();
+
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({ connectAdmin: async () => statusWith(warmPool) }),
+      );
+
+      expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
+    });
+
+    it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
+      const output = outputCapture();
+      const findings = [
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "iOS 27.0 is not installed",
+          platform: "ios" as const,
+          reason: "runtime-missing" as const,
+          remedy: "run simlock component install ios 27.0",
+          target: "iPhone 17 / 27.0 / full",
+        },
+        {
+          kind: "warm-pool-target-unreachable" as const,
+          message: "the targets want 4 running devices, and the running limit leaves room for 3",
+          reason: "over-limit" as const,
+          remedy: "lower the counts of the warmPool.targets, or raise the running limit",
+          target: "all targets",
+        },
+        { deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" },
+      ];
+
+      await expect(
+        runCli(
+          ["doctor"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(
+        output.stderr
+          .split("\n")
+          .filter((line) => line.includes("warm-pool-target-unreachable") || line.includes("d-1")),
+      ).toEqual([
+        "warm-pool-target-unreachable  iPhone 17 / 27.0 / full: iOS 27.0 is not installed; run simlock component install ios 27.0",
+        "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
+      ]);
+      expect(output.stderr).not.toContain("undefined");
+      expect(JSON.parse(output.stdout)).toEqual({ findings });
+    });
+  });
+
+  describe("against a starting daemon", () => {
+    // A starting daemon answers `status.get` with `daemon` and `host` only.
+    const STARTING: StatusGetOutput = {
+      daemon: { health: "starting", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    };
+
+    it("simlock status prints the starting line and no device, lease or capacity line", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(output.stdout).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+    });
+
+    it.each(["capacity", "devices", "leases", "queueDepth"] as const)(
+      "simlock status prints the starting line for an answer with no %s, though the rest is there",
+      async (missing) => {
+        const output = outputCapture();
+        const { [missing]: _left, ...answer } = EMPTY_STATUS;
+        await runCli(
+          ["status"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(answer as StatusGetOutput) }),
+          }),
+        );
+
+        expect(output.stdout).toContain(
+          "Devices, leases and capacity appear once startup finishes.\n",
+        );
+        expect(output.stdout).not.toContain("Queue depth");
+      },
+    );
+
+    it("simlock status --json prints the answer with those fields absent", async () => {
+      const output = outputCapture();
+      await runCli(
+        ["status", "--json"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(STARTING) }),
+        }),
+      );
+
+      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+    });
+  });
+
   it("prints the host line", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
@@ -2920,6 +3716,123 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     await runCli(["status"], environment);
 
     expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
+  });
+
+  describe("the Load line", () => {
+    const GIB = 2 ** 30;
+    const MIB = 2 ** 20;
+    const LOAD = {
+      ageMs: 4_000,
+      cpu: { busyPercent: 34.2, cores: 10, limited: false },
+      disk: { freeBytes: 120_688_581_018, totalBytes: 530_857_957_786 },
+      memory: {
+        availableBytes: 10_522_669_875,
+        limited: false,
+        pressure: "normal" as const,
+        swapUsedBytes: 1_288_490_189,
+        totalBytes: 32 * GIB,
+      },
+    };
+    const FULL_LINE =
+      "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago\n";
+    const STARTING = {
+      daemon: { health: "starting" as const, mode: "worker" as const },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+    };
+
+    const print = async (status: StatusGetOutput): Promise<string> => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const loadLine = async (load: StatusGetOutput["load"]): Promise<string> => {
+      const stdout = await print({ ...EMPTY_STATUS, load });
+      return stdout.split("\n").find((line) => line.startsWith("Load:")) ?? "";
+    };
+
+    it("simlock status prints the Load line after the Host line, on a starting daemon and a running one", async () => {
+      expect(await print({ ...STARTING, load: LOAD })).toBe(
+        "Daemon: starting (worker)\n" +
+          "Host: macOS 15.5 arm64\n" +
+          FULL_LINE +
+          "Devices, leases and capacity appear once startup finishes.\n",
+      );
+
+      expect(await print({ ...EMPTY_STATUS, load: LOAD })).toContain(
+        `Host: macOS 15.5 arm64\n${FULL_LINE}`,
+      );
+    });
+
+    it("simlock status prints CPU unavailable, memory unavailable or disk unavailable for an absent part, and no swap or pressure part when memory is absent", async () => {
+      const { cpu: _cpu, ...withoutCpu } = LOAD;
+      const { memory: _memory, ...withoutMemory } = LOAD;
+      const { disk: _disk, ...withoutDisk } = LOAD;
+
+      expect(await loadLine(withoutCpu)).toBe(
+        "Load: CPU unavailable · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(await loadLine(withoutMemory)).toBe(
+        "Load: CPU 34% busy (10 cores) · memory unavailable · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(await loadLine(withoutDisk)).toBe(
+        "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · pressure normal · disk unavailable · read 4s ago",
+      );
+    });
+
+    it("simlock status prints no pressure part when the reading has none, and limit on a limited CPU or memory", async () => {
+      const { pressure: _pressure, ...noPressure } = LOAD.memory;
+
+      expect(await loadLine({ ...LOAD, memory: noPressure })).toBe(
+        "Load: CPU 34% busy (10 cores) · memory 9.8 GiB of 32.0 GiB available · swap 1.2 GiB used · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+      expect(
+        await loadLine({
+          ...LOAD,
+          cpu: { busyPercent: 34.2, cores: 2, limited: true },
+          memory: { ...LOAD.memory, availableBytes: 3 * GIB, limited: true, totalBytes: 8 * GIB },
+        }),
+      ).toBe(
+        "Load: CPU 34% busy (2 cores, limit) · memory 3.0 GiB of 8.0 GiB available (limit) · swap 1.2 GiB used · pressure normal · disk 112.4 GiB of 494.4 GiB free · read 4s ago",
+      );
+    });
+
+    it.each([
+      ["swap 0 B", { memory: { ...LOAD.memory, swapUsedBytes: 0 } }, "swap 0 B used"],
+      [
+        "swap 300 MiB",
+        { memory: { ...LOAD.memory, swapUsedBytes: 300 * MIB } },
+        "swap 300 MiB used",
+      ],
+      [
+        "swap 1023.6 MiB",
+        { memory: { ...LOAD.memory, swapUsedBytes: 1_073_322_394 } },
+        "swap 1.0 GiB used",
+      ],
+      ["busy 34.5", { cpu: { ...LOAD.cpu, busyPercent: 34.5 } }, "CPU 35% busy"],
+      ["cores 1", { cpu: { ...LOAD.cpu, cores: 1 } }, "(1 core)"],
+      ["cores 0.5", { cpu: { ...LOAD.cpu, cores: 0.5 } }, "(0.5 cores)"],
+      ["cores 10", { cpu: { ...LOAD.cpu, cores: 10 } }, "(10 cores)"],
+      ["cores 0.01", { cpu: { ...LOAD.cpu, cores: 0.01 } }, "(0.01 cores)"],
+      ["cores 0.001", { cpu: { ...LOAD.cpu, cores: 0.001 } }, "(<0.01 cores)"],
+      ["ageMs 4001", { ageMs: 4_001 }, "read 5s ago"],
+      ["ageMs 0", { ageMs: 0 }, "read 0s ago"],
+    ])("simlock status formats %s as in the inputs table", async (_row, change, fragment) => {
+      expect(await loadLine(LOAD)).toContain("CPU 34% busy (10 cores)");
+
+      expect(await loadLine({ ...LOAD, ...change })).toContain(fragment);
+    });
+
+    it("simlock status prints no Load line when the answer has no load block", async () => {
+      expect(await print({ ...EMPTY_STATUS, load: LOAD })).toContain("Load: ");
+
+      expect(await print(EMPTY_STATUS)).not.toContain("Load:");
+      expect(await print(STARTING)).not.toContain("Load:");
+    });
   });
 
   it("simlock status prints the console address when HTTP is enabled", async () => {
@@ -3056,12 +3969,31 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
   it("prints each device's mode and whether it serves a request naming no mode", async () => {
     const output = outputCapture();
-    const spec = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
+    const spec = {
+      physical: false,
+      model: "iPhone 17",
+      osVersion: "26.0",
+      platform: "ios" as const,
+    };
     const status: StatusGetOutput = {
       ...EMPTY_STATUS,
       devices: [
-        { id: "dev_slim", mode: "slim", servesDefaultMode: false, spec, state: "ready" },
-        { id: "dev_full", mode: "full", servesDefaultMode: true, spec, state: "leased" },
+        {
+          physical: false,
+          id: "dev_slim",
+          mode: "slim",
+          servesDefaultMode: false,
+          spec,
+          state: "ready",
+        },
+        {
+          physical: false,
+          id: "dev_full",
+          mode: "full",
+          servesDefaultMode: true,
+          spec,
+          state: "leased",
+        },
       ],
     };
     const environment = output.environmentWith({
@@ -3077,7 +4009,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
   });
 
   it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
-    const statusWith = (ramBudget?: NonNullable<StatusGetOutput["capacity"]["ramBudget"]>) => {
+    type RamBudget = NonNullable<NonNullable<StatusGetOutput["capacity"]>["ramBudget"]>;
+    const statusWith = (ramBudget?: RamBudget) => {
       const status: StatusGetOutput = {
         ...EMPTY_STATUS,
         capacity: { ...EMPTY_STATUS.capacity, ...(ramBudget === undefined ? {} : { ramBudget }) },
@@ -3130,12 +4063,123 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(lines).toContain("Capacity android: managed 0/1, running 0 + 0 reserved/1, warm 0");
   });
 
+  it("simlock status prints a physical device as physical and its class, with today's markers, and a simulator's line as before", async () => {
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      devices: [
+        {
+          class: "phone",
+          id: "dev_p1",
+          physical: true,
+          servesDefaultMode: false,
+          spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+          state: "ready",
+        },
+        {
+          class: "tablet",
+          id: "dev_p2",
+          physical: true,
+          servesDefaultMode: false,
+          spec: { model: "iPad Pro", osVersion: "18.4", physical: true, platform: "ios" },
+          state: "quarantined",
+          quarantineAttempts: 1,
+          workerId: "wrk_1",
+        },
+        {
+          id: "dev_v1",
+          mode: "full",
+          physical: false,
+          servesDefaultMode: true,
+          spec: { model: "iPhone 16", osVersion: "18.4", physical: false, platform: "ios" },
+          state: "ready",
+        },
+      ],
+    };
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    expect(lines).toContain("Device dev_p1: ready, physical phone");
+    expect(lines).toContain("Device dev_p2 on wrk_1: quarantined, physical tablet (purge retry 1)");
+    expect(lines).toContain("Device dev_v1: ready, mode full, serves default mode: yes");
+  });
+
+  it("status prints absent (<reason>) as the state of an absent device", async () => {
+    const physical = (id: string, state: string, absentReason?: string) => ({
+      class: "phone",
+      id,
+      physical: true,
+      servesDefaultMode: false,
+      spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+      state,
+      ...(absentReason === undefined ? {} : { absentReason }),
+    });
+    const status = {
+      ...EMPTY_STATUS,
+      devices: [
+        physical("dev_ready", "ready"),
+        physical("dev_locked", "absent", "locked"),
+        physical("dev_untrusted", "absent", "untrusted"),
+        physical("dev_gone", "absent", "not-present"),
+      ],
+    } as unknown as StatusGetOutput;
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    expect(lines).toContain("Device dev_ready: ready, physical phone");
+    expect(lines).toContain("Device dev_locked: absent (locked), physical phone");
+    expect(lines).toContain("Device dev_untrusted: absent (untrusted), physical phone");
+    expect(lines).toContain("Device dev_gone: absent (not-present), physical phone");
+  });
+
+  it("status prints a bare state for an absent device with no reason and for a device that is not absent", async () => {
+    const physical = (id: string, state: string, absentReason?: string) => ({
+      class: "phone",
+      id,
+      physical: true,
+      servesDefaultMode: false,
+      spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+      state,
+      ...(absentReason === undefined ? {} : { absentReason }),
+    });
+    const status = {
+      ...EMPTY_STATUS,
+      devices: [physical("dev_bare", "absent"), physical("dev_stray", "ready", "locked")],
+    } as unknown as StatusGetOutput;
+    const output = outputCapture();
+
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+      }),
+    );
+
+    const lines = output.stdout.split("\n");
+    expect(lines).toContain("Device dev_bare: absent, physical phone");
+    expect(lines).toContain("Device dev_stray: ready, physical phone");
+  });
+
   it("simlock status marks a stalled device", async () => {
     const device = (id: string, extra: object) => ({
+      physical: false,
       id,
       mode: "full" as const,
       servesDefaultMode: true,
-      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" as const },
+      spec: { physical: false, model: "iPhone 16", osVersion: "18.4", platform: "ios" as const },
       state: "provisioning" as const,
       ...extra,
     });
@@ -3249,9 +4293,10 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         recoveredListener?.({ leaseId: "lse_1", deviceId: "dev_1", attempts: 2 });
         return Promise.resolve({
           device: {
+            physical: false,
             id: "dev_1",
             driverDeviceId: "dev_1",
-            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            spec: { physical: false, platform: "ios", model: "x", osVersion: "26.5" },
             mode: "full",
           },
           environment: {},
@@ -3262,6 +4307,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3304,9 +4350,10 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         capturedInput = input as unknown as Record<string, unknown>;
         return Promise.resolve({
           device: {
+            physical: false,
             id: "dev_1",
             driverDeviceId: "dev_1",
-            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            spec: { physical: false, platform: "ios", model: "x", osVersion: "26.5" },
             mode: "full",
           },
           environment: {},
@@ -3317,6 +4364,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3354,9 +4402,10 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         inputs.push(input as unknown as Record<string, unknown>);
         return Promise.resolve({
           device: {
+            physical: false,
             id: "dev_1",
             driverDeviceId: "dev_1",
-            spec: { platform: "android", model: "Pixel 8", osVersion: "34" },
+            spec: { physical: false, platform: "android", model: "Pixel 8", osVersion: "34" },
             mode: "full",
           },
           environment: {},
@@ -3367,6 +4416,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3389,6 +4439,58 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 
     expect(inputs[0]?.imageTag).toBe("google_apis_playstore");
     expect(inputs[1]).not.toHaveProperty("imageTag");
+  });
+
+  it("sends physical: true for --physical, and no physical field without it", async () => {
+    const inputs: Record<string, unknown>[] = [];
+    const client = fakeClient({
+      requestLease: (input) => {
+        inputs.push(input as unknown as Record<string, unknown>);
+        return Promise.resolve({
+          device: {
+            class: "phone",
+            driverDeviceId: "00008110-001A2B3C4D5E",
+            id: "dev_1",
+            physical: true,
+            spec: {
+              class: "phone",
+              model: "iPhone 15 Pro",
+              osVersion: "18.4",
+              physical: true,
+              platform: "ios",
+            },
+          },
+          environment: {},
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            grantedAt: 0,
+            lastRenewedAt: 0,
+            idChosenByRequester: false,
+            ttlMs: 60_000,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    const lease = ["lease", "--platform", "ios", "--detach"];
+
+    await runCli(
+      [...lease, "--physical"],
+      outputCapture().environmentWith({ connectAdmin: async () => client }),
+    );
+    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
+
+    expect(inputs[0]?.physical).toBe(true);
+    expect(inputs[1]).not.toHaveProperty("physical");
   });
 
   it("fails the removed full flag as an unknown option, before connecting", async () => {
@@ -3416,9 +4518,10 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         capturedInput = input as unknown as Record<string, unknown>;
         return Promise.resolve({
           device: {
+            physical: false,
             id: "dev_1",
             driverDeviceId: "dev_1",
-            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            spec: { physical: false, platform: "ios", model: "x", osVersion: "26.5" },
             mode: "full",
           },
           environment: {},
@@ -3429,6 +4532,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -3474,6 +4578,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 30_000,
         });
@@ -3577,6 +4682,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: clock.now(),
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         }),
@@ -3690,6 +4796,40 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
     // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
     expect(requested).toEqual([30 * 60_000, undefined]);
+  });
+
+  it("the CLI --lease-id flag sends leaseId and exits 13 on LEASE_ID_TAKEN", async () => {
+    const output = outputCapture();
+    const requested: unknown[] = [];
+    let answer: "grant" | "taken" = "grant";
+    const environment = output.environmentWith({
+      clock: new FakeClock(0),
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push("leaseId" in input ? input.leaseId : "absent");
+            return answer === "grant"
+              ? Promise.resolve(detachedGrant)
+              : Promise.reject(
+                  fromWireError("LEASE_ID_TAKEN", "lease ID ad-7f3a is already in use", {
+                    leaseId: "ad-7f3a",
+                  }),
+                );
+          },
+        }),
+    });
+    const lease = ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"];
+
+    await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+    await runCli(lease, environment);
+    answer = "taken";
+    const exitCode = await runCli([...lease, "--lease-id", "ad-7f3a"], environment);
+
+    // The flag's value goes out as typed and an omitted flag sends none: the contract decides
+    // what an ID may look like.
+    expect(requested).toEqual(["ad-7f3a", "absent", "ad-7f3a"]);
+    expect(exitCode).toBe(13);
+    expect(output.stderr).toContain('"code":"LEASE_ID_TAKEN"');
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(
@@ -3915,9 +5055,10 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       requestLease: () =>
         Promise.resolve({
           device: {
+            physical: false,
             id: "dev_1",
             driverDeviceId: "dev_1",
-            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            spec: { physical: false, platform: "ios", model: "x", osVersion: "26.5" },
             mode: "full",
           },
           // A driver-supplied key that is not a shell identifier fails the command rather than
@@ -3930,6 +5071,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
             ownerId: "test-requester",
             grantedAt: 0,
             lastRenewedAt: 0,
+            idChosenByRequester: false,
             ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
@@ -4000,6 +5142,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
           ownerId: "test-requester",
           requesterId: "test-requester",
           lastRenewedAt: 0,
+          idChosenByRequester: false,
           ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         });
@@ -4468,7 +5611,7 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
       statusOut.environmentWith({ connectAdmin: environment.connectAdmin }),
     );
     const status = JSON.parse(statusOut.stdout) as StatusGetOutput;
-    expect(status.leases.map((lease) => lease.id)).toContain(grant.lease.id);
+    expect(status.leases?.map((lease) => lease.id)).toContain(grant.lease.id);
 
     const releaseOut = outputCapture();
     const releaseExit = await runCli(
@@ -4592,9 +5735,6 @@ describe("CLI: pure helpers", () => {
   });
 });
 
-// Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
-// `readStdin` directly and never exercises this function at all -- documented in
-// `docs/internal/KNOWN-PITFALLS.md` as an unbounded read, and until now entirely untested.
 describe("readPipedStdin", () => {
   function fakeStdin(chunks: readonly string[], isTTY: boolean): typeof process.stdin {
     const stream = Readable.from(chunks);
@@ -4672,7 +5812,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
 
 /** Hoisted out of `fakeClient` so a test can hand back the same status with a different
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
-const EMPTY_STATUS: StatusGetOutput = {
+const EMPTY_STATUS = {
   devices: [],
   host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
@@ -4701,7 +5841,7 @@ const EMPTY_STATUS: StatusGetOutput = {
   },
   daemon: { health: "running", mode: "worker" },
   queueDepth: 0,
-};
+} satisfies StatusGetOutput;
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
@@ -4712,9 +5852,10 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
   const grant: LeaseGrant = {
     environment: {},
     device: {
+      physical: false,
       id: "dev_1",
       driverDeviceId: "dev_1",
-      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      spec: { physical: false, platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
       mode: "full",
     },
     lease: {
@@ -4724,6 +5865,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       ownerId: "test-requester",
       grantedAt: 0,
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ttlMs: 60_000,
       ttlDeadline: 60_000,
     },
@@ -4788,6 +5930,18 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
         platform: input.platform,
         version: input.version,
       }),
+    addDevice: (input) =>
+      Promise.resolve({
+        appCount: 2,
+        class: "phone" as const,
+        driverDeviceId: input.id,
+        id: "dev_9",
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        platform: input.platform,
+        reenrolled: false,
+      }),
+    removeDevice: (input) => Promise.resolve({ driverDeviceId: input.id, id: input.id }),
     ...overrides,
   };
   return base;
@@ -4799,14 +5953,6 @@ interface OutputCapture {
   environmentWith(overrides?: Partial<CliEnvironment>): CliEnvironment;
 }
 
-/**
- * `ports` is `undefined` for the fully-mocked default every other suite uses (a bare object
- * literal, `connectAdmin` etc. never call their argument unless a test's override does).
- * Passing `ports` (built with `realCliEnvironmentPorts`, or by hand for the cold-start/B1
- * suites) routes `environmentWith` through the real `buildCliEnvironment` instead -- the only
- * way to exercise the production credential-resolution ordering (B2) and the real config
- * validator (B9) rather than re-testing a test double.
- */
 function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
   const capture: OutputCapture = {
     stdout: "",
@@ -4915,6 +6061,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
@@ -5039,6 +6186,7 @@ async function startInMemoryDaemon(options: {
   const daemon = new DaemonServer({
     adminSecret,
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: engine,
     instanceId: "instance-test",
@@ -5075,6 +6223,7 @@ async function startInMemoryDaemon(options: {
 
 function testConfig(): Config {
   return {
+    capabilities: {},
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -5109,6 +6258,8 @@ function testConfig(): Config {
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
     },
     capacity: {
       strategy: "resource",
@@ -5129,6 +6280,9 @@ function testConfig(): Config {
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -5218,10 +6372,11 @@ describe("simlock list --requests", () => {
 describe("simlock lease: a request names a model, a class, or nothing", () => {
   const grant = {
     device: {
+      physical: false,
       driverDeviceId: "dev_1",
       id: "dev_1",
       mode: "full" as const,
-      spec: { model: "iPhone 17", osVersion: "26.5", platform: "ios" as const },
+      spec: { physical: false, model: "iPhone 17", osVersion: "26.5", platform: "ios" as const },
     },
     environment: {},
     lease: {
@@ -5229,6 +6384,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
       grantedAt: 0,
       id: "lse_1",
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "test-requester",
       requesterId: "test-requester",
       ttlDeadline: 60_000,
@@ -5287,7 +6443,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );
@@ -5349,6 +6505,40 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     );
   });
 
+  it("prints physical in a waiting physical request's line, and nothing for a simulator request", async () => {
+    const output = outputCapture();
+    const client = fakeClient({
+      list: async () => [
+        {
+          createdAt: 0,
+          id: "req_1",
+          queuePosition: 1,
+          requesterId: "a",
+          spec: { model: "iPhone 15 Pro", physical: true, platform: "ios" },
+          stage: "queued",
+        },
+        {
+          createdAt: 0,
+          id: "req_2",
+          queuePosition: 1,
+          requesterId: "b",
+          spec: { model: "iPhone 16", platform: "ios" },
+          stage: "queued",
+        },
+      ],
+    });
+
+    await runCli(
+      ["list", "--requests"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+
+    expect(output.stdout).toBe(
+      "Request req_1: a, ios physical iPhone 15 Pro, queued at 1, waiting 0s\n" +
+        "Request req_2: b, ios iPhone 16, queued at 1, waiting 0s\n",
+    );
+  });
+
   it("prints a waiting request's OS range as typed", async () => {
     const output = outputCapture();
     const client = fakeClient({
@@ -5372,5 +6562,139 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Request req_1: a, ios class phone >=18 <26, queued at 1, waiting 0s\n",
     );
+  });
+});
+
+describe("CLI: a worker's capabilities", () => {
+  const platform = {
+    atRamBudget: false,
+    limit: 2,
+    maxRunning: 2,
+    overLimit: false,
+    reserved: 0,
+    running: 0,
+    used: 0,
+    warm: 0,
+  };
+  const worker = (overrides: Record<string, unknown> = {}) => ({
+    capacity: {
+      android: platform,
+      global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+      ios: platform,
+    },
+    catalog: [],
+    connection: "connected" as const,
+    devices: [],
+    drained: false,
+    id: "wrk_1",
+    label: "mac-mini",
+    lastSeenAt: 1_000,
+    leases: [],
+    ...overrides,
+  });
+  const listed = async (workers: unknown[]): Promise<string> => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ listWorkers: () => Promise.resolve({ workers } as never) }),
+    });
+    await runCli(["worker", "list"], environment);
+    return output.stdout;
+  };
+
+  it("worker list prints ` -- agent-device available`, ` -- agent-device off` and ` -- agent-device unavailable: <reason>` on the worker's line", async () => {
+    const shown = await listed([
+      worker({ capabilities: [{ name: "agent-device", state: "available" }] }),
+      worker({ capabilities: [{ name: "agent-device", state: "off" }], id: "wrk_2" }),
+      worker({
+        capabilities: [
+          {
+            name: "agent-device",
+            reason: "found 0.20.1, need 0.21.28 or later",
+            state: "unavailable",
+          },
+        ],
+        id: "wrk_3",
+      }),
+    ]);
+
+    expect(shown).toContain("wrk_1 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s)");
+    expect(shown).toMatch(/^wrk_1 .* -- agent-device available$/m);
+    expect(shown).toMatch(/^wrk_2 .* -- agent-device off$/m);
+    expect(shown).toMatch(
+      /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.28 or later$/m,
+    );
+  });
+
+  it("worker list prints a starting agent-device as ` -- agent-device unavailable: starting`", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
+      }),
+    ]);
+
+    expect(shown).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
+  });
+
+  it("worker list prints two entries in the order the worker sent them", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [
+          { name: "zeta", state: "off" },
+          { name: "agent-device", state: "available" },
+        ],
+      }),
+    ]);
+
+    expect(shown).toMatch(/^wrk_1 .* -- zeta off -- agent-device available$/m);
+  });
+
+  it("worker list prints nothing for a worker whose list is absent", async () => {
+    const shown = await listed([worker()]);
+
+    expect(shown).toMatch(/^wrk_1 .* 0 lease\(s\)$/m);
+  });
+
+  it("worker list puts the suffix on the worker's line, before its install lines", async () => {
+    const shown = await listed([
+      worker({
+        capabilities: [{ name: "agent-device", state: "available" }],
+        installs: [
+          { component: "26.4", platform: "ios", since: 1_000, state: "downloading", waiters: 2 },
+        ],
+      }),
+    ]);
+
+    expect(shown).toContain(
+      "-- agent-device available\n  Install ios 26.4: downloading for 0s, 2 waiters",
+    );
+  });
+
+  it("status against a gateway prints the same suffix in its workers block", async () => {
+    const output = outputCapture();
+    const status = {
+      capacity: {
+        android: platform,
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: platform,
+      },
+      daemon: { health: "running" as const, mode: "gateway" as const },
+      devices: [],
+      host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
+      leases: [],
+      queueDepth: 0,
+      workers: [
+        worker({
+          capabilities: [{ name: "agent-device", reason: "starting", state: "unavailable" }],
+        }),
+      ],
+    };
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status as never) }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toMatch(/^wrk_1 .* -- agent-device unavailable: starting$/m);
   });
 });

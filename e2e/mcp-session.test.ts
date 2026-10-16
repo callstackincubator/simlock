@@ -156,8 +156,20 @@ describe("MCP session semantics", () => {
         name: "lease_simulator",
         arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       });
-      const leased = leaseResult.structuredContent as { lease: { id: string } };
+      const leased = leaseResult.structuredContent as {
+        device: { driverDeviceId: string };
+        lease: { id: string };
+      };
 
+      // A restart keeps a lease only while its device is running; the fake driver forgets its
+      // devices with the process, so it is told this one still is.
+      await env.driverScript.merge({
+        ios: {
+          managedReality: {
+            devices: [{ deviceId: leased.device.driverDeviceId, runState: "running" }],
+          },
+        },
+      });
       await env.restartDaemon();
 
       const leaseRow = async (): Promise<{ ttlDeadline: number } | undefined> => {

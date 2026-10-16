@@ -1,6 +1,6 @@
 import type { EventBus } from "../bus/index.js";
-import type { Proposal } from "./cleanup/types.js";
-import type { DeviceRecord } from "./domain.js";
+import type { Proposal } from "./cleanup/index.js";
+import type { VirtualDevice } from "./domain.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { RegistrySnapshot } from "./registry.js";
 
@@ -32,7 +32,7 @@ export class CleanupExecutor implements CleanupActionExecutor {
     const action = proposal.action;
     if (action !== "shutdown" && action !== "destroy") return false;
 
-    const device = this.options.registry.snapshot.devices.find(
+    const device = this.options.registry.snapshot.virtualDevices.find(
       (candidate) => candidate.id === proposal.target,
     );
     if (device === undefined || !canExecute(device, action, this.options.registry.snapshot)) {
@@ -55,7 +55,7 @@ export class CleanupExecutor implements CleanupActionExecutor {
 }
 
 function canExecute(
-  device: DeviceRecord,
+  device: VirtualDevice,
   action: "shutdown" | "destroy",
   snapshot: RegistrySnapshot,
 ): boolean {

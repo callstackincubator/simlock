@@ -7,10 +7,12 @@ export {
   type DownloadPolicy,
   effectiveAllowDownload,
   loadConfig,
+  type ModuleConfigEntry,
   REDACTED_VALUE,
   redactConfig,
 } from "./config.js";
 export {
+  type AbsentReason,
   DEVICE_CLASSES,
   type DeviceClass,
   type DeviceMode,
@@ -18,7 +20,10 @@ export {
   type DeviceSpec,
   type LeaseRecord,
   type LeaseRequestFailure,
+  type PhysicalClass,
   type Platform,
+  type VirtualDevice,
+  type VirtualSpec,
   IllegalTransition,
   transition,
   transitionEnteredAt,
@@ -31,9 +36,9 @@ export {
   type CapacityReservation,
   plannedCapacityDevice,
 } from "./capacity/index.js";
-export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
-export { automaticCleanupRules } from "./cleanup/rules.js";
+export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
+export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,
@@ -65,6 +70,14 @@ export {
   type ObservedDevice,
   type ObservedRunState,
   type PassthroughCommand,
+  isPhysicalDriverDevice,
+  type PhysicalDriverDevice,
+  type DriverRefusalReason,
+  type VirtualDriverDevice,
+  type PhysicalInspection,
+  type PresentPhysical,
+  toDriverDevice,
+  uninstallPlan,
   type PrerequisiteCheck,
   PassthroughRefusedError,
   removeListedComponent,
@@ -77,11 +90,30 @@ export {
   DriverCatalog,
   NoDriverError,
   type ModelPreferences,
+  type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export {
+  encodeScreenFrame,
+  encodeScreenMeta,
+  type ScreenCapture,
+  type ScreenFeed,
+  SCREEN_FRAME_HEADER_BYTES,
+  SCREEN_FRAME_TAG,
+  type ScreenMeta,
+  ScreenNotSupportedError,
+  type ScreenSettings,
+  ScreenUnavailableError,
+} from "./screen.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
-export { Doctor, isStalledTransition, type StallInput } from "./doctor.js";
+export {
+  Doctor,
+  isStalledTransition,
+  type OptionalModuleFinding,
+  type StallInput,
+} from "./doctor.js";
+export { StartupRead } from "./startup-read.js";
 export { type HostFacts, HostFactsReader } from "./host-facts.js";
 export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
 export type { EnsureOwnedRootOptions } from "./device-root.js";
@@ -105,9 +137,26 @@ export {
   type CatalogReader,
   type LeaseExpirer,
   type PassthroughResolver,
+  type WarmPoolReader,
 } from "./core-ports.js";
 export { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";
-export { type DeviceRequirement, fits, type LeaseGrant } from "./domain.js";
+export {
+  type DeviceRequirement,
+  type FittableSpec,
+  fits,
+  fitsPhysical,
+  type LeaseGrant,
+  noPhysicalMatch,
+  type PhysicalDevice,
+  type PhysicalRequest,
+} from "./domain.js";
+export {
+  type LatestPresence,
+  latestPresence,
+  type PhysicalRead,
+  readPhysicalPresence,
+  readPhysicalPresenceDetail,
+} from "./physical-presence.js";
 export {
   type DriverCatalogImage,
   type MissingPrerequisite,
@@ -117,6 +166,12 @@ export {
 } from "./driver.js";
 export { type Core, type CorePorts, createCore } from "./create-core.js";
 export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
+export {
+  DeviceBusyError,
+  DeviceNotEnrollableError,
+  PhysicalEnrollment,
+  UnknownEnrolledDeviceError,
+} from "./physical-enrollment.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
   exactRequirement,
@@ -127,6 +182,7 @@ export {
   sameSpec,
   specMode,
   type LeaseTiming,
+  type TargetResolution,
   type WaitingDemand,
 } from "./domain.js";
 export { classCandidates } from "./catalog-match.js";

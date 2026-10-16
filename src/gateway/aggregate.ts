@@ -18,7 +18,7 @@ import type { WorkerView } from "./worker-registry.js";
 
 type StatusOutput = z.infer<(typeof OPERATIONS)["status.get"]["output"]>;
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
-type StatusCapacity = StatusOutput["capacity"];
+type StatusCapacity = NonNullable<StatusOutput["capacity"]>;
 type PlatformCatalog = CatalogOutput["platforms"][number];
 type CatalogImage = NonNullable<PlatformCatalog["images"]>[number];
 
@@ -44,38 +44,19 @@ const EMPTY_GLOBAL_CAPACITY = {
 };
 
 export interface AggregateStatusOptions {
-  /** The *gateway's* own health, not any worker's. */
   readonly health: StatusOutput["daemon"]["health"];
-  /** The *gateway's* own machine. Each worker's is on its view. */
   readonly host: StatusOutput["host"];
-  /** The gateway's fleet queue depth -- 0 until #118 gives it a queue. */
+  readonly load?: StatusOutput["load"];
   readonly queueDepth: number;
-  /** The requests waiting in the fleet queue. Each worker's own are on its view. */
+  readonly physicalQueueDepth?: number;
   readonly waiting?: StatusOutput["waiting"];
-  /**
-   * #118: rewrites each view's leases to gateway-facing form (its own id, fleet-level
-   * `requesterId`, `worker`) for the ones this gateway actually issued -- see
-   * `FleetLeaseIndex#project`. A caller's own `status.get`-derived lease id must round-trip into
-   * `lease.renew` the same way `lease.list`'s does; leaving this out (as every caller before
-   * #118 did, and every `aggregate.test.ts` case that still omits it) reports each worker's raw
-   * lease record instead, which is still correct for a worker's own local lease -- it only stops
-   * being correct for one the gateway granted.
-   */
+  /** A caller's `status.get`-derived lease id must round-trip into `lease.renew` as `lease.list`'s does. */
   readonly leaseIndex?: Pick<FleetLeaseIndex, "project">;
 }
 
 /**
- * ADR 0005 §20: "the same shape a worker returns -- capacity summed across connected workers,
- * all leases and devices, the gateway queue's depth -- plus an additive `workers` array".
- *
- * Two deliberate asymmetries in what is included:
- *
- * - **Capacity sums connected workers only.** An unreachable machine's last-known free slots
- *   are not capacity; reporting them would tell an operator the fleet can take work it cannot.
- * - **Devices and leases include every view, connected or not.** A lease on a machine that
- *   dropped off is precisely what an operator needs to see (it is still holding a device, and
- *   its worker's TTL is still counting down), so hiding it would be the more misleading
- *   choice. Each entry carries `workerId`, and that worker's view says whether it is live.
+ * Capacity sums connected workers only: an unreachable machine's last-known free slots are not capacity.
+ * Devices and leases include every view: a lease on a machine that dropped off still holds a device.
  */
 export function aggregateStatus(
   views: readonly WorkerView[],
@@ -85,28 +66,29 @@ export function aggregateStatus(
     capacity: sumCapacity(views.filter((view) => view.connection === "connected")),
     daemon: { health: options.health, mode: "gateway" },
     host: options.host,
+    ...(options.load === undefined ? {} : { load: options.load }),
     installs: fleetInstalls(views),
     devices: views.flatMap((view) =>
-      view.devices.map((device) => ({ ...device, workerId: view.id })),
+      (view.devices ?? []).map((device) => ({ ...device, workerId: view.id })),
     ),
     leases: views.flatMap((view) =>
-      view.leases.map((lease) =>
+      (view.leases ?? []).map((lease) =>
         options.leaseIndex === undefined
           ? { ...lease, workerId: view.id }
           : options.leaseIndex.project(lease, view.id, view.label),
       ),
     ),
     queueDepth: options.queueDepth,
+    ...(options.physicalQueueDepth === undefined
+      ? {}
+      : { physicalQueueDepth: options.physicalQueueDepth }),
     waiting: [...(options.waiting ?? [])],
+    warmPool: { enabled: false, reserveRunning: { android: 0, ios: 0 }, targets: [] },
     workers: [...views],
   };
 }
 
-/**
- * ADR 0010 §3/§7: the workers' installs, each naming its worker. Only a connected worker's view
- * lists any: `WorkerRegistry` drops them when a worker disconnects or turns incompatible. The
- * fleet list has the same bound as one worker's, so it keeps the oldest.
- */
+/** The fleet list has the same bound as one worker's, so it keeps the oldest. */
 function fleetInstalls(views: readonly WorkerView[]): NonNullable<StatusOutput["installs"]> {
   return views
     .flatMap((view) => (view.installs ?? []).map((install) => ({ ...install, workerId: view.id })))
@@ -240,7 +222,7 @@ function indexCatalogs(
   const inIdOrder = [...views].sort((left, right) => left.id.localeCompare(right.id));
   for (const view of inIdOrder) {
     if (view.connection !== "connected") continue;
-    for (const entry of view.catalog) {
+    for (const entry of view.catalog ?? []) {
       if (platform === undefined || entry.platform === platform) {
         addCatalogEntry(byPlatform, entry, view.id);
       }

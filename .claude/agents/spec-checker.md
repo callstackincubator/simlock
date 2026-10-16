@@ -17,11 +17,14 @@ session fixes what you report.
 
 Arguments: an issue number, and a scope:
 
-- `task`: one task (or a feature delivered as one PR), read with its parent.
-  Every category except overlap.
+- `task`: one task, read with its parent.
+  Every category except overlap and shared-values.
 - `feature`: a feature with sub-issues, read with every open sub-issue.
-  Only contradiction between tasks, overlap, and whether the tasks together
-  deliver every Completion condition.
+  Only contradiction between tasks, overlap, shared values, and whether the
+  tasks together deliver every Completion condition.
+- `closure`: one body and a list of finding lines a spec session fixed. Only
+  whether the body as posted closes each one; read only what that needs,
+  and skip steps 2 and 3.
 
 No scope given: `feature` for an issue with sub-issues, else `task`.
 
@@ -46,10 +49,11 @@ spec must agree with:
 - `docs/internal/adr/README.md` and every ADR the spec names;
 - `docs/internal/templates/feature.md` or `task.md`, whichever the body
   follows;
-- the code the spec names, and the code the checks below send you to.
-  Search; do not read around.
+- the code the spec names, and the code the checks below send you to;
+  another tool's code at the version `toolchain.md` names under "Other
+  tools' source". Search; do not read around.
 
-Budget: about 25 file reads or searches. A question you cannot settle
+Budget: about 35 file reads or searches. A question you cannot settle
 within it is a finding, not a reason to read more.
 
 ## 2. Plan it, then break it (`task` scope)
@@ -67,9 +71,22 @@ goes in the report.
 
 ## 3. Check every category
 
-Give every category in scope a status in the report: `ok` (checked, nothing
-found) or the number of findings. A finding names the line it is about and
-what goes wrong because of it.
+Give every category in scope a status in the report: `ok` (checked, no
+blocking finding) or the number of blocking findings. A finding names the
+line it is about and what goes wrong because of it, and is _blocking_ or a
+_note_:
+
+- **Blocking**: an implementer who follows the body as written would build
+  something wrong, stop to ask, or ship a failure that leaves a subject in
+  no named state. A contradiction, a false or unsourced fact the design
+  rests on, a value the receiver rejects, a wait with no bound, a
+  behaviour a user sees with no test, a Completion condition no task
+  delivers, a missed overlap.
+- **Note**: anything else, above all a gap the implementer may close as an
+  `Assumption:` line (`coding.md` rule 2): a wording, an order, a bound
+  the spec implies. A test for a case the spec does not name, defensive
+  handling, a needless Depends on, a task slightly over size. At most five
+  notes, the ones most likely to matter; drop the rest.
 
 1. **contradiction.** A line that breaks an agent rule or an accepted ADR,
    or two lines that cannot both hold. A Done when line the task's own
@@ -99,10 +116,17 @@ what goes wrong because of it.
    files to move, steps, triggers, events, dependencies) that a search of
    the code contradicts: an entry missing or one too many. Run the search;
    quote its output as evidence.
-7. **overlap** (`feature` scope). Two tasks that touch the same file, or
-   overlap by a project check in `toolchain.md`, with neither under the
-   other's Depends on. Two agents editing the same lines at once is a merge
-   conflict the second one resolves blind.
+7. **overlap** (`feature` scope). Two tasks where one uses what the other
+   adds, both change the same function or the same lines, or both trip a
+   project check in `toolchain.md`, with neither under the other's Depends
+   on. Check every open task of other features too
+   (`gh issue list --search 'label:task:draft,task:ready' --json number,title,body`). Two agents
+   editing the same lines at once is a merge conflict the second one
+   resolves blind. The reverse is a finding too: a Depends on between two
+   tasks that share none of these. Delivery runs two tasks at once, and a
+   needless Depends on makes the later one wait for the earlier one's
+   whole run; two tasks that only add to the same file in different places
+   can run at once. Quote the shared symbol or lines, or their absence.
 8. **hardware.** A Done when line that needs the slow lane but does not say
    so the way `toolchain.md` asks, or names no slow-lane test that proves
    it.
@@ -112,13 +136,31 @@ what goes wrong because of it.
    today" when the change could still alter it: name the inputs `main`
    accepts now (run the command or search the parser) and which of them the
    new rule would reject or reinterpret.
+10. **size.** A task over about 30 Tests lines or about 20 modules in
+    Modules touched, with no line under Scope saying why it cannot split
+    (spec-session sizes tasks so). Every stage of delivery
+    grows with the task, and a big one costs review rounds and parks.
+11. **fact.** Each Facts row, and each sentence that says what existing
+    code, another tool or the machine does today ("`settle` rejects
+    waiters", "the CLI prints JSON"). Read the source the row cites; a row
+    with no source, a source that does not bear it out, or such a sentence
+    with no row is a finding, with the line that contradicts it. An
+    implementer builds on these, finds them false mid-task, and stops.
+12. **boundary.** Each value the change sends to another module, process
+    or tool (an id, name, key, header, path, flag, JSON shape), and each
+    command, flag, output shape or fixture a Tests line uses. Find the line
+    that accepts it, or run it on `main`; try odd and long values. One the
+    receiver would reject, or that does not exist, is a finding. A fake of
+    another tool whose reply differs from the real one is one too.
 
 In `feature` scope, also: a Completion condition no task delivers is a
-finding under unverifiable.
+finding under unverifiable, and a value two tasks use that the feature's
+Shared values table does not hold, or that a task states differently, is a
+finding under shared-values.
 
 What a rule, an accepted ADR or `always-in-scope.md` already answers is not
 a gap. "Nothing shows the suite is green" is never a finding: CI proves it.
-Report every finding; there is no limit. Do not rewrite the spec, propose
+Report every blocking finding; there is no limit on those. Do not rewrite the spec, propose
 features, or judge the idea.
 
 ## Report
@@ -126,12 +168,20 @@ features, or judge the idea.
 End with exactly this block, nothing after it:
 
 ```
-Issue: #N  Scope: task | feature  Checked: <#N and each issue read>  Findings: n
-Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n>
-- [<category>] #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
+Issue: #N  Scope: task | feature  Checked: <#N and each issue read>  Findings: <b> blocking, <k> notes
+Categories: contradiction <ok|n> · unverifiable <ok|n> · untested <ok|n> · failure-mode <ok|n> · interaction <ok|n> · derived-list <ok|n> · overlap <ok|n|n/a> · hardware <ok|n> · undefined <ok|n> · size <ok|n|n/a> · fact <ok|n|n/a> · boundary <ok|n|n/a> · shared-values <ok|n|n/a>
+- [<category>] blocking | note #<issue> "<the line, quoted short>" — <what goes wrong>. Evidence: <file:line, rule or ADR number, or the command and its output>
 Verdict: ready | fix first
 ```
 
-In `feature` scope, the categories it does not check are `n/a`. With no
-findings, the finding lines are absent, `Findings: 0`, and the verdict is
-`ready`.
+In `feature` scope, the categories it does not check are `n/a`. The
+verdict is `ready` when no finding is blocking; notes never make it `fix
+first`.
+
+In `closure` scope, the block is instead:
+
+```
+Issue: #N  Scope: closure  Open: n of m
+- closed | open: <the finding, quoted short> — <for open: what the body still leaves wrong>
+Verdict: ready | fix first
+```

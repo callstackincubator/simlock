@@ -1,4 +1,4 @@
-import type { DeviceRecord } from "../domain.js";
+import type { VirtualDevice } from "../domain.js";
 import type {
   CapacityPlatform,
   RamBudget,
@@ -37,7 +37,7 @@ export interface CapacityFigures {
  * cannot disagree.
  */
 export function buildCapacityFigures(
-  devices: readonly DeviceRecord[],
+  devices: readonly VirtualDevice[],
   source: CapacityFiguresSource,
 ): CapacityFigures {
   const running = source.runningCapacity;

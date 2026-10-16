@@ -16,6 +16,7 @@ import {
   DriverCatalog,
   type HostFacts,
   HostFactsReader,
+  type LatestPresence,
   Nuke,
   PassthroughRefusedError,
   Registry,
@@ -23,6 +24,7 @@ import {
   RuntimeMissingError,
   type CatalogReader,
   type PassthroughResolver,
+  toDriverDevice,
 } from "../core/index.js";
 import { NoCapacityError } from "../leasing/index.js";
 import {
@@ -43,7 +45,7 @@ import {
   type ProcessRunner,
 } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
-import type { DispatchSession } from "./dispatcher.js";
+import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
@@ -109,8 +111,8 @@ function fakePassthroughOptions(
   contextSink: unknown[] | undefined,
 ): Partial<FakeDriverOptions> {
   if (tool === undefined) return {};
-  return {
-    passthrough: (args: readonly string[], context?: unknown) => {
+  const options = {
+    passthrough: (_tool: string, _device: unknown, args: readonly string[], context?: unknown) => {
       contextSink?.push(context);
       // The refusal half of a real driver's passthrough, in the smallest form that
       // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
@@ -127,8 +129,30 @@ function fakePassthroughOptions(
         env: { SIMLOCK_SCOPED: "1" },
       };
     },
-    passthroughTool: tool,
+    passthroughTools: [tool],
   };
+  return options;
+}
+
+interface RecordedPassthrough {
+  readonly args: readonly string[];
+  readonly context: unknown;
+  readonly device: unknown;
+  readonly tool: string;
+}
+
+function recordingResolver(
+  calls: RecordedPassthrough[],
+  answer: () => Promise<unknown> = () =>
+    Promise.resolve({ args: ["list", "devices"], command: "simctl", env: {} }),
+): PassthroughResolver {
+  const resolver = {
+    passthrough: (tool: string, device: unknown, args: readonly string[], context?: unknown) => {
+      calls.push({ args, context, device, tool });
+      return answer();
+    },
+  };
+  return resolver as unknown as PassthroughResolver;
 }
 
 /** A fake clock that can also be set back, as a wall clock can be. */
@@ -154,55 +178,43 @@ function withHttp(config: Config, http: Config["http"] | undefined): Config {
   return http === undefined ? config : { ...config, http };
 }
 
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
-    /** Extra fake driver options, such as `knownModels` for a catalog that lists a model. */
     readonly driverOptions?: Partial<FakeDriverOptions>;
     readonly awaitReady?: () => Promise<void>;
-    /** Overrides the `catalog` dependency -- used only to force `#parseOutput`'s failure path
-     * (see "Dispatcher: #parseOutput") with a fake that returns a payload violating the
-     * contract's output schema, something no real `CatalogReader` implementation would do. */
     readonly catalog?: CatalogReader;
-    /** ADR §3: `nuke.run` is admin-only and destructive (`safety.md` rules 1/5). `false` by
-     * default -- matching `DispatcherOptions.nuke`'s own undefined default, so most tests don't
-     * pay for wiring one -- since a real `Nuke` needs this function's own `engine`/`registry`,
-     * it is built here (rather than passed in) when a test opts in. */
     readonly includeNuke?: boolean;
-    /** Gives the fake driver a `simlock <tool>` wrapper so `driver.passthrough` has something
-     * to route to; off by default so no other test's catalog output changes shape. */
+    readonly includeEnrollment?: boolean;
     readonly passthroughTool?: string;
-    /** Narrows the lease TTL knobs (ADR 0004), for the cap and default-width rules. */
     readonly lease?: Partial<Config["lease"]>;
-    /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default, like the option it
-     * feeds, so no other test pays for a scripted process. */
     readonly processRunner?: ProcessRunner;
-    /** Narrows `exec.timeoutMs` so the timeout path can be driven with a short clock advance
-     * rather than ten minutes of one. */
     readonly exec?: Partial<Config["exec"]>;
-    /** Collects the `PassthroughContext` each resolution was given, so a test can assert what
-     * the driver was told about its caller (ADR 0005 §19c's "no terminal"). */
     readonly passthroughContextSink?: unknown[];
-    /** Shares one clock with the test, for a flow that has to schedule against the dispatcher's
-     * own timers. */
     readonly clock?: FakeClock;
     /** Replaces the fake driver's own `passthrough` (which unconditionally prepends
      * `--set /root`) with a caller-supplied resolver -- for the one suite that needs a
      * `device.exec` command a *real* `NodeProcessRunner` can actually spawn (`node -e ...`
      * takes no `--set`), rather than `ScriptedProcessRunner`'s scripted chunks. */
     readonly passthroughOverride?: PassthroughResolver;
+    readonly execEnv?: NodeJS.ProcessEnv;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
     readonly eventHistory?: Pick<EventHistory, "replay">;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
     readonly capacity?: Config["capacity"];
+    /** Changes keys of the `warmPool` block, for a test about its targets or its switch. */
+    readonly warmPool?: Partial<Config["warmPool"]>;
     /** Stands in for the component installer: a test that needs to see whether it was reached,
      * or one that reads `status.get`'s installs from an installer of its own. */
     readonly components?: Pick<
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
     >;
+    /** The daemon's health, as `status.get` reports it; `running` by default. */
+    readonly health?: "starting" | "running" | "failed";
     /** `gateway.label` in this daemon's config; unset by default. */
     readonly gatewayLabel?: string;
     /** The `http` block; disabled by default. */
@@ -213,11 +225,19 @@ async function buildDispatcher(
     readonly otherStallDrivers?: readonly FakeDriver[];
     /** Extra leasing options, such as `defaultModes` (a platform's default device mode). */
     readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
+    /** A `state.json` the registry loads, for a test that starts from records already on disk. */
+    readonly state?: object;
+    readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
+    readonly capabilitySources?: DispatcherOptions["capabilitySources"];
+    readonly load?: DispatcherOptions["load"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();
+  if (overrides.state !== undefined) {
+    await filesystem.writeFileAtomic("/state.json", JSON.stringify(overrides.state));
+  }
   const registry = await Registry.load({
     clock,
     eventBus,
@@ -232,7 +252,7 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = withHttp(
+  const baseConfig = withHttp(
     withGatewayLabel(
       testConfig(
         overrides.downloadsPolicy,
@@ -244,6 +264,10 @@ async function buildDispatcher(
     ),
     overrides.http,
   );
+  const config: Config = {
+    ...baseConfig,
+    warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+  };
   const wiring = testComponentWiring({
     clock: clock,
     components: overrides.components,
@@ -274,6 +298,7 @@ async function buildDispatcher(
     registry,
   });
   const doctor = new Doctor({
+    decisions: wiring.decisions,
     claims: engine.claimReader,
     clock,
     config,
@@ -292,7 +317,11 @@ async function buildDispatcher(
   });
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
+    ...(overrides.capabilitySources === undefined
+      ? {}
+      : { capabilitySources: overrides.capabilitySources }),
     capacity: engine,
+    warmPool: engine,
     deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
@@ -301,15 +330,18 @@ async function buildDispatcher(
     doctor,
     eventBus,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
-    health: () => "running",
+    health: () => overrides.health ?? "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     instanceId: "instance-1",
     leases: engine,
+    ...(overrides.load === undefined ? {} : { load: overrides.load }),
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
+    ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
     ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
-    execEnv: { PATH: "/usr/bin" },
+    execEnv: overrides.execEnv ?? { PATH: "/usr/bin" },
     queue: engine,
+    ...(overrides.presence === undefined ? {} : { presence: overrides.presence }),
     reaper,
     registry,
     stalls: stallOptions(engine, driver, overrides),
@@ -438,6 +470,20 @@ describe("Dispatcher: parsing", () => {
     ]);
   });
 
+  it("grants lease.request's leaseId as the lease ID, and answers an ID that is in use with LEASE_ID_TAKEN carrying it in details", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const input = { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" } as const;
+
+    const first = await dispatcher.dispatch("lease.request", input, session());
+    const clash = dispatcher.dispatch("lease.request", input, session({ principal: "other" }));
+
+    expect(first.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
+    await expect(clash).rejects.toMatchObject({
+      code: "LEASE_ID_TAKEN",
+      details: { leaseId: "ad-7f3a" },
+    });
+  });
+
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
     const { dispatcher } = await buildDispatcher();
     // "daemon.stop" is ADR §6's frozen exception -- `DaemonServer#dispatchLine` intercepts it
@@ -470,6 +516,28 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       version: "1.2.3",
     });
     expect(workers[0]).not.toHaveProperty("protocol");
+  });
+
+  it("a worker's own worker.list carries its load with readAt taken when its status answered, not after its catalog read", async () => {
+    const clock = new FakeClock(10_000);
+    const base = await buildDispatcher({ clock });
+    const slowCatalog: CatalogReader = {
+      async listCatalog(...arguments_) {
+        // why: a later macrotask, so status's own answer has already been taken by then.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        clock.advance(5_000);
+        return base.engine.listCatalog(...arguments_);
+      },
+    };
+    const { dispatcher } = await buildDispatcher({
+      catalog: slowCatalog,
+      clock,
+      load: () => ({ ageMs: 2_000, disk: { freeBytes: 120, totalBytes: 500 } }),
+    });
+
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(workers[0]?.load).toEqual({ disk: { freeBytes: 120, totalBytes: 500 }, readAt: 8_000 });
   });
 
   it("worker.list on a worker carries gateway.label as label, and no label when it is unset", async () => {
@@ -555,7 +623,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
   it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const runtimes = async () =>
-      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog?.flatMap(
         (entry) => entry.runtimes,
       );
     expect(await runtimes()).toEqual(["26.5"]);
@@ -594,7 +662,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
 
     expect(calls).toBe(2);
-    expect(workers[0]?.catalog.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+    expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
@@ -627,8 +695,10 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(status.leases).toHaveLength(1);
     expect(status.installs).toHaveLength(1);
     expect(status.host.tools).toHaveLength(1);
+    expect(status.warmPool).toBeDefined();
     expect(catalog.platforms[0]?.models).toEqual(["iPhone 17 Pro"]);
     expect(workers[0]).toMatchObject({
+      warmPool: status.warmPool,
       capacity: status.capacity,
       catalog: catalog.platforms,
       devices: statusDeviceSchema.array().parse(devices),
@@ -641,7 +711,7 @@ describe("Dispatcher: the fleet operations on a worker", () => {
       queueDepth: status.queueDepth,
     });
     expect(workers[0]?.devices).toHaveLength(1);
-    expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
+    expect(workers[0]?.devices?.[0]).not.toHaveProperty("driverData");
   });
 
   it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
@@ -821,7 +891,12 @@ describe("Dispatcher: ownership", () => {
     await expect(
       dispatcher.dispatch(
         "lease.request",
-        { model: "iPhone 17 Pro", osVersion: "26.5", owner: "someone-else", platform: "ios" },
+        {
+          model: "iPhone 17 Pro",
+          osVersion: "26.5",
+          owner: "someone-else",
+          platform: "ios",
+        },
         session({ principal: "tok_agent", role: "agent" }),
       ),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -840,7 +915,12 @@ describe("Dispatcher: ownership", () => {
     await expect(
       dispatcher.dispatch(
         "lease.request",
-        { model: "iPhone 17 Pro", osVersion: "26.5", owner: "someone-else", platform: "ios" },
+        {
+          model: "iPhone 17 Pro",
+          osVersion: "26.5",
+          owner: "someone-else",
+          platform: "ios",
+        },
         session({ principal: "tok_operator", role: "admin" }),
       ),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -851,7 +931,12 @@ describe("Dispatcher: ownership", () => {
 
     const grant = await dispatcher.dispatch(
       "lease.request",
-      { model: "iPhone 17 Pro", osVersion: "26.5", owner: "agent-7", platform: "ios" },
+      {
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+        owner: "agent-7",
+        platform: "ios",
+      },
       session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
     );
 
@@ -871,6 +956,69 @@ describe("Dispatcher: ownership", () => {
         session({ principal: "agent-7", role: "agent" }),
       ),
     ).resolves.toMatchObject({ id: (grant as { lease: { id: string } }).lease.id });
+  });
+
+  describe("lease.request's fleetRequestId (ADR 0021)", () => {
+    const probeInput = {
+      fleetRequestId: "req_gw1",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+
+    it.each([
+      ["with noWait: true", { ...probeInput, noWait: true }],
+      ["without noWait", probeInput],
+    ])(
+      "refuses it from a session that is not the gateway uplink with FORBIDDEN and stores nothing, %s",
+      async (_label, input) => {
+        const { dispatcher, registry } = await buildDispatcher();
+
+        for (const refused of [
+          session({ principal: "tok_agent", role: "agent" }),
+          session({ principal: "tok_operator", role: "admin" }),
+        ]) {
+          await expect(dispatcher.dispatch("lease.request", input, refused)).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("fleetRequestId"),
+          });
+        }
+
+        expect(registry.leaseRequests()).toEqual([]);
+        expect(registry.snapshot.leases).toEqual([]);
+      },
+    );
+
+    it("refuses it without noWait: true from the gateway uplink with BAD_REQUEST and stores nothing", async () => {
+      const { dispatcher, registry } = await buildDispatcher();
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          probeInput,
+          session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("noWait"),
+      });
+
+      expect(registry.leaseRequests()).toEqual([]);
+    });
+
+    it("stores it on the request when the gateway uplink sends it with noWait: true", async () => {
+      const { dispatcher, registry } = await buildDispatcher();
+
+      await dispatcher.dispatch(
+        "lease.request",
+        { ...probeInput, noWait: true },
+        session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+      );
+
+      expect(registry.leaseRequests()).toEqual([
+        expect.objectContaining({ fleetRequestId: "req_gw1", state: "granted" }),
+      ]);
+    });
   });
 
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
@@ -1184,8 +1332,255 @@ describe("Dispatcher: device mode on every surface", () => {
       .replay()
       .filter((event) => event.event === "capacity.changed")
       .at(-1);
-    expect(last?.payload).toEqual(capacityChangedPayload(status.capacity));
-    expect(status.capacity.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+    const capacity = status.capacity as NonNullable<typeof status.capacity>;
+    expect(last?.payload).toEqual(capacityChangedPayload(capacity));
+    expect(status.capacity?.ios).toMatchObject({ running: 1, warm: 0, used: 1 });
+  });
+
+  it("lease.request grants a physical device with physical true and its class on the device", async () => {
+    const { dispatcher, driver, engine } = await buildDispatcher({
+      state: {
+        devices: [],
+        leases: [],
+        physicalDevices: [
+          {
+            createdAt: 1,
+            driverData: {},
+            driverDeviceId: "00008110-001A2B3C4D5E",
+            enrolledApps: [],
+            id: "dev_phys",
+            physical: true,
+            spec: {
+              class: "tablet",
+              model: "iPad Pro",
+              osVersion: "18.4",
+              physical: true,
+              platform: "ios",
+            },
+            state: "ready",
+          },
+        ],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    driver.setPhysicalPresence("00008110-001A2B3C4D5E", true);
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPad Pro", physical: true, platform: "ios" },
+      session(),
+    );
+
+    expect(grant.device).toMatchObject({ class: "tablet", id: "dev_phys", physical: true });
+  });
+
+  it("status.get and list.get show a physical record with physical, its class and no mode or enrolledApps, and count nothing of it in the capacity figures", async () => {
+    const { dispatcher, engine } = await buildDispatcher({
+      state: {
+        devices: [],
+        leases: [],
+        physicalDevices: [
+          {
+            createdAt: 1,
+            driverData: {},
+            driverDeviceId: "00008110-001A2B3C4D5E",
+            enrolledApps: ["com.example.kept"],
+            id: "dev_phys",
+            physical: true,
+            spec: {
+              class: "tablet",
+              model: "iPad Pro",
+              osVersion: "18.4",
+              physical: true,
+              platform: "ios",
+            },
+            state: "ready",
+          },
+        ],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    const lease = await dispatcher.dispatch("lease.request", request, session());
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const listed = (await dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
+    )) as { id: string; class?: string; mode?: string; physical: boolean }[];
+
+    for (const devices of [status.devices ?? [], listed]) {
+      const phys = devices.find((device) => device.id === "dev_phys");
+      expect(phys).toMatchObject({ class: "tablet", physical: true, state: "ready" });
+      expect(phys).not.toHaveProperty("mode");
+      expect(phys).not.toHaveProperty("enrolledApps");
+      const simulator = devices.find((device) => device.id === lease.device.id);
+      expect(simulator).toMatchObject({ mode: "full", physical: false });
+      expect(simulator).not.toHaveProperty("class");
+    }
+    expect(status.capacity?.ios).toMatchObject({ running: 1, used: 1, warm: 0 });
+  });
+
+  it("status.get and list.get carry the latest presence read as presence on a physical device; a virtual device, and a physical device not yet read, carry none", async () => {
+    const physical = (id: string, driverDeviceId: string) => ({
+      createdAt: 1,
+      driverData: {},
+      driverDeviceId,
+      enrolledApps: [],
+      id,
+      physical: true,
+      spec: {
+        class: "phone",
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        physical: true,
+        platform: "ios",
+      },
+      state: "ready",
+    });
+    const reads = new Map<string, LatestPresence>([
+      ["UDID-READ", { present: false, reason: "locked" }],
+      ["UDID-PRESENT", { present: true }],
+    ]);
+    const { dispatcher, engine } = await buildDispatcher({
+      // why: every ID but the unread one answers a read, so a virtual device's own driver ID does too and only the physical guard keeps it off the wire.
+      presence: (driverDeviceId) =>
+        driverDeviceId === "UDID-UNREAD"
+          ? undefined
+          : (reads.get(driverDeviceId) ?? { present: true }),
+      state: {
+        devices: [],
+        leases: [],
+        physicalDevices: [
+          physical("dev_read", "UDID-READ"),
+          physical("dev_present", "UDID-PRESENT"),
+          physical("dev_unread", "UDID-UNREAD"),
+        ],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    const lease = await dispatcher.dispatch("lease.request", request, session());
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const listed = (await dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
+    )) as { id: string; presence?: unknown }[];
+
+    for (const devices of [status.devices ?? [], listed]) {
+      const byId = (id: string) => devices.find((device) => device.id === id);
+      expect(byId("dev_read")).toMatchObject({ presence: { present: false, reason: "locked" } });
+      expect(byId("dev_present")).toMatchObject({ presence: { present: true } });
+      expect(byId("dev_unread")).not.toHaveProperty("presence");
+      expect(byId(lease.device.id)).not.toHaveProperty("presence");
+    }
+  });
+
+  it("a reclaiming physical device's status entry has no reclaimingSince", async () => {
+    const { dispatcher } = await buildDispatcher({
+      state: {
+        devices: [],
+        leases: [],
+        physicalDevices: [
+          {
+            createdAt: 1,
+            driverData: {},
+            driverDeviceId: "00008110-001A2B3C4D5E",
+            enrolledApps: [],
+            id: "dev_phys",
+            lastLeaseEndedAt: 200,
+            physical: true,
+            reclaimingSince: 600,
+            spec: {
+              class: "phone",
+              model: "iPhone 15 Pro",
+              osVersion: "18.4",
+              physical: true,
+              platform: "ios",
+            },
+            state: "reclaiming",
+          },
+        ],
+      },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    const entry = status.devices?.find((device) => device.id === "dev_phys");
+    expect(entry).toMatchObject({ state: "reclaiming", transitionAgeMs: 400 });
+    expect(entry).not.toHaveProperty("reclaimingSince");
+  });
+
+  it("status.get carries the warm pool's figures: the reserve, and a target the pass could not meet with its reason", async () => {
+    const { dispatcher, engine } = await buildDispatcher({
+      warmPool: {
+        reserveRunning: { android: 0, ios: 1 },
+        targets: [{ count: 1, model: "iPhone 17", osVersion: "27.0", platform: "ios" }],
+      },
+    });
+    await engine.convergeRunningCapacity();
+    await engine.core.passWarmPool();
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    });
+  });
+
+  it("status.get on a daemon whose pool is off carries enabled false, the reserve and every configured target with ready 0, booting 0 and short disabled", async () => {
+    const { dispatcher } = await buildDispatcher({
+      warmPool: {
+        enabled: false,
+        reserveRunning: { android: 1, ios: 0 },
+        targets: [
+          { count: 2, model: "iPhone 17", osVersion: "26.5", platform: "ios" },
+          { count: 1, mode: "slim", model: "Pixel 8", platform: "android" },
+        ],
+      },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.warmPool).toStrictEqual({
+      enabled: false,
+      reserveRunning: { android: 1, ios: 0 },
+      targets: [
+        {
+          booting: 0,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.5",
+          platform: "ios",
+          ready: 0,
+          short: "disabled",
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "slim",
+          model: "Pixel 8",
+          platform: "android",
+          ready: 0,
+          short: "disabled",
+        },
+      ],
+    });
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
@@ -1195,7 +1590,7 @@ describe("Dispatcher: device mode on every surface", () => {
       driverData: {},
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
-      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     });
 
     const status = await dispatcher.dispatch("status.get", {}, session());
@@ -1209,7 +1604,7 @@ describe("Dispatcher: device mode on every surface", () => {
       { id: granted.device.id, mode: "slim" },
       { id: provisioning.id, mode: "full" },
     ];
-    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.devices?.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
     expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
       expected,
     );
@@ -1230,6 +1625,7 @@ describe("Dispatcher: device mode on every surface", () => {
           driverDeviceId,
           provisionDuration: 0,
           spec: {
+            physical: false,
             model: "iPhone 17 Pro",
             osVersion: "26.5",
             platform: "ios",
@@ -1252,7 +1648,7 @@ describe("Dispatcher: device mode on every surface", () => {
       ];
       const project = (devices: readonly { id: string; servesDefaultMode?: boolean }[]) =>
         devices.map(({ id, servesDefaultMode }) => ({ id, servesDefaultMode }));
-      expect(project(status.devices)).toEqual(expected);
+      expect(project(status.devices ?? [])).toEqual(expected);
       expect(project(list as { id: string; servesDefaultMode?: boolean }[])).toEqual(expected);
     },
   );
@@ -1265,7 +1661,7 @@ describe("Dispatcher: device mode on every surface", () => {
         driverData: {},
         driverDeviceId,
         provisionDuration: 0,
-        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       });
     const stuck = await register("driver-stuck");
     // The fake driver estimates 0, so the threshold is the 60 s floor. The stuck device is past
@@ -1286,7 +1682,7 @@ describe("Dispatcher: device mode on every surface", () => {
     );
 
     for (const devices of [status.devices, list, workers[0]?.devices ?? []]) {
-      const byId = new Map(devices.map((device) => [device.id, device]));
+      const byId = new Map(devices?.map((device) => [device.id, device]));
       expect(byId.get(stuck.id)?.stalled).toBe(true);
       expect(byId.get(fresh.id)).toBeDefined();
       expect(byId.get(fresh.id)).not.toHaveProperty("stalled");
@@ -1305,11 +1701,11 @@ describe("Dispatcher: device mode on every surface", () => {
       driverData: {},
       driverDeviceId: "driver-booting",
       provisionDuration: 0,
-      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     });
     clock.advance(60_001);
     const stalled = async () =>
-      (await dispatcher.dispatch("status.get", {}, session())).devices.find(
+      (await dispatcher.dispatch("status.get", {}, session())).devices?.find(
         (entry) => entry.id === device.id,
       )?.stalled;
 
@@ -1331,13 +1727,13 @@ describe("Dispatcher: device mode on every surface", () => {
       driverData: {},
       driverDeviceId: "driver-ios-stuck",
       provisionDuration: 0,
-      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     });
     clock.advance(60_001);
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(status.devices.find((entry) => entry.id === device.id)?.stalled).toBe(true);
+    expect(status.devices?.find((entry) => entry.id === device.id)?.stalled).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
@@ -1434,7 +1830,12 @@ describe("Dispatcher: image tags", () => {
       await buildDispatcher({ driverOptions: androidImages })
     ).dispatcher.dispatch(
       "lease.request",
-      { model: "Pixel 8", osVersion: "34", platform: "android", requesterId: "untagged" },
+      {
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+        requesterId: "untagged",
+      },
       session(),
     );
 
@@ -1442,11 +1843,13 @@ describe("Dispatcher: image tags", () => {
       imageTag: "google_apis_playstore",
       model: "Pixel 8",
       osVersion: "34",
+      physical: false,
       platform: "android",
     });
     expect(untagged.device.spec).toEqual({
       model: "Pixel 8",
       osVersion: "34",
+      physical: false,
       platform: "android",
     });
   });
@@ -1512,7 +1915,12 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     await expect(
       dispatcher.dispatch(
         "lease.request",
-        { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+        {
+          allowDownload: true,
+          model: "iPhone 17 Pro",
+          osVersion: "27.0",
+          platform: "ios",
+        },
         session(),
       ),
     ).rejects.toMatchObject({ name: "RuntimeMissingError" });
@@ -1576,7 +1984,12 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "on-request" });
     await dispatcher.dispatch(
       "lease.request",
-      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+      {
+        allowDownload: true,
+        model: "iPhone 17 Pro",
+        osVersion: "27.0",
+        platform: "ios",
+      },
       session(),
     );
     expect(
@@ -1606,7 +2019,7 @@ describe("Dispatcher: status.get installs in progress", () => {
       registry: {
         deleteComponent: () => Promise.resolve(),
         recordComponent: () => Promise.resolve(),
-        snapshot: { components: [], devices: [], leases: [] },
+        snapshot: { components: [], devices: [], leases: [], virtualDevices: [] },
       },
       timeoutMs: installTimeoutMs,
     });
@@ -1689,7 +2102,11 @@ describe("Dispatcher: status.get installs in progress", () => {
 });
 
 describe("Dispatcher: list.get requests and status.get waiting", () => {
-  const IOS_REQUEST = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+  const IOS_REQUEST = {
+    model: "iPhone 17 Pro",
+    osVersion: "26.5",
+    platform: "ios",
+  } as const;
 
   /** A lease request from `requesterId`, left running: it resolves once granted. */
   function request(
@@ -1934,7 +2351,12 @@ describe("Dispatcher: component.install", () => {
     await until(() => installCalls(driver).length === 1, "the install started");
     const lease = dispatcher.dispatch(
       "lease.request",
-      { allowDownload: true, model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+      {
+        allowDownload: true,
+        model: "iPhone 17 Pro",
+        osVersion: "27.0",
+        platform: "ios",
+      },
       session(),
     );
     // The lease reaches the installer while the install is still held, so it can only join.
@@ -2295,7 +2717,11 @@ describe("Dispatcher: status.get RAM budget", () => {
       },
       driverOptions: { slimmableOsVersions: ["26.5"] },
     });
-    const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const ios = {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
     await dispatcher.dispatch("lease.request", { ...ios, mode: "slim" }, session());
     await dispatcher.dispatch(
       "lease.request",
@@ -2306,24 +2732,24 @@ describe("Dispatcher: status.get RAM budget", () => {
       driverData: {},
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
-      spec: { ...ios, mode: "slim" },
+      spec: { ...ios, mode: "slim", physical: false },
     });
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    const listed = status.devices
+    const listed = (status.devices ?? [])
       .filter((device) => device.state !== "deleted")
       .map((device) =>
         device.mode === "slim" ? sizes.iosSlimBytesPerDevice : sizes.iosBytesPerDevice,
       );
     // The provisioning device is listed `full` until its slim pass, and counts at that size.
-    expect(status.devices.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
-    expect(status.capacity.ramBudget).toEqual({
+    expect(status.devices?.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
+    expect(status.capacity?.ramBudget).toEqual({
       limitBytes: 28 * gibibyte,
       overLimit: false,
       usedBytes: listed.reduce((total, bytes) => total + bytes, 0),
     });
-    expect(status.capacity.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
+    expect(status.capacity?.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
   });
 
   describe("atRamBudget", () => {
@@ -2347,19 +2773,23 @@ describe("Dispatcher: status.get RAM budget", () => {
           driverData: {},
           driverDeviceId: `driver-${index}`,
           provisionDuration: 0,
-          spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+          spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         });
       }
       return built;
     }
-    const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const ios = {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
 
     it("is true for a platform whose next full device the planner refuses for RAM, and false while it would be admitted", async () => {
       // 13 devices use 26 of 28 GiB: one more iOS device fits, an Android one does not.
       const roomy = await withIosDevices(13);
       const roomyStatus = await roomy.dispatcher.dispatch("status.get", {}, session());
-      expect(roomyStatus.capacity.ios.atRamBudget).toBe(false);
-      expect(roomyStatus.capacity.android.atRamBudget).toBe(true);
+      expect(roomyStatus.capacity?.ios.atRamBudget).toBe(false);
+      expect(roomyStatus.capacity?.android.atRamBudget).toBe(true);
       await expect(
         roomy.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).resolves.toBeDefined();
@@ -2367,7 +2797,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       // 14 devices use all 28 GiB: not even one more iOS device fits.
       const full = await withIosDevices(14);
       const fullStatus = await full.dispatcher.dispatch("status.get", {}, session());
-      expect(fullStatus.capacity.ios.atRamBudget).toBe(true);
+      expect(fullStatus.capacity?.ios.atRamBudget).toBe(true);
       await expect(
         full.dispatcher.dispatch("lease.request", { ...ios, noWait: true }, session()),
       ).rejects.toBeInstanceOf(NoCapacityError);
@@ -2380,8 +2810,8 @@ describe("Dispatcher: status.get RAM budget", () => {
 
       const status = await dispatcher.dispatch("status.get", {}, session());
 
-      expect(status.capacity.ios.atRamBudget).toBe(false);
-      expect(status.capacity.android.atRamBudget).toBe(false);
+      expect(status.capacity?.ios.atRamBudget).toBe(false);
+      expect(status.capacity?.android.atRamBudget).toBe(false);
     });
   });
 
@@ -2532,6 +2962,37 @@ describe("Dispatcher: device.exec", () => {
     // Order across both streams, and each chunk exactly as written: a handler that buffered or
     // line-joined would show two stdout chunks merged, or stderr after both of them.
     expect(seen).toEqual(["stdout:first", "stderr:warning\n", "stdout: and second\n"]);
+  });
+
+  it("spawns without a key of the daemon's environment that the command's unsetEnv names, and keeps every other key and the command's own env", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const resolver = recordingResolver([], () =>
+      Promise.resolve({
+        args: command.args,
+        command: command.command,
+        env: { SIMLOCK_SCOPED: "1" },
+        unsetEnv: ["ANDROID_ADB_SERVER_ADDRESS", "ANDROID_SERIAL"],
+      }),
+    );
+    const { dispatcher, leaseId } = await withLease({
+      execEnv: {
+        ANDROID_ADB_SERVER_ADDRESS: "other-host",
+        ANDROID_SERIAL: "someone-elses-phone",
+        PATH: "/usr/bin",
+        UNRELATED: "kept",
+      },
+      passthroughOverride: resolver,
+      processRunner: runner,
+    });
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+
+    const env = runner.calls[0]?.options.env;
+    expect(env).toEqual({ PATH: "/usr/bin", SIMLOCK_SCOPED: "1", UNRELATED: "kept" });
   });
 
   it("writes stdin to the child once and closes it", async () => {
@@ -2694,6 +3155,138 @@ describe("Dispatcher: device.exec", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it("passes the lease's driver device to passthrough for device.exec and no device for driver.passthrough", async () => {
+    const calls: RecordedPassthrough[] = [];
+    const built = await buildDispatcher({
+      passthroughOverride: recordingResolver(calls),
+      processRunner: new ScriptedProcessRunner([
+        { match: { args: ["list", "devices"], command: "simctl" } },
+      ]),
+    });
+    const grant = (await built.dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_agent" }),
+    )) as { lease: { id: string } };
+    const lease = built.registry.snapshot.leases.find(
+      (candidate) => candidate.id === grant.lease.id,
+    );
+    const record = built.registry.snapshot.devices.find((device) => device.id === lease?.deviceId);
+    if (record === undefined) throw new Error("granted device is not in the registry");
+
+    const settled = await Promise.allSettled([
+      built.dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: grant.lease.id, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+      built.dispatcher.dispatch(
+        "driver.passthrough",
+        { args: ["list", "devices"], tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ]);
+
+    expect(calls.map((call) => call.device)).toEqual([toDriverDevice(record), undefined]);
+    expect(calls[0]?.device).toMatchObject({ deviceId: record.driverDeviceId, physical: false });
+    expect(settled.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+  });
+
+  it("answers PASSTHROUGH_REFUSED on device.exec and driver.passthrough when passthrough rejects, and device.exec spawns nothing", async () => {
+    const calls: RecordedPassthrough[] = [];
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({
+      passthroughOverride: recordingResolver(calls, () =>
+        Promise.reject(new PassthroughRefusedError("devicectl", "Refusing `simlock devicectl`.")),
+      ),
+      processRunner: runner,
+    });
+
+    const exec = await dispatcher
+      .dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "devicectl" },
+        session({ principal: "tok_agent" }),
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    const direct = await dispatcher
+      .dispatch(
+        "driver.passthrough",
+        { args: ["list", "devices"], tool: "devicectl" },
+        session({ principal: "tok_agent" }),
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(calls.map((call) => call.tool)).toEqual(["devicectl", "devicectl"]);
+    expect(exec).toBeInstanceOf(PassthroughRefusedError);
+    expect(classifyError(exec)).toBe("PASSTHROUGH_REFUSED");
+    expect(direct).toBeInstanceOf(PassthroughRefusedError);
+    expect(classifyError(direct)).toBe("PASSTHROUGH_REFUSED");
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("answers UNKNOWN_LEASE and resolves no command when device.exec names no lease", async () => {
+    const calls: RecordedPassthrough[] = [];
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher } = await withLease({
+      passthroughOverride: recordingResolver(calls),
+      processRunner: runner,
+    });
+
+    const error = await dispatcher
+      .dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: "lse_gone", tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      )
+      .then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+
+    expect(classifyError(error)).toBe("UNKNOWN_LEASE");
+    expect(calls).toEqual([]);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("answers UNKNOWN_LEASE and resolves no command when the lease's device record is gone", async () => {
+    const calls: RecordedPassthrough[] = [];
+    const runner = new ScriptedProcessRunner([]);
+    const built = await buildDispatcher({
+      passthroughOverride: recordingResolver(calls),
+      processRunner: runner,
+    });
+    const grant = (await built.dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_agent" }),
+    )) as { lease: { id: string } };
+    const snapshot = built.registry.snapshot;
+    expect(snapshot.leases.map((lease) => lease.id)).toEqual([grant.lease.id]);
+    vi.spyOn(built.registry, "snapshot", "get").mockReturnValue({ ...snapshot, devices: [] });
+
+    const error = await built.dispatcher
+      .dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: grant.lease.id, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      )
+      .then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+
+    expect(classifyError(error)).toBe("UNKNOWN_LEASE");
+    expect(calls).toEqual([]);
+    expect(runner.calls).toEqual([]);
+  });
+
   it("tells the driver there is no terminal, so it can refuse what needs one", async () => {
     // ADR 0005 §19c: the command runs here, on pipes. The driver is the only thing that knows
     // which of its own commands that rules out (a bare `adb shell`), so the fact travels to
@@ -2715,7 +3308,7 @@ describe("Dispatcher: device.exec", () => {
       session({ principal: "tok_agent" }),
     );
 
-    expect(seen).toEqual([{ hasTerminal: false }, undefined]);
+    expect(seen).toEqual([{ hasTerminal: false, platform: "ios" }, undefined]);
   });
 
   it("answers UNKNOWN_LEASE for an id that names no lease, rather than running the command", async () => {
@@ -2824,11 +3417,14 @@ describe("Dispatcher: device.exec", () => {
     // defect -- and its fix, in `NodeStreamingProcessHandle` -- is actually exercised, for
     // both transports at once.
     function realCommand(script: string): PassthroughResolver {
-      return { passthrough: () => ({ args: ["-e", script], command: process.execPath, env: {} }) };
+      return recordingResolver([], () =>
+        Promise.resolve({ args: ["-e", script], command: process.execPath, env: {} }),
+      );
     }
-    // The 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
-    // case waits out the real 5 s `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` by design, and a 10 s guard
-    // left one slow child-process spawn on a busy machine between it and a false failure.
+    // why: the 30 s per-test timeouts below are hang guards, not speed claims: the stalled-delivery
+    // cases pass a 100 ms exit deferral cap to the real runner instead of waiting out its 5 s
+    // default, and a short guard would leave one slow child-process spawn on a busy machine
+    // between it and a false failure.
 
     it("delivers every chunk in full, in order, even when one delivery stalls past the exit grace window", async () => {
       const seen: string[] = [];
@@ -2841,7 +3437,7 @@ describe("Dispatcher: device.exec", () => {
           "process.stdout.write('before-exit-A');" +
             "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
         ),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitGraceMs: 300 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2850,15 +3446,15 @@ describe("Dispatcher: device.exec", () => {
         session({
           onOutput: (_stream, chunk) => {
             seen.push(chunk);
-            // Stall only the first chunk's delivery, well past the 1s exit-to-close grace
-            // window this handle used to settle on regardless.
+            // why: only the first chunk's delivery stalls, past the 300 ms exit grace window
+            // this handle used to settle on regardless.
             return seen.length === 1 ? firstDelivery : undefined;
           },
           principal: "tok_agent",
         }),
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       let settledEarly = false;
       void pending.then(() => {
         settledEarly = true;
@@ -2877,7 +3473,7 @@ describe("Dispatcher: device.exec", () => {
     it("fails device.exec loudly, rather than answering a truncated exit code, when a chunk's delivery never resolves", async () => {
       const { dispatcher, leaseId } = await withLease({
         passthroughOverride: realCommand("process.stdout.write('stuck'); process.exit(0);"),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitDeferralCapMs: 100 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2905,7 +3501,7 @@ describe("Dispatcher: device.exec", () => {
       const { clock, dispatcher, leaseId } = await withLease({
         exec: { timeoutMs: 50 },
         passthroughOverride: realCommand("process.stdout.write('x'); setInterval(() => {}, 1000);"),
-        processRunner: new NodeProcessRunner(),
+        processRunner: new NodeProcessRunner({ exitDeferralCapMs: 100 }),
       });
 
       const pending = dispatcher.dispatch(
@@ -2925,9 +3521,13 @@ describe("Dispatcher: device.exec", () => {
       // Let the real child actually spawn and write its one chunk before the timeout fires,
       // so the pending delivery this test depends on genuinely exists.
       await new Promise((resolve) => setTimeout(resolve, 200));
+      const advancedAt = Date.now();
       clock.advance(50);
 
       await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+      expect(Date.now() - advancedAt, "rejected only after the default 5 s cap").toBeLessThan(
+        2_500,
+      );
     }, 30_000);
   });
 });
@@ -2979,6 +3579,7 @@ function testConfig(
   },
 ): Config {
   return {
+    capabilities: {},
     mode: "worker",
     gateway: {
       disconnectedRetentionMs: 24 * 60 * 60_000,
@@ -3013,6 +3614,8 @@ function testConfig(
       identity: { ios: "reusable", android: "reusable" },
       requestRetentionMs: 600_000,
       maxRequestRecords: 10_000,
+      maxPerRequester: 1,
+      endWaitMs: 600_000,
       ...leaseOverrides,
     },
     capacity,
@@ -3024,6 +3627,9 @@ function testConfig(
     },
     warmPool: {
       enabled: true,
+      maxConcurrentBoots: 1,
+      reserveRunning: { android: 0, ios: 0 },
+      targets: [],
       quarantine: {
         maxRetries: 3,
         maxRetryBackoffMs: 300_000,
@@ -3034,6 +3640,145 @@ function testConfig(
   };
 }
 
+describe("Dispatcher: device.add and device.remove", () => {
+  const admin = () => session({ principal: "tok_operator", role: "admin" });
+  const UDID = "00008110-001A2B3C4D5E";
+
+  async function withEnrollment() {
+    return buildDispatcher({
+      driverOptions: {
+        physicalDevices: [
+          {
+            apps: ["a", "b"],
+            class: "tablet",
+            ids: [UDID, "ALIAS"],
+            model: "iPad",
+            osVersion: "18.5",
+          },
+          { ids: ["LOCKED"], refusal: { message: "locked: unlock it", reason: "locked" } },
+        ],
+      },
+      includeEnrollment: true,
+    });
+  }
+
+  it("enrolls a device, answering with the registry ID, the canonical ID and what was read, and removes it by its canonical ID", async () => {
+    const { dispatcher, registry } = await withEnrollment();
+
+    const added = await dispatcher.dispatch(
+      "device.add",
+      { id: "ALIAS", platform: "ios" },
+      admin(),
+    );
+    const removed = await dispatcher.dispatch("device.remove", { id: UDID }, admin());
+
+    expect(added).toEqual({
+      appCount: 2,
+      class: "tablet",
+      driverDeviceId: UDID,
+      id: registry.snapshot.devices[0]?.id,
+      model: "iPad",
+      osVersion: "18.5",
+      platform: "ios",
+      reenrolled: false,
+    });
+    expect(removed).toEqual({ driverDeviceId: UDID, id: registry.snapshot.devices[0]?.id });
+    expect(registry.snapshot.devices[0]?.state).toBe("deleted");
+  });
+
+  it("answers a refusal as DEVICE_NOT_ENROLLABLE with the ID as typed, the platform, the reason and the driver's message", async () => {
+    const { dispatcher } = await withEnrollment();
+
+    const refusal = dispatcher.dispatch("device.add", { id: "LOCKED", platform: "ios" }, admin());
+
+    await expect(refusal).rejects.toMatchObject({
+      code: "DEVICE_NOT_ENROLLABLE",
+      details: { id: "LOCKED", platform: "ios", reason: "locked" },
+      message: "locked: unlock it",
+    });
+    await expect(refusal).rejects.not.toHaveProperty("details.canonicalId");
+  });
+
+  it("carries the canonical ID of a refusal of the second read", async () => {
+    const { dispatcher, driver } = await withEnrollment();
+    await dispatcher.dispatch("device.add", { id: UDID, platform: "ios" }, admin());
+    const original = driver.inspectPhysical.bind(driver);
+    let calls = 0;
+    vi.spyOn(driver, "inspectPhysical").mockImplementation(async (id) => {
+      calls += 1;
+      return calls === 1
+        ? original(id)
+        : { enrollable: false, message: "locked: unlock it", reason: "locked" };
+    });
+
+    await expect(
+      dispatcher.dispatch("device.add", { id: "ALIAS", platform: "ios" }, admin()),
+    ).rejects.toMatchObject({
+      code: "DEVICE_NOT_ENROLLABLE",
+      details: { canonicalId: UDID, id: "ALIAS", platform: "ios", reason: "locked" },
+    });
+  });
+
+  it("answers a leased device as DEVICE_BUSY with its ID and reason, and an unknown one as UNKNOWN_DEVICE", async () => {
+    const { dispatcher, registry } = await withEnrollment();
+    const { id } = await dispatcher.dispatch("device.add", { id: UDID, platform: "ios" }, admin());
+    await registry.createLease({
+      deviceId: id,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: 61_000,
+      ttlMs: 60_000,
+    });
+
+    await expect(dispatcher.dispatch("device.remove", { id: UDID }, admin())).rejects.toMatchObject(
+      {
+        code: "DEVICE_BUSY",
+        details: { id: UDID, reason: "leased" },
+        message: `${UDID} is leased: release it first`,
+      },
+    );
+    await expect(
+      dispatcher.dispatch("device.remove", { id: "NOPE" }, admin()),
+    ).rejects.toMatchObject({
+      code: "UNKNOWN_DEVICE",
+      details: { id: "NOPE" },
+      message: "NOPE is not an enrolled device",
+    });
+  });
+
+  it("passes a driver that throws on as the error it is, and answers INTERNAL on a daemon with no enrollment", async () => {
+    const { dispatcher, driver } = await withEnrollment();
+    driver.failOn("inspectPhysical", 1, new Error("usbmuxd went away"));
+    const without = await buildDispatcher();
+
+    const failure: unknown = await dispatcher
+      .dispatch("device.add", { id: UDID, platform: "ios" }, admin())
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      message: `Reading ${UDID} failed: usbmuxd went away`,
+      name: "PhysicalInspectionError",
+    });
+    await expect(
+      without.dispatcher.dispatch("device.add", { id: UDID, platform: "ios" }, admin()),
+    ).rejects.toMatchObject({ code: "INTERNAL", message: "Device enrollment is unavailable" });
+    await expect(
+      without.dispatcher.dispatch("device.remove", { id: UDID }, admin()),
+    ).rejects.toMatchObject({ code: "INTERNAL", message: "Device enrollment is unavailable" });
+  });
+
+  it("refuses an agent session with FORBIDDEN and never asks the driver", async () => {
+    const { dispatcher, driver } = await withEnrollment();
+
+    await expect(
+      dispatcher.dispatch("device.add", { id: UDID, platform: "ios" }, session()),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch("device.remove", { id: UDID }, session()),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(driver.calls.filter((call) => call.operation === "inspectPhysical")).toEqual([]);
+  });
+});
+
 describe("Dispatcher: component.remove", () => {
   const admin = (overrides: Partial<DispatchSession> = {}) =>
     session({ principal: "tok_operator", role: "admin", ...overrides });
@@ -3042,7 +3787,6 @@ describe("Dispatcher: component.remove", () => {
     return driver.calls.filter((call) => call.operation === operation).length;
   }
 
-  /** A dispatcher over a real engine and installer, with iOS 27.0 installed by Simlock. */
   async function withSimlockInstall() {
     const built = await buildDispatcher({
       driverOptions: { componentSizes: { "27.0": 7_000_000_000 }, knownModels: ["iPhone 17 Pro"] },
@@ -3201,5 +3945,344 @@ describe("Dispatcher: component.remove", () => {
     expect(driverCalls(driver, "provision")).toBe(0);
     driver.releaseRemovals();
     await expect(removal).resolves.toMatchObject({ outcome: "removed" });
+  });
+});
+
+describe("Dispatcher: status.get while the daemon is starting", () => {
+  it("status.get on a worker whose health is starting returns daemon and host and no other field", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ health: "starting" });
+    await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-unchecked",
+      provisionDuration: 0,
+      spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(Object.keys(status).sort()).toEqual(["daemon", "host"]);
+    expect(status.daemon).toEqual({ health: "starting", mode: "worker" });
+    expect(status.host).toEqual({ ...HOST_SYSTEM, tools: [] });
+  });
+
+  it.each(["running", "failed"] as const)(
+    "status.get on a %s daemon returns every field it returns today",
+    async (health) => {
+      const { dispatcher, registry } = await buildDispatcher({ health });
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver-known",
+        provisionDuration: 0,
+        spec: { physical: false, model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      });
+
+      const status = await dispatcher.dispatch("status.get", {}, session());
+
+      expect(Object.keys(status).sort()).toEqual([
+        "capacity",
+        "daemon",
+        "devices",
+        "host",
+        "installs",
+        "leases",
+        "physicalQueueDepth",
+        "queueDepth",
+        "waiting",
+        "warmPool",
+      ]);
+      expect(status.daemon.health).toBe(health);
+      expect(status.devices).toHaveLength(1);
+    },
+  );
+});
+
+describe("Dispatcher: status.get capabilities", () => {
+  type Read = Awaited<
+    ReturnType<NonNullable<DispatcherOptions["capabilitySources"]>[number]["read"]>
+  >;
+  const source = (read: () => Promise<Read>) => [{ name: "agent-device", read }];
+  const capabilitiesAfter = async (read: () => Promise<unknown>) => {
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: source(read as () => Promise<Read>),
+    });
+    return (await dispatcher.dispatch("status.get", {}, session())).capabilities;
+  };
+
+  it("answers a reason of 600 characters with a newline, an escape, a DEL and a U+2028 as 500 characters with spaces in their place", async () => {
+    const reason = `a\nb\u001bc\u007fd\u2028${"x".repeat(600)}`;
+
+    const capabilities = await capabilitiesAfter(async () => ({ reason, state: "unavailable" }));
+
+    expect(capabilities).toHaveLength(1);
+    expect(capabilities?.[0]?.name).toBe("agent-device");
+    expect(capabilities?.[0]?.reason).toHaveLength(500);
+    expect(capabilities?.[0]?.reason?.startsWith("a b c d ")).toBe(true);
+  });
+
+  it("answers a reason that is only control characters as unknown", async () => {
+    expect(
+      await capabilitiesAfter(async () => ({ reason: "\n\u001b\u007f", state: "unavailable" })),
+    ).toEqual([{ name: "agent-device", reason: "unknown", state: "unavailable" }]);
+  });
+
+  it("answers a source that reports a state outside the three as unavailable with reason `reported an invalid status`", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "available" }))).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+
+    expect(await capabilitiesAfter(async () => ({ state: "broken" }))).toEqual([
+      { name: "agent-device", reason: "reported an invalid status", state: "unavailable" },
+    ]);
+  });
+
+  it("answers a source that reports available with a reason as available with none", async () => {
+    expect(await capabilitiesAfter(async () => ({ reason: "fine", state: "available" }))).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+  });
+
+  it("answers a source that reports off with a reason as off with none", async () => {
+    expect(await capabilitiesAfter(async () => ({ reason: "no", state: "off" }))).toEqual([
+      { name: "agent-device", state: "off" },
+    ]);
+  });
+
+  it("answers a source that reports unavailable with no reason as unavailable with reason unknown", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "unavailable" }))).toEqual([
+      { name: "agent-device", reason: "unknown", state: "unavailable" },
+    ]);
+  });
+
+  it("answers a source whose read throws as unavailable with reason `could not read agent-device's status`, and status.get still answers", async () => {
+    expect(await capabilitiesAfter(async () => ({ state: "available" }))).toBeDefined();
+
+    expect(
+      await capabilitiesAfter(async () => {
+        throw new Error("boom");
+      }),
+    ).toEqual([
+      {
+        name: "agent-device",
+        reason: "could not read agent-device's status",
+        state: "unavailable",
+      },
+    ]);
+  });
+
+  it("answers status.get within 1.5 s when a capability read takes 2 s, with unavailable and reason `could not read agent-device's status`", async () => {
+    const clock = new FakeClock(1_000);
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: source(
+        () =>
+          new Promise((resolve) => clock.setTimer(2_000, () => resolve({ state: "available" }))),
+      ),
+      clock,
+    });
+    const answer = dispatcher.dispatch("status.get", {}, session());
+
+    for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+
+    expect((await answer).capabilities).toEqual([
+      {
+        name: "agent-device",
+        reason: "could not read agent-device's status",
+        state: "unavailable",
+      },
+    ]);
+  });
+
+  it("answers status.get with no capabilities field while the daemon's health is starting", async () => {
+    const sources = source(async () => ({ state: "available" }));
+    const running = await buildDispatcher({ capabilitySources: sources });
+    const starting = await buildDispatcher({ capabilitySources: sources, health: "starting" });
+
+    expect((await running.dispatcher.dispatch("status.get", {}, session())).capabilities).toEqual([
+      { name: "agent-device", state: "available" },
+    ]);
+    expect(await starting.dispatcher.dispatch("status.get", {}, session())).not.toHaveProperty(
+      "capabilities",
+    );
+  });
+});
+
+describe("Dispatcher: lease.request requires", () => {
+  const IOS = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+  const REQUIRES = { ...IOS, requires: ["agent-device"] } as const;
+  type SourceState = { state: "available" | "off" | "unavailable" };
+
+  function sources(initial: SourceState["state"]) {
+    const current: SourceState = { state: initial };
+    return {
+      current,
+      list: [{ name: "agent-device", read: async () => ({ state: current.state }) }] as NonNullable<
+        DispatcherOptions["capabilitySources"]
+      >,
+    };
+  }
+
+  it("refuses a request on a worker whose agent-device is off with CAPABILITY_MISSING, message `This worker cannot serve agent-device`, details naming it, stores nothing and emits no event", async () => {
+    const capability = sources("available");
+    const { dispatcher, eventBus, registry } = await buildDispatcher({
+      capabilitySources: capability.list,
+    });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { ...REQUIRES, requesterId: "a" },
+      session(),
+    );
+    await dispatcher.dispatch("lease.release", { leaseId: grant.lease.id }, session());
+    capability.current.state = "off";
+    const requestsBefore = registry.leaseRequests().length;
+    const eventsBefore = eventBus.replay().length;
+
+    await expect(
+      dispatcher.dispatch("lease.request", { ...REQUIRES, requesterId: "b" }, session()),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      message: "This worker cannot serve agent-device",
+    });
+
+    expect(registry.leaseRequests()).toHaveLength(requestsBefore);
+    expect(eventBus.replay()).toHaveLength(eventsBefore);
+  });
+
+  it("refuses the same request from the gateway uplink as a probe, the same way, with no lease.declined", async () => {
+    const capability = sources("unavailable");
+    const { dispatcher, eventBus, registry } = await buildDispatcher({
+      capabilitySources: capability.list,
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...REQUIRES, fleetRequestId: "req_gw1", noWait: true },
+        session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
+
+    expect(registry.leaseRequests()).toEqual([]);
+    expect(eventBus.replay().map((event) => event.event)).not.toContain("lease.declined");
+  });
+
+  it("names only x-other when requires is [x-other, agent-device] and only agent-device is available", async () => {
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...IOS, requires: ["x-other", "agent-device"] },
+        session(),
+      ),
+    ).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["x-other"] },
+      message: "This worker cannot serve x-other",
+    });
+  });
+
+  it("refuses within 1.5 s with CAPABILITY_MISSING when the capability source takes 2 s", async () => {
+    const clock = new FakeClock(1_000);
+    const { dispatcher } = await buildDispatcher({
+      capabilitySources: [
+        {
+          name: "agent-device",
+          read: () =>
+            new Promise((resolve) => clock.setTimer(2_000, () => resolve({ state: "available" }))),
+        },
+      ],
+      clock,
+    });
+    let settled = false;
+    const answer = dispatcher.dispatch("lease.request", REQUIRES, session()).then(
+      () => "granted",
+      (error: unknown) => error,
+    );
+    void answer.then(() => {
+      settled = true;
+    });
+
+    for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(settled).toBe(true);
+    expect(await answer).toMatchObject({ code: "CAPABILITY_MISSING" });
+  });
+
+  it("grants a queued request with requires once a device frees, even though the capability turned unavailable while it waited", async () => {
+    const capability = sources("available");
+    const { dispatcher, engine } = await buildDispatcher({ capabilitySources: capability.list });
+    const first = await dispatcher.dispatch(
+      "lease.request",
+      { ...IOS, requesterId: "h1" },
+      session(),
+    );
+    await dispatcher.dispatch("lease.request", { ...IOS, requesterId: "h2" }, session());
+    const waiting = dispatcher.dispatch(
+      "lease.request",
+      { ...REQUIRES, requesterId: "w" },
+      session(),
+    );
+    await expect.poll(() => engine.queueDepth).toBe(1);
+    capability.current.state = "unavailable";
+
+    await dispatcher.dispatch("lease.release", { leaseId: first.lease.id }, session());
+
+    await expect(waiting).resolves.toMatchObject({ lease: { requesterId: "w" } });
+  });
+
+  it("refuses requires together with idempotencyKey with BAD_REQUEST and stores nothing", async () => {
+    const { dispatcher, registry } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    await expect(
+      dispatcher.dispatch("lease.request", { ...REQUIRES, idempotencyKey: "key-1" }, session()),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("requires cannot be combined with idempotencyKey"),
+    });
+
+    expect(registry.leaseRequests()).toEqual([]);
+    expect(registry.snapshot.leases).toEqual([]);
+  });
+
+  it.each([
+    ["absent", {}],
+    ["[]", { requires: [] }],
+  ])(
+    "a request with requires %s is granted on a worker whose agent-device is off, and lease.requested's requestSpec has no requires",
+    async (_label, extra) => {
+      const { dispatcher, eventBus } = await buildDispatcher({
+        capabilitySources: sources("off").list,
+      });
+
+      await dispatcher.dispatch("lease.request", { ...IOS, ...extra }, session());
+
+      const requested = eventBus.replay().find((event) => event.event === "lease.requested");
+      expect(requested?.payload).toMatchObject({ requestSpec: IOS });
+      expect(JSON.stringify(requested?.payload)).not.toContain("requires");
+    },
+  );
+
+  it("a request with requires is granted as today on a worker with the capability, and its requestSpec has no requires", async () => {
+    const { dispatcher, eventBus } = await buildDispatcher({
+      capabilitySources: sources("available").list,
+    });
+
+    const grant = await dispatcher.dispatch("lease.request", REQUIRES, session());
+
+    expect(grant.device.spec).toMatchObject({ model: "iPhone 17 Pro", platform: "ios" });
+    const requested = eventBus.replay().find((event) => event.event === "lease.requested");
+    expect(requested?.payload).toMatchObject({ requestSpec: IOS });
+    expect(JSON.stringify(requested?.payload)).not.toContain("requires");
   });
 });

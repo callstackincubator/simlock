@@ -8,6 +8,7 @@ import {
   requestedDevice,
 } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
+import { relayChannelSchema } from "./relay.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
@@ -50,7 +51,6 @@ const ROLE_MATRIX: ReadonlyArray<{
   },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
-  // ADR 0005 §8/§23: gateway-only, admin throughout.
   { name: "worker.list", input: {}, role: "admin" },
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
@@ -66,6 +66,22 @@ const ROLE_MATRIX: ReadonlyArray<{
   },
   // ADR 0010 §8: removal is destructive, so admin-only.
   { name: "component.remove", input: { platform: "ios", version: "26.4" }, role: "admin" },
+  { name: "device.add", input: { id: "00008110-001A2B3C4D5E", platform: "ios" }, role: "admin" },
+  { name: "device.remove", input: { id: "00008110-001A2B3C4D5E" }, role: "admin" },
+  {
+    name: "relay.request",
+    input: {
+      hasBody: false,
+      headers: [],
+      method: "GET",
+      relayId: "r-1",
+      target: "agent-device",
+      tenant: "gw.g.a",
+      url: "http://gateway.test/x",
+    },
+    role: "admin",
+  },
+  { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -83,8 +99,6 @@ describe("operation role matrix", () => {
   });
 });
 
-/** Which calls change state: the daemon log records a `write` at its default level and a
- * `read` only at `debug`. Rows keyed like `ROLE_MATRIX`, input-dependent ones twice. */
 const EFFECT_MATRIX: ReadonlyArray<{
   readonly name: OperationName;
   readonly input: unknown;
@@ -133,6 +147,22 @@ const EFFECT_MATRIX: ReadonlyArray<{
     effect: "write",
   },
   { name: "component.remove", input: { platform: "ios", version: "26.4" }, effect: "write" },
+  { name: "device.add", input: { id: "00008110-001A2B3C4D5E", platform: "ios" }, effect: "write" },
+  { name: "device.remove", input: { id: "00008110-001A2B3C4D5E" }, effect: "write" },
+  {
+    name: "relay.request",
+    input: {
+      hasBody: false,
+      headers: [],
+      method: "GET",
+      relayId: "r-1",
+      target: "agent-device",
+      tenant: "gw.g.a",
+      url: "http://gateway.test/x",
+    },
+    effect: "write",
+  },
+  { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
@@ -211,7 +241,11 @@ describe("component.install input", () => {
 
 describe("lease.request osVersion", () => {
   const parse = (osVersion: string) =>
-    OPERATIONS["lease.request"].input.safeParse({ model: "iPhone 17", osVersion, platform: "ios" });
+    OPERATIONS["lease.request"].input.safeParse({
+      model: "iPhone 17",
+      osVersion,
+      platform: "ios",
+    });
 
   it.each([["18.4"], ["Baklava"], ["34-ext12"], [">=18"], [">=18 <26"], ["18 - 26"]])(
     "accepts %s",
@@ -233,6 +267,94 @@ describe("lease.request osVersion", () => {
   );
 });
 
+describe("lease.request leaseId", () => {
+  const parse = (leaseId: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({ leaseId, model: "iPhone 17", platform: "ios" });
+
+  it.each([
+    ["a plain ID", "myid"],
+    ["a case-sensitive one", "MyID"],
+    ["one with a hyphen and an underscore inside", "ad-7f3a_01"],
+    ["one that looks like a generated ID", "lse_123"],
+    ["a single character", "a"],
+    ["a digit first", "7"],
+    ["64 characters", "a".repeat(64)],
+  ])("accepts %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["65 characters", "a".repeat(65)],
+    ["a dot, kept for gateway IDs", "w1.myid"],
+    ["a space", "my id"],
+    ["a hyphen first", "-s"],
+    ["an option", "--help"],
+    ["an underscore first", "_x"],
+    ["a character outside ASCII", "ząb"],
+    ["a trailing newline", "myid\n"],
+    ["a fullwidth digit", "\uFF11abc"],
+    ["a number", 7],
+    ["null", null],
+  ])("refuses %s", (_label, leaseId) => {
+    expect(parse(leaseId).success).toBe(false);
+  });
+
+  it("is optional, and an input without it parses to one without it", () => {
+    expect(
+      OPERATIONS["lease.request"].input.parse({ model: "iPhone 17", platform: "ios" }),
+    ).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+
+  it("is not part of the device the request names", () => {
+    const input = OPERATIONS["lease.request"].input.parse({
+      leaseId: "myid",
+      model: "iPhone 17",
+      platform: "ios",
+    });
+
+    expect(requestedDevice(input)).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+});
+
+describe("lease.request fleetRequestId", () => {
+  const parse = (fleetRequestId: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({
+      fleetRequestId,
+      model: "iPhone 17",
+      noWait: true,
+      platform: "ios",
+    });
+
+  it.each([
+    ["a single character", "a"],
+    ["a generated request id", "req_0f3a"],
+    ["200 characters", "a".repeat(200)],
+  ])("accepts %s", (_label, fleetRequestId) => {
+    expect(parse(fleetRequestId).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["201 characters", "a".repeat(201)],
+    ["a number", 7],
+    ["null", null],
+  ])("refuses %s", (_label, fleetRequestId) => {
+    expect(parse(fleetRequestId).success).toBe(false);
+  });
+
+  it("is not part of the device the request names", () => {
+    const input = OPERATIONS["lease.request"].input.parse({
+      fleetRequestId: "req_1",
+      model: "iPhone 17",
+      noWait: true,
+      platform: "ios",
+    });
+
+    expect(requestedDevice(input)).toEqual({ model: "iPhone 17", platform: "ios" });
+  });
+});
+
 describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
@@ -240,7 +362,11 @@ describe("operation input/output round trips", () => {
       platform: "ios",
       osVersion: "18.0",
     });
-    expect(input).toMatchObject({ model: "iPhone 17 Pro", platform: "ios", osVersion: "18.0" });
+    expect(input).toMatchObject({
+      model: "iPhone 17 Pro",
+      platform: "ios",
+      osVersion: "18.0",
+    });
 
     expect(() =>
       OPERATIONS["lease.request"].input.parse({ device: "iPhone 17 Pro", platform: "ios" }),
@@ -298,9 +424,10 @@ describe("operation input/output round trips", () => {
   it("lease.request: round-trips a representative output grant", () => {
     const grant = {
       device: {
+        physical: false,
         id: "dev_1",
         driverDeviceId: "sim-1",
-        spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "18.0" },
+        spec: { physical: false, platform: "ios", model: "iPhone 17 Pro", osVersion: "18.0" },
         mode: "full",
         state: "leased",
         driverData: { udid: "abc" },
@@ -314,6 +441,7 @@ describe("operation input/output round trips", () => {
         ownerId: "req_1",
         grantedAt: 1,
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ttlMs: 1,
         ttlDeadline: 2,
       },
@@ -388,8 +516,155 @@ describe("operation input/output round trips", () => {
         tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" }],
       },
       queueDepth: 0,
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 1 }, targets: [] },
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
+  });
+
+  describe("status.get warmPool", () => {
+    const host = { os: "macOS", osVersion: "15.5", arch: "arm64", tools: [] };
+    const warmPool = {
+      enabled: true,
+      reserveRunning: { android: 0, ios: 1 },
+      targets: [
+        {
+          booting: 1,
+          count: 2,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 1,
+        },
+        {
+          booting: 0,
+          count: 1,
+          mode: "full",
+          model: "iPhone 17",
+          osVersion: "27.0",
+          platform: "ios",
+          ready: 0,
+          short: "runtime-missing",
+        },
+      ],
+    };
+    const capacityEntry = {
+      atRamBudget: false,
+      limit: 1,
+      maxRunning: 1,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    };
+    const running = {
+      capacity: {
+        android: capacityEntry,
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: capacityEntry,
+      },
+      daemon: { health: "running", mode: "worker" },
+      devices: [],
+      host,
+      leases: [],
+      queueDepth: 0,
+    };
+
+    it("round-trips the block field for field", () => {
+      expect(OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool).toEqual(
+        warmPool,
+      );
+    });
+
+    it("parses a starting daemon's answer without it, and a running one that carries it", () => {
+      expect(
+        OPERATIONS["status.get"].output.parse({ ...running, warmPool }).warmPool,
+      ).toBeDefined();
+      expect(
+        OPERATIONS["status.get"].output.parse({
+          daemon: { health: "starting", mode: "worker" },
+          host,
+        }),
+      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+    });
+
+    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+      const target = warmPool.targets[0];
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: [{ ...target, short: "tired" }] },
+        }),
+      ).toThrow();
+      expect(() =>
+        OPERATIONS["status.get"].output.parse({
+          ...running,
+          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+        }),
+      ).toThrow();
+    });
+  });
+
+  it.each([
+    "disabled",
+    "no-driver",
+    "runtime-missing",
+    "unknown-model",
+    "unresolvable",
+    "boot-failed",
+    "device-limit",
+    "running-limit",
+    "reserve",
+    "ram-budget",
+  ])("status.get: accepts the warm pool reason %s", (short) => {
+    const target = {
+      booting: 0,
+      count: 1,
+      mode: "full",
+      model: "iPhone 17",
+      platform: "ios",
+      ready: 0,
+      short,
+    };
+    const status = {
+      daemon: { health: "running", mode: "worker" },
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
+    };
+
+    expect(OPERATIONS["status.get"].output.parse(status).warmPool?.targets[0]?.short).toBe(short);
+  });
+
+  it.each(["runtime-missing", "unknown-model", "over-limit"])(
+    "doctor.run: accepts a warm-pool-target-unreachable finding with reason %s",
+    (reason) => {
+      const finding = {
+        kind: "warm-pool-target-unreachable",
+        message: "m",
+        reason,
+        remedy: "r",
+        target: "t",
+      };
+
+      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
+        finding,
+      ]);
+    },
+  );
+
+  it("doctor.run: round-trips a warm-pool-target-unreachable finding field for field", () => {
+    const finding = {
+      kind: "warm-pool-target-unreachable",
+      message: "iOS 27.0 is not installed",
+      platform: "ios",
+      reason: "runtime-missing",
+      remedy: "run simlock component install ios 27.0",
+      target: "iPhone 17 / 27.0 / full",
+    };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+      findings: [finding],
+    });
   });
 
   it("status.get: cuts installs to their first 16 and each component to 64 characters, on the status and on a worker view", () => {
@@ -469,13 +744,15 @@ describe("operation input/output round trips", () => {
       ttlMs: 2,
       ttlDeadline: 3,
       lastRenewedAt: 1,
+      idChosenByRequester: false,
       workerId: "wrk_1",
     };
     const parsed = OPERATIONS["status.get"].output.parse({
       devices: [
         {
+          physical: false,
           id: "dev_1",
-          spec: { platform: "ios", model: "iPhone 17", osVersion: "26.0" },
+          spec: { physical: false, platform: "ios", model: "iPhone 17", osVersion: "26.0" },
           mode: "full",
           servesDefaultMode: true,
           state: "leased",
@@ -532,8 +809,8 @@ describe("operation input/output round trips", () => {
     });
     expect(parsed.workers?.[1]?.protocol?.worker).toEqual({ min: 3, max: 3 });
     expect(parsed.workers?.[0]?.host?.tools[0]?.name).toBe("emulator");
-    expect(parsed.devices[0]?.workerId).toBe("wrk_1");
-    expect(parsed.leases[0]?.workerId).toBe("wrk_1");
+    expect(parsed.devices?.[0]?.workerId).toBe("wrk_1");
+    expect(parsed.leases?.[0]?.workerId).toBe("wrk_1");
   });
 
   it("catalog.get: round-trips a gateway's per-entry worker annotations (ADR 0005 §21)", () => {
@@ -794,6 +1071,7 @@ describe("operation input/output round trips", () => {
 
   it("config.get: round-trips a representative config", () => {
     const config = {
+      capabilities: {},
       mode: "worker",
       gateway: {
         disconnectedRetentionMs: 86_400_000,
@@ -806,6 +1084,9 @@ describe("operation input/output round trips", () => {
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
       warmPool: {
         enabled: true,
+        maxConcurrentBoots: 1,
+        reserveRunning: { android: 0, ios: 0 },
+        targets: [],
         quarantine: {
           maxRetries: 1,
           retryBackoffMs: 1,
@@ -819,6 +1100,8 @@ describe("operation input/output round trips", () => {
         identity: { ios: "fresh", android: "reusable" },
         requestRetentionMs: 1,
         maxRequestRecords: 1,
+        maxPerRequester: 1,
+        endWaitMs: 600_000,
       },
       exec: { timeoutMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
@@ -843,8 +1126,88 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
   });
 
+  it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
+    const targets = [
+      {
+        count: 2,
+        mode: "slim",
+        model: "iPhone 17",
+        osVersion: ">=18",
+        platform: "ios",
+      },
+      { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
+    ];
+    const warmPool = { targets, maxConcurrentBoots: 3 };
+    const output = OPERATIONS["config.get"].output;
+    const base = {
+      capabilities: {},
+      mode: "worker",
+      gateway: {
+        disconnectedRetentionMs: 1,
+        execTimeoutMs: 1,
+        leaseRequestTimeoutMs: 1,
+        routing: "warm-then-free",
+      },
+      capacity: { strategy: "fixed", config: { maxRunning: 4 } },
+      downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
+      idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      lease: {
+        defaultTtlMs: 1,
+        maxTtlMs: 1,
+        identity: { ios: "fresh", android: "reusable" },
+        requestRetentionMs: 1,
+        maxRequestRecords: 1,
+        maxPerRequester: 1,
+        endWaitMs: 600_000,
+      },
+      exec: { timeoutMs: 1 },
+      diskPressure: { freeBytesThreshold: 1 },
+      eventBuffer: { capacity: 1 },
+      log: { level: "info", rotateBytes: 1 },
+      http: { enabled: false, host: "127.0.0.1", port: 4700 },
+      health: {
+        enabled: true,
+        probeIntervalMs: 1,
+        stableObservations: 1,
+        maxRecoveryAttempts: 1,
+        recoveryBackoffMs: 1,
+        maxConcurrentRecoveries: 1,
+      },
+      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      android: {
+        defaultModels: {},
+        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
+      },
+      stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
+    };
+    const config = (pool: object) => ({
+      ...base,
+      warmPool: {
+        enabled: true,
+        reserveRunning: { android: 0, ios: 0 },
+        quarantine: {
+          maxRetries: 1,
+          retryBackoffMs: 1,
+          retryBackoffMultiplier: 1,
+          maxRetryBackoffMs: 1,
+        },
+        ...pool,
+      },
+    });
+
+    expect(output.parse(config(warmPool)).warmPool).toMatchObject(warmPool);
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], platform: "tvos" }] })),
+    ).toThrow();
+    expect(() =>
+      output.parse(config({ ...warmPool, targets: [{ ...targets[0], mode: "lean" }] })),
+    ).toThrow();
+    expect(() => output.parse(config({ maxConcurrentBoots: 1 }))).toThrow();
+    expect(() => output.parse(config({ targets: [] }))).toThrow();
+  });
+
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {
-    const shape = OPERATIONS["status.get"].output.shape.capacity.shape.ramBudget;
+    const shape = OPERATIONS["status.get"].output.shape.capacity.unwrap().shape.ramBudget;
     const budget = { limitBytes: 8, overLimit: false, usedBytes: 1 };
 
     expect(shape.parse(budget)).toEqual(budget);
@@ -935,5 +1298,297 @@ describe("lease.request names a model, a class, or nothing (ADR 0015 §1)", () =
     expect(requestedClass({ class: "tv" })).toBe("tv");
     expect(requestedClass({})).toBe("phone");
     expect(requestedClass({ model: "iPhone 16" })).toBeUndefined();
+  });
+});
+
+describe("lease.request physical (ADR 0022)", () => {
+  const input = OPERATIONS["lease.request"].input;
+
+  it.each([
+    ["mode", { mode: "slim" }],
+    ["imageTag", { imageTag: "x" }],
+    ["allowDownload", { allowDownload: true }],
+  ])("a physical request with %s is BAD_REQUEST naming the field", (field, extra) => {
+    expect(input.safeParse({ physical: true, platform: "ios" }).success).toBe(true);
+
+    const result = input.safeParse({ ...extra, physical: true, platform: "ios" });
+
+    expect(result.success).toBe(false);
+    const message = result.success ? "" : result.error.issues.map((issue) => issue.message).join();
+    expect(message).toContain(`\`${field}\``);
+  });
+
+  it.each([
+    ["mode", { mode: "slim" }],
+    ["imageTag", { imageTag: "x" }],
+    ["allowDownload", { allowDownload: true }],
+  ])("a physical request with %s reports the issue at that field's path", (field, extra) => {
+    const result = input.safeParse({ ...extra, physical: true, platform: "ios" });
+
+    expect(result.success ? [] : result.error.issues.map((issue) => issue.path)).toStrictEqual([
+      [field],
+    ]);
+  });
+
+  it("a physical request with allowDownload false passes", () => {
+    const result = input.safeParse({ allowDownload: false, physical: true, platform: "ios" });
+
+    expect(result.success).toBe(true);
+    expect(result.success ? (result.data as { physical?: boolean }).physical : undefined).toBe(
+      true,
+    );
+  });
+
+  it("requestedDevice carries physical true only when the input set it", () => {
+    expect(requestedDevice(input.parse({ physical: true, platform: "ios" }))).toStrictEqual({
+      physical: true,
+      platform: "ios",
+    });
+    expect(requestedDevice(input.parse({ physical: false, platform: "ios" }))).toStrictEqual({
+      platform: "ios",
+    });
+    expect(requestedDevice(input.parse({ platform: "ios" }))).toStrictEqual({ platform: "ios" });
+  });
+});
+
+describe("status.get physicalQueueDepth (ADR 0022)", () => {
+  const host = { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] };
+  const entry = {
+    atRamBudget: false,
+    limit: 1,
+    maxRunning: 1,
+    overLimit: false,
+    reserved: 0,
+    running: 0,
+    used: 0,
+    warm: 0,
+  };
+  const capacity = {
+    android: entry,
+    global: { maxRunning: 1, overLimit: false, reserved: 0, running: 0, warm: 0 },
+    ios: entry,
+  };
+  const output = OPERATIONS["status.get"].output;
+
+  it("a status carries the physical line's depth beside the virtual one", () => {
+    const parsed = output.parse({
+      capacity,
+      daemon: { health: "running", mode: "worker" },
+      devices: [],
+      host,
+      leases: [],
+      physicalQueueDepth: 1,
+      queueDepth: 2,
+    });
+
+    expect(parsed.queueDepth).toBe(2);
+    expect((parsed as { physicalQueueDepth?: number }).physicalQueueDepth).toBe(1);
+  });
+
+  it("a worker's entry in a gateway's status carries it too", () => {
+    const parsed = output.parse({
+      capacity,
+      daemon: { health: "running", mode: "gateway" },
+      devices: [],
+      host,
+      leases: [],
+      queueDepth: 0,
+      workers: [
+        {
+          capacity,
+          catalog: [],
+          connection: "connected",
+          devices: [],
+          drained: false,
+          health: "running",
+          host,
+          id: "wrk_1",
+          label: "mac-mini-1",
+          lastSeenAt: 10,
+          leases: [],
+          physicalQueueDepth: 1,
+          queueDepth: 0,
+          version: "0.3.0",
+        },
+      ],
+    });
+
+    expect(
+      (parsed.workers?.[0] as { physicalQueueDepth?: number } | undefined)?.physicalQueueDepth,
+    ).toBe(1);
+  });
+});
+
+describe("device.add and device.remove ids (ADR 0022 §2)", () => {
+  const long = "x".repeat(201);
+
+  it.each([
+    ["201 characters", long],
+    ["a space", "00008110 001A2B3C4D5E"],
+    ["a tab", "00008110\t001A2B3C4D5E"],
+    ["a control character", "00008110\u0007001A2B3C4D5E"],
+    ["a leading dash", "-00008110-001A2B3C4D5E"],
+    ["nothing", ""],
+  ])("refuses an id with %s", (_case, id) => {
+    expect(OPERATIONS["device.add"].input.safeParse({ id, platform: "ios" }).success).toBe(false);
+    expect(OPERATIONS["device.remove"].input.safeParse({ id }).success).toBe(false);
+  });
+
+  it("takes an id of exactly 200 characters, and refuses a field it does not declare", () => {
+    const id = "x".repeat(200);
+
+    expect(OPERATIONS["device.add"].input.safeParse({ id, platform: "ios" }).success).toBe(true);
+    expect(
+      OPERATIONS["device.add"].input.safeParse({ id: "A", platform: "ios", worker: "w1" }).success,
+    ).toBe(false);
+    expect(OPERATIONS["device.remove"].input.safeParse({ id: "A", yes: true }).success).toBe(false);
+  });
+
+  it.each([
+    ["a unit separator", "A\u001fB"],
+    ["a delete", "A\u007fB"],
+    ["a C1 control", "A\u0080B"],
+    ["the last C1 control", "A\u009fB"],
+    ["a no-break space", "A\u00a0B"],
+    ["a newline", "A\nB"],
+  ])("refuses an id with %s", (_case, id) => {
+    expect(OPERATIONS["device.remove"].input.safeParse({ id }).success).toBe(false);
+  });
+
+  it.each([
+    ["a letter beyond ASCII", "caf\u00e9"],
+    ["a dash inside", "A-B"],
+    ["a tilde and an inverted exclamation mark", "A~\u00a1B"],
+  ])("takes an id with %s", (_case, id) => {
+    expect(OPERATIONS["device.remove"].input.safeParse({ id }).success).toBe(true);
+  });
+
+  it("says why an id is refused", () => {
+    const messages = (id: string) =>
+      OPERATIONS["device.remove"].input
+        .safeParse({ id })
+        .error?.issues.map((issue) => issue.message);
+
+    expect(messages("A B")).toEqual(["must not contain whitespace or control characters"]);
+    expect(messages("-A")).toEqual(["must not start with -"]);
+  });
+
+  it("declares device.add and device.remove with their names, outputs and strict inputs", () => {
+    const output = {
+      appCount: 3,
+      class: "tablet",
+      driverDeviceId: "U",
+      id: "dev_1",
+      model: "iPad",
+      osVersion: "18",
+      platform: "ios",
+      reenrolled: true,
+    };
+
+    expect(OPERATIONS["device.add"].name).toBe("device.add");
+    expect(OPERATIONS["device.remove"].name).toBe("device.remove");
+    expect(OPERATIONS["device.add"].output.parse(output)).toEqual(output);
+    expect(OPERATIONS["device.add"].output.safeParse({ ...output, class: "watch" }).success).toBe(
+      false,
+    );
+    expect(OPERATIONS["device.add"].output.safeParse({ ...output, appCount: -1 }).success).toBe(
+      false,
+    );
+    expect(OPERATIONS["device.remove"].output.parse({ driverDeviceId: "U", id: "U" })).toEqual({
+      driverDeviceId: "U",
+      id: "U",
+    });
+    expect(OPERATIONS["device.add"].input.safeParse({ id: "A" }).success).toBe(false);
+    expect(OPERATIONS["device.add"].input.safeParse({ id: "A", platform: "windows" }).success).toBe(
+      false,
+    );
+    expect(OPERATIONS["device.remove"].input.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("lease.request requires", () => {
+  const base = { model: "iPhone 17", platform: "ios" } as const;
+  const parse = (extra: Record<string, unknown>) =>
+    OPERATIONS["lease.request"].input.safeParse({ ...base, ...extra });
+  const names = (count: number) =>
+    Array.from({ length: count }, (_, index) => `cap-${String(index)}`);
+
+  it.each([
+    ["one name", ["agent-device"]],
+    ["an empty list", []],
+    ["8 names", names(8)],
+  ])("accepts %s", (_label, requires) => {
+    expect(parse({ requires }).success).toBe(true);
+  });
+
+  it("accepts a request without requires, and one with requires: [] parses to the same device", () => {
+    expect(parse({}).success).toBe(true);
+    const input = parse({ requires: [] });
+    expect(input.success && requestedDevice(input.data)).toEqual({
+      model: "iPhone 17",
+      platform: "ios",
+    });
+  });
+
+  it.each([
+    ["an upper-case name", ["Agent-Device"]],
+    ["a duplicate name", ["agent-device", "agent-device"]],
+    ["9 names", names(9)],
+  ])("refuses requires with %s with BAD_REQUEST-shaped issues on requires", (_label, requires) => {
+    const parsed = parse({ requires });
+
+    expect(parsed.success).toBe(false);
+    expect(
+      !parsed.success && parsed.error.issues.every((issue) => issue.path[0] === "requires"),
+    ).toBe(true);
+  });
+
+  it("refuses requires together with idempotencyKey, naming both, where each alone is accepted", () => {
+    expect(parse({ idempotencyKey: "key-1" }).success).toBe(true);
+    expect(parse({ requires: ["agent-device"] }).success).toBe(true);
+
+    const both = parse({ idempotencyKey: "key-1", requires: ["agent-device"] });
+
+    expect(both.success).toBe(false);
+    expect(!both.success && both.error.issues.map((issue) => issue.message)).toContain(
+      "requires cannot be combined with idempotencyKey",
+    );
+  });
+});
+
+describe("relay.request on a byte channel", () => {
+  const request = {
+    hasBody: false,
+    headers: [],
+    method: "GET",
+    relayId: "r-1",
+    target: "agent-device",
+    tenant: "gw.g.a",
+    url: "http://gateway.test/x",
+  };
+  const parse = (input: Record<string, unknown>) =>
+    OPERATIONS["relay.request"].input.safeParse(input).success;
+
+  it("accepts a channel of 1 to 32 characters of [A-Za-z0-9-] and refuses an empty, a 33-character and a bad-character one, and a request without one", () => {
+    expect(parse({ ...request, channel: "a" })).toBe(true);
+    expect(parse({ ...request, channel: "Ab-9".repeat(8) })).toBe(true);
+    expect(parse({ ...request, channel: "" })).toBe(false);
+    expect(parse({ ...request, channel: "a".repeat(33) })).toBe(false);
+    expect(parse({ ...request, channel: "a b" })).toBe(false);
+    expect(parse({ ...request, channel: "a_b" })).toBe(false);
+    expect(parse(request)).toBe(false);
+  });
+
+  it("relayChannelSchema holds the same bound the operation uses", () => {
+    expect(relayChannelSchema.safeParse("a".repeat(32)).success).toBe(true);
+    expect(relayChannelSchema.safeParse("a".repeat(33)).success).toBe(false);
+    expect(relayChannelSchema.safeParse("").success).toBe(false);
+    expect(relayChannelSchema.safeParse("a b").success).toBe(false);
+  });
+
+  it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
+    expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
+    expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
+    expect(Object.keys(PUSH_SCHEMAS)).toContain("relay-head");
   });
 });

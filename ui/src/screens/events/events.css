@@ -1,0 +1,25 @@
+/* The events page: a small column chart over the filter, then the feed. */
+
+.events-chart {
+  min-width: 0;
+}
+
+.events-chart .chart-summary {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.event-time {
+  margin-right: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.event-warn {
+  color: var(--status-warn);
+}
+
+.event-error {
+  color: var(--status-error);
+}

@@ -1,32 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import type { VirtualDevice, LeaseRecord } from "./domain.js";
 import { NukeService, type NukeDeviceLifecycle, type NukeRegistryView } from "./nuke-service.js";
 
-const device = (id: string, state: DeviceRecord["state"]): DeviceRecord => ({
+const device = (id: string, state: VirtualDevice["state"]): VirtualDevice => ({
+  physical: false,
   createdAt: 0,
   driverData: { privateDriverData: id },
   driverDeviceId: `driver_${id}`,
   id,
-  spec: { model: "Phone", osVersion: "1", platform: "ios" },
+  spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
   mode: "full",
   state,
 });
 
 class MutableRegistry implements NukeRegistryView {
-  devices: DeviceRecord[];
+  devices: VirtualDevice[];
   leases: LeaseRecord[] = [];
 
-  constructor(devices: DeviceRecord[]) {
+  constructor(devices: VirtualDevice[]) {
     this.devices = devices;
   }
 
   get snapshot() {
-    return { devices: this.devices, leases: this.leases };
+    return { leases: this.leases, virtualDevices: this.devices };
   }
 }
 
-function createHarness(devices: DeviceRecord[]) {
+function createHarness(devices: VirtualDevice[]) {
   const registry = new MutableRegistry(devices);
   const calls: string[] = [];
   const lifecycle: NukeDeviceLifecycle = {
@@ -143,6 +144,7 @@ describe("NukeService", () => {
         requesterId: "agent",
         ownerId: "agent",
         lastRenewedAt: 0,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 1,
       },

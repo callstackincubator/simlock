@@ -1,6 +1,6 @@
 # 0009. Gateway routing is a list of stages, and a request that cannot be served fails at once
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — partly implemented: §6's `defaultRuntime` rule
 - **Date:** 2026-10-01
 - **Issue:** [#173](https://github.com/callstackincubator/simlock/issues/173)
 - **Supersedes:** nothing. Narrows [ADR

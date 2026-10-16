@@ -9,11 +9,6 @@ import { type EventBusLogger, EventBus, type EventMap, type EventName } from "./
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/**
- * Every `EventName`, as a value the catalog test can compare: typed `Record<EventName, true>`, so
- * `pnpm typecheck` rejects this list the moment it misses a name `EventMap` gained or keeps one it
- * lost -- the list cannot drift from the type, and the test below holds the docs to the list.
- */
 const EVENT_NAMES: Record<EventName, true> = {
   "lease.requested": true,
   "lease.queued": true,
@@ -32,11 +27,14 @@ const EVENT_NAMES: Record<EventName, true> = {
   "device.recovered": true,
   "device.recovery-failed": true,
   "device.quarantined": true,
+  "device.absence-detected": true,
+  "device.returned": true,
   "device.quarantine-recovered": true,
   "device.quarantine-abandoned": true,
   "device.quarantine-stranded": true,
   "device.shutdown": true,
   "device.deleted": true,
+  "device.enrolled": true,
   "device.slimmed": true,
   "component.install-started": true,
   "component.installed": true,
@@ -60,6 +58,9 @@ const EVENT_NAMES: Record<EventName, true> = {
   "worker.drain-started": true,
   "worker.drain-ended": true,
   "request.dispatched": true,
+  "request.granted": true,
+  "lease.declined": true,
+  "warm-pool.target-missed": true,
 };
 
 /** The first-column `` `subject.fact` `` of every catalog table row in an EVENTS.md, sorted. */
@@ -276,6 +277,36 @@ describe("EventBus", () => {
       expect(documentedEventNames(readFileSync(join(REPO_ROOT, doc), "utf8"))).toEqual(
         Object.keys(EVENT_NAMES).sort(),
       );
+    },
+  );
+
+  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+    "lists lease-engine among the device.deleted initiators in %s",
+    (doc) => {
+      const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
+      const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
+      expect(row).toBeDefined();
+      expect(row).toContain("`lease-engine`");
+    },
+  );
+
+  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+    "lists cleanup-reaper among the device.deleted initiators in %s",
+    (doc) => {
+      const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
+      const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
+      expect(row).toBeDefined();
+      expect(row).toContain("`cleanup-reaper`");
+    },
+  );
+
+  it.each(["docs/internal/EVENTS.md", "docs/EVENTS.md"])(
+    "lists nuke among the device.deleted initiators in %s",
+    (doc) => {
+      const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
+      const row = markdown.split("\n").find((line) => line.startsWith("| `device.deleted` |"));
+      expect(row).toBeDefined();
+      expect(row).toContain("`nuke`");
     },
   );
 

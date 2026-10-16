@@ -6,15 +6,16 @@ import {
   CapacityCoordinator,
   type Config,
   DeviceOperationClaims,
-  type DeviceRecord,
-  type DeviceSpec,
+  type VirtualDevice,
+  type VirtualSpec,
   type LeaseRecord,
 } from "../core/index.js";
 import { createCapacityStrategy } from "../core/testing.js";
 
 const gibibyte = 1024 ** 3;
-const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const config: Config = {
+  capabilities: {},
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -45,6 +46,9 @@ const config: Config = {
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   warmPool: {
     enabled: true,
+    maxConcurrentBoots: 1,
+    reserveRunning: { android: 0, ios: 0 },
+    targets: [],
     quarantine: {
       maxRetries: 3,
       maxRetryBackoffMs: 300_000,
@@ -58,6 +62,8 @@ const config: Config = {
     identity: { ios: "reusable", android: "reusable" },
     requestRetentionMs: 600_000,
     maxRequestRecords: 10_000,
+    maxPerRequester: 1,
+    endWaitMs: 600_000,
   },
   capacity: {
     strategy: "resource",
@@ -80,10 +86,11 @@ const config: Config = {
 
 function device(
   id: string,
-  state: DeviceRecord["state"],
-  deviceSpec: DeviceSpec = spec,
-): DeviceRecord {
+  state: VirtualDevice["state"],
+  deviceSpec: VirtualSpec = spec,
+): VirtualDevice {
   return {
+    physical: false,
     createdAt: 1,
     driverData: {},
     driverDeviceId: `driver-${id}`,
@@ -107,28 +114,31 @@ function planner(
 
 function plan(
   acquisitionPlanner: AcquisitionPlanner,
-  devices: readonly DeviceRecord[],
+  devices: readonly VirtualDevice[],
   options: {
     failures?: number;
     leases?: readonly LeaseRecord[];
     noWait?: boolean;
-    spec?: DeviceSpec;
+    owner?: string;
+    spec?: VirtualSpec;
   } = {},
 ) {
   return acquisitionPlanner.plan({
     failures: options.failures ?? 0,
     noWait: options.noWait ?? false,
-    snapshot: { devices, leases: options.leases ?? [] },
+    ...(options.owner === undefined ? {} : { owner: options.owner }),
+    snapshot: { devices, leases: options.leases ?? [], virtualDevices: devices },
     spec: options.spec ?? spec,
   });
 }
 
-function leaseOn(target: DeviceRecord): LeaseRecord {
+function leaseOn(target: VirtualDevice): LeaseRecord {
   return {
     deviceId: target.id,
     grantedAt: 1,
     id: `lease-${target.id}`,
     lastRenewedAt: 1,
+    idChosenByRequester: false,
     ownerId: "holder",
     requesterId: "holder",
     ttlDeadline: 100,
@@ -147,11 +157,15 @@ describe("AcquisitionPlanner", () => {
   it("reserves capacity and claims a matching shutdown device for boot", () => {
     const { claims, planner: acquisitionPlanner } = planner();
     const shutdown = device("shutdown", "shutdown");
+    const other = device("other", "shutdown");
 
-    const result = plan(acquisitionPlanner, [shutdown]);
+    const result = plan(acquisitionPlanner, [shutdown, other]);
 
     expect(result).toMatchObject({ device: shutdown, kind: "boot-shutdown" });
     expect(claims.operationFor(shutdown.id)).toBe("boot");
+    expect(plan(acquisitionPlanner, [shutdown, other], { noWait: true })).toEqual({
+      kind: "no-capacity",
+    });
     if (result.kind === "boot-shutdown") {
       result.capacityReservation.release();
       result.claim.release();
@@ -171,6 +185,7 @@ describe("AcquisitionPlanner", () => {
   it("selects a warm victim when a running limit blocks provisioning", () => {
     const { claims, planner: acquisitionPlanner } = planner();
     const warm = device("warm", "ready", {
+      physical: false,
       model: "Pixel 9",
       osVersion: "36",
       platform: "android",
@@ -204,6 +219,7 @@ describe("AcquisitionPlanner", () => {
         requesterId: "holder",
         ownerId: "holder",
         lastRenewedAt: 1,
+        idChosenByRequester: false,
         ttlMs: 60_000,
         ttlDeadline: 100,
       },
@@ -267,7 +283,7 @@ describe("AcquisitionPlanner", () => {
   });
 
   describe("RAM budget by mode", () => {
-    const slimSpec: DeviceSpec = { ...spec, mode: "slim" };
+    const slimSpec: VirtualSpec = { ...spec, mode: "slim" };
 
     /**
      * 12 GiB of RAM: an 8 GiB budget once the 4 GiB reserve is taken. Full iOS devices take
@@ -298,6 +314,7 @@ describe("AcquisitionPlanner", () => {
     it("needs full-size room to provision a new device, whatever its spec's mode", () => {
       const { planner: acquisitionPlanner } = sizedPlanner(8);
       const android = device("android", "leased", {
+        physical: false,
         model: "Pixel 9",
         osVersion: "36",
         platform: "android",
@@ -324,6 +341,7 @@ describe("AcquisitionPlanner", () => {
     it("waits, and evicts nothing, when the boot of a matching shut-down slim device is refused for RAM", () => {
       const { claims, planner: acquisitionPlanner } = sizedPlanner(8);
       const android = device("android", "leased", {
+        physical: false,
         model: "Pixel 9",
         osVersion: "36",
         platform: "android",
@@ -357,6 +375,7 @@ describe("AcquisitionPlanner", () => {
     it("evicts an idle slim device for a full request at the device limit, then waits when the freed RAM is not enough", () => {
       const { planner: acquisitionPlanner } = sizedPlanner(2);
       const android = device("android", "leased", {
+        physical: false,
         model: "Pixel 9",
         osVersion: "36",
         platform: "android",
@@ -373,6 +392,124 @@ describe("AcquisitionPlanner", () => {
       // With the slim device gone, 5 GiB is used of 8: the 3.5 GiB full device still does not fit.
       const afterEviction = [android, leasedSlim, { ...idleSlim, state: "deleted" as const }];
       expect(plan(acquisitionPlanner, afterEviction, { leases })).toEqual({ kind: "wait" });
+    });
+  });
+
+  describe("a device on its way", () => {
+    const roomy: Config["capacity"] = {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 2, maxRunning: 2 },
+          ios: { maxDevices: 3, maxRunning: 3 },
+          maxRunning: 3,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
+    };
+
+    it.each([
+      { name: "shut-down", state: "shutdown" },
+      { name: "provisioning", state: "provisioning" },
+    ] as const)(
+      "waits for a serving $name device under a boot claim no request owns",
+      ({ state }) => {
+        const { claims, planner: acquisitionPlanner } = planner(roomy);
+        const onItsWay = device("on-its-way", state);
+        claims.tryClaim(onItsWay.id, "boot");
+
+        expect(plan(acquisitionPlanner, [onItsWay])).toEqual({ kind: "wait" });
+      },
+    );
+
+    it("plans as if the device were absent under noWait", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const booting = device("booting", "shutdown");
+      claims.tryClaim(booting.id, "boot");
+
+      const result = plan(acquisitionPlanner, [booting], { noWait: true });
+
+      const absent = plan(acquisitionPlanner, [], { noWait: true });
+
+      expect(result.kind).toBe("provision");
+      expect(absent.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+      if (absent.kind === "provision") absent.reservation.release();
+    });
+
+    it.each([
+      {
+        name: "a provisioning device under a boot claim another waiter owns",
+        state: "provisioning",
+        claim: { kind: "boot", owner: "waiter-2" },
+      },
+      { name: "a provisioning device with no claim at all", state: "provisioning" },
+      {
+        name: "a ready device under a boot claim no request owns, which is a boot already done",
+        state: "ready",
+        claim: { kind: "boot" },
+      },
+      {
+        name: "a serving device under an eviction claim",
+        state: "shutdown",
+        claim: { kind: "eviction" },
+      },
+      {
+        name: "a serving device under a cleanup claim",
+        state: "shutdown",
+        claim: { kind: "cleanup" },
+      },
+      {
+        name: "a device on its way in another pool mode",
+        state: "shutdown",
+        claim: { kind: "boot" },
+        mode: "slim",
+      },
+    ] as const)("ignores $name and provisions", (row) => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const candidate = device(
+        "candidate",
+        row.state,
+        "mode" in row ? { ...spec, mode: row.mode } : spec,
+      );
+      if ("claim" in row) {
+        claims.tryClaim(
+          candidate.id,
+          row.claim.kind,
+          "owner" in row.claim ? row.claim.owner : undefined,
+        );
+      }
+
+      const result = plan(acquisitionPlanner, [candidate]);
+
+      expect(result.kind).toBe("provision");
+      if (result.kind === "provision") result.reservation.release();
+    });
+
+    it("grants a ready device before it waits for one on its way", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const booting = device("booting", "shutdown");
+      const ready = device("ready", "ready");
+      claims.tryClaim(booting.id, "boot");
+
+      expect(plan(acquisitionPlanner, [booting, ready])).toEqual({
+        device: ready,
+        kind: "grant-ready",
+      });
+    });
+
+    it("puts the requesting waiter's id on the boot claim it takes", () => {
+      const { claims, planner: acquisitionPlanner } = planner(roomy);
+      const shutdown = device("shutdown", "shutdown");
+
+      const result = plan(acquisitionPlanner, [shutdown], { owner: "waiter-1" });
+
+      expect(result.kind).toBe("boot-shutdown");
+      expect(claims.claim(shutdown.id)).toEqual({ kind: "boot", owner: "waiter-1" });
+      if (result.kind === "boot-shutdown") {
+        result.capacityReservation.release();
+        result.claim.release();
+      }
     });
   });
 });

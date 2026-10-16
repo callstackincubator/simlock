@@ -1,6 +1,7 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import {
+  type AbsentReason,
   type DeviceRecord,
   type LeaseGrant,
   type LeaseRecord,
@@ -19,6 +20,7 @@ export interface LeaseLifecycleRegistry {
     readonly ownerId: string;
     readonly ttlMs: number;
     readonly ttlDeadline: number;
+    readonly leaseId?: string;
     readonly request?: {
       readonly id: string;
       readonly environment: LeaseGrant["environment"];
@@ -26,23 +28,32 @@ export interface LeaseLifecycleRegistry {
     };
   }): Promise<LeaseRecord>;
   renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord>;
-  beginRelease(leaseId: string): Promise<ReleasedLease>;
+  beginRelease(
+    leaseId: string,
+    options?: { readonly deferReclaim?: boolean },
+  ): Promise<ReleasedLease>;
+  endLeaseAndMarkDeviceMissing(
+    leaseId: string,
+    initiator: string,
+    announceLeaseEnd: (ended: ReleasedLease) => void,
+  ): Promise<ReleasedLease>;
+  endLeaseAndMarkDeviceAbsent(
+    leaseId: string,
+    absentReason: AbsentReason,
+    announceLeaseEnd: (ended: ReleasedLease) => void,
+  ): Promise<ReleasedLease>;
 }
+
+type LeaseEndReason = "explicit" | "killed" | "expired" | "device-lost";
 
 export interface LeaseLifecycleOptions {
   readonly clock: Clock;
   readonly eventBus: EventBus;
   readonly expiryScheduler: LeaseExpiryScheduler;
   readonly registry: LeaseLifecycleRegistry;
-  /**
-   * ADR 0004 §4: `defaultMs` is `lease.defaultTtlMs`, and it applies in exactly one place -- a
-   * grant whose request named no `ttlMs`. A renew never falls back to it; it re-applies the
-   * lease's own stored width instead.
-   */
   readonly ttl: { readonly defaultMs: number };
 }
 
-/** Registry-backed lease state changes, deliberately excluding reclaiming and queue wakeups. */
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
 
@@ -65,8 +76,14 @@ export class LeaseLifecycle {
      * none. Whatever it resolves to is stored on the record, because that is what a later
      * body-less renew re-applies. */
     readonly ttlMs?: number;
+    /** ADR 0020: the lease ID the requester chose, when it did. The caller has already refused one
+     * that is in use. */
+    readonly leaseId?: string;
+    /** ADR 0021: the gateway's request id, when the request is a gateway dispatch, carried on
+     * `lease.granted`. */
+    readonly fleetRequestId?: string;
   }): Promise<LeaseGrant> {
-    const { ttlMs, requestId, environment, timing, source, ...createInput } = input;
+    const { ttlMs, requestId, environment, timing, source, fleetRequestId, ...createInput } = input;
     const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;
     const lease = await this.options.registry.createLease({
       ...createInput,
@@ -91,6 +108,7 @@ export class LeaseLifecycle {
         requester: lease.requesterId,
         requestId,
         source,
+        ...(fleetRequestId === undefined ? {} : { fleetRequestId }),
       },
       "lease-lifecycle",
     );
@@ -132,10 +150,34 @@ export class LeaseLifecycle {
    */
   async beginRelease(
     leaseId: string,
-    reason: "explicit" | "killed" | "expired" | "device-lost",
+    reason: LeaseEndReason,
+    options: { readonly deferReclaim?: boolean } = {},
   ): Promise<ReleasedLease> {
-    const released = await this.options.registry.beginRelease(leaseId);
-    this.options.expiryScheduler.cancel(leaseId);
+    const released = await this.options.registry.beginRelease(leaseId, options);
+    this.#announceEnd(released, reason);
+    return released;
+  }
+
+  /** why: the lease's fact is emitted after the commit and before the device's `device.deleted`. */
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
+  async endForMissingDevice(
+    leaseId: string,
+    reason: "expired" | "device-lost",
+  ): Promise<ReleasedLease> {
+    return this.options.registry.endLeaseAndMarkDeviceMissing(leaseId, "doctor", (ended) =>
+      this.#announceEnd(ended, reason),
+    );
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
+  async endForAbsentDevice(leaseId: string, absentReason: AbsentReason): Promise<ReleasedLease> {
+    return this.options.registry.endLeaseAndMarkDeviceAbsent(leaseId, absentReason, (ended) =>
+      this.#announceEnd(ended, "device-lost"),
+    );
+  }
+
+  #announceEnd(released: ReleasedLease, reason: LeaseEndReason): void {
+    this.options.expiryScheduler.cancel(released.lease.id);
     if (reason === "expired") {
       this.options.eventBus.emit(
         "lease.expired",
@@ -158,12 +200,12 @@ export class LeaseLifecycle {
         "lease-lifecycle",
       );
     }
-    return released;
   }
 
-  /** Re-arms every persisted lease's TTL timer from its own deadline (ADR 0004: startup
-   * restores all of them, and sweeps none -- nothing about a restart proves a holder is
-   * dead). */
+  /** Re-arms every remaining lease's TTL timer from its own deadline. Startup runs it after the
+   * reconciler has ended the leases whose device is not running (ADR 0019): a restart does not
+   * prove a holder is dead, so a lease whose device is running is kept, and one whose deadline
+   * passed while no daemon ran expires here. */
   restoreExpiryTimers(): Promise<void> {
     return this.options.expiryScheduler.restore(this.options.registry.snapshot.leases);
   }

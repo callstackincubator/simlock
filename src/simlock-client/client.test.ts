@@ -16,9 +16,10 @@ function sampleGrant(
   const deviceId = overrides.deviceId ?? "device_1";
   return {
     device: {
+      physical: false,
       driverDeviceId: "sim-1",
       id: deviceId,
-      spec: { model: "iPhone 17", osVersion: "18.0", platform: "ios" },
+      spec: { physical: false, model: "iPhone 17", osVersion: "18.0", platform: "ios" },
       mode: "full",
     },
     environment: {},
@@ -27,6 +28,7 @@ function sampleGrant(
       grantedAt: 0,
       id: leaseId,
       lastRenewedAt: 0,
+      idChosenByRequester: false,
       ownerId: "agent-1",
       requesterId: "agent-1",
       ttlMs: 1_000,
@@ -54,19 +56,20 @@ describe("connectSimlock: handshake", () => {
       daemonVersion: "9.9.9",
     });
 
-    // The daemon deliberately keeps this connection open after a failed range negotiation
-    // (ADR §6, see the comments in `daemon/server.ts#handleHello`) so an admin client can
-    // still send `daemon.stop` on it instead of restarting the daemon -- closing here, what
-    // this client used to do unconditionally, made that escape hatch dead on arrival.
     const client = await connectPromise;
     expect(connection.closed).toBe(false);
 
-    // Every other operation rejects with the captured mismatch error, never reaching the wire.
     const before = connection.sent.length;
     await expect(client.getStatus()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
     });
     await expect(client.runCleanup()).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
+    await expect(client.addDevice({ id: "UDID-1", platform: "ios" })).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
+    await expect(client.removeDevice({ id: "UDID-1" })).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
     });
     expect(connection.sent).toHaveLength(before);
@@ -216,6 +219,38 @@ describe("connectSimlock: handshake", () => {
     connection.reply(call.id, answer);
 
     await expect(callPromise).resolves.toEqual(answer);
+  });
+
+  it("enrolls a device from an admin client with device.add and removes it with device.remove, sending the input and returning the daemon's answer", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const enrolled = {
+      appCount: 2,
+      class: "phone",
+      driverDeviceId: "UDID-1",
+      id: "dev_1",
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+      reenrolled: false,
+    };
+
+    const addPromise = client.addDevice({ id: "ALIAS", platform: "ios" });
+    await flushMicrotasks();
+    const addCall = connection.lastSentOf("device.add")!;
+    expect(addCall.payload).toEqual({ id: "ALIAS", platform: "ios" });
+    connection.reply(addCall.id, enrolled);
+    await expect(addPromise).resolves.toEqual(enrolled);
+
+    const removePromise = client.removeDevice({ id: "UDID-1" });
+    await flushMicrotasks();
+    const removeCall = connection.lastSentOf("device.remove")!;
+    expect(removeCall.payload).toEqual({ id: "UDID-1" });
+    connection.reply(removeCall.id, { driverDeviceId: "UDID-1", id: "UDID-1" });
+    await expect(removePromise).resolves.toEqual({ driverDeviceId: "UDID-1", id: "UDID-1" });
   });
 
   it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
@@ -1069,6 +1104,34 @@ describe("requestLease abort: ADR §4 identity cases (B3)", () => {
     expect(anotherCancelCall.id).not.toBe(cancelCall.id);
     connection.reply(anotherCancelCall.id, { result: "not-found" });
     await expect(anotherCall).resolves.toMatchObject({ result: "not-found" });
+  });
+});
+
+describe("requestLease requires", () => {
+  it("sends requires on the lease.request frame and rejects with CAPABILITY_MISSING, its details naming the capabilities, when the worker lacks the capability", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const pending = client.requestLease({
+      model: "iPhone 17",
+      platform: "ios",
+      requires: ["agent-device"],
+    });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("lease.request")!;
+    connection.fail(call.id, "CAPABILITY_MISSING", "This worker cannot serve agent-device", {
+      capabilities: ["agent-device"],
+    });
+
+    expect(call.payload).toMatchObject({ requires: ["agent-device"] });
+    await expect(pending).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      details: { capabilities: ["agent-device"] },
+      kind: "domain",
+    });
   });
 });
 

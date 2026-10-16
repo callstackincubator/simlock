@@ -11,12 +11,17 @@ import {
 } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { MemoryDrainStore } from "./drain-store.js";
+import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
+import { FleetLeaseIndex } from "./lease-index.js";
+import { createRoutingPolicy } from "./routing.js";
 import { GatewayService, REJECTION_COALESCE_WINDOW_MS } from "./service.js";
 import {
   catalogFixture,
   deviceFixture,
   hostFixture,
   leaseFixture,
+  physicalDeviceFixture,
+  type PhysicalPresenceFixture,
   protocolMismatchError,
   ScriptedWorkerClient,
   statusFixture,
@@ -93,6 +98,7 @@ function fleet(
   return {
     clients,
     clock,
+    eventBus,
     events,
     service,
     transport,
@@ -165,6 +171,169 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("WorkerLink stamps a view's load with the gateway clock's time when status.get answered", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    harness.clock.advance(19_000);
+    // why: the device read lands later than status, so a stamp taken after it would be 5 s fresher.
+    class SlowDevices extends ScriptedWorkerClient {
+      override async list(input: { readonly kind?: string }): Promise<unknown> {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        harness.clock.advance(5_000);
+        return super.list(input);
+      }
+    }
+    const worker = new SlowDevices();
+    worker.status = statusFixture({
+      load: { ageMs: 2_000, disk: { freeBytes: 120, totalBytes: 500 } },
+    });
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.load).toBeDefined());
+
+    expect(harness.service.workers.view("wrk_1")?.load).toEqual({
+      disk: { freeBytes: 120, totalBytes: 500 },
+      readAt: 18_000,
+    });
+    await harness.service.stop();
+  });
+
+  it("builds a starting worker's view from health and host alone, asks it for nothing else, and builds the full view once it answers running", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    // A starting worker answers `status.get` with `daemon` and `host` only.
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture({ arch: "x64" }),
+    };
+    worker.devices = [deviceFixture("dev_1", "leased")];
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+
+    const view = harness.service.workers.view("wrk_1");
+    expect(view?.host).toEqual(hostFixture({ arch: "x64" }));
+    for (const field of [
+      "capacity",
+      "catalog",
+      "devices",
+      "installs",
+      "leases",
+      "queueDepth",
+      "waiting",
+    ]) {
+      expect(Object.keys(view ?? {})).not.toContain(field);
+    }
+    // Nothing but the status read, and the event subscription, was asked of it.
+    expect(
+      worker.calls.filter((call) => !["status.get", "events.subscribe"].includes(call)),
+    ).toEqual([]);
+
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")] });
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    worker.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("running"));
+
+    // The refresh a lease event asks for reads no catalog of its own, but the starting answer
+    // dropped the last one, so this refresh reads it: the worker takes requests again at once.
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      catalog: [],
+      catalogReadAt: harness.clock.now(),
+      devices: [{ id: "dev_1" }],
+      leases: [{ id: "lease_1" }],
+    });
+    await harness.service.stop();
+  });
+
+  // #414, modelled on a real worker: its `events.subscribe` parks until startup ends (only
+  // `status.get` answers while it is `starting`), and it emits `daemon.started` before that parked
+  // call subscribes, so the gateway never hears it. A startup longer than `WORKER_CALL_TIMEOUT_MS`
+  // times the subscription out, and the refresh after it reads a `starting` answer. The clock
+  // stops there, short of the periodic tick.
+  it("builds the full view of a worker that was starting when first read, once its startup ends, before the next tick", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    worker.devices = [deviceFixture("dev_1", "leased")];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => undefined;
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+    const startedAt = harness.clock.now();
+
+    // Startup ends: `status.get` answers in full, and the parked subscription is answered.
+    worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")], queueDepth: 1 });
+    endStartup();
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")).toMatchObject({
+        capacity: { ios: { limit: 2 } },
+        catalog: [{ models: ["iPhone 17"] }],
+        catalogReadAt: startedAt,
+        devices: [{ id: "dev_1" }],
+        health: "running",
+        leases: [{ id: "lease_1" }],
+        queueDepth: 1,
+      }),
+    );
+    expect(harness.clock.now()).toBe(startedAt);
+
+    await harness.service.stop();
+  });
+
+  it("reads nothing more from a worker whose late subscription answer arrives after the service stopped", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    let endStartup!: () => void;
+    const startupEnded = new Promise<void>((resolve) => {
+      endStartup = resolve;
+    });
+    let subscribeCalled = false;
+    let unsubscribed = false;
+    worker.subscribeEvents = async () => {
+      worker.calls.push("events.subscribe");
+      subscribeCalled = true;
+      await startupEnded;
+      return async () => {
+        unsubscribed = true;
+      };
+    };
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+    await vi.waitFor(() => expect(worker.calls).toContain("status.get"));
+    await harness.service.stop();
+    const callsBefore = [...worker.calls];
+
+    endStartup();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(worker.calls).toEqual(callsBefore);
+    expect(unsubscribed).toBe(false);
+  });
+
   it("reads the catalog for a catalog refresh that arrives while a refresh without one is in flight", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -220,7 +389,7 @@ describe("GatewayService", () => {
     };
     worker.status = statusFixture({
       capacity,
-      daemon: { health: "starting", mode: "worker" },
+      daemon: { health: "failed", mode: "worker" },
       host: hostFixture({ arch: "x64" }),
       installs: [install],
       leases: [leaseFixture("lease_1", "dev_1")],
@@ -249,7 +418,7 @@ describe("GatewayService", () => {
       devices: [deviceFixture("dev_1", "leased")],
       downloads: { policy: "always", timeoutMs: 45 * 60_000 },
       drained: false,
-      health: "starting",
+      health: "failed",
       host: hostFixture({ arch: "x64" }),
       id: "wrk_1",
       installs: [install],
@@ -281,7 +450,7 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(1));
 
-    const device = harness.service.workers.view("wrk_1")?.devices[0];
+    const device = harness.service.workers.view("wrk_1")?.devices?.[0];
     expect(device).toMatchObject({ id: "dev_1", state: "ready" });
     expect(device).not.toHaveProperty("driverData");
     expect(device).not.toHaveProperty("driverDeviceId");
@@ -311,10 +480,51 @@ describe("GatewayService", () => {
     }
     expect(harness.service.workers.grantedDevices()).toEqual([
       {
+        physical: false,
         driverDeviceId: "UDID-1",
         id: "dev_1",
         mode: "full",
-        spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+        spec: { physical: false, model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+        workerId: "wrk_1",
+      },
+    ]);
+
+    await harness.service.stop();
+  });
+
+  it("keeps a worker's physical device in the grant shape beside its view, with physical and class and no mode, so a lease on it is not UNKNOWN_LEASE", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.devices = [
+      {
+        class: "phone",
+        createdAt: 1,
+        driverData: {},
+        driverDeviceId: "00008110-001A2B3C4D5E",
+        id: "dev_p",
+        physical: true,
+        servesDefaultMode: false,
+        spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+        state: "ready",
+      },
+    ];
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(1));
+
+    expect(harness.service.workers.view("wrk_1")?.devices?.[0]).toMatchObject({
+      class: "phone",
+      id: "dev_p",
+      physical: true,
+    });
+    expect(harness.service.workers.grantedDevices()).toEqual([
+      {
+        class: "phone",
+        driverDeviceId: "00008110-001A2B3C4D5E",
+        id: "dev_p",
+        physical: true,
+        spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
         workerId: "wrk_1",
       },
     ]);
@@ -335,7 +545,7 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
 
     expect(
-      harness.service.workers.view("wrk_1")?.devices.map(({ id, mode }) => ({ id, mode })),
+      harness.service.workers.view("wrk_1")?.devices?.map(({ id, mode }) => ({ id, mode })),
     ).toEqual([
       { id: "dev_slim", mode: "slim" },
       { id: "dev_full", mode: "full" },
@@ -471,11 +681,10 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
-  // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
-  // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking
-  // its admin protocol) could forge one of the six subjects `docs/internal/EVENTS.md` calls "the
-  // gateway's own" -- e.g. `worker.drain-ended` -- straight into the operator's audit trail.
+  // why: nothing about the admin protocol proves that a pushed event's *name* is genuinely the
+  // worker's own -- `workerId` is merged in last so it cannot be spoofed, but a worker (or
+  // anything speaking its protocol) could otherwise forge a fact only a gateway authors, such as
+  // `worker.drain-ended`, straight into the operator's audit trail.
   it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -488,8 +697,6 @@ describe("GatewayService", () => {
       module: "gateway",
       payload: { workerId: "wrk_forged", label: "not-this-worker" },
     });
-    // A genuine event from the same worker still goes through -- the guard is on the six names,
-    // not on this link entirely.
     worker.pushEvent({
       event: "lease.granted",
       module: "lease-engine",
@@ -503,6 +710,66 @@ describe("GatewayService", () => {
     // Never forwarded, and never with the forged `workerId` a real gateway-authored
     // `worker.drain-ended` for a *different* worker would otherwise be indistinguishable from.
     expect(forged).toEqual([]);
+
+    await harness.service.stop();
+  });
+
+  it("refuses to republish a request.granted a worker pushes, which only the gateway itself emits (ADR 0021 §4)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "request.granted",
+      module: "fleet-lease-coordinator",
+      payload: { leaseId: "wrk_1.lease_1", requestId: "req_forged", worker: "wrk_1" },
+    });
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    expect(harness.events.filter((event) => event.event === "request.granted")).toEqual([]);
+
+    await harness.service.stop();
+  });
+
+  it("refuses to republish a request.dispatched a worker pushes, which only the gateway itself emits", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "request.dispatched",
+      module: "fleet-lease-coordinator",
+      payload: {
+        platform: "ios",
+        queuedMs: 0,
+        reason: "warm-hit",
+        requestId: "req_forged",
+        requesterId: "agent-1",
+        stage: "warm-hit",
+        workerId: "wrk_forged",
+      },
+    });
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    expect(harness.events.filter((event) => event.event === "request.dispatched")).toEqual([]);
 
     await harness.service.stop();
   });
@@ -560,11 +827,70 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.models).toEqual([
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.models).toEqual([
         "iPhone 17",
         "iPad Pro",
       ]),
     );
+
+    await harness.service.stop();
+  });
+
+  it("sends a waiting physical request its worker refused to that worker again on the first periodic refresh after the worker's view reports the device present, with no worker event", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const coordinator = new FleetLeaseCoordinator({
+      clock: harness.clock,
+      describeFailure: (error) => ({ code: "INTERNAL", message: String(error) }),
+      directory: harness.service,
+      eventBus: harness.eventBus,
+      execTimeoutMs: 11 * 60_000,
+      idGenerator: {
+        generate: (() => {
+          let next = 1;
+          return () => `${next++}`;
+        })(),
+      },
+      leaseIndex: new FleetLeaseIndex("gw:instance-1:"),
+      leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
+      leaseRequestTimeoutMs: 5 * 60_000,
+      routing: createRoutingPolicy("warm-then-free"),
+      views: harness.service.workers,
+    });
+    const worker = new ScriptedWorkerClient();
+    const phone = (presence: PhysicalPresenceFixture) =>
+      physicalDeviceFixture("dev_p", "ready", { presence });
+    worker.devices = [phone({ present: true })];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 15 Pro"], platform: "ios", runtimes: ["18.4"] },
+    ]);
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(1));
+    const leaseRequests = () => worker.calls.filter((call) => call.startsWith("lease.request"));
+
+    void coordinator
+      .request(
+        { physical: true, platform: "ios" },
+        { allowDownload: false, noWait: false, ownerId: "agent-1", requesterId: "agent-1" },
+      )
+      .catch(() => undefined);
+    await vi.waitFor(() => expect(leaseRequests()).toHaveLength(1));
+    const callsBefore = worker.calls.length;
+
+    worker.devices = [phone({ present: false, reason: "not-present" })];
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(worker.calls.length).toBeGreaterThan(callsBefore));
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.devices?.[0]).toMatchObject({
+        presence: { present: false, reason: "not-present" },
+      }),
+    );
+    expect(leaseRequests()).toHaveLength(1);
+
+    worker.devices = [phone({ present: true })];
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() => expect(leaseRequests()).toHaveLength(2));
 
     await harness.service.stop();
   });
@@ -583,7 +909,7 @@ describe("GatewayService", () => {
     ]);
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["26.0"],
       }),
     );
@@ -600,7 +926,7 @@ describe("GatewayService", () => {
     harness.clock.advance(REFRESH_MS);
 
     await vi.waitFor(() =>
-      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+      expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["25.4", "26.0"],
       }),
     );
@@ -743,7 +1069,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "component.installed" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),
@@ -768,7 +1094,7 @@ describe("GatewayService", () => {
       worker.pushEvent({ event: "lease.released" });
 
       await vi.waitFor(() =>
-        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+        expect(harness.service.workers.view("wrk_1")?.catalog?.[0]?.runtimes).toEqual([
           "26.0",
           "26.4",
         ]),
@@ -896,6 +1222,21 @@ describe("GatewayService", () => {
     });
   });
 
+  it("puts the warm pool block a worker's status read carries on its view", async () => {
+    const warmPool = { enabled: true, reserveRunning: { android: 0, ios: 2 }, targets: [] };
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ warmPool });
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.warmPool).toEqual(warmPool),
+    );
+
+    await harness.service.stop();
+  });
+
   it("marks a worker that speaks only the previous protocol version incompatible with both ranges, and asks it nothing else", async () => {
     // Protocol 5 is the version before ADR 0008 made `modelRuntimes` required.
     const previous = { min: 5, max: 5 };
@@ -915,6 +1256,28 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
+
+    await harness.service.stop();
+  });
+
+  it("marks a worker one protocol version behind the gateway incompatible (ADR 0022 §2: it does not know `device.add` or `device.remove`, and reports no `driverDeviceId`)", async () => {
+    const previous = {
+      min: PROTOCOL_VERSION_RANGE.max - 1,
+      max: PROTOCOL_VERSION_RANGE.max - 1,
+    };
+    expect(PROTOCOL_VERSION_RANGE.max).toBe(39);
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+
+    expect(worker.calls).toEqual(["status.get"]);
 
     await harness.service.stop();
   });
@@ -1123,6 +1486,38 @@ describe("GatewayService", () => {
 
     expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9");
 
+    await harness.service.stop();
+  });
+
+  // H2's case again, for the answer a starting worker gives: a replaced link's late `starting`
+  // must not strip the successor's view of its devices and leases.
+  it("does not let a stale link's late starting answer overwrite its successor's view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const clientA = new ScriptedWorkerClient("admin", "0.1.0");
+    await harness.join("wrk_1", clientA);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("0.1.0"));
+    const release = clientA.holdStatus();
+    clientA.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(clientA.calls.at(-1)).toBe("status.get"));
+    const clientB = new ScriptedWorkerClient("admin", "9.9.9");
+    clientB.devices = [deviceFixture("dev_b", "ready")];
+    await harness.join("wrk_1", clientB);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+
+    // A's held `status.get` now answers `starting`, after B built the current view.
+    clientA.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      devices: [{ id: "dev_b" }],
+      health: "running",
+      version: "9.9.9",
+    });
     await harness.service.stop();
   });
 
@@ -1498,5 +1893,87 @@ describe("GatewayService", () => {
       expect(target?.reachable).toBe(false);
       expect(target?.client()).toBeUndefined();
     });
+  });
+});
+
+describe("GatewayService: a worker's capabilities in its view", () => {
+  const unavailable = {
+    name: "agent-device",
+    reason: "found 0.20.1, need 0.21.28 or later",
+    state: "unavailable" as const,
+  };
+  const available = { name: "agent-device", state: "available" as const };
+
+  async function joinedWith(capabilities: readonly (typeof unavailable | typeof available)[]) {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ capabilities: [...capabilities] });
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual(capabilities),
+    );
+    return { harness, worker };
+  }
+
+  it("shows available after the next refresh tick when the worker's agent-device went from unavailable to running", async () => {
+    const { harness, worker } = await joinedWith([unavailable]);
+    worker.status = statusFixture({ capabilities: [available] });
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([available]),
+    );
+    await harness.service.stop();
+  });
+
+  it("shows no list for a worker that reported one and restarted into starting", async () => {
+    const { harness } = await joinedWith([available]);
+    const restarted = new ScriptedWorkerClient();
+    restarted.status = {
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture(),
+    };
+
+    await harness.join("wrk_1", restarted);
+
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
+    expect(Object.keys(harness.service.workers.view("wrk_1") ?? {})).not.toContain("capabilities");
+    await harness.service.stop();
+  });
+
+  it("shows no list for a worker that reported one and came back incompatible", async () => {
+    const { harness } = await joinedWith([available]);
+    const previous = { min: 5, max: 5 };
+    const incompatible = new ScriptedWorkerClient();
+    incompatible.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", incompatible);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+    expect(Object.keys(harness.service.workers.view("wrk_1") ?? {})).not.toContain("capabilities");
+    await harness.service.stop();
+  });
+
+  it("keeps the list a disconnected worker last reported", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ capabilities: [unavailable] });
+    const workerEnd = await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([unavailable]),
+    );
+
+    await workerEnd.close();
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("disconnected"),
+    );
+    expect(harness.service.workers.view("wrk_1")?.capabilities).toEqual([unavailable]);
+    await harness.service.stop();
   });
 });
