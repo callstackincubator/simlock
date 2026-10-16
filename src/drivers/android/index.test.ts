@@ -5850,8 +5850,7 @@ function ok(stdout = ""): ProcessResult {
   return { code: 0, stderr: "", stdout };
 }
 
-async function* emptyLines(): AsyncIterable<string> {
-}
+async function* emptyLines(): AsyncIterable<string> {}
 
 function installFor(
   driver: AndroidDriver,

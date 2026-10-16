@@ -782,8 +782,7 @@ export class AndroidDriver implements Driver {
   async #register(consolePort: number): Promise<void> {
     try {
       await this.#registrar.register(consolePort + 1);
-    } catch {
-    }
+    } catch {}
   }
 
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
@@ -1489,8 +1488,7 @@ export class AndroidDriver implements Driver {
     try {
       const stat = await this.#filesystem.stat(`${image.path}/source.properties`);
       stamp = `${stat.identity}@${String(stat.modifiedAtMs)}`;
-    } catch {
-    }
+    } catch {}
     return {
       package: systemImagePackage(image.apiLevel, image.tag, image.abi),
       revision: image.version,
