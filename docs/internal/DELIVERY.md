@@ -106,9 +106,12 @@ still change.
    contradictions, lines nobody could check, behaviour no test pins,
    failure modes no line answers, existing code on the same state no line
    names, lists the code contradicts, overlapping tasks without a Depends
-   on, and undefined terms. The session fixes what they find with you.
-   After the second check, a closure check confirms each fix closed its
-   finding; one that did not goes to you.
+   on, and undefined terms. Each finding is blocking (an implementer
+   would build the wrong thing, stop, or leave broken state) or a note (a
+   gap the implementer may close as an `Assumption:` line, five at most).
+   The session fixes the blocking ones with you; notes never start another
+   round. After the second check, a closure check confirms each fix closed
+   its finding; one that did not goes to you.
 8. **Ready.** Once the check passes and every linked ADR is accepted, the
    session sets every task `task:ready` and the feature `feature:planned`.
    The ADRs move to _Accepted — not yet implemented_. Your say is the

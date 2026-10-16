@@ -23,7 +23,9 @@ Argument: an issue number, optionally `revise`.
 - A `task:draft` task: write or finish its Technical spec. Load its
   feature too; explore (step 4) only what the task touches, interview for
   the task's open choices, then write (step 7), check (step 8) and set it
-  ready (step 9). The feature's label is left as it is.
+  ready (step 9). When that leaves every task of a `feature:spec` feature
+  ready and its Open questions empty, move the feature to
+  `feature:planned` too.
 - `revise`, on a `feature:spec` or `feature:planned` feature or a task:
   reconcile (step 2), then interview only for the amendments it produced.
 
@@ -298,24 +300,30 @@ The check reads the bodies as posted. Start `spec-checker` agents with the
 Agent tool, `run_in_background: false`, all in one message: one per task,
 with `#<task> task`, and one with `#<feature> feature`.
 
-Fix each finding in the body it names. More than half of a second
-round's findings sit in text written to fix the first, so after each fix
-run the self-check (step 7) again on the lines you changed, and re-read
-every task that shares a Shared values row with the one you fixed. Only
-you edit the bodies. Then run the check once more for
-every issue whose body you changed (and the feature check, if any task
-changed). What the second run reports is fixed as below; then start one
-`spec-checker` with `#<issue> closure` and the finding lines you fixed, for
-each body you changed after the second run. A finding it reports open is
-not fixed again: ask the maintainer.
+Fix each blocking finding in the body it names. More than half of a
+second round's findings sit in text written to fix the first, so after
+each fix run the self-check (step 7) again on the lines you changed, and
+re-read every task that shares a Shared values row with the one you fixed.
+Only you edit the bodies.
+
+Notes never start a round. Fix a note when the fix is one line and
+decides nothing; leave the rest to the implementer, who closes such gaps
+as `Assumption:` lines.
+
+Then run the check once more for every issue whose body you changed for a
+blocking finding (and the feature check, if any task changed). Fix what
+its blocking findings report; then start one `spec-checker` with
+`#<issue> closure` and the blocking finding lines you fixed, for each body
+you changed after the second run. A finding it reports open is not fixed
+again: ask the maintainer.
 
 Never fix a finding by deciding something the interview left open: put it
 to the maintainer in a round. A finding the maintainer accepts stays.
 
 ## 9. Set the labels
 
-Once the check says `Verdict: ready`, or every open finding is one the
-maintainer accepted, and no ADR the feature links is still _Proposed_:
+Once the check says `Verdict: ready`, or every open blocking finding is
+one the maintainer accepted, and no ADR the feature links is still _Proposed_:
 
 ```bash
 gh issue edit <task> --add-label task:ready --remove-label task:draft
