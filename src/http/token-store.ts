@@ -58,6 +58,7 @@ export class TokenStore {
   readonly #idGenerator: IdGenerator;
   readonly #secrets: TokenSecrets;
   readonly #path: string;
+  #mutation: Promise<void> = Promise.resolve();
 
   constructor(options: TokenStoreOptions) {
     this.#filesystem = options.filesystem;
@@ -69,20 +70,22 @@ export class TokenStore {
 
   // fallow-ignore-next-line unused-class-member -- called by `Dispatcher`'s `token.create` handler through `#requireTokens()`'s return value (src/daemon/dispatcher.ts); the audit does not follow a member access on a method's result.
   async create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }> {
-    const secret = this.#secrets.generateSecret();
-    const record: TokenRecord = {
-      id: `tok_${this.#idGenerator.generate()}`,
-      hash: this.#secrets.hash(secret),
-      role,
-      ...(label === undefined ? {} : { label }),
-      createdAt: this.#clock.now(),
-    };
+    return this.#mutate(async () => {
+      const secret = this.#secrets.generateSecret();
+      const record: TokenRecord = {
+        id: `tok_${this.#idGenerator.generate()}`,
+        hash: this.#secrets.hash(secret),
+        role,
+        ...(label === undefined ? {} : { label }),
+        createdAt: this.#clock.now(),
+      };
 
-    const records = await this.#readAll();
-    records.push(record);
-    await this.#writeAll(records);
+      const records = await this.#readAll();
+      records.push(record);
+      await this.#writeAll(records);
 
-    return { record, secret };
+      return { record, secret };
+    });
   }
 
   async list(): Promise<TokenRecord[]> {
@@ -91,13 +94,15 @@ export class TokenStore {
 
   // fallow-ignore-next-line unused-class-member -- same as `create` above: reached through `#requireTokens()`'s return value.
   async revoke(id: string): Promise<boolean> {
-    const records = await this.#readAll();
-    const index = records.findIndex((record) => record.id === id);
-    if (index === -1) return false;
+    return this.#mutate(async () => {
+      const records = await this.#readAll();
+      const index = records.findIndex((record) => record.id === id);
+      if (index === -1) return false;
 
-    records.splice(index, 1);
-    await this.#writeAll(records);
-    return true;
+      records.splice(index, 1);
+      await this.#writeAll(records);
+      return true;
+    });
   }
 
   /**
@@ -112,6 +117,15 @@ export class TokenStore {
     if (record === undefined) return undefined;
 
     return { requesterId: record.id, role: record.role };
+  }
+
+  #mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#mutation.then(operation);
+    this.#mutation = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   }
 
   async #readAll(): Promise<TokenRecord[]> {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import type { TokenSecrets } from "../ports/token-secrets.js";
@@ -101,6 +101,68 @@ describe("TokenStore", () => {
       created.map(({ record }) => ({ requesterId: record.id, role: record.role })),
     );
   });
+
+  it.each(["create-first", "revoke-first"])(
+    "preserves a concurrent create and revoke (%s)",
+    async (order) => {
+      const { store, filesystem } = tokenStore();
+      const existing = await store.create("agent", "old");
+      const create = () => store.create("operator", "new");
+      const revoke = () => store.revoke(existing.record.id);
+
+      const [created, revoked] = await (order === "create-first"
+        ? Promise.all([create(), revoke()])
+        : Promise.all([revoke(), create()]).then(([removed, added]) => [added, removed] as const));
+
+      expect(revoked).toBe(true);
+      expect(JSON.parse(await filesystem.readFile(tokensPath))).toEqual([created.record]);
+      await expect(store.verify(existing.secret)).resolves.toBeUndefined();
+      await expect(store.verify(created.secret)).resolves.toEqual({
+        requesterId: created.record.id,
+        role: "operator",
+      });
+    },
+  );
+
+  it("keeps both concurrent revocations effective", async () => {
+    const { store, filesystem } = tokenStore();
+    const first = await store.create("agent");
+    const second = await store.create("operator");
+
+    await expect(
+      Promise.all([store.revoke(first.record.id), store.revoke(second.record.id)]),
+    ).resolves.toEqual([true, true]);
+
+    expect(JSON.parse(await filesystem.readFile(tokensPath))).toEqual([]);
+    await expect(store.verify(first.secret)).resolves.toBeUndefined();
+    await expect(store.verify(second.secret)).resolves.toBeUndefined();
+  });
+
+  it.each(["create", "revoke"])(
+    "rejects a failed %s write and lets a queued mutation persist",
+    async (operation) => {
+      const { store, filesystem } = tokenStore();
+      const existing = await store.create("agent");
+      const failure = new Error("token write failed");
+      vi.spyOn(filesystem, "writeFileAtomic").mockRejectedValueOnce(failure);
+
+      const failed =
+        operation === "create" ? store.create("worker") : store.revoke(existing.record.id);
+      const next = store.create("operator");
+
+      await expect(failed).rejects.toBe(failure);
+      await expect(next).resolves.toMatchObject({ record: { role: "operator" } });
+      const created = await next;
+      expect(JSON.parse(await filesystem.readFile(tokensPath))).toEqual([
+        existing.record,
+        created.record,
+      ]);
+      await expect(store.verify(created.secret)).resolves.toEqual({
+        requesterId: created.record.id,
+        role: "operator",
+      });
+    },
+  );
 
   it("verifies a token by hashing the presented secret against stored hashes", async () => {
     const { store } = tokenStore();
