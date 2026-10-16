@@ -17,6 +17,7 @@ import {
   UnknownModelError,
 } from "../../core/index.js";
 import {
+  FakeBytePipeLauncher,
   FakeClock,
   MemoryFilesystem,
   NodeFilesystem,
@@ -4439,6 +4440,53 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
   await vi.waitFor(() => expect(state.done).toBe(true));
   return state.value;
 }
+
+describe("IosSimctlDriver screen capture commands", () => {
+  const physicalDevice = {
+    address: "UDID-P",
+    deviceId: "UDID-P",
+    driverData: {},
+    enrolledApps: [],
+    physical: true,
+  } as const;
+  const settings = { bitrateKbps: 1_500, fps: 30, maxDimension: 720 };
+
+  // why: the daemon hands the driver its packaged programs; `drivers.ios.deviceCaptureCommand`
+  // replaces only the physical iPhone's program, and an empty string counts as unset exactly as
+  // `screenCaptureCommand` does, so one mistaken `""` does not turn iPhone streams off.
+  it.each([
+    ["the configured program", "/worker/custom-device-capture", "/worker/custom-device-capture"],
+    ["the daemon's program when unset", undefined, "/dist/bin/simlock-device-capture"],
+    ["the daemon's program when set empty", "", "/dist/bin/simlock-device-capture"],
+  ] as const)("a physical iPhone's stream starts %s", async (_claim, configured, expected) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/worker");
+    await filesystem.mkdirp("/dist/bin");
+    await filesystem.writeFileAtomic("/worker/custom-device-capture", "");
+    await filesystem.writeFileAtomic("/dist/bin/simlock-device-capture", "");
+    const launcher = new FakeBytePipeLauncher();
+    const driver = await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      driverConfig: configured === undefined ? {} : { deviceCaptureCommand: configured },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: new ScriptedProcessRunner([]),
+      screenCapture: {
+        baseEnvironment: { PATH: "/usr/bin" },
+        command: "/dist/bin/simlock-screen-capture",
+        deviceCommand: "/dist/bin/simlock-device-capture",
+        launcher,
+      },
+      simlockHome: "/home/.simlock",
+    });
+
+    const capture = driver.screenCapture;
+    if (capture === undefined) throw new Error("the driver offers no screen capture");
+    await capture.open(physicalDevice, settings, new AbortController().signal);
+    expect(launcher.starts.map((start) => start.command)).toEqual([expected]);
+  });
+});
 
 describe("IosSimctlDriver defaultModels", () => {
   it("lists the built-in iOS preference list per class, newest first, with phone starting at iPhone 17", async () => {

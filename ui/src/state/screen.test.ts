@@ -4,16 +4,14 @@ import { ApiError } from "../data/api";
 import { refusalOf, STREAM_HEAD_TIMEOUT_MS } from "./screen";
 
 describe("what a refused stream says", () => {
-  it("says which devices can be streamed when the daemon answers that this one cannot", () => {
+  it("says only that this device cannot be streamed, naming no platform, when the daemon answers 415", () => {
     const refused = new ApiError(
       415,
       undefined,
       "A physical iPhone's screen cannot be streamed; only a simulator's can",
     );
 
-    expect(refusalOf(refused)).toBe(
-      "This device cannot be streamed. A live screen is captured from a simulator, an emulator or a physical Android phone, not from a physical iPhone.",
-    );
+    expect(refusalOf(refused)).toBe("This device cannot be streamed.");
   });
 
   it("waits for a stream's headers past the longest open a physical Android phone's capture can take", () => {

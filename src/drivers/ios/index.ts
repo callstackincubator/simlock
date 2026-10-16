@@ -214,6 +214,7 @@ export interface IosSimctlDriverOptions {
   // screen at all rather than one that fails on every open.
   readonly screenCapture?: {
     readonly command: string;
+    readonly deviceCommand?: string;
     readonly launcher: BytePipeLauncher;
     readonly baseEnvironment: NodeJS.ProcessEnv;
     readonly onLog?: (line: string) => void;
