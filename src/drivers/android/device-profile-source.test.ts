@@ -872,10 +872,11 @@ describe("device classes", () => {
   });
 
   it("classes a listed model by the profile its name resolves to, not the one it was listed from", async () => {
-    // why: the three devices.xml profiles are named after SDK profile ids -- two the library
-    // also ships, one (`tv_720p`) only the SDK has -- so a lease of each name creates the SDK's
-    // TV or Wear OS device; the class the catalog lists must follow that profile, not the
-    // untagged devices.xml entry the name was listed from.
+    // why: the three devices.xml profiles are named after profile ids the library or the SDK
+    // ships -- `tv_1080p` and `wearos_large_round` resolve to the library's TV and Wear OS
+    // profiles, `tv_720p` to an SDK-only one -- so a lease of each name creates that TV or
+    // Wear OS device; the class the catalog lists must follow the profile the name resolves
+    // to, not the untagged devices.xml entry the name was listed from.
     const collidingDevicesXml = `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
       <d:device><d:name>tv_1080p</d:name><d:hardware><d:ram unit="MiB">2048</d:ram></d:hardware></d:device>
       <d:device><d:name>tv_720p</d:name></d:device>
