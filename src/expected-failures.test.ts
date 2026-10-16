@@ -125,6 +125,23 @@ describe("the expected-failure matcher", () => {
     ]);
   });
 
+  it("reports the line the call is written on, even below a multi-line comment", () => {
+    // why: the offender is reported as path and line so a reader opens the file at the right
+    // place; a comment stripped without its newlines would point them at the header instead.
+    const file = [
+      "/*",
+      " * a header",
+      " * of several",
+      " */",
+      `${["it", "fails"].join(".")}("a title", () => {})`,
+    ].join("\n");
+    // why: the expected report line is assembled from pieces like the calls above, because a
+    // string holding the whole call is text this file's own scan reads, and it would name itself.
+    expect(expectedFailuresIn(file, "probe.test.ts")).toEqual([
+      `probe.test.ts:5: ${["it", "fails("].join(".")}`,
+    ]);
+  });
+
   it("does not report a hit for prose that only names the API", () => {
     // why: built in pieces for the same reason as the call above — a string holding the whole call
     // is text this file's own scan reads, and it would then name itself.
