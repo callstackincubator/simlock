@@ -1334,6 +1334,19 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(launched).toBe(false);
   });
 
+  it("prints the human view for daemon status when --json is absent", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        output.environmentWith({ connectExistingAdmin: async () => fakeClient() }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
+  });
+
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
