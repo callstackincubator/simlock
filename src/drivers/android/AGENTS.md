@@ -83,6 +83,8 @@ Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
 `ANDROID_SDK_HOME` or home). First case-insensitive name match wins. A devices.xml name the
 library shadows → advisory `device-profile-hidden`. SDK class from `Tag`: none `phone`,
 `android-tv` `tv`, `android-wear` `watch`, `android-automotive*` `auto`, `android-desktop` `desktop`.
+The catalog classes each model by the profile its name resolves to — the one a lease of that
+name creates — not the one it was listed from.
 
 Fit — `fits(profile, image)`: API range, image kind (tag), Play Store, tablet. The catalog's
 `modelRuntimes` lists only API levels with a fitting image.
