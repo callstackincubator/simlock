@@ -75,13 +75,13 @@ is enabled, the driver:
 2. shuts the device down,
 3. boots it again and waits for `bootstatus -b` and a successful `simctl listapps` installer probe,
 4. records what it did in `driverData` (see 3),
-5. emits `device.slimmed` after the registry commit.
+5. emits `device.slimmed` after the overrides have survived the reboot and the installer probe has passed.
 
 `makeReady` is the single choke point because it is the only operation that
 already holds the safety guarantees this needs: it runs on registry-owned
-devices, it never runs on a leased device (the crash-recovery exception in
-`ManagedDeviceLifecycle.recoverLeased` reboots an already-provisioned device
-and is precisely the case where re-slimming is correct), and it downloads
+devices, it never runs on a leased device except for crash recovery in
+`ManagedDeviceLifecycle.recoverLeased`, which reboots an already-provisioned
+device without reapplying the slim pass, and it downloads
 nothing. Slimming from a cleanup rule, from `doctor`, or from the CLI
 directly would each have to re-derive those guarantees.
 
