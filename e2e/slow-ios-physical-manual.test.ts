@@ -1,6 +1,10 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+
+const execFileAsync = promisify(execFile);
 
 const UDID = process.env["SIMLOCK_PHYSICAL_IOS"];
 const APP = process.env["SIMLOCK_PHYSICAL_IOS_APP"];
@@ -24,15 +28,25 @@ interface StatusDevice {
   readonly absentReason?: string;
 }
 
-async function startDaemon(): Promise<TestEnv> {
+async function startDaemon(
+  options: { stream?: boolean } = {},
+): Promise<TestEnv & { port: number }> {
   const port = await freeLoopbackPort();
-  return withDaemon({
+  const env = await withDaemon({
     configOverrides: {
+      ...(options.stream === true
+        ? {
+            capabilities: {
+              stream: { bitrateKbps: 1500, enabled: true, fps: 30, maxDimension: 720 },
+            },
+          }
+        : {}),
       health: { probeIntervalMs: 2_000, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
     },
     driver: "real",
   });
+  return { ...env, port };
 }
 
 async function deviceOf(env: TestEnv, udid: string): Promise<StatusDevice | undefined> {
@@ -72,6 +86,14 @@ async function enroll(env: TestEnv, id: string): Promise<void> {
     timeout: 2 * MINUTE,
   });
   expect(added.code, `device add failed: ${added.stderr}`).toBe(0);
+}
+
+/** why: `pgrep -x` matches the program's own name only; a pattern match would also find the shell running this check. */
+async function deviceCapturesRunning(): Promise<number> {
+  const found = await execFileAsync("pgrep", ["-x", "simlock-device-capture"]).catch(() => ({
+    stdout: "",
+  }));
+  return found.stdout.split("\n").filter((line) => line.trim() !== "").length;
 }
 
 describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
@@ -128,6 +150,50 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         ]);
 
         await expectAfterPrompt(env, udid, "PLUG IN and UNLOCK the phone now", "ready");
+      },
+    );
+
+    it(
+      "while the iPhone streams, a person locking it ends the lease as device-lost and leaves no device capture running within 10 s",
+      { timeout: 15 * MINUTE },
+      async () => {
+        const env = await startDaemon({ stream: true });
+        await enroll(env, udid);
+        await expectAfterPrompt(env, udid, "keep the phone unlocked and plugged in", "ready");
+        const leased = await env.cli(
+          ["lease", "--platform", "ios", "--physical", "--agent-id", "phone-lane-lock", "--detach"],
+          { timeout: 2 * MINUTE },
+        );
+        expect(leased.code, `lease failed: ${leased.stderr}`).toBe(0);
+        const leaseId = (leased.json as { lease: { id: string } }).lease.id;
+
+        const created = await env.cli(["token", "create", "--role", "operator"]);
+        expect(created.code, created.stderr).toBe(0);
+        const viewer = new AbortController();
+        const response = await fetch(
+          `http://127.0.0.1:${String(env.port)}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+          {
+            headers: { authorization: `Bearer ${(created.json as { secret: string }).secret}` },
+            signal: viewer.signal,
+          },
+        ).catch(() => undefined);
+        expect(response?.status, "the leased iPhone did not start streaming").toBe(200);
+
+        await expectAfterPrompt(env, udid, "LOCK the phone now", "absent", "locked");
+
+        const released = (await env.events("1h"))
+          .map((entry) => ({
+            event: entry.event,
+            payload: entry.payload as { leaseId?: string; reason?: string },
+          }))
+          .filter((entry) => entry.event === "lease.released" && entry.payload.leaseId === leaseId);
+        expect(released.map((entry) => entry.payload.reason)).toContain("device-lost");
+        await waitFor(async () => (await deviceCapturesRunning()) === 0, {
+          interval: 500,
+          label: "the device capture stopped once the locked iPhone's lease ended",
+          timeout: 10_000,
+        });
+        viewer.abort();
       },
     );
 

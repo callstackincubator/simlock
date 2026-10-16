@@ -10,6 +10,7 @@ import type { BytePipeLauncher, BytePipeProcess, Clock, Filesystem } from "../..
 
 export interface IosScreenCaptureOptions {
   readonly command: string;
+  readonly deviceCommand?: string;
   readonly launcher: BytePipeLauncher;
   readonly clock: Clock;
   readonly filesystem: Filesystem;
