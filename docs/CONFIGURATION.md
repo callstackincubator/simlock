@@ -78,6 +78,7 @@ edit yourself keeps the mode you give it until the next `config set`; run
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
 | `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
 | `drivers.ios.screenCaptureCommand` | The program that captures a simulator's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
+| `drivers.ios.deviceCaptureCommand` | The program that captures a physical iPhone's screen for `capabilities.stream.enabled`. Unset, the one `pnpm build` put beside the daemon. | unset |
 | `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
 | `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
 | `ios.defaultMode`                 | The device mode an iOS lease request gets when it names none: `slim` or `full`. Every worker makes both kinds whatever this says. See [Device mode: slim and full](#device-mode-slim-and-full).                             | `full`                                                           |
@@ -607,16 +608,19 @@ sends almost nothing. `capabilities.stream.fps` is a ceiling rather than a rate 
 reason. On a Mac an iOS capture costs about 50-80 MB of memory per device being
 watched.
 
-An iOS simulator's screen and an Android emulator's screen can be streamed. A
-lease on a physical iPhone or Android phone is refused with
-`STREAM_NOT_SUPPORTED`, naming that as the reason rather than failing for one
-the reader has to guess.
+An iOS simulator's screen, a physical iPhone's screen and an Android
+emulator's screen can be streamed. A lease on a physical Android phone is
+refused with `STREAM_NOT_SUPPORTED`, naming that as the reason rather than
+failing for one the reader has to guess.
 
-- **iOS** needs the capture program `pnpm build` builds on a Mac with Xcode
-  selected. Without it an iOS stream is refused with
-  `STREAM_UNAVAILABLE`, saying why; `simlock status` says why too when no
-  platform on the worker can stream. `drivers.ios.screenCaptureCommand` names a
-  program at another path.
+- **iOS** needs the capture programs `pnpm build` builds on a Mac with Xcode
+  selected: one for a simulator and one for a physical iPhone. Without the one
+  a device needs, that stream is refused with `STREAM_UNAVAILABLE`, saying why;
+  `simlock status` says why too when no platform on the worker can stream. A
+  physical iPhone additionally needs a worker on Xcode 27 — the device program
+  refuses a Mac whose CoreDevice major is another.
+  `drivers.ios.screenCaptureCommand` names another simulator program and
+  `drivers.ios.deviceCaptureCommand` another iPhone one.
 - **Android** needs nothing more than the SDK the emulators already use. Each
   stream copies a small screen server into the emulator, and removes it when
   the stream ends. An emulator encodes in software unless its GPU mode gives it

@@ -942,7 +942,9 @@ worth asking for twice rather than holding open in advance.
 Authorization is the same as every other lease route: a token sees its own
 leases, an operator sees any, and anything else is a `404`. `STREAM_NOT_SUPPORTED`
 (415) means the device behind the lease can never produce a picture here — a
-physical phone. `STREAM_UNAVAILABLE` (503) means it could but cannot now: a
+physical Android phone. A physical iPhone is not refused that way: it streams
+like a simulator, on a worker that can capture it. `STREAM_UNAVAILABLE`
+(503) means it could but cannot now: a
 capture program that is not installed, or a device that painted nothing within
 30 seconds; asking again is the right move. A stream that stops receiving frames
 for 30 seconds ends with an error rather than freezing on its last picture. `WORKER_UNREACHABLE` on

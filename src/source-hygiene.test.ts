@@ -149,12 +149,14 @@ const licensesClaimedOf = (name: string): string[] => {
 
 /**
  * why: some licenses' verbatim text never names the license -- BSD-3-Clause is a copyright line
- * and three conditions -- so a name-word check would reject the verbatim text rule 3 demands. For
- * those, the name is checked against the clause that makes the text that license instead: the
- * third condition is what separates BSD-3-Clause from BSD-2-Clause.
+ * and three conditions, MIT's is a permission grant with no title -- so a name-word check would
+ * reject the verbatim text rule 3 demands. For those, the name is checked against the clause that
+ * makes the text that license instead: the third condition is what separates BSD-3-Clause from
+ * BSD-2-Clause, and the grant-plus-inclusion pair is what an MIT/Expat text is.
  */
 const clauseNamingLicense: Readonly<Record<string, RegExp>> = {
   "BSD-3-Clause": /Neither the name of[\s\S]+?may\s+be\s+used\s+to\s+endorse\s+or\s+promote/,
+  MIT: /Permission is hereby granted, free of charge[\s\S]{0,2000}?shall be included in all copies/,
 };
 
 /** why: what in `text` contradicts the license `name` claims to hold, one line per mismatch. */

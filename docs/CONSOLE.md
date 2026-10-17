@@ -258,10 +258,10 @@ live on the page. What you are looking at is either moving or gone.
 
 The panel is on every lease's page, and streams wherever the worker the lease
 runs on has screen streaming turned on (see [`capabilities.stream.enabled`](CONFIGURATION.md)).
-Where it is off, the panel says so before you press anything, and the button
-cannot be pressed; where the lease is on a device a screen cannot be
-captured from — a physical iPhone or Android phone — it says that a live screen
-comes only from a simulator or an emulator. Either way it starts nothing.
+Simulators, emulators and physical iPhones all stream. Where it is off, the
+panel says so before you press anything, and the button cannot be pressed; it
+starts nothing. An iPhone streams on a worker running Xcode 27: on another
+worker, the panel reports that the screen cannot be captured there and why.
 
 The first picture can take a while on a slow emulator. The panel waits up to 90
 seconds for it, longer than a worker takes to give up, so a capture that cannot

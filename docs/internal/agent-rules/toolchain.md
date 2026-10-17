@@ -66,8 +66,11 @@ that goes through the reviews its diff's kind gets and the merge gate:
 `pnpm build` runs `scripts/build-capture.mjs`: it copies the vendored scrcpy
 server into `dist/vendor/scrcpy/` after checking its pinned SHA-256, and on a
 Mac with Xcode selected it builds `vendor/screen-capture/` (Swift) into
-`dist/bin/simlock-screen-capture`. Elsewhere the Swift build is skipped and iOS
-streams report unavailable.
+`dist/bin/simlock-screen-capture` and `dist/bin/simlock-device-capture`, one
+product per `swift build`, each whether or not the other built. Elsewhere the
+Swift build is skipped and iOS streams report unavailable. Neither build checks
+a CoreDevice version: the device program is the one place that enforces that
+pin.
 
 Neither runs in the unit, e2e or console lanes: both read a booted device's
 screen, which means real devices and the slow lane. The lanes cover what this
@@ -108,7 +111,7 @@ The machine can run a line only if:
 | ---------- | ---------------------------------------------------------- |
 | iOS        | `uname -s` is `Darwin`; `xcrun simctl list runtimes` lists one |
 | Android    | `command -v emulator adb` finds both                       |
-| Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
+| Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. `/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /Library/Developer/PrivateFrameworks/CoreDevice.framework/Resources/Info.plist` prints `642.` followed by a number (streaming a phone needs Xcode 27's CoreDevice; the framework is machine-wide and does not follow `xcode-select`). DeviceHub and Xcode are not running during the lane. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
 | agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in an install of the agent-device version `package.json` pins for `@agent-device/proxy` (`npm install -g agent-device@<version>`, or a checkout at tag `v<version>` built with `pnpm install && pnpm build && pnpm build:android`, the last building the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
 | Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
 | Physical Android, a person at the phone | the Physical Android checks above, and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-android-physical-manual.test.ts` |
