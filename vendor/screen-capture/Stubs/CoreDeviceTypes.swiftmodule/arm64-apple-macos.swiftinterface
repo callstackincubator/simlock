@@ -1,0 +1,14 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDeviceTypes -module-abi-name CoreDevice
+// Hand-written stub for the CoreDeviceTypes module. Its symbols live in
+// CoreDeviceUtilities.framework / CoreDevice.framework and no `.swiftinterface` ships with Xcode, so
+// this declares only what simlock-device-capture reads. The `-module-abi-name` is what makes these
+// declarations line up with the binary's mangled names.
+import Swift
+import Foundation
+
+public enum TransportType {
+  public var description: Swift.String { get }
+  public var rawValue: Swift.String { get }
+}
