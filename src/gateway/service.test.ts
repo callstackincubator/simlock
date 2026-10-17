@@ -1788,7 +1788,7 @@ describe("GatewayService", () => {
   // twice before this round. This asserts the coalescing itself: two dials with the same claimed
   // id and reason inside one window produce exactly one event, and the first dial after the
   // window closes reports the closed window's total as `count`.
-  it("coalesces a flood of identical refusals into one event per window, with a count (P-2)", async () => {
+  it("coalesces a flood of identical refusals into one event per window, with a count only above one (P-2)", async () => {
     const harness = fleet({ authenticate: () => "unauthenticated" });
     await harness.service.start();
     const rejectedEvents = () =>
@@ -1824,6 +1824,18 @@ describe("GatewayService", () => {
     ).rejects.toMatchObject({ code: "rejected" });
     expect(rejectedEvents()).toHaveLength(3);
     expect(rejectedEvents()[2]?.payload).not.toHaveProperty("count");
+
+    // why: both EVENTS.md cuts document `count` as "present only above one", so a lone refusal
+    // whose predecessor window absorbed exactly one -- the normal path for a worker redialling
+    // on its backoff, which lands outside every window by design -- must not carry `count: 1`.
+    // Presence is the flood signal (#677).
+    harness.clock.advance(REJECTION_COALESCE_WINDOW_MS);
+    await expect(
+      harness.join("wrk_other", new ScriptedWorkerClient(), "mac-mini-2"),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(rejectedEvents()).toHaveLength(4);
+    expect(rejectedEvents()[3]?.payload).toMatchObject({ workerId: "wrk_other" });
+    expect(rejectedEvents()[3]?.payload).not.toHaveProperty("count");
 
     await harness.service.stop();
   });

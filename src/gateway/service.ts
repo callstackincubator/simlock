@@ -198,7 +198,12 @@ export class GatewayService {
       if (oldestKey !== undefined) this.#recentRejections.delete(oldestKey);
     }
     this.#recentRejections.set(key, { count: 1, windowStart: now });
-    this.#registry.rejected(reason, workerId, label, previousTotal);
+    this.#registry.rejected(
+      reason,
+      workerId,
+      label,
+      previousTotal === 1 ? undefined : previousTotal,
+    );
   }
 
   async stop(): Promise<void> {
