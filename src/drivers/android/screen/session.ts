@@ -30,7 +30,7 @@ const PUSH_TIMEOUT_MS = 30_000;
 // why: a phone's screen state is read once, before anything is pushed; a read that outlives this
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
 const SCREEN_READ_TIMEOUT_MS = 10_000;
-const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)$/;
+const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)\s*$/;
 const SCREEN_OFF_MESSAGE = "The phone's screen is off. Turn it on and ask for the stream again.";
 // why: measured from the moment the push returned, through every connect retry, to the first session
 // packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
