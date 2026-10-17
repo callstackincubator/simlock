@@ -151,6 +151,44 @@ describe("the overview", () => {
     expect(activity[1]).not.toHaveProperty("tone");
   });
 
+  it("lists the eight latest events across a daemon restart, not the eight with the highest seq", () => {
+    // why: the console's first load reads the daemon's event file, which survives a restart, so one
+    // buffer holds the previous run's events beside the restarted counter's own. `seq` restarts with
+    // every daemon, so only `timestamp` then `seq` orders them (docs/EVENTS.md).
+    const previousGeneration = [91, 92, 93, 94, 95, 96].map((seq, index) => ({
+      event: "lease.released",
+      id: `before-${seq}`,
+      payload: {},
+      seq,
+      timestamp: NOW - (20 - index) * 60_000,
+    }));
+    const currentGeneration = [1, 2, 3, 4].map((seq, index) => ({
+      event: "lease.granted",
+      id: `after-${seq}`,
+      payload: {},
+      seq,
+      timestamp: NOW - (4 - index) * 60_000,
+    }));
+
+    const { activity } = overviewOf({
+      events: [...previousGeneration, ...currentGeneration],
+      now: NOW,
+      requests: [],
+      workers: fleet,
+    });
+
+    expect(activity.map((row) => row.key)).toEqual([
+      "after-4",
+      "after-3",
+      "after-2",
+      "after-1",
+      "before-96",
+      "before-95",
+      "before-94",
+      "before-93",
+    ]);
+  });
+
   it("gives each worker its health square, its slots and its load, and a lost worker no load", () => {
     const { workers } = overviewOf({ events: [], now: NOW, requests: [], workers: fleet });
 
