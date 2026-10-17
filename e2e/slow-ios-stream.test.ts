@@ -161,12 +161,15 @@ describe.skipIf(process.platform !== "darwin")(
 );
 
 // why: `execFile` rejects on a non-zero exit, which is the whole claim here; the exit code is what
-// the test reads, so the rejection is unwrapped rather than caught per call site.
+// the test reads, so the rejection is unwrapped rather than caught per call site. `stdio[0]` is
+// `pipe` and not `ignore` because stdin is the capture's liveness handle: the driver hands it a live
+// pipe it closes only to stop, and a pipe hung up at birth is a stop asked for before the program
+// began, which the program answers by going at once rather than reporting why it could not start.
 async function run(
   program: string,
   args: readonly string[],
 ): Promise<{ code: number; stderr: string }> {
-  const child = spawn(program, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(program, args, { stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");

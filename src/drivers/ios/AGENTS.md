@@ -89,7 +89,8 @@ Either program missing → `ScreenUnavailableError` (a missing iPhone program re
 open only). Default programs: dist/bin, built by `pnpm build`;
 `drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand` name others. Neither
 program's environment carries `SIMLOCK_COREDEVICE_INFO_PLIST`; the iPhone program enforces its own
-pin — a CoreDevice major other than 642 exits 69 with the reason, a 503 for the viewer.
+pin — a CoreDevice major other than 642 exits 69 with the reason, a 503 for the viewer. Asked to
+stop while still starting, a program stops and goes inside its 2 s.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).

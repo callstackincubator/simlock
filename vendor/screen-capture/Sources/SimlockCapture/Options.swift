@@ -60,6 +60,12 @@ public struct CaptureError: Error, CustomStringConvertible, Sendable {
     }
 }
 
+/// What a source throws when it did not start because the caller had already asked it to stop. It is
+/// not a reason a viewer needs: the caller asked for this, and it is the clean end it asked for.
+public struct StoppedBeforeStart: Error {
+    public init() {}
+}
+
 /// What hands decoded pictures to the encode loop. The simulator's framebuffer is one
 /// implementation, CoreDevice's media stream is the second, and ADR 0031 names CoreMediaIO (the
 /// QuickTime path) as the third. Each program picks one in its `main.swift`; there is no registry.
