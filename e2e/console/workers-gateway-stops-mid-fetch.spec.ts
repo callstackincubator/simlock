@@ -1,6 +1,7 @@
 import type { Locator, Page, Route } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
+import { answerWithoutLoad } from "./workers-answers.js";
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
 
 /**
@@ -56,8 +57,6 @@ test.describe("the workers page response helper against a gateway whose listener
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
     ]);
-    const escaped: string[] = [];
-    let answeredAfterInjection = 0;
     let parkNext = false;
     let parkedSeen = false;
     let parkedArrived = { resolve: () => {} };
@@ -68,40 +67,20 @@ test.describe("the workers page response helper against a gateway whose listener
     const released = new Promise<void>((resolve) => {
       releaseParked = { resolve };
     });
-    let lastListed: { workers: Record<string, unknown>[] } | undefined;
-    // why: the lane's `answerWithoutLoad` verbatim but for the park, so the refused connect is the
-    // lane's accident and not a helper of this test's own invention.
-    const answerWithoutLoad = async (route: Route): Promise<void> => {
-      if (parkNext && !parkedSeen) {
-        parkedSeen = true;
-        parkNext = false;
-        parkedArrived.resolve();
-        await released;
-      }
-      const response = await route.fetch();
-      const listed = (await response.json()) as { workers: Record<string, unknown>[] };
-      for (const worker of listed.workers) delete worker.load;
-      lastListed = listed;
-      await route.fulfill({ json: listed, response });
-    };
+    await answerWithoutLoad(page);
+    // why: Playwright runs the latest-registered route first, so this one parks the next re-read
+    // before the lane's real helper above sees it, then hands it on with `fallback()`: the helper's
+    // `route.fetch()` is the only line that meets the dead listener, as in the lane.
     await page.route(
       (url) => url.pathname === "/v1/workers",
       async (route: Route) => {
-        try {
-          if (parkedSeen && lastListed !== undefined) {
-            // why: later polls are answered from the last payload, so the only fetch made against
-            // the dead listener is the parked one this test names.
-            answeredAfterInjection += 1;
-            await route.fulfill({ json: lastListed });
-            return;
-          }
-          await answerWithoutLoad(route);
-        } catch (error: unknown) {
-          // why: Playwright fails the whole test on this rejection at the handler line; the test
-          // records it and keeps going so the failure names the refusal, not a timeout.
-          escaped.push(String(error).split("\n")[0] ?? "");
-          await route.abort().catch(() => undefined);
+        if (parkNext && !parkedSeen) {
+          parkedSeen = true;
+          parkNext = false;
+          parkedArrived.resolve();
+          await released;
         }
+        await route.fallback();
       },
     );
 
@@ -112,7 +91,6 @@ test.describe("the workers page response helper against a gateway whose listener
       // why: the same helper answers through this gateway while it is up, so a refusal below is the
       // listener being gone and not a route that never worked (testing rule 2).
       expect(await askForWorkerList(page, fleet.gateway)).toBe(200);
-      expect(escaped).toEqual([]);
 
       parkNext = true;
       const asked = askForWorkerList(page, fleet.gateway);
@@ -124,21 +102,11 @@ test.describe("the workers page response helper against a gateway whose listener
         timeout: 10_000,
       });
       releaseParked.resolve();
-      await waitFor(() => answeredAfterInjection > 0, {
-        interval: 50,
-        label: "the first poll answered after the injection",
-        timeout: 10_000,
-      });
 
-      // why: the body only waits and re-asserts from here, as the lane's does around its
-      // `finally`; `asked` is drained to keep the page's promise from outliving the test.
+      // why: once the helper drops the re-read the page's own promise settles (0 when aborted);
+      // a rejection escaping the helper fails the test at its `route.fetch()` line instead.
       await asked;
       await expect(page.getByRole("heading", { level: 1, name: "Workers" })).toBeVisible();
-
-      expect(
-        escaped,
-        "the helper must answer or quietly drop the re-read whose gateway stops mid-request, not let the connect failure escape it",
-      ).toEqual([]);
     } finally {
       await disposeFleet(fleet).catch(() => undefined);
     }
