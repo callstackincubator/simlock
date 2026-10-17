@@ -38,7 +38,17 @@ export function capacityByPlatform(
   ];
 }
 
-export function leasesHeld(workers: readonly WorkerView[]): number {
+// why: a connected worker that sends no `leases` or `devices` (it is starting) has not said what it
+// holds; "not known" is not "none", so a fleet that includes one has no count.
+export function isUnread(worker: WorkerView): boolean {
+  return (
+    worker.connection === "connected" &&
+    (worker.leases === undefined || worker.devices === undefined)
+  );
+}
+
+export function leasesHeld(workers: readonly WorkerView[]): number | undefined {
+  if (workers.some(isUnread)) return undefined;
   return workers.reduce((sum, worker) => sum + (worker.leases?.length ?? 0), 0);
 }
 
