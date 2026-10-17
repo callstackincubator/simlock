@@ -464,6 +464,51 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
     );
 
     it(
+      "the device program asked to stop while it is still starting goes away inside the caller's grace, on its own and not by force",
+      { timeout: 5 * MINUTE },
+      async () => {
+        // why: 642.x and a UDID that is not there leave the program in its 25 s start, which is when a
+        // stop is hardest to honour — the caller SIGKILLs 2 s after it asks, and a program that cannot
+        // leave a start it cannot cancel is SIGKILLed with the iPhone's media stream left up. Closing
+        // stdin is the stop the driver uses; exit 0 within 2 s is that stop having been taken.
+        const plist = await aCoreDevicePlist("642.0");
+        const child = spawn(
+          DEVICE_PROGRAM,
+          ["FFFFFFFF-0000-4000-8000-000000000000", ...SETTINGS_ARGS],
+          {
+            env: { ...process.env, SIMLOCK_COREDEVICE_INFO_PLIST: plist },
+            stdio: ["pipe", "pipe", "pipe"],
+          },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString("utf8");
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        expect(child.exitCode, "the program ended before it was asked to").toBeNull();
+        const askedAt = Date.now();
+        child.stdin.end();
+        const ended = await new Promise<{
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }>((resolve) => {
+          child.once("exit", (exitCode, exitSignal) =>
+            resolve({ code: exitCode, signal: exitSignal }),
+          );
+        });
+        expect(
+          Date.now() - askedAt,
+          `the stop was not taken within 2 s, so the caller killed it: ${stderr}`,
+        ).toBeLessThan(2_000);
+        expect(
+          ended.signal,
+          `a stop the program was asked for is not a signal: ${stderr}`,
+        ).toBeNull();
+        expect(ended.code, "a stop the program was asked for is a clean end").toBe(0);
+      },
+    );
+
+    it(
       "a lease on the iPhone streams its screen as meta with codec h264, an avcC description and a key frame; a still screen keeps the stream open past 35 s; a second viewer on the same lease either streams or refuses with a reason while the first keeps its frames; after the lease ends no device capture remains and a new lease streams a key frame",
       { timeout: 15 * MINUTE },
       async () => {
@@ -593,13 +638,16 @@ async function aCoreDevicePlist(version: string): Promise<string> {
 
 // why: runs the device program on its own, with a version file the driver never passes. `device` is
 // the UDID it is asked to stream; the caller's 26 s bound is the program's own 25 s start deadline.
+// `stdio[0]` is `pipe` and not `ignore` because stdin is the capture's liveness handle: the
+// driver hands it a live pipe it closes only to stop, and a pipe hung up at birth is a stop asked for
+// before the program began, which the program answers by exiting 0 without ever looking for a device.
 async function runDeviceProgram(
   infoPlist: string,
   device: string,
 ): Promise<{ code: number; stderr: string }> {
   const child = spawn(DEVICE_PROGRAM, [device, ...SETTINGS_ARGS], {
     env: { ...process.env, SIMLOCK_COREDEVICE_INFO_PLIST: infoPlist },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {

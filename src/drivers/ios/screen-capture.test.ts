@@ -142,6 +142,25 @@ describe("iOS screen capture", () => {
     ]);
   });
 
+  // why: `deviceCommand` is optional on the options a host builds, so the refusal has a wording of its
+  // own for a worker that was never given a device program at all — which is not the same claim as a
+  // program that did not build, and is the only thing standing between a physical open and a spawn of
+  // the empty string.
+  it("refuses a physical open when the worker was given no device program at all, and a simulator open still works", async () => {
+    const { capture, launcher } = await setup();
+    await expect(
+      capture.open(physical, settings, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenUnavailableError);
+    await expect(capture.open(physical, settings, new AbortController().signal)).rejects.toThrow(
+      "Physical iPhone streams need simlock-device-capture, which this worker was not given",
+    );
+    expect(launcher.starts).toEqual([]);
+    await expect(
+      capture.open(simulator, settings, new AbortController().signal),
+    ).resolves.toBeDefined();
+    expect(await capture.unavailable()).toBeUndefined();
+  });
+
   it("reports streaming available when only the device program is missing, and the simulator program's reason when that one is", async () => {
     const { capture, filesystem } = await setup({ deviceCommand: DEVICE_COMMAND });
     await filesystem.rm(DEVICE_COMMAND);

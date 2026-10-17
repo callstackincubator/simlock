@@ -34,6 +34,13 @@ public final class OneShot<Value>: @unchecked Sendable {
         for waiter in pending { waiter(offered) }
     }
 
+    /// The settled value, or nil while nothing has offered one.
+    public func offered() -> Value? {
+        lock.lock()
+        defer { lock.unlock() }
+        return settled ? produce?() : nil
+    }
+
     public func wait() async -> Value {
         await withCheckedContinuation { (continuation: CheckedContinuation<Value, Never>) in
             lock.lock()
@@ -56,9 +63,22 @@ struct Pending: @unchecked Sendable {
     let atNanos: UInt64
 }
 
+/// How a `start` call ended: running, or the one line it gave for why it could not start. A clean
+/// refusal to begin because the caller had already asked to stop is `.stopped`, which is not a reason
+/// anyone should be shown — it is the end that caller asked for.
+enum StartOutcome {
+    case running
+    case refused(String)
+    case stopped
+}
+
 /// What the frame path mutates, behind one lock. A class rather than an actor because the source's
 /// callback is synchronous and stdout needs one writer at a time.
-final class Session {
+///
+/// why: `@unchecked Sendable` because the counts and the way out are reached from the source's
+/// callback, the encode loop and the signal and stdin threads, and everything read here is either
+/// under `lock` or written by the encode loop alone.
+final class Session: @unchecked Sendable {
     private let lock = NSLock()
     private var writtenFrames = 0
     private var writtenBytes = 0
@@ -67,6 +87,12 @@ final class Session {
     var scaledSize = Dimensions(width: 0, height: 0)
     /// The way out every end goes through: nil for a clean stop, else the one line to print last.
     let exitRequest = OneShot<String?>()
+    /// How the `start` call ended, set last of the two so a lifecycle that waits on this one knows it
+    /// is reading the final word on the start. why: kept apart from `exitRequest` because a start that
+    /// fails and a caller that asks to stop arrive together more often than they sound like they
+    /// would, and the fact the caller acts on is the reason: a program that exits 0 after failing to
+    /// start leaves a viewer reading "wrote nothing" where it should read why nothing was written.
+    let startEnded = OneShot<StartOutcome>()
 
     init() {}
 
@@ -262,6 +288,27 @@ final class ExitSources {
     }
 }
 
+/// How long the lifecycle gives a `start` that is still in flight to report its last word once the
+/// program is on its way out.
+///
+/// why: the caller's own grace is 2 s and a source's `stop()` bounds itself to 1.5 s, so this leaves
+/// the program inside the grace it was given: past it, staying alive buys nothing the caller is not
+/// already willing to take by force.
+let unwindBoundSeconds: TimeInterval = 0.4
+
+/// Waits for `work` to finish, and gives up on it when `bound` has passed.
+private func unwound(_ work: Task<Void, Never>, within bound: TimeInterval) async {
+    // why: a one-shot rather than a task group, because a group waits for every child it started
+    // before its body ends — which would wait for the very call this bound exists to walk away from.
+    let ended = OneShot<Bool>()
+    DispatchQueue.global().asyncAfter(deadline: .now() + bound) { ended.set(false) }
+    Task {
+        await work.value
+        ended.set(true)
+    }
+    _ = await ended.wait()
+}
+
 /// Reports the running totals every few seconds, so a caller's log carries what a stream cost even
 /// though a stream ended by a viewer going away has no chance to report at exit.
 func watchStats(_ session: Session, startedAt: Date) {
@@ -326,26 +373,59 @@ public func runCapture(options: Options, source: any ScreenSource) async -> Neve
         of: Pending.self,
         bufferingPolicy: .bufferingNewest(1)
     )
-    do {
-        try await source.start(
-            deviceID: options.udid,
-            onFrame: { buffer in
-                sink.yield(Pending(buffer: buffer, atNanos: DispatchTime.now().uptimeNanoseconds))
-            },
-            onEnd: { reason in session.exitRequest.set(reason) }
-        )
-    } catch {
-        log("start failed: \(error)")
-        await source.stop()
-        fail("\(error)")
-    }
-    log("capture started")
-
     let encoding = Task { await encodeLoop(frames, options: options, session: session) }
+
+    // why: `start` runs on a task of its own rather than being awaited here. The way out most likely
+    // to arrive while it is still running is the caller's own — a stop closes stdin, and the caller
+    // SIGKILLs the program two seconds later — and a start awaited on this line swallows that stop
+    // until the source's own deadline passes, so a stream that was asked to stop dies by SIGKILL with
+    // the iPhone's media stream left running. Every way out still goes through the one door below.
+    let starting = Task {
+        do {
+            try await source.start(
+                deviceID: options.udid,
+                onFrame: { buffer in
+                    sink.yield(Pending(buffer: buffer, atNanos: DispatchTime.now().uptimeNanoseconds))
+                },
+                onEnd: { reason in session.exitRequest.set(reason) }
+            )
+            log("capture started")
+            session.startEnded.set(.running)
+        } catch is StoppedBeforeStart {
+            // The caller asked for this end before the source got going, which is the clean stop it
+            // asked for; naming it would turn a stop into a reason a viewer reads as a failure.
+            log("start stopped before it began")
+            session.startEnded.set(.stopped)
+            session.exitRequest.set(nil)
+        } catch {
+            // What the source opened is already closed again by the time it throws. The reason goes
+            // out as the program's last line, whatever else was already on its way out.
+            log("start failed: \(error)")
+            let message = "\(error)"
+            session.startEnded.set(.refused(message))
+            session.exitRequest.set(message)
+        }
+    }
+
     let reason = await session.exitRequest.wait()
     encoding.cancel()
+    // why: `stop()` is the whole way back, and is never skipped. It is what marks the stop a start in
+    // flight polls for, and it closes what the source has opened up to now.
     await source.stop()
+    // why: then the start is given a bounded moment to land, because until it has the exit code this
+    // program is about to take is undecided — a start that fails as the caller asks to stop is the
+    // common case, not the rare one, and settling the code before it throws is a coin flip between
+    // the reason and a clean 0. Bounded because a caller SIGKILLs a program that outlives its grace
+    // and a CoreDevice call inside a start cannot be cancelled from here; past the bound this program
+    // goes out as a SIGKILL would, which the module's manual names as a known gap.
+    if session.startEnded.offered() == nil {
+        await unwound(starting, within: unwindBoundSeconds)
+    }
     withExtendedLifetime(signals) {}
+    switch session.startEnded.offered() ?? .running {
+    case .refused(let message): fail(message)
+    case .running, .stopped: break
+    }
     if let reason { fail(reason) }
     exit(0)
 }

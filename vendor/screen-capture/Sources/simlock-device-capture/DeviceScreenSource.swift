@@ -264,7 +264,15 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
             if let settled = box.settled {
                 clearStartingCall()
                 switch settled {
-                case .success(let response): return response
+                case .success(let response):
+                    // why: the id is taken from the answer here rather than in `applyAnswer`, because a
+                    // stop that lands the moment this call returns refuses the start before it gets
+                    // there — and the refusal's way back stops what it knows the id of, or leaves this
+                    // iPhone's stream up for CoreDevice to notice.
+                    if let id = UInt32(exactly: response.connection.streamConfig.StreamInputID) {
+                        note(streamID: id)
+                    }
+                    return response
                 case .failure(let error):
                     throw CaptureError("iPhone \(deviceID)'s stream did not start: \(error)")
                 }
@@ -416,6 +424,20 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
         return startingCall
     }
 
+    /// The handles the way back stops and releases, taken off the source as they are read. A `start`
+    /// that fails cleans what it opened, and a stop the caller asked for while that start was running
+    /// asks for the same way back; whoever takes a handle first is the one that closes it, so the same
+    /// assertion is never released and the same stream never stopped twice.
+    private func takeTargets() -> (device: RemoteDevice?, assertion: DeviceUsageAssertion?, streamID: UInt32?) {
+        lock.lock()
+        defer { lock.unlock() }
+        let opened = (device, assertion, streamID)
+        device = nil
+        assertion = nil
+        streamID = nil
+        return opened
+    }
+
     private func markReceiveLoopStarted() {
         lock.lock()
         receiveLoopStarted = true
@@ -437,16 +459,11 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
         return first
     }
 
-    private func targets() -> (device: RemoteDevice?, assertion: DeviceUsageAssertion?, streamID: UInt32?) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (device, assertion, streamID)
-    }
-
     private func refuseIfStopping() throws {
-        guard !isStopping else {
-            throw CaptureError("The capture was stopped before it started")
-        }
+        // why: `StoppedBeforeStart` rather than a reason — a stop is the caller asking for this end,
+        // and a program that prints a reason for the stop it was asked for hands a viewer a 503 about
+        // a stream nobody failed.
+        guard !isStopping else { throw StoppedBeforeStart() }
     }
 
     // MARK: - The way back
@@ -485,7 +502,7 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
 
     /// The blocking half of the way back: the two waits, and the calls that may never be answered.
     private func closeBlockedParts(by bound: TimeInterval) {
-        let opened = targets()
+        let opened = takeTargets()
         if opened.device != nil || opened.assertion != nil || opened.streamID != nil {
             let cleaned = DispatchSemaphore(value: 0)
             Task.detached {
@@ -585,10 +602,14 @@ private final class ReceiveLoop: @unchecked Sendable {
             }
             if let datagram = simlockReceive(5) {
                 parser.receive(datagram as Data)
-                parser.flushPending()
-                let now = uptime()
-                if now - lastReport >= 1 { report(now: now) }
             }
+            // why: the window is flushed and the report written on the clock rather than only when a
+            // packet arrives — the two moments a report is worth sending are the two where the iPhone
+            // has stopped sending: a picture held in the reorder window with nothing behind it, and a
+            // decoder still waiting for its first key frame.
+            parser.flushPending()
+            let now = uptime()
+            if reportIsDue(now: now) { report(now: now) }
             if !keepAlive() { break }
             // The one clock from launch to the first decoded picture, which `start` has already
             // returned under: past it the stream would answer 200 and show nothing, so the source ends
@@ -617,6 +638,15 @@ private final class ReceiveLoop: @unchecked Sendable {
             onFrame(lastPicture)
         }
         return !source.isStopping
+    }
+
+    /// Whether a report is worth sending now: once a second, or sooner while the decoder still has no
+    /// picture to start from, because a key-frame request is at most twice a second (F20). Nothing is
+    /// reported before the iPhone's own synchronization source is known — a report speaks about
+    /// packets received from a source, and a picture loss indication has no one to ask.
+    private func reportIsDue(now: TimeInterval) -> Bool {
+        guard parser.source != nil else { return false }
+        return now - lastReport >= 1 || (decoder.needsKeyframe && now - lastKeyframeRequest >= 0.5)
     }
 
     /// One receiver report, and a picture loss indication while the decoder still has no picture to
