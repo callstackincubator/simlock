@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { Registry } from "./index.js";
 import type { VirtualDevice, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -254,6 +254,7 @@ describe("NukeService", () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
+    const sink = new MemoryLogSink();
     let nextId = 1;
     const registry = await Registry.load({
       clock,
@@ -282,6 +283,7 @@ describe("NukeService", () => {
         },
         async endMaintenance() {},
       },
+      logger: new JsonLinesLogger({ clock, sink }),
       registry,
     });
 
@@ -334,6 +336,20 @@ describe("NukeService", () => {
     });
 
     await expect(service.nuke(true)).resolves.toEqual({ releasedLeaseIds: [] });
+
+    expect(sink.records).toEqual(
+      [ghostReady, ghostShutdown].map((ghost) =>
+        expect.objectContaining({
+          level: "error",
+          module: "daemon.nuke",
+          fields: {
+            deviceId: ghost.id,
+            error: "NoDriverError: No driver registered for platform: android",
+            platform: "android",
+          },
+        }),
+      ),
+    );
 
     const stateOf = (deviceId: string) =>
       registry.snapshot.devices.find((candidate) => candidate.id === deviceId)?.state;
