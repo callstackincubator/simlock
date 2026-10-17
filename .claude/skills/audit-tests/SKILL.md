@@ -82,3 +82,9 @@ from an applier is a real defect: leave the PR open and report it.
 Routine: audit-tests  Base: <short sha>  Files: <read>/<changed>  Findings: <scan> scanned, <kept> verified
 PR: #M merged | #M open (<why>) | none
 ```
+
+Review follow-up uses `docs/internal/REVIEW.md`: pass the previous SHA and
+resolution ledger, classify actual impacts and recheck changed assertions
+with code/tests and changed claims with claims. Record all invocations and
+Assessment. The round cap parks unresolved blocking or incomplete work;
+tests/comments are not blanket exemptions from recheck.

@@ -8,6 +8,9 @@
 #
 #   diff.patch             the PR's diff against its base, as GitHub shows it
 #   commit                 the PR head the directory was built from
+#   base, merge-base       immutable actual PR base tip and fork
+#   previous               validated ancestor for targeted checks
+#   review-protocol.md     review policy from the pinned base, when present
 #   kind                   what .agents/scripts/diff-kind.mjs calls the diff: adr-only,
 #                          docs-only, comments-only, tests-only, full or large; it sets which
 #                          reviews run
@@ -64,8 +67,18 @@ git fetch -q origin "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"
 git fetch -q origin "+refs/pull/$pr/head:refs/review-inputs/$pr"
 head=$(git rev-parse "refs/review-inputs/$pr")
 git update-ref -d "refs/review-inputs/$pr"
-base="origin/$base_ref"
+base=$(git rev-parse "origin/$base_ref")
 fork=$(git merge-base "$base" "$head")
+if [ -n "$previous" ]; then
+  previous=$(git rev-parse --verify "$previous^{commit}" 2>/dev/null) || {
+    say "previous commit is unavailable; assessment incomplete"
+    exit 65
+  }
+  git merge-base --is-ancestor "$previous" "$head" || {
+    say "previous commit is not an ancestor of head; assessment incomplete"
+    exit 65
+  }
+fi
 
 tmp=${TMPDIR:-/tmp}
 out=$(mktemp -d "${tmp%/}/review-$pr.XXXXXX")
@@ -73,13 +86,15 @@ mkdir "$out/spec" "$out/rules"
 
 git diff "$fork" "$head" >"$out/diff.patch"
 echo "$head" >"$out/commit"
+echo "$base" >"$out/base"
+echo "$fork" >"$out/merge-base"
+[ -z "$previous" ] || echo "$previous" >"$out/previous"
+if git cat-file -e "$base:docs/internal/REVIEW.md" 2>/dev/null; then
+  git show "$base:docs/internal/REVIEW.md" >"$out/review-protocol.md"
+fi
 node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
-  if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-    git diff "$previous" "$head" >"$out/fix.patch"
-  else
-    say "previous commit $previous is not in this clone; no fix.patch"
-  fi
+  git diff "$previous" "$head" >"$out/fix.patch"
 fi
 "$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
 # Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".

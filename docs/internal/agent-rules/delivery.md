@@ -190,97 +190,22 @@ is open, done means closed as completed.
 
 13. **Assume every agent is in a worktree:** [coding.md](coding.md) rule 4.
 
-14. **A PR is marked ready only after review, and every blocking finding
-    is answered.** The PR opens as a draft once the spec's tests are
-    committed red, so CI runs from the first push and the PR body carries
-    the work's status. It leaves draft only after the reviews below. Each
-    reviewer is a fresh sub-agent defined in `.claude/agents/`, whose
-    frontmatter pins the model and effort, reading a brief from
-    `.agents/briefs/`. `.agents/scripts/review-inputs.sh` builds what each
-    one reads; rules, ADRs and briefs come from `main`, so a PR cannot
-    rewrite what it is judged by. No reviewer sees the PR body, the commit
-    messages, the implementer or another reviewer's findings, and each reads
-    first `.agents/briefs/calibration.md`, the findings rejected in the last
-    four weeks, so a rejected class is not raised again without new
-    evidence.
-    - The *spec review* gets the issue body, its parent feature, the ADRs it
-      names, the files under Rules in play, `always-in-scope.md`, a bug's
-      triage report, the PR body's `Assumption:` lines, the diff, and every
-      change made to the spec's tests since they were committed red. It
-      answers: is every line of Scope and Done when delivered as written;
-      does the diff do anything the spec did not ask for (what
-      `always-in-scope.md` lists counts as asked for); does every test title
-      state a claim the spec made; does any change after red leave a line of
-      the spec unproven; is every assumption conservative and consistent
-      with the spec. It reads; it runs nothing. An ADR diff is judged as a
-      design record rather than against Completion conditions.
-    - The *code review* gets the same specification, every file in this
-      directory, the ADR index and the diff, in its own worktree. Behaviour
-      lens: for each changed function, what input, state or interleaving
-      makes it wrong, and what other code acting on the same state conflicts
-      with it. Tests and rules lens: which test cannot fail for the reason
-      its title gives, and which rule the diff breaks. One reviewer holds
-      both lenses; a diff over 1,500 changed lines gets two, one per lens.
-      It proves a claim with the affected test file only, may break code to
-      see what stays green (testing rules 2 and 3), nine times at most, and
-      may write one new test file to prove an interleaving, restoring the
-      tree afterwards. It never runs the checks [toolchain.md](toolchain.md)
-      leaves to the hooks and CI, nor the slow lane. A defect on a line the
-      diff does not touch is a note; a conflict between the spec and a rule
-      is a finding, never resolved silently.
-    - The *claims review* gets the diff, this directory, and the output of
-      `.agents/scripts/stale-refs.sh` (lines anywhere in the repo that still
-      name what the diff removed); never the issue. It checks that every
-      comment, doc line, test title, help text and error message the diff
-      touches, the sweep finds, or the docs say about what the diff changed,
-      is true of the code. Whether a comment may exist at all is the commit
-      hook's (architecture rule 17), not a review's.
-    The diff's kind (`.agents/scripts/diff-kind.mjs`) sets which of these
-    run. An ADR-only diff gets the spec review alone; a docs-only or
-    comments-only diff the spec and claims reviews; a tests-only diff all
-    three, the code review with the tests lens only; any other diff all
-    three. A PR that closes no issue gets no spec review.
-    Each review lists what it checked and returns its findings, one per
-    defect: a claim, its class (the general rule it breaks), the evidence as
-    `file:line` or a command and its output, and *blocking* or *note*. A
-    finding is blocking when it breaks behaviour, leaves wrong state, states
-    something false, or breaches a rule, an accepted ADR or the spec;
-    anything else is a note. A test for a case the spec does not name, or
-    defensive code, is a note. A finding needs a concrete failure or a named
-    cost and who pays it. A review returns at most five notes, each a
-    possible wrong behaviour or state; nothing else is written down. Whether
-    CI is green is never a finding: CI proves it, and the gate checks it
-    (rule 15).
-    A blocking finding is a claim, not a fact: it is verified against the
-    code before anyone acts on it. A confirmed one is fixed, together with
-    every other instance of its class; it is *src* when its fix must change
-    production source, *text* when a test, a comment, a doc or an assumption
-    line is enough. A rejected one is listed in the PR body under
-    `## Review`, one line each, tagged `spec:`, `code:` or `claims:` with
-    the reason, so the maintainer sees what was overruled. Accepted findings
-    are not narrated.
-    Rounds are at most two, plus one fix check. Round 1 reviews the whole
-    diff. Round 2 runs only when round 1 confirmed a *src* finding: the code
-    and claims reviews, on the fix alone, checking that each finding is
-    resolved, that the fix adds no defect, and that no other instance of
-    each fixed class is left; what they find outside that is a note, or an
-    Out of scope line that becomes a `bug:new` issue when it is a confirmed
-    defect. A *src* finding round 2 confirms gets one fix run and one *fix
-    check*, the code and claims reviews on that fix alone; a commit pushed
-    after the reviews passed (a merge of the base branch, a fix the gate
-    needed) gets a fix check too, unless it changes only tests the PR's
-    diff does not touch (a flaky test elsewhere): that one is listed under
-    `## Review` as fixed unreviewed. A merge of a base branch that needed
-    no conflict resolution brings in only commits reviewed in their own
-    PRs, and gets no fix check either; CI checks it. A *src* finding a fix check confirms means
-    the agent stops and hands off with it under Findings (rule 2), leaving
-    the PR in draft. *Text* findings never stop delivery and get no further review:
-    they are fixed in one run that edits tests, comments and docs only,
-    listed under `## Review` as fixed unreviewed.
-    Notes are not verified and never start a round: after the last check
-    they go out once, as one comment on the PR. A note becomes an issue only
-    when a person opens one. A PR from a person gets the same reviews when
-    the maintainer asks for them.
+14. **Review before ready.** Every PR starts in draft. Follow
+    [the review protocol](../REVIEW.md) for immutable inputs, independent
+    spec/code/claims lenses, risk-based model routing, verification and the
+    resolution ledger. Rules and briefs come from the pinned PR base;
+    explicitly authorized rule amendments are reviewed as such. One full
+    review, one targeted round 2 and one targeted fix-check are the cap.
+    Follow-up depends on actual behavior, test-logic, acceptance and claims
+    impact, not file extension. Only mechanical fixes need no lens rerun.
+    Missing coverage or exhausted budget means incomplete, never pass.
+    An unresolved PR regression or incomplete assessment at the cap leaves
+    the PR in draft for escalation. Pre-existing unrelated debt is separate.
+    No reviewer sees author narration or another lens's findings before
+    synthesis; later checks receive the resolution history and fix delta.
+    The coordinator deduplicates before verification and records every
+    invocation, including fix-check and fix effort. Notes go out once after
+    the last check; they do not start rounds without evidence of a defect.
 
 15. **An agent merges only through the gate, and a feature merges as one
     stack.** `.agents/scripts/merge-pr.sh`
@@ -296,7 +221,7 @@ is open, done means closed as completed.
     `needs-hardware` label, a body `pr-body-check.mjs` accepts (a `## Review`
     section with its counts line, no "spec needs" line, the agent footer),
     green CI, and no conflict. Before calling it the agent also checks what
-    the script cannot read: no blocking finding is open. A conflict, or red
+    the script cannot read: no blocking finding is open and assessment is complete. A conflict, or red
     CI, gets one fix run, a fix check (rule 14) and the gate again. Anything else short of that parks the issue with
     a handoff and leaves the PR for the maintainer.
 

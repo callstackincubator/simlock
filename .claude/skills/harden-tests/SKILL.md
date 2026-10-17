@@ -83,7 +83,7 @@ its reason, the dead-code issue's link, and `*Written by an agent.*`.
 
 `reviewer` with the PR number, round 1. Fix each Fix line yourself, tests
 only, then the check its Rerun names, as rule 14 says: `reviewer` with
-that name, `previous <Commit>` and the Fix lines. `Rerun: none` with
+that name, `previous <Commit>` and the complete resolution ledger. `Rerun: none` with
 findings open: leave the PR in draft and report them.
 
 Add the `## Review` section exactly as the deliver skill's step 4 shapes it,
@@ -92,7 +92,7 @@ with `Spec review: skipped.` (edit the body with
 is GraphQL, which a cloud session refuses). Then `gh pr ready <M>` (in a cloud session it
 fails with a 403 naming the proxy's ready-for-review route: call that route)
 and `.agents/scripts/merge-pr.sh <M>`. Red CI from a test this PR changed: fix
-it once and run the gate again. Anything else: leave the PR open and report.
+it once, run the applicable targeted fix-check, then the gate again. Anything else: leave the PR open and report.
 
 ## Report
 
@@ -100,3 +100,9 @@ it once and run the gate again. Anything else: leave the PR open and report.
 Routine: harden-tests  Base: <short sha>  Alive: <n> (kill <k>, equivalent <e>, low value <l>, dead <d>)
 PR: #M merged | #M open (<why>) | none
 ```
+
+Review follow-up uses `docs/internal/REVIEW.md`: pass the previous SHA and
+resolution ledger, classify actual impacts and recheck changed assertions
+with code/tests and changed claims with claims. Record all invocations and
+Assessment. The round cap parks unresolved blocking or incomplete work;
+tests/comments are not blanket exemptions from recheck.

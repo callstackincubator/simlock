@@ -75,3 +75,9 @@ open and report.
 Routine: garden-comments  Base: <short sha>  Listed: <n>  Deleted: <d>  Prefixed: <p>  Left: <l>
 PR: #M merged | #M open (<why>) | none
 ```
+
+Review follow-up uses `docs/internal/REVIEW.md`: pass the previous SHA and
+resolution ledger, classify actual impacts and recheck changed assertions
+with code/tests and changed claims with claims. Record all invocations and
+Assessment. The round cap parks unresolved blocking or incomplete work;
+tests/comments are not blanket exemptions from recheck.

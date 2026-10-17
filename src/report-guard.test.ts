@@ -20,11 +20,19 @@ function stop(agentType: string, lastMessage: string): string {
 }
 
 describe("report-guard.mjs", () => {
+  it("requires explicit review coverage but lets incomplete work stop honestly", () => {
+    const report = "PR: #456  Round: 2  Kind: full  Commit: abc";
+    expect(JSON.parse(stop("reviewer", report)).reason).toContain("Assessment");
+    expect(stop("reviewer", `${report}\nAssessment: incomplete — budget exhausted`)).toBe("");
+  });
+
   it("lets each stage agent stop once its last message holds its report block", () => {
     expect(
       stop("implementer", "```\nissue: 438  branch: task/438  pr: 456  mode: green\n```"),
     ).toBe("");
-    expect(stop("reviewer", "PR: #456  Round: 2  Kind: full  Commit: abc")).toBe("");
+    expect(
+      stop("reviewer", "PR: #456  Round: 2  Kind: full  Commit: abc\nAssessment: complete"),
+    ).toBe("");
     expect(stop("hardware-verifier", "PR: #456  Hardware: pass\nRan: e2e/x.test.ts")).toBe("");
   });
 

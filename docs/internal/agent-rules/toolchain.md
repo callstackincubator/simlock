@@ -155,3 +155,10 @@ the tool's docs alone.
   `DAEMON_PROTOCOL_VERSION` by one in the same PR (a spec's "protocol +1 at
   merge" means this too), so two tasks that change contract shapes
   overlap even when they touch different files.
+
+## Review measurement
+
+`node .agents/scripts/review-metrics.mjs <ledger.json>` validates and
+summarizes per-PR invocation records. Use the template and evaluation
+procedure in [REVIEW.md](../REVIEW.md). This is reporting, not a broad
+project check. Preserve unknown usage/cost as null.

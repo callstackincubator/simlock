@@ -144,7 +144,7 @@ to the feature.
 
 `deliver` never writes code itself. It hands each stage to a new background
 agent in `.claude/agents/` that runs on the model and effort its
-frontmatter pins — `implementer` on Sonnet, `reviewer`, `bug-triager` and
+frontmatter pins — `implementer`, `reviewer` and `bug-triager` on Sonnet,
 `spec-checker` on Opus — up to two issues at once, and reasons only over the
 fixed report each one returns. The stage skills of the same names are thin
 wrappers that start those agents when a person invokes them, after renaming the session
@@ -191,80 +191,22 @@ on the PR saying how to reverse it. A question left to a person used to stop
 the run until they answered: five hours one night in #466, though the
 maintainer picked the recommended option 15 times of 16.
 
-A PR leaves draft reviewed; it is not reviewed on arrival. The `review`
-skill builds the reviewers' inputs with `.agents/scripts/review-inputs.sh`
-(rules, ADRs and briefs from `main`, so a PR cannot rewrite what it is
-judged by) and spawns reviewer agents from `.claude/agents/`, each reading
-its brief from `.agents/briefs/`, with its model pinned and its tools
-limited. None has seen the delivering session, the PR body or another
-reviewer's findings, and each reads first `.agents/briefs/calibration.md`,
-the findings rejected in the last four weeks, which the weekly
-`calibrate-reviews` routine regenerates.
+A PR leaves draft after complete assessment, with no blocking finding open.
+[The review protocol](REVIEW.md) defines the procedure: immutable actual-PR
+bases, independent lenses selected by semantic risk, deduplication before
+verification, and a resolution ledger carried across targeted follow-ups.
+Spec uses Sonnet for ordinary acceptance checks and Opus for consequential
+decisions. Code remains Opus by default; routine Sonnet is an explicit pilot.
+Claims and coordination use Sonnet. Haiku is not a semantic reviewer.
 
-- The spec reviewer gets the issue, its parent, its ADRs,
-  `always-in-scope.md`, the PR's `Assumption:` lines, the diff, and every
-  change made to the spec's tests after they were committed red (the final
-  diff cannot show a red test deleted or loosened on the way to green). It
-  answers whether every line of the spec is delivered, whether the diff
-  does anything the spec did not ask for, whether each test proves the
-  claim in its title, and whether each assumption is the conservative one.
-- The code reviewer gets the same specification, the agent rules, the ADR
-  index and the diff, in its own worktree, and holds two lenses. One looks
-  for the input, state or interleaving that makes a changed function wrong,
-  and for other code acting on the same state. The other looks for tests
-  that cannot fail for the reason their title gives, breaking code to see
-  what stays green, and for broken rules. It may write one test of its own
-  to prove an interleaving. A diff over 1,500 changed lines gets two
-  reviewers, one per lens. `pnpm check` and the browser and slow lanes are
-  left to the git hooks and CI.
-- The claims reviewer gets the diff and the output of
-  `.agents/scripts/stale-refs.sh`, which lists every line in the repo that
-  still names a path, declaration or quoted string the diff removed. It
-  checks that comments, docs, test titles and messages are true of the code.
-
-Whether a comment may exist at all is not a review's question any more. A
-comment starts with `why:` or goes (architecture rule 17), and
-`.agents/scripts/comment-lint.mjs` rejects the rest in the commit hook and
-in CI. A Haiku reviewer used to judge that rule: on one PR it raised 155
-findings, each verified by Opus and fixed by Sonnet, and a third of its
-findings on another were rejected as "gives a why". Older comments are the
-weekly `garden-comments` routine's.
-
-How many of these reviews a PR gets depends on its diff's kind
-(`.agents/scripts/diff-kind.mjs`): an ADR-only diff gets the spec review
-alone; a docs-only or comments-only diff the spec and claims reviews; a
-tests-only diff all three with the tests lens only; any other diff all
-three, and a large one (over 1,500 changed lines) two code reviewers.
-
-The code reviewer sees the spec as well as the rules. It used to be blind
-to the issue so that a conflict between the spec and a rule would surface
-rather than be resolved silently; what it produced instead was findings
-about intent ("the spec decides this interim on purpose", "spec line 179
-asks for it as a guard"), each verified and rejected. The conflict still
-surfaces: it is a finding of its own class, never resolved by the reviewer,
-and the maintainer sees it under Spec needs.
-
-Every finding is blocking — it breaks behaviour, leaves wrong state, states
-something false, or breaches a rule, an ADR or the spec — or a note, and
-names its class: the general rule it breaks. A review returns at most five
-notes, each a possible wrong behaviour or state. Only blocking findings are
-verified: the agent reproduces each against the code, has the implementer
-fix it and every other instance of its class, and lists what it rejects in
-the PR body under `## Review`, one line each, tagged `spec:`, `code:` or
-`claims:`, with the reason. A confirmed finding is *src* when its fix must
-change production source and *text* when a test, a comment, a doc or an
-assumption line is enough. Rounds are at most two, plus one fix check.
-Round 1 reviews the whole diff. Round 2 runs only after a confirmed *src*
-finding and reviews the fix alone; a *src* finding it confirms gets one fix
-and one fix check of that fix; one still confirmed then is a contested
-change: the agent hands off with it and leaves the PR in draft. *Text*
-findings never park a PR and get no further review: they are fixed once, in
-tests, comments and docs only. A check of those fixes ran in the #466
-delivery three times and found one docs line a round 1 note had already
-named. Five rounds used to be allowed; rounds 3 to 5 confirmed almost
-nothing a person then kept. Notes are not verified and never start a round;
-they reach you once, as one "Review notes" comment on the PR, and become
-issues only when you open one.
+One full round is followed by at most a targeted round 2 and final fix-check.
+Actual impact selects rechecks: test assertions are logic, changed acceptance
+needs spec review, and claims run only where affected. Budget exhaustion
+means incomplete. Late PR regressions still block at the cap; pre-existing
+unrelated debt is separate. Counts include every invocation, even fix-check,
+and unknown usage or cost remains unknown. The protocol specifies the clean
+and buggy replay corpus, live shadow evaluation and rollback before any
+routine-model downgrade can become default.
 
 A Done when line that needs a real simulator or emulator runs through the
 `verify-hardware` skill and `scripts/slow-e2e.sh`, one lane per machine, on
@@ -343,7 +285,11 @@ time and compare the rows before and after. A review whose blocking
 findings are mostly rejected costs a verification each and changes nothing:
 tune its brief, or what `always-in-scope.md` lists. A rejection that keeps
 coming back for the same reason is a missing rule or a missing spec line;
-`--calibration` prints the recent ones as the brief every reviewer reads.
+`--calibration` prints recent incorrect findings as the brief every reviewer
+reads; duplicate, intentional and nonblocking dispositions are excluded.
+New runs also keep the per-invocation ledger from [REVIEW.md](REVIEW.md).
+The stats show checks including fix-check, invocation counts and cost
+separately from legacy rounds/session totals; unavailable data is unknown.
 
 ## A feature merges as one stack
 

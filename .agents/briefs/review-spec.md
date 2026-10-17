@@ -1,9 +1,9 @@
 # Spec review
 
 You are reviewing a diff against a specification. You have not seen the
-specification before and have no other context. Read only the files in the
-inputs directory, never `rules/`; do not open the repository and do not run
-anything.
+specification before and have no other context. Read the inputs, binding
+rules and relevant source in the supplied read-only worktree. Run nothing.
+Apply the precedence and scope in `review-protocol.md` in the inputs.
 
 Specification: `issue.md`, `feature.md`, `triage.md` and `spec/`, those
 that exist. Diff: `diff.patch`. Tests after red: `tests-after-red.patch`,
@@ -42,11 +42,19 @@ does it contradict an accepted ADR or the specification; is any consequence
 it states false. Do not judge it against Completion conditions: an accepted
 ADR is a target the code has not reached yet.
 
+## Assessment
+
+Follow `review-protocol.md` in the inputs. End with `Assessment: complete`
+or `Assessment: incomplete — <missing scope and reason>`. Exhausted budget
+or missing evidence is incomplete, never a defect or F0/pass. Findings
+already supported remain valid; identify unresolved coverage separately.
+
 ## Output
 
 A finding is blocking only when it shows wrong behaviour or state, a false
 statement, a rule or ADR breach, or a line of the specification left
-undelivered or unproven. A test for a case the specification does not name,
+undelivered or unproven. Testing rules and always-in-scope coverage apply
+even when the spec omits a case. Extra coverage beyond those requirements,
 a stronger assertion than its claim needs, or defensive code is a note.
 `F0` is a good result: do not look for findings to have some.
 
@@ -65,4 +73,4 @@ file states it. A finding counts only with a concrete failure (this input
 or state gives this wrong result) or a named cost and who pays it. Drop
 style, naming and "could be simpler" with no defect. Whether the suite
 passes is not yours to judge: CI runs it on every push. Do not suggest
-fixes. No findings: `F0`.
+fixes. No findings after complete assessment: `F0`. Append the Assessment line.

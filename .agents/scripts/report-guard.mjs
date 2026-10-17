@@ -30,7 +30,14 @@ if (!shape.test(message)) {
       "still running, wait for it in the foreground. Then finish the work and end with the " +
       "report block your instructions define, and nothing after it.",
   );
-} else if (/\bmode: audit\b/.test(message)) {
+} else if (
+  input.agent_type === "reviewer" &&
+  !/^Assessment: (complete|incomplete)\b/m.test(message)
+) {
+  block(
+    "Report Assessment: complete or incomplete with missing scope; budget exhaustion is not a pass.",
+  );
+} else if (/\bmode: audit\b/.test(message) && !/^Assessment: incomplete\b/m.test(message)) {
   const audit = /^audit: .*$/m.exec(message);
   const probed = audit === null ? null : /\bprobed (\d+)\/(\d+)/.exec(audit[0]);
   if (audit === null) {
