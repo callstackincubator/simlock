@@ -607,10 +607,11 @@ sends almost nothing. `capabilities.stream.fps` is a ceiling rather than a rate 
 reason. On a Mac an iOS capture costs about 50-80 MB of memory per device being
 watched.
 
-An iOS simulator's screen and an Android emulator's screen can be streamed. A
-lease on a physical iPhone or Android phone is refused with
-`STREAM_NOT_SUPPORTED`, naming that as the reason rather than failing for one
-the reader has to guess.
+An iOS simulator's screen, an Android emulator's screen and a physical
+Android phone's screen can be streamed. A lease on a physical iPhone is
+refused with `STREAM_NOT_SUPPORTED`, naming that as the reason rather than
+failing for one the reader has to guess. A phone whose screen is off is
+refused with `STREAM_UNAVAILABLE` saying to turn it on; nothing wakes it.
 
 - **iOS** needs the capture program `pnpm build` builds on a Mac with Xcode
   selected. Without it an iOS stream is refused with

@@ -40,6 +40,7 @@ import {
   type ReclaimResult,
   removeListedComponent,
   type ScreenCapture,
+  ScreenUnavailableError,
   RuntimeMissingError,
   sameReceipt,
 } from "../../core/index.js";
@@ -74,7 +75,7 @@ import {
 } from "./device-profile-source.js";
 import { fits, isPlayStoreImage, misfitReason } from "./image-fit.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
-import { createAndroidScreenCapture } from "./screen/index.js";
+import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
@@ -524,19 +525,28 @@ export class AndroidDriver implements Driver {
     adb: string,
     adbServerPort: number,
   ): ScreenCapture | undefined {
-    if (options.scrcpyServerPath === undefined || options.tcpStreamConnector === undefined) {
+    const tcp = options.tcpStreamConnector;
+    if (options.scrcpyServerPath === undefined || tcp === undefined) {
       return undefined;
     }
+    const runner = options.processRunner;
+    const serverPort = adbServerPort;
     return createAndroidScreenCapture({
-      adb,
-      adbServerPort,
       clock: options.clock,
-      env: () => this.#env(),
       filesystem: options.filesystem,
-      processRunner: options.processRunner,
-      serialOf: (device) => this.#dataFor(device).serial,
       serverPath: options.scrcpyServerPath,
-      tcp: options.tcpStreamConnector,
+      targetFor: async (device) =>
+        isPhysicalDriverDevice(device)
+          ? this.#physical.screenTargetFor(device, tcp)
+          : emulatorScreenTarget(
+              runner,
+              adb,
+              tcp,
+              serverPort,
+              () => this.#env(),
+              this.#dataFor(device).serial,
+              device,
+            ),
     });
   }
 
@@ -2534,6 +2544,33 @@ function defaultDeviceProfileSources(
     // why: Scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
     builtin: new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
     user: new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
+  };
+}
+
+// why: an emulator's capture target -- the same `adb -s <serial> …` with this driver's scoped env
+// that every other emulator call carries, and raw connections to Simlock's own adb server. A phone
+// gets its target from the physical handler, behind that server's version check; the capture itself
+// names neither a port nor a check.
+function emulatorScreenTarget(
+  processRunner: ProcessRunner,
+  adb: string,
+  tcp: TcpStreamConnector,
+  serverPort: number,
+  env: () => NodeJS.ProcessEnv,
+  serial: string,
+  device: VirtualDriverDevice,
+): ScreenTarget {
+  if (serial === "") {
+    throw new ScreenUnavailableError(
+      `${device.deviceId} is not running, so it has no screen to stream`,
+    );
+  }
+  return {
+    connect: async (timeoutMs) => await tcp.connect(serverPort, timeoutMs),
+    serial,
+    spawn: async (args) => processRunner.spawn(adb, ["-s", serial, ...args], { env: env() }),
+    run: async (args, timeoutMs) =>
+      await processRunner.run(adb, ["-s", serial, ...args], { env: env(), timeoutMs }),
   };
 }
 

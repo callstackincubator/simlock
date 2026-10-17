@@ -6,7 +6,6 @@ import {
   type PhysicalDriverDevice,
   type ScreenCapture,
   type ScreenFeed,
-  ScreenNotSupportedError,
   type ScreenSettings,
   ScreenUnavailableError,
   SCREEN_FRAME_TAG,
@@ -16,9 +15,8 @@ import type {
   Clock,
   Filesystem,
   ProcessHandle,
-  ProcessRunner,
+  ProcessResult,
   TcpStream,
-  TcpStreamConnector,
 } from "../../../ports/index.js";
 import { ChunkReader, openDeviceSocket } from "./adb-socket.js";
 import { EnvelopeMapper } from "./envelope.js";
@@ -29,6 +27,11 @@ import { ScrcpyVideoParser } from "./scrcpy-video.js";
 const SCRCPY_SERVER_VERSION = "5.0.1";
 const DEVICE_DIRECTORY = "/data/local/tmp";
 const PUSH_TIMEOUT_MS = 30_000;
+// why: a phone's screen state is read once, before anything is pushed; a read that outlives this
+// goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
+const SCREEN_READ_TIMEOUT_MS = 10_000;
+const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)\s*$/;
+const SCREEN_OFF_MESSAGE = "The phone's screen is off. Turn it on and ask for the stream again.";
 // why: measured from the moment the push returned, through every connect retry, to the first session
 // packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
 export const START_DEADLINE_MS = 15_000;
@@ -48,17 +51,28 @@ const QUIET = Symbol("quiet");
 const LOG_TAIL_LINES = 20;
 const SCID_LIMIT = 2 ** 31;
 
+// why: where one device's scrcpy session runs, as the driver builds it. An emulator's target runs
+// `adb -s <serial> …` with Simlock's scoped env and connects to Simlock's own adb server; a physical
+// phone's runs `adb -P 5037 …` with the shared server's env, behind that server's version check. The
+// capture never names a port and never runs that check: the target is the one place that knows both.
+export interface ScreenTarget {
+  readonly serial: string;
+  // why: `args` start at the adb subcommand; the target aims them at its device. A promise so a
+  // phone's version check can run before the process starts; an emulator's resolves at once.
+  spawn(args: readonly string[]): Promise<ProcessHandle>;
+  run(args: readonly string[], timeoutMs: number): Promise<ProcessResult>;
+  // why: a raw connection to the adb server this target's device is reached through.
+  connect(timeoutMs: number): Promise<TcpStream>;
+}
+
 export interface AndroidScreenCaptureOptions {
-  readonly adb: string;
-  readonly adbServerPort: number;
   readonly clock: Clock;
-  readonly env: () => NodeJS.ProcessEnv;
   readonly filesystem: Filesystem;
-  readonly processRunner: ProcessRunner;
-  readonly serialOf: (device: VirtualDriverDevice) => string;
   readonly serverPath: string;
-  readonly tcp: TcpStreamConnector;
   readonly scid?: () => number;
+  // why: where this device's session runs, built by the driver: an emulator's `adb` with Simlock's
+  // own env and server, a physical phone's `adb -P 5037` behind the shared server's version check.
+  targetFor(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<ScreenTarget>;
 }
 
 export function createAndroidScreenCapture(options: AndroidScreenCaptureOptions): ScreenCapture {
@@ -72,51 +86,55 @@ export function createAndroidScreenCapture(options: AndroidScreenCaptureOptions)
       settings: ScreenSettings,
       signal: AbortSignal,
     ): Promise<ScreenFeed> => {
-      if (isPhysicalDriverDevice(device)) {
-        throw new ScreenNotSupportedError(
-          "Screen streams are offered for Android emulators only, not for physical Android devices",
-        );
-      }
       const reason = await unavailable();
       if (reason !== undefined) throw new ScreenUnavailableError(reason);
-      const serial = options.serialOf(device);
-      if (serial === "") {
-        throw new ScreenUnavailableError(
-          `${device.deviceId} is not running, so it has no screen to stream`,
-        );
-      }
+      const target = await options.targetFor(device);
       const scid = options.scid?.() ?? randomInt(0, SCID_LIMIT);
-      return await new ScrcpySession(options, serial, scid, settings).start(signal);
+      return await new ScrcpySession(
+        options.clock,
+        options.serverPath,
+        target,
+        scid,
+        settings,
+        isPhysicalDriverDevice(device),
+      ).start(signal);
     },
     unavailable,
   };
 }
 
 class ScrcpySession {
-  readonly #options: AndroidScreenCaptureOptions;
-  readonly #serial: string;
+  readonly #clock: Clock;
+  readonly #serverPath: string;
+  readonly #target: ScreenTarget;
   readonly #scidHex: string;
   readonly #devicePath: string;
   readonly #settings: ScreenSettings;
+  readonly #isPhone: boolean;
   readonly #tail: string[] = [];
   readonly #abort = new AbortController();
   #pushed = false;
   #shell: ProcessHandle | undefined;
   #shellExited = false;
+  #collected: Promise<void> | undefined;
   #stream: TcpStream | undefined;
   #closing: Promise<void> | undefined;
 
   constructor(
-    options: AndroidScreenCaptureOptions,
-    serial: string,
+    clock: Clock,
+    serverPath: string,
+    target: ScreenTarget,
     scid: number,
     settings: ScreenSettings,
+    isPhone: boolean,
   ) {
     if (!Number.isInteger(scid) || scid < 0 || scid >= SCID_LIMIT) {
       throw new RangeError(`A scrcpy session id is a 31-bit number, not ${String(scid)}`);
     }
-    this.#options = options;
-    this.#serial = serial;
+    this.#isPhone = isPhone;
+    this.#clock = clock;
+    this.#serverPath = serverPath;
+    this.#target = target;
     // why: the server parses `scid` as hex and names its socket `scrcpy_%08x`, exactly as scrcpy's
     // own client formats it, so one formatting serves the argument, the socket and the file name.
     this.#scidHex = scid.toString(16).padStart(8, "0");
@@ -130,14 +148,21 @@ class ScrcpySession {
     stopped.addEventListener("abort", stop, { once: true });
     try {
       if (stopped.aborted) throw this.#startFailure("was stopped before it started");
+      if (this.#isPhone) {
+        await this.#readScreenState();
+        // why: like the push, the screen read cannot be cut short from outside; a stop that arrived
+        // during it waits for the read to end and pushes nothing onto a device being handed back.
+        if (this.#abort.signal.aborted)
+          throw this.#startFailure("was stopped while the phone's screen was being read");
+      }
       await this.#push();
       // why: the push is the one step that cannot be interrupted; a stop that arrived during it
       // starts no server on a device that is being handed back.
       if (this.#abort.signal.aborted)
         throw this.#startFailure("was stopped while it was being copied");
-      this.#spawnServer();
-      const deadlineAt = this.#options.clock.now() + START_DEADLINE_MS;
-      timer = this.#options.clock.setTimer(START_DEADLINE_MS, () => {
+      const startedAt = await this.#spawnServer();
+      const deadlineAt = startedAt + START_DEADLINE_MS;
+      timer = this.#clock.setTimer(START_DEADLINE_MS, () => {
         this.#abort.abort();
       });
       const reader = await this.#connect(deadlineAt);
@@ -152,7 +177,7 @@ class ScrcpySession {
         : new ScreenUnavailableError(this.#withTail(errorMessage(error)));
     } finally {
       stopped.removeEventListener("abort", stop);
-      if (timer !== undefined) this.#options.clock.cancel(timer);
+      if (timer !== undefined) this.#clock.cancel(timer);
     }
   }
 
@@ -179,64 +204,82 @@ class ScrcpySession {
     return this.#closing;
   }
 
+  // why: only a read that names Asleep or Dozing is a fact about the screen; every other answer —
+  // another word, no line, a non-zero exit, a timed-out read — reads as unknown and goes on to the
+  // push, where a phone that paints nothing meets the same silence bounds as an emulator.
+  async #readScreenState(): Promise<void> {
+    const read = await this.#target.run(["shell", "dumpsys", "power"], SCREEN_READ_TIMEOUT_MS);
+    if (read.code !== 0) return;
+    for (const line of read.stdout.split("\n")) {
+      const word = WAKEFULNESS_LINE.exec(line.endsWith("\r") ? line.slice(0, -1) : line)?.[1];
+      if (word === undefined) continue;
+      if (word === "Asleep" || word === "Dozing")
+        throw new ScreenUnavailableError(SCREEN_OFF_MESSAGE);
+      return;
+    }
+  }
+
   async #push(): Promise<void> {
-    const result = await this.#options.processRunner.run(
-      this.#options.adb,
-      ["-s", this.#serial, "push", this.#options.serverPath, this.#devicePath],
-      { env: this.#options.env(), timeoutMs: PUSH_TIMEOUT_MS },
+    const result = await this.#target.run(
+      ["push", this.#serverPath, this.#devicePath],
+      PUSH_TIMEOUT_MS,
     );
     // why: a push that timed out may still have written part of the file, so cleanup removes it too.
     this.#pushed = true;
     if (result.code !== 0) {
       throw new ScreenUnavailableError(
-        `adb could not copy the screen server to ${this.#serial}: ${(result.stderr || result.stdout).trim()}`,
+        `adb could not copy the screen server to ${this.#target.serial}: ${(result.stderr || result.stdout).trim()}`,
       );
     }
   }
 
-  #spawnServer(): void {
+  // why: resolves with the moment the server's process started -- the 15 s budget begins there, so a
+  // phone's version check before the spawn does not spend it.
+  async #spawnServer(): Promise<number> {
     const { fps, maxDimension, bitrateKbps } = this.#settings;
-    const shell = this.#options.processRunner.spawn(
-      this.#options.adb,
-      [
-        "-s",
-        this.#serial,
-        "shell",
-        `CLASSPATH=${this.#devicePath}`,
-        "app_process",
-        "/",
-        "com.genymobile.scrcpy.Server",
-        SCRCPY_SERVER_VERSION,
-        `scid=${this.#scidHex}`,
-        "log_level=info",
-        "tunnel_forward=true",
-        "video=true",
-        "audio=false",
-        "control=false",
-        "video_codec=h264",
-        "send_device_meta=false",
-        "send_dummy_byte=true",
-        "send_stream_meta=true",
-        "send_frame_meta=true",
-        "cleanup=true",
-        `max_size=${String(maxDimension)}`,
-        `max_fps=${String(fps)}`,
-        `video_bit_rate=${String(bitrateKbps * 1000)}`,
-      ],
-      { env: this.#options.env() },
-    );
+    const shell = await this.#target.spawn([
+      "shell",
+      `CLASSPATH=${this.#devicePath}`,
+      "app_process",
+      "/",
+      "com.genymobile.scrcpy.Server",
+      SCRCPY_SERVER_VERSION,
+      `scid=${this.#scidHex}`,
+      "log_level=info",
+      "tunnel_forward=true",
+      "video=true",
+      "audio=false",
+      "control=false",
+      "video_codec=h264",
+      "send_device_meta=false",
+      "send_dummy_byte=true",
+      "send_stream_meta=true",
+      "send_frame_meta=true",
+      "cleanup=true",
+      `max_size=${String(maxDimension)}`,
+      `max_fps=${String(fps)}`,
+      `video_bit_rate=${String(bitrateKbps * 1000)}`,
+    ]);
     this.#shell = shell;
-    void this.#collect(shell.stdout);
-    void this.#collect(shell.stderr);
+    // why: the drain is kept, not fired away: a failure is reported with the server's last output, and
+    // a message built while that output is still in flight would say "exited" with nothing from it.
+    this.#collected = Promise.all([this.#collect(shell.stdout), this.#collect(shell.stderr)]).then(
+      () => undefined,
+    );
     void shell.wait().then(
       () => this.#onShellExit(),
       () => this.#onShellExit(),
     );
+    return this.#clock.now();
   }
 
   #onShellExit(): void {
     this.#shellExited = true;
-    this.#abort.abort();
+    // why: the abort is delayed until the server's output has been collected, so the failure it
+    // triggers names that output instead of racing it to the last line.
+    void (this.#collected ?? Promise.resolve()).then(() => {
+      this.#abort.abort();
+    });
   }
 
   async #collect(lines: AsyncIterable<string>): Promise<void> {
@@ -266,15 +309,16 @@ class ScrcpySession {
   async #attempt(deadlineAt: number, signal: AbortSignal): Promise<ChunkReader | string> {
     try {
       const outcome = await openDeviceSocket({
-        adbServerPort: this.#options.adbServerPort,
-        serial: this.#serial,
+        connect: (timeoutMs) => this.#target.connect(timeoutMs),
+        serial: this.#target.serial,
         signal,
         socketName: `scrcpy_${this.#scidHex}`,
-        tcp: this.#options.tcp,
-        timeoutMs: Math.max(1, deadlineAt - this.#options.clock.now()),
+        timeoutMs: Math.max(1, deadlineAt - this.#clock.now()),
       });
       if (outcome.kind === "no-transport") {
-        throw new ScreenUnavailableError(`adb cannot reach ${this.#serial}: ${outcome.reason}`);
+        throw new ScreenUnavailableError(
+          `adb cannot reach ${this.#target.serial}: ${outcome.reason}`,
+        );
       }
       if (outcome.kind !== "open") return outcome.reason;
       this.#stream = outcome.stream;
@@ -300,12 +344,12 @@ class ScrcpySession {
         resolve();
         return;
       }
-      const timer = this.#options.clock.setTimer(delayMs, () => {
+      const timer = this.#clock.setTimer(delayMs, () => {
         signal.removeEventListener("abort", wake);
         resolve();
       });
       const wake = () => {
-        this.#options.clock.cancel(timer);
+        this.#clock.cancel(timer);
         resolve();
       };
       signal.addEventListener("abort", wake, { once: true });
@@ -313,7 +357,7 @@ class ScrcpySession {
   }
 
   #startFailure(what: string): ScreenUnavailableError {
-    const server = `The screen server on ${this.#serial}`;
+    const server = `The screen server on ${this.#target.serial}`;
     const reason = this.#shellExited
       ? `${server} exited before it streamed`
       : this.#abort.signal.aborted
@@ -389,14 +433,14 @@ class ScrcpySession {
     read: Promise<Uint8Array | undefined>,
   ): Promise<Uint8Array | undefined | typeof QUIET> {
     return new Promise((resolve, reject) => {
-      const timer = this.#options.clock.setTimer(ALIVE_AFTER_MS, () => resolve(QUIET));
+      const timer = this.#clock.setTimer(ALIVE_AFTER_MS, () => resolve(QUIET));
       read.then(
         (chunk) => {
-          this.#options.clock.cancel(timer);
+          this.#clock.cancel(timer);
           resolve(chunk);
         },
         (error: unknown) => {
-          this.#options.clock.cancel(timer);
+          this.#clock.cancel(timer);
           reject(error instanceof Error ? error : new Error(String(error)));
         },
       );
@@ -406,12 +450,12 @@ class ScrcpySession {
   async #close(): Promise<void> {
     let timer: ReturnType<Clock["setTimer"]> | undefined;
     const bound = new Promise<void>((resolve) => {
-      timer = this.#options.clock.setTimer(CLOSE_DEADLINE_MS, resolve);
+      timer = this.#clock.setTimer(CLOSE_DEADLINE_MS, resolve);
     });
     try {
       await Promise.race([this.#teardown(), bound]);
     } finally {
-      if (timer !== undefined) this.#options.clock.cancel(timer);
+      if (timer !== undefined) this.#clock.cancel(timer);
     }
   }
 
@@ -428,11 +472,8 @@ class ScrcpySession {
     if (this.#pushed) {
       // why: with cleanup=true the server unlinks its own jar as it starts, so this only matters for
       // a server that never got that far; it runs anyway because that case is not visible from here.
-      await this.#options.processRunner
-        .run(this.#options.adb, ["-s", this.#serial, "shell", "rm", "-f", this.#devicePath], {
-          env: this.#options.env(),
-          timeoutMs: REMOVE_TIMEOUT_MS,
-        })
+      await this.#target
+        .run(["shell", "rm", "-f", this.#devicePath], REMOVE_TIMEOUT_MS)
         .catch(() => undefined);
     }
   }
@@ -447,11 +488,11 @@ class ScrcpySession {
           () => true,
         ),
         new Promise<boolean>((resolve) => {
-          timer = this.#options.clock.setTimer(delayMs, () => resolve(false));
+          timer = this.#clock.setTimer(delayMs, () => resolve(false));
         }),
       ]);
     } finally {
-      if (timer !== undefined) this.#options.clock.cancel(timer);
+      if (timer !== undefined) this.#clock.cancel(timer);
     }
   }
 }

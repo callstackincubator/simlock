@@ -3,23 +3,23 @@ import { describe, expect, it } from "vitest";
 import {
   type PhysicalDriverDevice,
   SCREEN_FRAME_TAG,
-  ScreenNotSupportedError,
   ScreenUnavailableError,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
 import {
   FakeClock,
   MemoryFilesystem,
+  type ProcessResult,
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
   type TcpStream,
-  type TcpStreamConnector,
 } from "../../../ports/index.js";
 import {
   ALIVE_AFTER_MS,
   CLOSE_DEADLINE_MS,
   CONNECT_RETRY_MS,
   createAndroidScreenCapture,
+  type ScreenTarget,
   START_DEADLINE_MS,
 } from "./session.js";
 import { codecId, concatBytes, mediaPacket, SAMPLE, sessionPacket } from "./test-scrcpy.js";
@@ -27,17 +27,31 @@ import { codecId, concatBytes, mediaPacket, SAMPLE, sessionPacket } from "./test
 const ADB = "/sdk/platform-tools/adb";
 const SERVER = "/simlock/scrcpy-server-v5.0.1";
 const SERIAL = "emulator-5586";
-const PORT = 5038;
+const PHONE_SERIAL = "R58M123ABC";
 const SCID = 0x1234abcd;
 const DEVICE_JAR = "/data/local/tmp/simlock-scrcpy-1234abcd.jar";
 const SETTINGS = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
+const SCREEN_READ_MS = 10_000;
 const DEVICE: VirtualDriverDevice = {
   address: SERIAL,
   deviceId: "simlock_1",
   driverData: {},
   physical: false,
 };
-const ENV = { ANDROID_ADB_SERVER_PORT: String(PORT), ANDROID_AVD_HOME: "/root", PATH: "/bin" };
+const PHONE: PhysicalDriverDevice = {
+  address: PHONE_SERIAL,
+  deviceId: PHONE_SERIAL,
+  driverData: {},
+  enrolledApps: [],
+  physical: true,
+};
+
+// why: the reason a phone's target gives when the shared adb server's version check is closed. The
+// capture is expected to pass it through as its own, unchanged, and to run nothing after it.
+const GATE_REFUSAL =
+  "the adb server on port 5037 speaks protocol 40 and Simlock's adb speaks 41. " +
+  "No command goes to physical Android devices until they match, and Simlock will not restart that server.";
+const SCREEN_OFF = "The phone's screen is off. Turn it on and ask for the stream again.";
 
 type Behaviour = "accept" | "refuse" | "no-transport" | "connection-refused" | "silent";
 
@@ -93,28 +107,34 @@ class Peer {
   }
 }
 
-class AdbServer implements TcpStreamConnector {
+// why: the adb server on the far side of a target's `connect`; what it answers is scripted per attempt.
+class AdbServer {
   readonly peers: Peer[] = [];
-  readonly ports: number[] = [];
   readonly #behaviours: Behaviour[];
 
   constructor(
     behaviours: Behaviour[] = [],
     readonly otherwise: Behaviour = "accept",
+    // why: a peer that stays silent and open until this moment of the fake clock, then refuses.
+    private readonly acceptFromMs: number | undefined = undefined,
   ) {
     this.#behaviours = behaviours;
   }
 
-  async connect(port: number): Promise<TcpStream> {
-    this.ports.push(port);
+  newPeer(clock: FakeClock): Peer | undefined {
+    if (this.acceptFromMs !== undefined && clock.now() < this.acceptFromMs) {
+      const waiting = new Peer();
+      waiting.send("OKAY", "FAIL0006closed");
+      return waiting;
+    }
     const behaviour = this.#behaviours.shift() ?? this.otherwise;
     if (behaviour === "connection-refused") throw new Error("connect ECONNREFUSED 127.0.0.1");
     const peer = new Peer();
     this.peers.push(peer);
-    if (behaviour === "no-transport") peer.send("FAIL0020device 'emulator-5586' not found");
+    if (behaviour === "no-transport") peer.send(`FAIL0020device '${SERIAL}' not found`);
     if (behaviour === "refuse") peer.send("OKAY", "FAIL0006closed");
     if (behaviour === "accept") peer.send("OKAY", "OKAY", new Uint8Array([0]));
-    return peer.stream;
+    return peer;
   }
 
   get last(): Peer {
@@ -124,10 +144,91 @@ class AdbServer implements TcpStreamConnector {
   }
 }
 
+interface PowerAnswer {
+  readonly code: number | null;
+  readonly stdout: string;
+}
+
+// why: the device's capture target as the driver builds it. `args` start at the adb subcommand, so
+// the serial and the adb server are the target's and not the capture's: this fake records what it
+// was asked to run, and the commands themselves are the scripted runner's, so a push can fail, a
+// server can hang and a kill can be escalated exactly as before the target existed.
+class FakeTarget implements ScreenTarget {
+  readonly log: string[] = [];
+  readonly powerReads: number[] = [];
+  readonly connects: number[] = [];
+  readonly runner: ScriptedProcessRunner;
+  readonly server: AdbServer;
+  // why: `"refuse"` is the version check refusing the read, `"slow"` a read that ends later.
+  power: PowerAnswer | "refuse" | "slow" = { code: 0, stdout: "  mWakefulness=Awake\n" };
+  // why: stands in for a check that closes mid-session: a command whose args this picks out is refused as a closed check refuses it.
+  refuses: (args: readonly string[]) => boolean = () => false;
+  // why: stand-ins for the check a target runs before its own command or connection, so a bound can be measured against it.
+  spawnDelayMs = 0;
+  connectDelayMs = 0;
+  #clock: FakeClock;
+
+  constructor(
+    readonly serial: string,
+    clock: FakeClock,
+    expectations: ScriptedProcessExpectation[],
+    server: AdbServer | undefined,
+  ) {
+    this.#clock = clock;
+    this.runner = new ScriptedProcessRunner(expectations);
+    this.server = server ?? new AdbServer();
+  }
+
+  get steps(): string[] {
+    return this.log.map((entry) => (entry.includes("app_process") ? "server" : entry));
+  }
+
+  async run(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
+    if (isScreenRead(args)) {
+      this.powerReads.push(timeoutMs);
+      if (this.power === "refuse") throw new ScreenUnavailableError(GATE_REFUSAL);
+      if (this.power === "slow") {
+        await this.#sleep(SCREEN_READ_MS);
+        return { code: null, stderr: "", stdout: "" };
+      }
+      return { code: this.power.code, stderr: "", stdout: this.power.stdout };
+    }
+    if (this.refuses(args)) throw new ScreenUnavailableError(GATE_REFUSAL);
+    this.log.push(args.join(" "));
+    return await this.runner.run(ADB, args);
+  }
+
+  async spawn(args: readonly string[]): Promise<import("../../../ports/index.js").ProcessHandle> {
+    if (this.spawnDelayMs > 0) await this.#sleep(this.spawnDelayMs);
+    if (this.refuses(args)) throw new ScreenUnavailableError(GATE_REFUSAL);
+    this.log.push(args.join(" "));
+    return await this.runner.spawn(ADB, args);
+  }
+
+  async connect(timeoutMs: number): Promise<TcpStream> {
+    this.connects.push(timeoutMs);
+    if (this.refuses(["connect"])) throw new ScreenUnavailableError(GATE_REFUSAL);
+    if (this.connectDelayMs > 0) await this.#sleep(this.connectDelayMs);
+    const peer = this.server.newPeer(this.#clock);
+    if (peer === undefined) throw new Error("connect ECONNREFUSED 127.0.0.1");
+    return peer.stream;
+  }
+
+  #sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.#clock.setTimer(ms, resolve);
+    });
+  }
+}
+
+function isScreenRead(args: readonly string[]): boolean {
+  return args.join(" ") === "shell dumpsys power";
+}
+
 function push(result: Partial<{ code: number; stderr: string }> = {}): ScriptedProcessExpectation {
   return {
     match: {
-      args: ["-s", SERIAL, "push", SERVER, /^\/data\/local\/tmp\/simlock-scrcpy-[0-9a-f]{8}\.jar$/],
+      args: ["push", SERVER, /^\/data\/local\/tmp\/simlock-scrcpy-[0-9a-f]{8}\.jar$/],
       command: ADB,
     },
     result: { code: result.code ?? 0, stderr: result.stderr ?? "", stdout: "" },
@@ -138,7 +239,7 @@ function shell(extra: Partial<ScriptedProcessExpectation> = {}): ScriptedProcess
   return {
     hangs: true,
     match: {
-      args: ["-s", SERIAL, "shell", ...Array.from({ length: 20 }, () => /.*/)],
+      args: ["shell", ...Array.from({ length: 20 }, () => /.*/)],
       command: ADB,
     },
     ...extra,
@@ -148,25 +249,24 @@ function shell(extra: Partial<ScriptedProcessExpectation> = {}): ScriptedProcess
 function remove(): ScriptedProcessExpectation {
   return {
     match: {
-      args: [
-        "-s",
-        SERIAL,
-        "shell",
-        "rm",
-        "-f",
-        /^\/data\/local\/tmp\/simlock-scrcpy-[0-9a-f]{8}\.jar$/,
-      ],
+      args: ["shell", "rm", "-f", /^\/data\/local\/tmp\/simlock-scrcpy-[0-9a-f]{8}\.jar$/],
       command: ADB,
     },
   };
 }
 
+// why: both devices' worlds — the other device's target is here so "it went through this device's
+// target" can fail; a capture that aimed at the wrong device would show up in the other's lists.
 async function setup(
   options: {
+    readonly acceptFromMs?: number;
+    readonly device?: VirtualDriverDevice | PhysicalDriverDevice;
     readonly expectations?: ScriptedProcessExpectation[];
-    readonly server?: AdbServer;
     readonly jar?: boolean;
+    readonly power?: FakeTarget["power"];
+    readonly refuses?: (args: readonly string[]) => boolean;
     readonly scid?: (() => number) | null;
+    readonly server?: AdbServer;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -175,21 +275,32 @@ async function setup(
     await filesystem.mkdirp("/simlock");
     await filesystem.writeFileAtomic(SERVER, "jar");
   }
-  const runner = new ScriptedProcessRunner(options.expectations ?? [push(), shell(), remove()]);
-  const server = options.server ?? new AdbServer();
-  const capture = createAndroidScreenCapture({
-    adb: ADB,
-    adbServerPort: PORT,
+  const device = options.device ?? DEVICE;
+  const phone = device.physical === true;
+  const server =
+    options.server ??
+    new AdbServer(
+      [],
+      "accept",
+      options.acceptFromMs === undefined ? undefined : 1_000 + options.acceptFromMs,
+    );
+  const target = new FakeTarget(
+    phone ? PHONE_SERIAL : SERIAL,
     clock,
-    env: () => ({ ...ENV }),
+    options.expectations ?? [push(), shell(), remove()],
+    server,
+  );
+  if (options.power !== undefined) target.power = options.power;
+  if (options.refuses !== undefined) target.refuses = options.refuses;
+  const other = new FakeTarget(phone ? SERIAL : PHONE_SERIAL, clock, [], new AdbServer());
+  const capture = createAndroidScreenCapture({
+    clock,
     filesystem,
-    processRunner: runner,
-    serialOf: () => SERIAL,
-    serverPath: SERVER,
-    tcp: server,
     ...(options.scid === null ? {} : { scid: options.scid ?? (() => SCID) }),
+    serverPath: SERVER,
+    targetFor: async (asked) => (asked === device ? target : other),
   });
-  return { capture, clock, runner, server };
+  return { capture, clock, other, target };
 }
 
 async function drive<T>(clock: FakeClock, promise: Promise<T>, stepMs = 50): Promise<T> {
@@ -222,66 +333,89 @@ function frameTag(frame: Uint8Array | undefined): number | undefined {
   return frame?.[4];
 }
 
-async function opened(setupResult: Awaited<ReturnType<typeof setup>>) {
-  const { capture, clock, server } = setupResult;
-  const opening = capture.open(DEVICE, SETTINGS, new AbortController().signal);
-  const feed = await drive(clock, waitThenStart(server, opening));
-  return feed;
-}
-
-async function waitThenStart<T>(server: AdbServer, opening: Promise<T>): Promise<T> {
-  for (let tries = 0; tries < 100 && server.peers.length === 0; tries += 1) {
+async function waitThenStart<T>(target: FakeTarget, opening: Promise<T>): Promise<T> {
+  for (let tries = 0; tries < 100 && target.server.peers.length === 0; tries += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
-  server.last.send(streamStart());
+  target.server.last.send(streamStart());
   return await opening;
+}
+
+async function opened(setupResult: Awaited<ReturnType<typeof setup>>) {
+  const { capture, clock, target } = setupResult;
+  const opening = capture.open(DEVICE, SETTINGS, new AbortController().signal);
+  return await drive(clock, waitThenStart(target, opening));
 }
 
 describe("Android screen capture: open", () => {
   it("pushes the server to a per-session path and starts it with that session's id and the settings", async () => {
     const world = await setup();
     await opened(world);
-    expect(world.runner.calls[0]).toMatchObject({
-      args: ["-s", SERIAL, "push", SERVER, DEVICE_JAR],
-      command: ADB,
-      options: { env: ENV },
-    });
-    expect(world.runner.calls[1]).toMatchObject({ command: ADB, options: { env: ENV } });
-    expect(world.runner.calls[1]!.args).toEqual([
-      "-s",
-      SERIAL,
-      "shell",
-      `CLASSPATH=${DEVICE_JAR}`,
-      "app_process",
-      "/",
-      "com.genymobile.scrcpy.Server",
-      "5.0.1",
-      "scid=1234abcd",
-      "log_level=info",
-      "tunnel_forward=true",
-      "video=true",
-      "audio=false",
-      "control=false",
-      "video_codec=h264",
-      "send_device_meta=false",
-      "send_dummy_byte=true",
-      "send_stream_meta=true",
-      "send_frame_meta=true",
-      "cleanup=true",
-      "max_size=720",
-      "max_fps=30",
-      "video_bit_rate=1500000",
-    ]);
+    expect(world.target.log[0]).toBe(`push ${SERVER} ${DEVICE_JAR}`);
+    expect(world.target.log[1]).toBe(
+      [
+        "shell",
+        `CLASSPATH=${DEVICE_JAR}`,
+        "app_process",
+        "/",
+        "com.genymobile.scrcpy.Server",
+        "5.0.1",
+        "scid=1234abcd",
+        "log_level=info",
+        "tunnel_forward=true",
+        "video=true",
+        "audio=false",
+        "control=false",
+        "video_codec=h264",
+        "send_device_meta=false",
+        "send_dummy_byte=true",
+        "send_stream_meta=true",
+        "send_frame_meta=true",
+        "cleanup=true",
+        "max_size=720",
+        "max_fps=30",
+        "video_bit_rate=1500000",
+      ].join(" "),
+    );
   });
 
-  it("reaches the server's abstract socket through Simlock's adb server, named by the session id", async () => {
+  it("streams a physical phone through its target: the screen read, the push, the server start and the close's removal go through its run and spawn with the phone's serial, and its socket through its connect", async () => {
+    const world = await setup({ device: PHONE });
+    const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
+    const feed = await drive(world.clock, waitThenStart(world.target, opening));
+
+    expect(frameTag((await feed.body.getReader().read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+    await drive(world.clock, feed.close());
+    // why: the phone's screen is read before the jar is pushed, and the push, the server start and the
+    // close's removal all run on the target that carries the phone's serial.
+    expect(world.target.steps).toEqual([
+      `push ${SERVER} ${DEVICE_JAR}`,
+      "server",
+      `shell rm -f ${DEVICE_JAR}`,
+    ]);
+    expect(world.target.powerReads).toEqual([SCREEN_READ_MS]);
+    expect(world.target.connects.length).toBeGreaterThan(0);
+    expect(world.other.steps).toEqual([]);
+    expect(world.other.powerReads).toEqual([]);
+    expect(world.other.connects).toEqual([]);
+  });
+
+  it("reads no screen state for an emulator", async () => {
     const world = await setup();
     await opened(world);
-    expect(world.server.ports).toEqual([PORT]);
-    expect(world.server.last.written).toEqual([
+    expect(world.target.powerReads).toEqual([]);
+    expect(world.target.log).not.toContainEqual(expect.stringContaining("dumpsys"));
+  });
+
+  it("reaches the server's abstract socket through the device's target, named by the session id", async () => {
+    const world = await setup();
+    await opened(world);
+    expect(world.target.server.peers).toHaveLength(1);
+    expect(world.target.server.last.written).toEqual([
       "001chost:transport:emulator-5586",
       "001dlocalabstract:scrcpy_1234abcd",
     ]);
+    expect(world.other.connects).toEqual([]);
   });
 
   it("hands out a body that starts with the session's meta frame", async () => {
@@ -303,12 +437,13 @@ describe("Android screen capture: open", () => {
     const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const started = world.clock.now();
     const watcher = (async () => {
-      while (world.server.peers.length < 3) await new Promise((resolve) => setImmediate(resolve));
-      world.server.last.send(streamStart());
+      while (world.target.server.peers.length < 3)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.target.server.last.send(streamStart());
     })();
     const feed = await drive(world.clock, opening, 10);
     await watcher;
-    expect(world.server.ports).toHaveLength(4);
+    expect(world.target.connects).toHaveLength(4);
     expect(world.clock.now() - started).toBeGreaterThanOrEqual(3 * CONNECT_RETRY_MS);
     expect(frameTag((await feed.body.getReader().read()).value)).toBe(SCREEN_FRAME_TAG.meta);
   });
@@ -317,15 +452,17 @@ describe("Android screen capture: open", () => {
     const world = await setup({ server: new AdbServer(["silent"]) });
     const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
-      while (world.server.peers.length < 1) await new Promise((resolve) => setImmediate(resolve));
-      world.server.peers[0]!.send("OKAY", "OKAY");
-      world.server.peers[0]!.close();
-      while (world.server.peers.length < 2) await new Promise((resolve) => setImmediate(resolve));
-      world.server.last.send(streamStart());
+      while (world.target.server.peers.length < 1)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.target.server.peers[0]!.send("OKAY", "OKAY");
+      world.target.server.peers[0]!.close();
+      while (world.target.server.peers.length < 2)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.target.server.last.send(streamStart());
     })();
     await drive(world.clock, opening, 10);
     await watcher;
-    expect(world.server.peers).toHaveLength(2);
+    expect(world.target.server.peers).toHaveLength(2);
   });
 
   it("gives up at the start deadline, reporting the server's last output, and cleans up", async () => {
@@ -343,12 +480,12 @@ describe("Android screen capture: open", () => {
     const failedAt = world.clock.now() - started;
     expect(failedAt).toBeGreaterThanOrEqual(START_DEADLINE_MS);
     expect(failedAt).toBeLessThan(START_DEADLINE_MS + CLOSE_DEADLINE_MS);
-    expect(world.runner.calls.map((call) => call.args.slice(2, 4))).toEqual([
-      ["push", SERVER],
-      ["shell", `CLASSPATH=${DEVICE_JAR}`],
-      ["shell", "rm"],
+    expect(world.target.steps).toEqual([
+      `push ${SERVER} ${DEVICE_JAR}`,
+      "server",
+      `shell rm -f ${DEVICE_JAR}`,
     ]);
-    expect(world.server.peers.every((peer) => peer.closed)).toBe(true);
+    expect(world.target.server.peers.every((peer) => peer.closed)).toBe(true);
   });
 
   it("fails at once when the server's shell exits before it listens", async () => {
@@ -382,15 +519,16 @@ describe("Android screen capture: open", () => {
     ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ScreenUnavailableError);
     expect((error as Error).message).toMatch(/not found/);
-    expect(world.server.peers).toHaveLength(1);
+    expect(world.target.server.peers).toHaveLength(1);
   });
 
   it("refuses with the server's reason when it cannot configure its encoder", async () => {
     const world = await setup();
     const opening = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
-      while (world.server.peers.length < 1) await new Promise((resolve) => setImmediate(resolve));
-      world.server.last.send(codecId(1));
+      while (world.target.server.peers.length < 1)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.target.server.last.send(codecId(1));
     })();
     const error = await drive(world.clock, opening).catch((caught: unknown) => caught);
     await watcher;
@@ -407,20 +545,10 @@ describe("Android screen capture: open", () => {
       world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
     ).catch((caught: unknown) => caught);
     expect((error as Error).message).toMatch(/device offline/);
-    expect(world.runner.calls.map((call) => call.args[2])).toEqual(["push", "shell"]);
-    expect(world.runner.calls[1]!.args.slice(3)).toEqual(["rm", "-f", DEVICE_JAR]);
-  });
-
-  it("refuses a physical device as not supported, before running anything", async () => {
-    const world = await setup({ expectations: [] });
-    await expect(
-      world.capture.open(
-        { ...DEVICE, enrolledApps: [], physical: true } as PhysicalDriverDevice,
-        SETTINGS,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(ScreenNotSupportedError);
-    expect(world.runner.calls).toEqual([]);
+    expect(world.target.steps).toEqual([
+      `push ${SERVER} ${DEVICE_JAR}`,
+      `shell rm -f ${DEVICE_JAR}`,
+    ]);
   });
 
   it("starts no server when it is stopped while the jar is being copied, and removes the jar", async () => {
@@ -430,10 +558,8 @@ describe("Android screen capture: open", () => {
     });
     const opening = world.capture.open(DEVICE, SETTINGS, stop.signal);
     await expect(drive(world.clock, opening)).rejects.toBeInstanceOf(ScreenUnavailableError);
-    expect(world.runner.calls.map((call) => call.args.join(" "))).not.toContainEqual(
-      expect.stringContaining("app_process"),
-    );
-    expect(world.runner.calls.at(-1)?.args.join(" ")).toContain("rm -f");
+    expect(world.target.log).not.toContainEqual(expect.stringContaining("app_process"));
+    expect(world.target.steps.at(-1)).toContain("rm -f");
   });
 
   it("refuses an open that was stopped before it began, running nothing", async () => {
@@ -443,7 +569,8 @@ describe("Android screen capture: open", () => {
     await expect(world.capture.open(DEVICE, SETTINGS, stop.signal)).rejects.toBeInstanceOf(
       ScreenUnavailableError,
     );
-    expect(world.runner.calls).toEqual([]);
+    expect(world.target.log).toEqual([]);
+    expect(world.target.connects).toEqual([]);
   });
 
   it("is unavailable, with the reason, while the server jar is missing", async () => {
@@ -455,7 +582,7 @@ describe("Android screen capture: open", () => {
     await expect(
       world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
     ).rejects.toBeInstanceOf(ScreenUnavailableError);
-    expect(world.runner.calls).toEqual([]);
+    expect(world.target.log).toEqual([]);
   });
 
   it("gives two concurrent opens two session ids, two sockets and two jar paths", async () => {
@@ -466,16 +593,17 @@ describe("Android screen capture: open", () => {
     const first = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const second = world.capture.open(DEVICE, SETTINGS, new AbortController().signal);
     const watcher = (async () => {
-      while (world.server.peers.length < 2) await new Promise((resolve) => setImmediate(resolve));
-      for (const peer of world.server.peers) peer.send(streamStart());
+      while (world.target.server.peers.length < 2)
+        await new Promise((resolve) => setImmediate(resolve));
+      for (const peer of world.target.server.peers) peer.send(streamStart());
     })();
     await drive(world.clock, Promise.all([first, second]));
     await watcher;
-    const sockets = world.server.peers.map((peer) => peer.written[1]);
+    const sockets = world.target.server.peers.map((peer) => peer.written[1]);
     expect(new Set(sockets).size).toBe(2);
-    const jars = world.runner.calls
-      .filter((call) => call.args[2] === "push")
-      .map((call) => call.args[4]);
+    const jars = world.target.log
+      .filter((entry) => entry.startsWith("push "))
+      .map((entry) => entry.split(" ")[2]);
     expect(new Set(jars).size).toBe(2);
     for (const socket of sockets) {
       const hex = /scrcpy_([0-9a-f]{8})$/.exec(socket ?? "")?.[1];
@@ -485,11 +613,195 @@ describe("Android screen capture: open", () => {
   });
 });
 
+describe("Android screen capture: a phone's screen state", () => {
+  it("refuses a phone whose screen is off with its own reason and pushes nothing, for each wakefulness that means off", async () => {
+    for (const printed of ["Asleep", "Dozing", "Asleep\r", "Dozing "]) {
+      const world = await setup({
+        device: PHONE,
+        power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
+      });
+      const error = await drive(
+        world.clock,
+        world.capture.open(PHONE, SETTINGS, new AbortController().signal),
+      ).catch((caught: unknown) => caught);
+
+      expect(error, printed).toBeInstanceOf(ScreenUnavailableError);
+      expect((error as Error).message, printed).toBe(SCREEN_OFF);
+      expect(world.target.steps, printed).toEqual([]);
+      expect(world.target.connects, printed).toEqual([]);
+    }
+  });
+
+  it("goes on to the push for every other wakefulness, including a word that is not one and no line at all", async () => {
+    for (const printed of ["Awake", "Dreaming", "Awaken", "asleep"]) {
+      const world = await setup({
+        device: PHONE,
+        power: { code: 0, stdout: `  mWakefulness=${printed}\n` },
+      });
+      const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
+      const feed = await drive(world.clock, waitThenStart(world.target, opening));
+      expect(await feed.body.getReader().read(), printed).toBeDefined();
+
+      expect(world.target.log[0], printed).toBe(`push ${SERVER} ${DEVICE_JAR}`);
+      expect(world.target.powerReads, printed).toEqual([SCREEN_READ_MS]);
+    }
+  });
+
+  it("goes on to the push when the screen read has no matching line, exits non-zero, or times out, and asks for it with a 10 s limit", async () => {
+    for (const answer of [
+      { code: 0, stdout: "  mPolicyBoost=0\n" },
+      { code: 1, stdout: "  mWakefulness=Asleep\n" },
+      "slow",
+    ] as const) {
+      const world = await setup({ device: PHONE, power: answer });
+      const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
+      // why: a timed-out read ends 10 s of fake clock after the open, and waitThenStart's capped
+      // flush-wait cannot span it; the file's uncapped watcher pattern waits for the peer whenever
+      // it appears, and drive still ends the run if the open never reaches it.
+      const watcher = (async () => {
+        while (world.target.server.peers.length === 0)
+          await new Promise((resolve) => setImmediate(resolve));
+        world.target.server.last.send(streamStart());
+      })();
+      const feed = await drive(world.clock, opening);
+      await watcher;
+      expect(await feed.body.getReader().read(), String(answer)).toBeDefined();
+
+      expect(world.target.powerReads, String(answer)).toEqual([SCREEN_READ_MS]);
+      expect(world.target.log[0], String(answer)).toBe(`push ${SERVER} ${DEVICE_JAR}`);
+    }
+  });
+
+  it("pushes nothing when it is stopped while the screen is being read", async () => {
+    const stop = new AbortController();
+    const world = await setup({ device: PHONE, power: "slow" });
+    const opening = world.capture.open(PHONE, SETTINGS, stop.signal);
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+
+    stop.abort();
+    const failed = await drive(world.clock, opening).catch((caught: unknown) => caught);
+
+    expect(failed).toBeInstanceOf(ScreenUnavailableError);
+    expect(world.target.log).toEqual([]);
+    expect(world.target.connects).toEqual([]);
+  });
+
+  it("fails the open with a target's own reason and runs nothing after it, for the screen read, the push, the server start and a connection attempt", async () => {
+    const stages: readonly {
+      readonly name: string;
+      readonly power?: FakeTarget["power"];
+      readonly refuses: (args: readonly string[]) => boolean;
+      readonly stepsBefore: string[];
+    }[] = [
+      {
+        name: "the screen read",
+        power: "refuse",
+        refuses: () => false,
+        stepsBefore: [],
+      },
+      {
+        name: "the push",
+        refuses: (args) => args[0] === "push",
+        stepsBefore: [],
+      },
+      {
+        name: "the server start",
+        refuses: (args) => args.includes("app_process"),
+        stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, `shell rm -f ${DEVICE_JAR}`],
+      },
+      {
+        // why: the server's spawn sits between the push and the connection attempt, so it is in the
+        // log by the time the attempt's check refuses; only the `rm -f` follows it.
+        name: "a connection attempt",
+        refuses: (args) => args[0] === "connect",
+        stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, "server", `shell rm -f ${DEVICE_JAR}`],
+      },
+    ];
+    for (const stage of stages) {
+      const world = await setup({
+        device: PHONE,
+        ...(stage.power === undefined ? {} : { power: stage.power }),
+        refuses: stage.refuses,
+      });
+      const started = world.clock.now();
+      const error = await drive(
+        world.clock,
+        world.capture.open(PHONE, SETTINGS, new AbortController().signal),
+      ).catch((caught: unknown) => caught);
+
+      expect(error, stage.name).toBeInstanceOf(ScreenUnavailableError);
+      expect((error as Error).message, stage.name).toBe(GATE_REFUSAL);
+      // why: a refusal that was retried instead of propagated would have spent the start deadline on
+      // it, and the viewer would get a start timeout instead of the check's reason.
+      expect(world.clock.now() - started, stage.name).toBeLessThan(START_DEADLINE_MS);
+      expect(world.target.steps, stage.name).toEqual(stage.stepsBefore);
+    }
+  });
+
+  it("sends nothing and settles when the version check is still closed at the jar's removal", async () => {
+    const world = await setup({
+      device: PHONE,
+      refuses: (args) => args.includes("app_process") || args[0] === "shell",
+    });
+    const error = await drive(
+      world.clock,
+      world.capture.open(PHONE, SETTINGS, new AbortController().signal),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ScreenUnavailableError);
+    expect(world.target.steps).toEqual([`push ${SERVER} ${DEVICE_JAR}`]);
+  });
+});
+
+describe("Android screen capture: the start bound", () => {
+  it("does not spend the 15 s start bound on the target's check that runs before the server is spawned", async () => {
+    // why: the check runs inside the target, before its process exists. The bound is measured from the
+    // moment that process started, so a slow first check costs a stream nothing.
+    const world = await setup({ acceptFromMs: 20_000, device: PHONE });
+    world.target.spawnDelayMs = 8_000;
+    const started = world.clock.now();
+    const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
+    const watcher = (async () => {
+      while (world.target.server.peers.length === 0)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.target.server.last.send(streamStart());
+    })();
+
+    const feed = await drive(world.clock, opening, 500);
+    await watcher;
+    const took = world.clock.now() - started;
+
+    // why: straddled on both sides -- 20 s from the open's start is past the 15 s budget a budget
+    // measured from the push would have allowed, and the stream is proof it was not spent.
+    expect(took).toBeGreaterThanOrEqual(20_000);
+    expect(took).toBeLessThan(20_000 + CLOSE_DEADLINE_MS);
+    expect(frameTag((await feed.body.getReader().read()).value)).toBe(SCREEN_FRAME_TAG.meta);
+  });
+
+  it("counts a connection attempt's own check inside the 15 s, waits for one still running at the deadline, and then fails as a start timeout", async () => {
+    const world = await setup({ server: new AdbServer([], "refuse") });
+    world.target.connectDelayMs = START_DEADLINE_MS + 2_000;
+    const started = world.clock.now();
+    const error = await drive(
+      world.clock,
+      world.capture.open(DEVICE, SETTINGS, new AbortController().signal),
+      500,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ScreenUnavailableError);
+    expect((error as Error).message).toMatch(/within 15 s/);
+    const failedAt = world.clock.now() - started;
+    expect(failedAt).toBeGreaterThanOrEqual(START_DEADLINE_MS);
+    expect(failedAt).toBeLessThanOrEqual(START_DEADLINE_MS + 5_000 + CLOSE_DEADLINE_MS);
+  });
+});
+
 describe("Android screen capture: the body", () => {
   it("reads the socket only when its reader asks for a frame", async () => {
     const world = await setup();
     const feed = await opened(world);
-    const peer = world.server.last;
+    const peer = world.target.server.last;
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     const before = peer.pulls;
     for (let flush = 0; flush < 10; flush += 1)
@@ -506,7 +818,7 @@ describe("Android screen capture: the body", () => {
   it("delivers every delta, in order, however slowly it is read", async () => {
     const world = await setup();
     const feed = await opened(world);
-    const peer = world.server.last;
+    const peer = world.target.server.last;
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     for (let index = 0; index < 50; index += 1) peer.send(mediaPacket({ pts: index }, SAMPLE.p1));
     const reader = feed.body.getReader();
@@ -522,7 +834,7 @@ describe("Android screen capture: the body", () => {
   it("says a still screen is alive every few seconds, and keeps the frames that follow in order", async () => {
     const world = await setup();
     const feed = await opened(world);
-    const peer = world.server.last;
+    const peer = world.target.server.last;
     peer.send(mediaPacket({ config: true }, SAMPLE.config), mediaPacket({ key: true }, SAMPLE.idr));
     const reader = feed.body.getReader();
     for (let index = 0; index < 3; index += 1) await reader.read();
@@ -538,22 +850,25 @@ describe("Android screen capture: the body", () => {
     expect(frameTag((await next).value)).toBe(SCREEN_FRAME_TAG.delta);
   });
 
-  it("says nothing is alive while the encoder has not painted a first picture", async () => {
-    const world = await setup();
-    const feed = await opened(world);
-    const peer = world.server.last;
-    peer.send(mediaPacket({ config: true }, SAMPLE.config));
-    const reader = feed.body.getReader();
-    expect(frameTag((await reader.read()).value)).toBe(SCREEN_FRAME_TAG.meta);
-    const quiet = reader.read();
-    let settled = false;
-    void quiet.then(() => (settled = true));
-    for (let flush = 0; flush < 10; flush += 1)
-      await new Promise((resolve) => setImmediate(resolve));
-    world.clock.advance(ALIVE_AFTER_MS * 3);
-    for (let flush = 0; flush < 10; flush += 1)
-      await new Promise((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
+  it("says nothing is alive while the encoder has not painted a first picture, on an emulator and on a phone", async () => {
+    for (const device of [DEVICE, PHONE]) {
+      const world = await setup({ device });
+      const opening = world.capture.open(device, SETTINGS, new AbortController().signal);
+      const feed = await drive(world.clock, waitThenStart(world.target, opening));
+      const peer = world.target.server.last;
+      peer.send(mediaPacket({ config: true }, SAMPLE.config));
+      const reader = feed.body.getReader();
+      expect(frameTag((await reader.read()).value), device.deviceId).toBe(SCREEN_FRAME_TAG.meta);
+      const quiet = reader.read();
+      let settled = false;
+      void quiet.then(() => (settled = true));
+      for (let flush = 0; flush < 10; flush += 1)
+        await new Promise((resolve) => setImmediate(resolve));
+      world.clock.advance(ALIVE_AFTER_MS * 3);
+      for (let flush = 0; flush < 10; flush += 1)
+        await new Promise((resolve) => setImmediate(resolve));
+      expect(settled, device.deviceId).toBe(false);
+    }
   });
 
   it("errors with the server's reason when the device side ends, and cleans up", async () => {
@@ -563,12 +878,12 @@ describe("Android screen capture: the body", () => {
     const feed = await opened(world);
     const reader = feed.body.getReader();
     await reader.read();
-    world.server.last.close();
+    world.target.server.last.close();
     const error = await drive(world.clock, reader.read()).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ScreenUnavailableError);
     expect((error as Error).message).toMatch(/Encoding error/);
     await drive(world.clock, feed.close());
-    expect(world.runner.calls.at(-1)?.args.slice(2)).toEqual(["shell", "rm", "-f", DEVICE_JAR]);
+    expect(world.target.steps.at(-1)).toBe(`shell rm -f ${DEVICE_JAR}`);
   });
 });
 
@@ -579,9 +894,9 @@ describe("Android screen capture: close", () => {
     const closes = Promise.all([feed.close(), feed.close()]);
     await drive(world.clock, closes);
     await drive(world.clock, feed.close());
-    expect(world.server.last.closed).toBe(true);
-    expect(await hasEnded(world.runner.handles[1]!)).toBe(true);
-    expect(world.runner.calls.filter((call) => call.args.includes("rm"))).toHaveLength(1);
+    expect(world.target.server.last.closed).toBe(true);
+    expect(await hasEnded(world.target.runner.handles[1]!)).toBe(true);
+    expect(world.target.log.filter((entry) => entry.includes("rm"))).toHaveLength(1);
   });
 
   it("kills a server still running a second after its socket closed, with SIGKILL", async () => {
@@ -590,7 +905,7 @@ describe("Android screen capture: close", () => {
     });
     const feed = await opened(world);
     const closing = feed.close();
-    const server = world.runner.handles[1]!;
+    const server = world.target.runner.handles[1]!;
     await hasEnded(server);
     world.clock.advance(999);
     expect(await hasEnded(server)).toBe(false);
@@ -612,7 +927,7 @@ describe("Android screen capture: close", () => {
     const world = await setup();
     const feed = await opened(world);
     await drive(world.clock, feed.body.cancel());
-    expect(world.server.last.closed).toBe(true);
-    expect(world.runner.calls.filter((call) => call.args.includes("rm"))).toHaveLength(1);
+    expect(world.target.server.last.closed).toBe(true);
+    expect(world.target.log.filter((entry) => entry.includes("rm"))).toHaveLength(1);
   });
 });

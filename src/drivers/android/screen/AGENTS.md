@@ -1,9 +1,10 @@
 # Android screen capture
 
-Does: an Android emulator's screen as core's screen frames, through the vendored scrcpy server and our own client.
+Does: an Android emulator's or a leased physical phone's screen as core's screen frames, through the vendored scrcpy
+server and our own client.
 Entry: `index.ts` → `createAndroidScreenCapture(options)`, built by `AndroidDriver` as its `screenCapture` when `create`
 gets `scrcpyServerPath` and `tcpStreamConnector` (`daemon/main.ts` passes the jar `pnpm build` copies to dist/vendor/scrcpy).
-Uses: core (`ScreenCapture`, frame encoder), ports (`ProcessRunner`, `TcpStreamConnector`, `Clock`), `../adb-host-protocol.ts`.
+Uses: core (`ScreenCapture`, frame encoder), ports (`Clock`, `Filesystem`), the device's `ScreenTarget` (below).
 Parent: [Android driver](../AGENTS.md). Consumer: [stream](../../../stream/AGENTS.md).
 
 ## Files
@@ -11,49 +12,77 @@ Parent: [Android driver](../AGENTS.md). Consumer: [stream](../../../stream/AGENT
 | File              | Role                                                                           |
 | ----------------- | ------------------------------------------------------------------------------ |
 | `index.ts`        | `createAndroidScreenCapture`: the driver's `ScreenCapture`, entered only here  |
-| `session.ts`      | One stream: push, server, socket, body, close                                  |
-| `adb-socket.ts`   | `openDeviceSocket`: `host:transport` + `localabstract` on Simlock's adb server |
+| `session.ts`      | One stream: screen read, push, server, socket, body, close; the `ScreenTarget` |
+| `adb-socket.ts`   | `openDeviceSocket`: `host:transport` + `localabstract` on the target's server  |
 | `scrcpy-video.ts` | `ScrcpyVideoParser`: scrcpy's video socket (codec id, session, media packets)  |
 | `h264.ts`         | Annex-B split, AVCC, the `avcC` record                                         |
 | `envelope.ts`     | `EnvelopeMapper`: scrcpy events → core's screen frames                         |
 
+## Where a session runs: the target
+
+The driver hands the capture one `ScreenTarget` per device: `serial`, `run(args, timeoutMs)`, `spawn(args)` and
+`connect(timeoutMs)`. `args` start at the adb subcommand — the target aims them at its device and picks its adb server.
+
+- **Emulator** (`index.ts` of the driver): `adb -s <serial> …` with the driver's scoped env, connections to Simlock's
+  own adb server.
+- **Physical phone** (`../physical-handler.ts`): each of `run`, `spawn` and `connect` first passes the 5037 protocol
+  check every other phone command passes; a closed check sends nothing and throws `ScreenUnavailableError` with its
+  message. An open one runs `adb -P 5037 -s <deviceId> …` with that server's env (Simlock's port in it,
+  `ANDROID_ADB_SERVER_ADDRESS`, `ADB_SERVER_SOCKET` and `ANDROID_SERIAL` removed), or connects to port 5037.
+
+**This capture never names port 5037 and never runs that check** — the physical handler is the one place that knows
+both (architecture rule 10, safety rule: the check before every physical command). A physical iPhone stays refused by
+the iOS driver, not here.
+
 ## How it works
 
-1. Physical → `ScreenNotSupportedError`. Jar missing at `scrcpyServerPath` → `ScreenUnavailableError`
-   (`unavailable()` gives the same reason). No serial (not running) → `ScreenUnavailableError`.
-2. `scid`: random 31-bit, written `%08x`. `adb -s <serial> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar`.
-3. `adb -s <serial> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>
+1. Jar missing at `scrcpyServerPath` → `ScreenUnavailableError` (`unavailable()` gives the same reason). Then the
+   device's target. **A phone's screen state is read before anything is pushed**:
+   `run(["shell", "dumpsys", "power"], 10_000)`, the line
+   `^\s*mWakefulness=(\S+)\s*$` after a trailing `\r` is stripped — what follows the word, if anything,
+   is blanks, so a printed `Dozing ` (a trailing blank) is the word `Dozing` — compared exactly. `Asleep` or
+   `Dozing` → `ScreenUnavailableError` naming the screen, and nothing is pushed. Anything else — `Awake`, `Dreaming`,
+   a word that is not one, no line, a non-zero exit, a timed-out read — goes on. Emulators skip this read. The phone
+   is never woken.
+2. `scid`: random 31-bit, written `%08x`. `<target> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar` (40 s: the
+   phone's own check plus the 30 s push).
+3. `<target> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>
 log_level=info tunnel_forward=true video=true audio=false control=false video_codec=h264
 send_device_meta=false send_dummy_byte=true send_stream_meta=true send_frame_meta=true cleanup=true
 max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. No option that changes a
    device setting (`show_touches`, `stay_awake`, `screen_off_timeout`, `power_off_on_close`); with
    `control=false` the server never powers the screen on.
-4. No `adb forward`: a TCP connection to Simlock's adb server sends `host:transport:<serial>`, then
+4. No `adb forward`: `target.connect` reaches the device socket and the session sends `host:transport:<serial>`, then
    `localabstract:scrcpy_<scid>`. `FAIL` on the second (nothing listening yet), a refused connect, or a
    socket that closes before the server's zero byte → retry every 100 ms. `FAIL` on the first → refuse.
 5. Then the codec id (must be `h264`) and the first session packet (width, height) → `open` resolves.
-   One 15 s budget from the push's return to here. Past it, or when the shell exits first →
-   `ScreenUnavailableError` with the server's last 20 output lines.
+   One 15 s budget from the moment `spawn`'s process started (a phone's check before it is outside the
+   budget; each attempt's own check is inside it, and one still running past the deadline is waited for,
+   ≤ 5 s) to here. Past it, or when the shell exits first → `ScreenUnavailableError` with the server's last
+   20 output lines. Each step keeps its own limit; there is no overall budget. A phone's worst case is
+   about 135 s, which is why the console waits 150 s for a stream's headers.
 6. Body: meta (session size, configured fps) on every session packet; the `avcC` description before
    the first picture after config packets; key/delta frames as 4-byte-length AVCC. Pull-based
    (`highWaterMark: 0`): the socket is read only when the body's reader pulls; nothing is dropped.
    A body whose socket ends errors with the server's last output and closes the feed. scrcpy sends
    nothing for a still screen, so after 5 s of quiet the body sends an empty `alive` frame.
 7. `close` (idempotent, ≤ 5 s): close the socket, wait 1 s for the shell, then SIGKILL it,
-   `adb shell rm -f <jar>`. The body's end, error or cancel calls it.
+   `<target> shell rm -f <jar>` — through the target, so a check still closed then sends nothing and `close`
+   resolves. The body's end, error or cancel calls it.
 
 A rotation starts a new scrcpy session: a new meta frame, then a new description before the next
 picture; the browser decoder re-reads both mid-stream.
 
-Stop: `open` takes an `AbortSignal`. A stop before the push runs nothing; one during the push (it
-cannot be interrupted) starts no server after it; one while connecting ends the retries. A stopped
-open cleans up (shell killed, jar removed) before it throws. `alive` frames begin only after the
+Stop: `open` takes an `AbortSignal`. A stop before the screen read or the push runs nothing; one during either of
+them (neither can be interrupted) waits for it and starts no server after it; one while connecting ends the retries.
+A stopped open cleans up (shell killed, jar removed) before it throws. `alive` frames begin only after the
 first key frame, so an encoder that never paints meets the stream's silence bound.
 
 ## State and timers
 
 | What                 | Default                         | Key                                                         |
 | -------------------- | ------------------------------- | ----------------------------------------------------------- |
+| Phone's screen read  | 10 s                            | `SCREEN_READ_TIMEOUT_MS`                                    |
 | Push / start / close | 30 s / 15 s, retry 100 ms / 5 s | `PUSH_TIMEOUT_MS`, `START_DEADLINE_MS`, `CLOSE_DEADLINE_MS` |
 | Quiet before `alive` | 5 s                             | `ALIVE_AFTER_MS`                                            |
 
@@ -64,6 +93,8 @@ process at its start and by `rm -f` on close.
 
 - A screen stream touches only its own `scid`: its jar path and socket name; never another stream's.
 - A screen stream changes no device setting and drops no frame.
+- Every adb command and connection of a session goes through its target. The capture names no adb server port and
+  runs no version check of its own.
 
 ## Known gaps
 
@@ -72,4 +103,9 @@ process at its start and by `rm -f` on close.
   `adb shell` died no scrcpy process and no jar were left on the device.
 - **Key frames every 10 s** (scrcpy's default): a viewer that resets its decoder waits up to 10 s.
 - **The `avcC` record omits the High-profile extension** (chroma format, bit depths); browsers accept it.
-- **Physical Android devices have no screen stream**, and the jar's digest is not checked at push.
+- **A phone whose screen turns off mid-stream** shows its last picture, still marked live by `alive` frames, until
+  the screen is on again or the lease ends. Nothing wakes it and nothing ends the stream for it. Keep the phone's
+  screen on (Stay awake while charging; `settings get global stay_on_while_plugged_in` with bit 2 set).
+- **A pushed jar can survive on a phone** when the version check closes after the push and stays closed through the
+  close and the server never started: the `rm -f` goes through that check and is not sent. A server that started
+  deletes its own jar (`cleanup=true`). The jar's digest is not checked at push either.
