@@ -41,6 +41,11 @@ function device(
   };
 }
 
+function neverLeased(id: string, platform: "ios" | "android"): VirtualDevice {
+  const { lastLeaseEndedAt: _dropped, ...rest } = device(id, "ready", 5_000, platform);
+  return { ...rest, readyAt: now - 11 * minute };
+}
+
 function leaseOn(deviceId: string): LeaseRecord {
   return {
     deviceId,
@@ -79,6 +84,7 @@ function harness(
     refuseReservation?: boolean;
     /** The budget's reservation call throws, which no refusal does. */
     reserveThrows?: boolean;
+    refusedPlatforms?: readonly ("ios" | "android")[];
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -203,6 +209,7 @@ function harness(
     },
     decisions: new SerializedDecision(),
     eventBus,
+    hasDriver: (platform) => options.refusedPlatforms?.includes(platform) !== true,
     idle: { shutdownAfterMs: 10 * minute },
     lifecycle: {
       bootWarm: async (target, claim) => {
@@ -878,6 +885,39 @@ describe("warm pool targets", () => {
     expect(rig.shutdownCalls).toEqual(["extra"]);
     expect(rig.shutdownArgs).toEqual([["warm-pool", "cleanup"]]);
   });
+
+  it.each([
+    {
+      kind: "pool off",
+      devices: [device("refused", "ready", 5_000, "android"), device("listed", "ready", 1_000)],
+      options: { enabled: false, refusedPlatforms: ["android"] as const },
+      expected: ["listed"],
+    },
+    {
+      kind: "over budget",
+      // why: the capacity fake counts every device including the refused one, so a limit of 1
+      // leaves the budget over whether or not the pool can act on the refused device.
+      devices: [device("refused", "ready", 5_000, "android"), device("listed", "ready", 1_000)],
+      options: { limit: 1, refusedPlatforms: ["android"] as const },
+      expected: ["listed"],
+    },
+    {
+      kind: "never leased and idle",
+      devices: [neverLeased("refused", "android"), neverLeased("listed", "ios")],
+      options: { refusedPlatforms: ["android"] as const },
+      expected: ["listed"],
+    },
+  ])(
+    "proposes no shutdown for a refused platform's device, whatever the reason ($kind)",
+    async ({ devices, options, expected }) => {
+      const rig = harness(devices, options);
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(rig.shutdownCalls).toEqual(expected);
+    },
+  );
 
   it("runs the target creations one after the other with maxConcurrentBoots 1, the second starting only after the first is ready", async () => {
     const first = held();
