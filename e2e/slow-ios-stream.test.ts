@@ -163,8 +163,8 @@ describe.skipIf(process.platform !== "darwin")(
 // why: `execFile` rejects on a non-zero exit, which is the whole claim here; the exit code is what
 // the test reads, so the rejection is unwrapped rather than caught per call site. `stdio[0]` is
 // `pipe` and not `ignore` because stdin is the capture's liveness handle: the driver hands it a live
-// pipe it closes only to stop, and a pipe hung up at birth is a stop asked for before the program
-// began, which the program answers by going at once rather than reporting why it could not start.
+// pipe it closes only to stop, so a pipe hung up at birth is a stop asked for before the program
+// began -- which the iPhone program answers by going at once with exit 0, reporting no reason.
 async function run(
   program: string,
   args: readonly string[],
