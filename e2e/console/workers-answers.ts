@@ -8,6 +8,22 @@ interface WorkerPayload {
     | undefined;
 }
 
+// why: the page re-reads the list every second, so a re-read can be intercepted just as the test's
+// `finally` stops the gateway; the refused connect it gets is the fleet going away, not a failure of
+// the test, and Playwright would otherwise charge the rejection to it. Only connect-level errors are
+// dropped: any other error is a real fault and must still kill the test.
+const CONNECT_ERROR = /ECONNREFUSED|ECONNRESET|socket hang up/i;
+
+async function fetchOrDrop(route: Route): Promise<Awaited<ReturnType<Route["fetch"]>> | undefined> {
+  try {
+    return await route.fetch();
+  } catch (error) {
+    if (!(error instanceof Error) || !CONNECT_ERROR.test(error.message)) throw error;
+    await route.abort().catch(() => undefined);
+    return undefined;
+  }
+}
+
 // why: the two fields a colour case has to state; everything else in the reading stays the
 // daemon's.
 export interface MemoryClaim {
@@ -25,7 +41,8 @@ export async function answerMemory(page: Page, claim: () => MemoryClaim): Promis
   await page.route(
     (url) => url.pathname === "/v1/workers",
     async (route: Route) => {
-      const response = await route.fetch();
+      const response = await fetchOrDrop(route);
+      if (response === undefined) return;
       const listed = (await response.json()) as { workers: WorkerPayload[] };
       for (const worker of listed.workers) {
         const memory = worker.load?.memory;
@@ -50,7 +67,8 @@ export async function answerWithoutLoad(page: Page): Promise<void> {
   await page.route(
     (url) => url.pathname === "/v1/workers",
     async (route: Route) => {
-      const response = await route.fetch();
+      const response = await fetchOrDrop(route);
+      if (response === undefined) return;
       const listed = (await response.json()) as { workers: WorkerPayload[] };
       for (const worker of listed.workers) delete worker.load;
       await route.fulfill({ json: listed, response });

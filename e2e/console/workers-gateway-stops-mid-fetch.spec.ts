@@ -112,3 +112,46 @@ test.describe("the workers page response helper against a gateway whose listener
     }
   });
 });
+
+type Handler = (route: Route) => Promise<void>;
+
+function captureHandler(answer: (page: Page) => Promise<void>): Promise<Handler> {
+  return new Promise<Handler>((resolve) => {
+    const page = { route: async (_match: unknown, handler: Handler) => resolve(handler) };
+    void answer(page as unknown as Page);
+  });
+}
+
+test.describe("what the workers page response helper drops and what it lets through", () => {
+  test("a fetch that fails for a reason other than the connection going away still rejects out of the helper", async () => {
+    const handler = await captureHandler(answerWithoutLoad);
+    let aborted = false;
+    const route = {
+      abort: async () => {
+        aborted = true;
+      },
+      fetch: async () => {
+        throw new Error("getaddrinfo ENOTFOUND gateway.invalid");
+      },
+    } as unknown as Route;
+
+    await expect(handler(route)).rejects.toThrow("ENOTFOUND");
+    expect(aborted).toBe(false);
+  });
+
+  test("a fetch refused at connect is aborted and resolves quietly", async () => {
+    const handler = await captureHandler(answerWithoutLoad);
+    let aborted = false;
+    const route = {
+      abort: async () => {
+        aborted = true;
+      },
+      fetch: async () => {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:1");
+      },
+    } as unknown as Route;
+
+    await handler(route);
+    expect(aborted).toBe(true);
+  });
+});
