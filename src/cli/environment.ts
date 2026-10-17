@@ -96,8 +96,8 @@ function lazyNodeParentWatch(): ParentWatch {
       let stopped = false;
       let inner: ParentWatchHandle | undefined;
       started ??= import("../ports/index.js").then(({ NodeParentWatch }) => new NodeParentWatch());
-      // why: a failed load means no parent watch, never a crash: this process holds a lease, and
-      // an unwatched parent still ends it by signal or TTL -- the same fate a watch miss has.
+      // why: a failed load means no parent watch, never a crash: the lease keeps renewing and
+      // ends only by signal or `simlock release` -- degraded, like a watch that misses its exit.
       void started.then(
         (watcher) => {
           if (stopped) return;

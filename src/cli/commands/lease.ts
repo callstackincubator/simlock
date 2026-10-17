@@ -145,8 +145,8 @@ async function runLease(
   let stderrWrites: Promise<void> = Promise.resolve();
   const queueErrorWrite = (error: unknown): void => {
     // why: a write that fails (a closed pipe, say) is swallowed like the base's synchronous
-    // write was: the chain the command's last `await` joins must stay resolved, or a failed
-    // line skips the release, the unsubscribes and the close in the `finally` below.
+    // write was: the release is awaited ahead of the chain in the `finally` below, but a
+    // rejected chain still skips the dispose, the unsubscribes and the close after it.
     stderrWrites = stderrWrites
       .then(() => writeError((value) => environment.stderr.write(value), error))
       .catch(() => undefined);

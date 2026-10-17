@@ -985,8 +985,9 @@ describe("CLI: exit codes", () => {
   });
 
   // why: `docs/CLI.md` promises a missing required argument ends with the `simlock --help`
-  // pointer, and each command repeats that hint at its own guard -- one lost `withHelpHint` call
-  // takes the pointer away silently, so a sample of both guarded paths is pinned here.
+  // pointer, and guards reach it two ways -- an explicit `withHelpHint` call or
+  // `requiredPositional` -- either of which can be dropped silently, so a sample of both
+  // paths (a command guard and the router's unknown command) is pinned here.
   it("points a missing required argument at simlock --help", async () => {
     const output = outputCapture();
     await expect(runCli(["lease"], output.environmentWith())).resolves.toBe(2);
