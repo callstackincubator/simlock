@@ -1,7 +1,7 @@
 import type { Locator, Page, Route } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { answerWithoutLoad } from "./workers-answers.js";
+import { answerMemory, answerWithoutLoad } from "./workers-answers.js";
 import { disposeFleet, expect, type RunningDaemon, signIn, startFleet, test } from "./fixtures.js";
 
 /**
@@ -139,19 +139,33 @@ test.describe("what the workers page response helper drops and what it lets thro
     expect(aborted).toBe(false);
   });
 
-  test("a fetch refused at connect is aborted and resolves quietly", async () => {
-    const handler = await captureHandler(answerWithoutLoad);
-    let aborted = false;
-    const route = {
-      abort: async () => {
-        aborted = true;
-      },
-      fetch: async () => {
-        throw new Error("connect ECONNREFUSED 127.0.0.1:1");
-      },
-    } as unknown as Route;
+  const helpers = [
+    ["answerWithoutLoad", answerWithoutLoad],
+    ["answerMemory", (page: Page) => answerMemory(page, () => ({ usedPercent: 50 }))],
+  ] as const;
+  const goneAway = [
+    ["refused at connect", "connect ECONNREFUSED 127.0.0.1:1"],
+    ["destroyed mid-request (socket hang up)", "socket hang up"],
+    ["reset by the peer", "read ECONNRESET"],
+  ] as const;
 
-    await handler(route);
-    expect(aborted).toBe(true);
-  });
+  for (const [helperName, helper] of helpers) {
+    for (const [how, message] of goneAway) {
+      test(`${helperName}: a fetch ${how} is aborted and resolves quietly`, async () => {
+        const handler = await captureHandler(helper);
+        let aborted = false;
+        const route = {
+          abort: async () => {
+            aborted = true;
+          },
+          fetch: async () => {
+            throw new Error(message);
+          },
+        } as unknown as Route;
+
+        await handler(route);
+        expect(aborted).toBe(true);
+      });
+    }
+  }
 });
