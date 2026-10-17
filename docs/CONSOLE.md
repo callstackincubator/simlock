@@ -140,9 +140,8 @@ The console opens on **Overview**: the whole fleet on one page.
 - **Tiles**: how full the fleet is (leases held, as a share of every running
   slot on connected workers), the leases held, the requests waiting and the
   longest wait, the workers connected of all, and the leases granted in the
-  last hour. A tile that has a page of its own opens it. While a connected
-  worker is still starting, the first two show a dash: its leases are not
-  known yet.
+  last hour. A tile that has a page of its own opens it. While a
+  worker's devices and leases are not known, the first two show a dash.
 - **Leases held, last hour**: a chart of how many leases were held at the end
   of each minute. It starts from the leases held now and counts back through
   the lease events of the last hour, the same events the Events page shows, so
@@ -155,7 +154,7 @@ The console opens on **Overview**: the whole fleet on one page.
   the same case.
 - **Workers**: a row per worker with its status square, a square per device
   slot (leased, ready, booting, quarantined, absent or free), its CPU and
-  memory, and the leases it holds (a dash while it is starting). Select a
+  memory, and the leases it holds (a dash while they are not known). Select a
   worker to open it.
 - **Attention** and **Activity**: what needs you, and the latest events. Each
   opens its own page.

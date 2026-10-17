@@ -81,5 +81,6 @@ describe("the overview screen", () => {
     expect(html).toContain('<td data-label="Leases" class="num"><span class="muted">—</span></td>');
     expect(html).toContain('<span class="muted">—</span></span></p>');
     expect(text(html)).toContain("2 of 4 running");
+    expect(html.match(/class="share-bar"/g)).toHaveLength(1);
   });
 });

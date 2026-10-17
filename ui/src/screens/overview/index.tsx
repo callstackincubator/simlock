@@ -93,12 +93,13 @@ export function OverviewBody({ overview }: { readonly overview: Overview }) {
 }
 
 function PlatformBar({ platform }: { readonly platform: PlatformUse }) {
+  const known = platform.running !== undefined && platform.limit !== undefined;
   return (
     <div className="platform">
       <p className="platform-head">
         <span>{platform.name}</span>
         <span className="mono">
-          {platform.running === undefined || platform.limit === undefined ? (
+          {!known ? (
             <span className="muted">—</span>
           ) : (
             <>
@@ -107,13 +108,15 @@ function PlatformBar({ platform }: { readonly platform: PlatformUse }) {
           )}
         </span>
       </p>
-      <ShareBar
-        shares={[
-          { kind: "leased", percent: platform.leasedPercent },
-          { kind: "ready", percent: platform.readyPercent },
-          { kind: "busy", percent: platform.busyPercent },
-        ]}
-      />
+      {known ? (
+        <ShareBar
+          shares={[
+            { kind: "leased", percent: platform.leasedPercent },
+            { kind: "ready", percent: platform.readyPercent },
+            { kind: "busy", percent: platform.busyPercent },
+          ]}
+        />
+      ) : null}
     </div>
   );
 }

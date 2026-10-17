@@ -15,7 +15,7 @@ import { isUnread, leasesHeld, type WorkerView, workerName, workerPath } from ".
 export interface OverviewTile {
   readonly label: string;
   readonly value: string;
-  readonly unit: string;
+  readonly unit?: string;
   readonly to?: string;
 }
 
@@ -155,13 +155,13 @@ function tiles(
   return [
     {
       label: "Utilisation",
-      unit: "%",
+      ...(unknown ? {} : { unit: "%" }),
       value: unknown ? "—" : String(Math.round(percentOf(held, limit))),
     },
     {
       label: "Leases",
       to: "/leases",
-      unit: unknown ? "not reported" : `of ${formatCount(limit)}`,
+      ...(unknown ? {} : { unit: `of ${formatCount(limit)}` }),
       value: unknown ? "—" : formatCount(held),
     },
     {
