@@ -1626,7 +1626,9 @@ from the device profile's tag: `android-tv` is `tv`, `android-wear` is
 `watch`, `android-automotive` and its variants are `auto`, `android-desktop`
 is `desktop`, and a profile with no tag is `phone`. A custom profile
 found only in `devices.xml` takes its class from the tag Android Studio saved
-for it, and is `phone` when it saved none. A profile Simlock ships carries its own class. A model whose tooling reports nothing usable has
+for it, and is `phone` when it saved none. When a custom name is one an SDK or
+Simlock-shipped profile already answers to, the class is that profile's, since a
+lease of that name creates its device. A profile Simlock ships carries its own class. A model whose tooling reports nothing usable has
 no entry, and is still listed and leasable by name.
 
 `classDefaults` says, for a class, which model Simlock would create for it on
