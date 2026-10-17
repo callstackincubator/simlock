@@ -94,7 +94,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    `shutdown`, idle (lease end, else `shutdownAt`) past T2, or T1 under pressure. `CleanupExecutor`
    revalidates, acts, emits `cleanup.executed`; a throwing action is logged, the run goes on.
 6. **Nuke** — one at a time: close acquisition, settle reclaim and warm pool → release all leases
-   `killed` → shut down each unleased `ready` virtual device; with delete, destroy each `shutdown` one.
+   `killed` → shut down each unleased `ready` virtual device; with delete, destroy each `shutdown` one; a device it cannot reset is logged, the rest go on.
 7. **Startup** — `readStartup` (`listManaged` per driver, parallel) → `doctor.reconcile({ read })`
    → leasing's reconcile → `core.converge`: re-arm quarantine → recover interrupted reclaims →
    delete spent devices → start warm pool and `CapacityObserver`. Skips unreadable, leased, claimed.

@@ -1,5 +1,7 @@
 import type { LeaseRecord, VirtualDevice } from "./domain.js";
+import { type Logger, NoopLogger } from "../ports/index.js";
 import type { NukeExecutor } from "./core-ports.js";
+import { stableError } from "./stable-error.js";
 
 /** Release maintenance boundary required by an operator reset. */
 export interface LeaseMaintenance {
@@ -41,6 +43,7 @@ export interface NukeServiceOptions {
   readonly acquisition: AcquisitionMaintenance;
   readonly leases: LeaseMaintenance;
   readonly registry: NukeRegistryView;
+  readonly logger?: Logger;
 }
 
 /**
@@ -51,7 +54,11 @@ export interface NukeServiceOptions {
 export class NukeService implements NukeExecutor {
   #tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly options: NukeServiceOptions) {}
+  readonly #logger: Logger;
+
+  constructor(private readonly options: NukeServiceOptions) {
+    this.#logger = options.logger?.child("nuke") ?? new NoopLogger();
+  }
 
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     let release!: () => void;
@@ -78,7 +85,15 @@ export class NukeService implements NukeExecutor {
       const releasedLeaseIds = await this.options.leases.releaseAllDuringMaintenance("killed");
 
       for (const device of this.options.registry.snapshot.virtualDevices) {
-        await this.#resetDevice(device, deleteDevices);
+        try {
+          await this.#resetDevice(device, deleteDevices);
+        } catch (error: unknown) {
+          this.#logger.error("nuke could not reset a device", {
+            deviceId: device.id,
+            platform: device.spec.platform,
+            error: stableError(error),
+          });
+        }
       }
 
       return { releasedLeaseIds };

@@ -271,6 +271,7 @@ export function createCore(options: CoreOptions): Core {
     },
     devices: deviceLifecycle,
     leases: leaseMaintenance.leases,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
   const doctor = new Doctor({
