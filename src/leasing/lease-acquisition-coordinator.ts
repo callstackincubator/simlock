@@ -1055,11 +1055,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
         destroyed = false;
       }
-      // why: a device the destroy could not retire may still be running, so it goes to quarantine
-      // rather than back to `shutdown`, where every planner would boot it again: `quarantined` is
-      // the one state that retries it, keeps it out of every plan and counts it as running. The
-      // waiter's reservation is released once that is committed, so the slot is never counted twice
-      // and never left to an in-memory claim nothing else holds.
+      // why: a device the destroy could not retire may still be running, so it is handed to
+      // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
+      // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
+      // first would leave a window where the next planner boots a device that may be running.
       if (!destroyed) {
         try {
           const quarantined = await this.options.quarantine.enterFromStalledTransition(
