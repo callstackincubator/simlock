@@ -28,7 +28,7 @@ const EMPTY: StreamStats = {
 // take up to 75 s to give up (an emulator's push 30 s, its server 15 s, the first frame 30 s); a
 // console that gave up at the API's usual 10 s would show its own timeout instead of the worker's
 // reason.
-const STREAM_HEAD_TIMEOUT_MS = 90_000;
+export const STREAM_HEAD_TIMEOUT_MS = 90_000;
 
 export interface Screen {
   readonly canvas: RefObject<HTMLCanvasElement | null>;

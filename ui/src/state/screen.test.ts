@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../data/api";
-import { refusalOf } from "./screen";
+import { refusalOf, STREAM_HEAD_TIMEOUT_MS } from "./screen";
 
 describe("what a refused stream says", () => {
   it("says which devices can be streamed when the daemon answers that this one cannot", () => {
@@ -12,8 +12,15 @@ describe("what a refused stream says", () => {
     );
 
     expect(refusalOf(refused)).toBe(
-      "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.",
+      "This device cannot be streamed. A live screen is captured from a simulator, an emulator or a physical Android phone, not from a physical iPhone.",
     );
+  });
+
+  it("waits for a stream's headers past the longest open a physical Android phone's capture can take", () => {
+    // why: a phone's open may spend about 135 s — the shared adb server's version check up to 45 s
+    // the first time, the screen read 20 s, the push 40 s, the server 15 s and a last check past it.
+    // A console that gave up sooner would show its own timeout instead of the worker's reason.
+    expect(STREAM_HEAD_TIMEOUT_MS).toBe(150_000);
   });
 
   it("keeps the daemon's own reason when it named one, and says what else to check", () => {
