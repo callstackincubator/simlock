@@ -149,8 +149,15 @@ public func fail(_ reason: String) -> Never {
 }
 
 /// As above, with the exit code the reason calls for.
+///
+/// why: the daemon reads this program's *last* stderr line as the reason a viewer sees, and a
+/// reason a framework handed back with newlines in it would arrive there as its last line only —
+/// so the one line promised here is what goes out, with any inner break flattened.
 public func fail(_ code: Int32, _ reason: String) -> Never {
-    FileHandle.standardError.write("\(reason)\n".data(using: .utf8)!)
+    let oneLine = reason
+        .split(whereSeparator: { $0.isNewline })
+        .joined(separator: " / ")
+    FileHandle.standardError.write("\(oneLine)\n".data(using: .utf8)!)
     exit(code)
 }
 
