@@ -5,10 +5,11 @@
 //   simlock-device-capture <UDID> [--codec avcc] [--fps N] [--bitrate BPS]
 //                               [--max-dimension PX] [--duration SEC]
 //
-// The wire, the envelope, the exit codes and the lifecycle are the same as simlock-screen-capture's;
-// both live in SimlockCapture. What differs is where the pictures come from: CoreDevice asks the
-// iPhone for an HEVC media stream, this program receives it as RTP, decodes it, and hands each
-// picture to the same encode loop a simulator's framebuffer goes into.
+// The wire, the envelope, the lifecycle and the encoders are the same as simlock-screen-capture's;
+// both live in SimlockCapture, and both end on 64, 1 or 0 — this program's version gate adds 69.
+// What differs is where the pictures come from: CoreDevice asks the iPhone for an HEVC media stream,
+// this program receives it as RTP, decodes it, and hands each picture to the same encode loop a
+// simulator's framebuffer goes into.
 //
 // Version gate: the first thing this program does, before any CoreDevice call, is read CoreDevice's
 // own version and refuse a Mac it was not written against (exit 69). The framework is linked `weak`,
