@@ -25,7 +25,13 @@
     ".dependency-cruiser.cycles.mjs",
     "vendor/screen-capture/scripts/*.mjs"
   ],
-  "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
+  "dynamicallyLoaded": [
+    "e2e/fake-driver/index.ts",
+    // The command tree names its modules in an `import("./commands/<name>.js")` thunk, so
+    // reachability is the tree's job and never a static edge; the tree's own module list is
+    // what `lazy-loading.test.ts` and the router tests cover.
+    "src/cli/commands/*.ts"
+  ],
   // The web console's libraries are bundled into dist/ui at build time and ship as files, so
   // they are dev dependencies on purpose: the package gains no runtime dependency for them.
   "ignoreDependencies": [

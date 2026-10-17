@@ -47,15 +47,11 @@ import type {
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
-import {
-  buildCliEnvironment,
-  parseDuration,
-  readLogFile,
-  readPipedStdin,
-  runCli,
-  type CliEnvironment,
-  type CliEnvironmentPorts,
-} from "./index.js";
+import { runCli, type CliEnvironment, type CliEnvironmentPorts } from "./index.js";
+import { buildCliEnvironment } from "./environment.js";
+import { readLogFile } from "./log-file.js";
+import { readPipedStdin } from "./stdio.js";
+import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
@@ -5471,7 +5467,17 @@ describe("CLI: daemon logs --follow", () => {
     };
     const output = outputCapture(ports);
     const exit = runCli(["daemon", "logs", "--follow"], output.environmentWith());
-    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    // why: `followLogFile` loads its follower module on first use, so settling once is no
+    // longer enough for the tail read to have started; this yields to the event loop until the
+    // poll timer is armed, which is the point the old single settle proved the follower was
+    // live. The wait is a real timer: the lazy import resolves through I/O callbacks, which
+    // `setImmediate` turns alone would not drain.
+    const settle = async () => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (clock.pendingTimerCount > 0) return;
+      }
+    };
     await settle();
     return {
       clock,

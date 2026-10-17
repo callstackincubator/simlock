@@ -5,22 +5,48 @@ Entry: `main.ts` (the `simlock` bin) → `index.ts` `runCli(argv)`.
 Uses: admin, client (types), agent-identity, lease-policy, bus (event file reader), core
 (`loadConfig` only), contract, ports; mcp, loaded on demand. Never imports: daemon, drivers,
 gateway, http.
+
+Everything except `agent-identity` (the requester-id resolver, the one cheap component) is
+loaded **on demand**: `index.ts`, `tree.ts`, `errors.ts`, `types.ts` and `environment.ts`
+import no component for a value, so the router answers `--help` or a usage error without
+loading `core`, `contract`, `admin`, `ports` or any command module. `lazy-loading.test.ts`
+fails if a value import creeps back into those five.
 Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
 
 ## Files
 
-| File             | Role                                                                    |
-| ---------------- | ----------------------------------------------------------------------- |
-| `index.ts`       | `runCli`, every command, `buildCliEnvironment`, rendering               |
-| `main.ts`        | The bin; sets `process.exitCode`                                        |
-| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited |
-| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                    |
+| File             | Role                                                                              |
+| ---------------- | --------------------------------------------------------------------------------- |
+| `index.ts`       | `runCli`: the global `--token`, the command lookup, the error boundary            |
+| `tree.ts`        | The command tree — each node names the module that implements it                  |
+| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed |
+| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code             |
+| `errors.ts`      | The usage error and the error → code/exit mapping                                 |
+| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice            |
+| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`        |
+| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit         |
+| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.             |
+| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                           |
+| `termination.ts` | The signals and parent-exit wait a held lease blocks on                           |
+| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                             |
+| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                   |
+| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited           |
+| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                              |
+| `main.ts`        | The bin; sets `process.exitCode`                                                  |
+
+`format.ts`, `duration.ts` and `termination.ts` are reached only from a command module, and
+`follow-log.ts` and `passthrough.ts` only from a dynamic import inside `environment.ts`, so
+the router's own load stays at eight files.
 
 ## How it works
 
-1. **Route** — `runCli` takes out a global `--token`, then switches on the first word.
-   Any error is one JSON line on stderr, `{ error: { code, message } }`. Exit code:
-   `ERROR_TABLE` `cliExitCode`, 2 for a usage error, else 1.
+1. **Route** — `runCli` takes out a global `--token`, then walks `COMMANDS` to the deepest
+   node the words name and loads only that node's module (and its children's, when a parent
+   and child share one implementation). Nothing runs without a node: an unmatched word is a
+   usage error before any command module is read. `--help`/`-h` as the first word, or no
+   words, prints the root usage without building an environment at all. Any error is one JSON
+   line on stderr, `{ error: { code, message } }`. Exit code: `ERROR_TABLE` `cliExitCode`,
+   2 for a usage error, else 1.
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
