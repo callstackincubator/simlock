@@ -7,14 +7,14 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                | Role                                                                          |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules |
-| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`            |
-| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                         |
-| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`      |
-| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done       |
-| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator        |
+| File                | Role                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules               |
+| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                          |
+| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                                       |
+| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                    |
+| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done                     |
+| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone |
 
 ## How it works
 
@@ -81,11 +81,19 @@ Passthrough —
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
 
-Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture <udid>
---codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>`; stdout is
-the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. Physical → `ScreenNotSupportedError`;
-program missing → `ScreenUnavailableError`. Default program: dist/bin, built by `pnpm build`;
-`drivers.ios.screenCaptureCommand` names another.
+Screen — `screenCapture` (only when `create` is given a launcher):
+`simlock-screen-capture <udid> --codec avcc --fps --bitrate --max-dimension` with
+`SIMLOCK_IOS_DEVICE_SET=<root>` for a simulator, and the same arguments without
+that variable for a physical iPhone run by `simlock-device-capture`. stdout is
+the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. Either program
+missing → `ScreenUnavailableError` (a missing iPhone program refuses an iPhone
+open only; a Mac without it still reports streaming available). Default
+programs: dist/bin, built by `pnpm build`; `drivers.ios.screenCaptureCommand`
+and `drivers.ios.deviceCaptureCommand` name others. Neither program's
+environment carries `SIMLOCK_COREDEVICE_INFO_PLIST`, whatever the daemon has:
+it points the iPhone program's version pin at another file. The iPhone program
+enforces that pin itself — a CoreDevice major other than 642 exits 69 with the
+reason, which reaches the viewer as a 503.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
@@ -128,4 +136,24 @@ record of a device's mode; `driverData` holds the slim signature.
   simulator is booted only when it starts, then repaints its last surface every 200 ms, so after
   the health monitor reboots a crashed simulator the viewer can see the old picture until they
   press Stop and Show screen again. A lease ending stops it as usual.
+- **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does today: the
+  scaler is sized once, from the first picture.
+- **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice
+  its client is gone.
+- **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked
+  against that release and the pin moves.
+- **Untested: whether DeviceHub or Xcode showing the same iPhone keeps its stream while simlock
+  streams it**, and whether the lease holder's `devicectl` commands affect a running stream.
+- **Untested: the iPhone source ending after the first picture** (an invalidated assertion), and
+  `stop()` really stopping the iPhone's stream and releasing the assertion. No test can see the
+  iPhone's stream or CoreDevice's assertions, and an iPhone that serves two streams at once lets a
+  new lease stream even when an old stream was left running. The slow lane proves only that the
+  process is gone and that the iPhone streams again.
+- **A stop while `startMediaStream` is still running past 1.5 s** exits without the stream's id,
+  like a SIGKILL.
+- **An iPhone that stays connected and unlocked but stops sending video**, or a decoder that stops
+  producing pictures, shows the last picture until the lease ends.
+- **Two viewers of one lease ask the iPhone for two streams.** Whether it serves both is what the
+  slow lane's two-viewer case finds out. #602 (one capture per lease) would remove the second
+  stream.
 - **A cold slim lease takes ~160 s.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
