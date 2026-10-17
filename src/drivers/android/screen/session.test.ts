@@ -655,7 +655,16 @@ describe("Android screen capture: a phone's screen state", () => {
     ] as const) {
       const world = await setup({ device: PHONE, power: answer });
       const opening = world.capture.open(PHONE, SETTINGS, new AbortController().signal);
-      const feed = await drive(world.clock, waitThenStart(world.target, opening));
+      // why: a timed-out read ends 10 s of fake clock after the open, and waitThenStart's capped
+      // flush-wait cannot span it; the file's uncapped watcher pattern waits for the peer whenever
+      // it appears, and drive still ends the run if the open never reaches it.
+      const watcher = (async () => {
+        while (world.target.server.peers.length === 0)
+          await new Promise((resolve) => setImmediate(resolve));
+        world.target.server.last.send(streamStart());
+      })();
+      const feed = await drive(world.clock, opening);
+      await watcher;
       expect(await feed.body.getReader().read(), String(answer)).toBeDefined();
 
       expect(world.target.powerReads, String(answer)).toEqual([SCREEN_READ_MS]);
@@ -702,9 +711,11 @@ describe("Android screen capture: a phone's screen state", () => {
         stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, `shell rm -f ${DEVICE_JAR}`],
       },
       {
+        // why: the server's spawn sits between the push and the connection attempt, so it is in the
+        // log by the time the attempt's check refuses; only the `rm -f` follows it.
         name: "a connection attempt",
         refuses: (args) => args[0] === "connect",
-        stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, `shell rm -f ${DEVICE_JAR}`],
+        stepsBefore: [`push ${SERVER} ${DEVICE_JAR}`, "server", `shell rm -f ${DEVICE_JAR}`],
       },
     ];
     for (const stage of stages) {
