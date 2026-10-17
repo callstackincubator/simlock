@@ -7,12 +7,13 @@ Uses: admin, client (types), agent-identity, lease-policy, bus (event file reade
 demand. Never imports: daemon, drivers, gateway, http.
 
 Everything except `agent-identity` (the requester-id resolver, the one cheap component) is
-loaded **on demand**: `index.ts`, `tree.ts`, `errors.ts`, `usage-error.ts` and `types.ts`
-import no component for a value and `environment.ts` imports none but `agent-identity`, so
-the router answers `--help` or a usage error without loading `core`, `contract`, `admin`,
-`ports` or any command module. The dependency rule
+loaded **on demand**: the CLI's own shared files (`main.ts`, `index.ts`, `tree.ts`,
+`errors.ts`, `usage-error.ts`, `types.ts`, `environment.ts`, `stdio.ts`, `log-file.ts`,
+`args.ts`, `connect.ts`) import no component for a value and `environment.ts` none but
+`agent-identity`, so the router answers `--help` or a usage error without loading `core`,
+`contract`, `admin`, `ports` or any command module. The dependency rule
 `cli-router-imports-no-component-values` rejects a value import of any other component into
-those six; `lazy-loading.test.ts` measures what a command loads when it runs.
+those files; `lazy-loading.test.ts` measures what a command loads when it runs.
 Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
 
 ## Files
