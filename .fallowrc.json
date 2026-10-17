@@ -83,6 +83,11 @@
         "reason": "The supervisor's test arranges a process table, a clock, a filesystem and a scripted runner in one helper so each of its cases reads as one claim; the helper is branching setup, not logic under test."
       },
       {
+        "files": ["src/drivers/android/screen/session.test.ts"],
+        "maxCrap": 45,
+        "reason": "The capture's `setup` builds both devices' worlds — two targets, a scripted runner, an adb server, a clock, a filesystem, an optional scripted screen answer — in one helper so each case reads as one claim; the branches are optional arrangement, not logic under test."
+      },
+      {
         "files": ["e2e/fake-driver/fake-driver.ts"],
         "maxCrap": 45,
         "reason": "This file has no wired coverage pipeline (fallow estimates 0% here), so CRAP is complexity-squared alone. The three flagged functions (#resolveOsVersion/#assertOsVersionAvailable, #beforeCall, compareVersions) are simple, deterministic script-interpretation/comparison helpers already reduced from a critical/high toError+resolveSpec pair (cyclomatic 11 and 9) down to cyclomatic 5-6 moderate; the daemon-level e2e flows exercise them on every run but that coverage isn't visible to this metric."

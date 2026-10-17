@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 
 import {
   encodeScreenFrame,
+  isPhysicalDriverDevice,
   type PhysicalDriverDevice,
   type ScreenCapture,
   type ScreenFeed,
@@ -26,6 +27,11 @@ import { ScrcpyVideoParser } from "./scrcpy-video.js";
 const SCRCPY_SERVER_VERSION = "5.0.1";
 const DEVICE_DIRECTORY = "/data/local/tmp";
 const PUSH_TIMEOUT_MS = 30_000;
+// why: a phone's screen state is read once, before anything is pushed; a read that outlives this
+// goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
+const SCREEN_READ_TIMEOUT_MS = 10_000;
+const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)$/;
+const SCREEN_OFF_MESSAGE = "The phone's screen is off. Turn it on and ask for the stream again.";
 // why: measured from the moment the push returned, through every connect retry, to the first session
 // packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
 export const START_DEADLINE_MS = 15_000;
@@ -90,6 +96,7 @@ export function createAndroidScreenCapture(options: AndroidScreenCaptureOptions)
         target,
         scid,
         settings,
+        isPhysicalDriverDevice(device),
       ).start(signal);
     },
     unavailable,
@@ -103,6 +110,7 @@ class ScrcpySession {
   readonly #scidHex: string;
   readonly #devicePath: string;
   readonly #settings: ScreenSettings;
+  readonly #isPhone: boolean;
   readonly #tail: string[] = [];
   readonly #abort = new AbortController();
   #pushed = false;
@@ -118,10 +126,12 @@ class ScrcpySession {
     target: ScreenTarget,
     scid: number,
     settings: ScreenSettings,
+    isPhone: boolean,
   ) {
     if (!Number.isInteger(scid) || scid < 0 || scid >= SCID_LIMIT) {
       throw new RangeError(`A scrcpy session id is a 31-bit number, not ${String(scid)}`);
     }
+    this.#isPhone = isPhone;
     this.#clock = clock;
     this.#serverPath = serverPath;
     this.#target = target;
@@ -138,6 +148,13 @@ class ScrcpySession {
     stopped.addEventListener("abort", stop, { once: true });
     try {
       if (stopped.aborted) throw this.#startFailure("was stopped before it started");
+      if (this.#isPhone) {
+        await this.#readScreenState();
+        // why: like the push, the screen read cannot be cut short from outside; a stop that arrived
+        // during it waits for the read to end and pushes nothing onto a device being handed back.
+        if (this.#abort.signal.aborted)
+          throw this.#startFailure("was stopped while the phone's screen was being read");
+      }
       await this.#push();
       // why: the push is the one step that cannot be interrupted; a stop that arrived during it
       // starts no server on a device that is being handed back.
@@ -185,6 +202,21 @@ class ScrcpySession {
   close(): Promise<void> {
     this.#closing ??= this.#close();
     return this.#closing;
+  }
+
+  // why: only a read that names Asleep or Dozing is a fact about the screen; every other answer —
+  // another word, no line, a non-zero exit, a timed-out read — reads as unknown and goes on to the
+  // push, where a phone that paints nothing meets the same silence bounds as an emulator.
+  async #readScreenState(): Promise<void> {
+    const read = await this.#target.run(["shell", "dumpsys", "power"], SCREEN_READ_TIMEOUT_MS);
+    if (read.code !== 0) return;
+    for (const line of read.stdout.split("\n")) {
+      const word = WAKEFULNESS_LINE.exec(line.endsWith("\r") ? line.slice(0, -1) : line)?.[1];
+      if (word === undefined) continue;
+      if (word === "Asleep" || word === "Dozing")
+        throw new ScreenUnavailableError(SCREEN_OFF_MESSAGE);
+      return;
+    }
   }
 
   async #push(): Promise<void> {
