@@ -333,12 +333,19 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
         onFrame: @escaping @Sendable (CVPixelBuffer) -> Void,
         deviceID: String
     ) async throws {
-        // CoreDevice shares the descriptor of the socket it opened for this stream; adopting it is what
-        // the iPhone's sender expects. The socket bound for the tunnel route is the fallback when
-        // CoreDevice shares none.
-        if let local = IPv6Address(localAddress),
-           let remote = IPv6Address(response.connection.sender.ipv6Address) {
-            try? NetworkUtils.withSharedSocketDictionary(
+        // The port this program bound for the tunnel route only ever named the address `startMediaStream`
+        // was asked to send to, so it is put down now that the answer is in hand. What receives from here
+        // is the socket CoreDevice shares for the stream, which is the one the iPhone's sender is the
+        // peer of and the only one an RTCP report can be written from.
+        simlockReleaseBoundSocket()
+        guard let local = IPv6Address(localAddress),
+              let remote = IPv6Address(response.connection.sender.ipv6Address)
+        else {
+            throw CaptureError("iPhone \(deviceID)'s stream endpoints were not readable")
+        }
+        let adopted: Bool
+        do {
+            adopted = try NetworkUtils.withSharedSocketDictionary(
                 sourceAddress: local,
                 port: response.connection.receiver.port,
                 remoteAddress: remote,
@@ -346,6 +353,11 @@ final class DeviceScreenSource: ScreenSource, @unchecked Sendable {
             ) { sockets in
                 simlockAdopt(sockets)
             }
+        } catch {
+            throw CaptureError("iPhone \(deviceID)'s stream socket was not shared: \(error)")
+        }
+        guard adopted else {
+            throw CaptureError("iPhone \(deviceID)'s stream shared no socket to receive on")
         }
 
         let loop = ReceiveLoop(remoteSSRC: remoteSSRC, onFrame: onFrame, source: self)
