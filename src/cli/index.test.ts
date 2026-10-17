@@ -1281,9 +1281,10 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
   }
 
   /**
-   * why: turns the clock at the auto-launch poll's own 50 ms step and keeps turning after the
-   * CLI settles, because the boot the CLI abandoned carries on without it. The `settled`
-   * guard makes a hang fail on a named assertion instead of on a test timeout.
+   * why: turns the clock at the auto-launch poll's own 50 ms step, with room to run past the
+   * startup deadline and keep pumping the boot the CLI abandoned; the clock is fake, so the
+   * extra ticks cost nothing. The `settled` guard makes a hang fail on a named assertion
+   * instead of on a test timeout.
    */
   async function runWithTicks(
     command: readonly string[],
@@ -1297,7 +1298,7 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
       settled = true;
       return code;
     });
-    for (let tick = 0; tick < 400 && (!settled || clock.now() < runOnMs); tick += 1) {
+    for (let tick = 0; tick < 500 && (!settled || clock.now() < runOnMs); tick += 1) {
       clock.advance(50);
       await settle();
       await settle();
@@ -1309,10 +1310,10 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
     return { exitCode: await exitCode, output };
   }
 
-  it("reports as running a daemon still booting past the deadline, not as a failed start", async () => {
+  it("waits 20 s for a daemon it auto-launched: within the deadline it reports as running, past it the command reports a failed start", async () => {
     const cases = [
-      { bootMs: 4_900, label: "4.9 s" },
-      { bootMs: 5_100, label: "5.1 s" },
+      { bootMs: 19_900, exitCode: 0, label: "19.9 s", timedOut: false },
+      { bootMs: 20_100, exitCode: 1, label: "20.1 s", timedOut: true },
     ];
 
     // why: every case runs before anything is asserted, so the case that passes cannot hide
@@ -1332,7 +1333,8 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         return {
           exitCode,
           label: testCase.label,
-          stderr: output.stderr,
+          timedOut: testCase.timedOut,
+          timedOutStarting: output.stderr.includes("Timed out starting simlock daemon"),
           stdout: output.stdout,
           statusHealth: status.daemon?.health ?? after.stdout,
           statusExit,
@@ -1344,12 +1346,27 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
       outcomes.map((outcome) => ({
         exitCode: outcome.exitCode,
         label: outcome.label,
-        stderr: outcome.stderr,
+        // why: the failed start is asserted as the timeout's wording, not the whole line or
+        // its error code, so what the code reports can change without moving this test.
+        timedOut: outcome.timedOut,
+        timedOutStarting: outcome.timedOutStarting,
         stdout: outcome.stdout,
       })),
     ).toEqual([
-      { exitCode: 0, label: "4.9 s", stderr: "", stdout: '{"status":"running"}\n' },
-      { exitCode: 0, label: "5.1 s", stderr: "", stdout: '{"status":"running"}\n' },
+      {
+        exitCode: 0,
+        label: "19.9 s",
+        timedOut: false,
+        timedOutStarting: false,
+        stdout: '{"status":"running"}\n',
+      },
+      {
+        exitCode: 1,
+        label: "20.1 s",
+        timedOut: true,
+        timedOutStarting: true,
+        stdout: "",
+      },
     ]);
 
     // why: asserted apart from the exit code so a fix that only softens the timeout message
