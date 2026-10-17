@@ -254,7 +254,6 @@ describe("NukeService", () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
-    const sink = new MemoryLogSink();
     let nextId = 1;
     const registry = await Registry.load({
       clock,
@@ -283,7 +282,6 @@ describe("NukeService", () => {
         },
         async endMaintenance() {},
       },
-      logger: new JsonLinesLogger({ clock, sink }),
       registry,
     });
 
@@ -337,20 +335,6 @@ describe("NukeService", () => {
 
     await expect(service.nuke(true)).resolves.toEqual({ releasedLeaseIds: [] });
 
-    expect(sink.records).toEqual(
-      [ghostReady, ghostShutdown].map((ghost) =>
-        expect.objectContaining({
-          level: "error",
-          module: "daemon.nuke",
-          fields: {
-            deviceId: ghost.id,
-            error: "NoDriverError: No driver registered for platform: android",
-            platform: "android",
-          },
-        }),
-      ),
-    );
-
     const stateOf = (deviceId: string) =>
       registry.snapshot.devices.find((candidate) => candidate.id === deviceId)?.state;
     expect([
@@ -371,5 +355,35 @@ describe("NukeService", () => {
         `shutdown ${healthyReady.driverDeviceId}`,
       ].sort(),
     );
+  });
+
+  it("logs a device it cannot reset at error, naming the device, platform and error, and still resolves the run", async () => {
+    const sink = new MemoryLogSink();
+    const harness = createHarness([device("dev_1", "ready")]);
+    harness.lifecycle.shutdown = async () => {
+      throw new Error("reset exploded");
+    };
+    const service = new NukeService({
+      acquisition: { async beginMaintenance() {}, async endMaintenance() {} },
+      devices: harness.lifecycle,
+      leases: {
+        async beginMaintenance() {},
+        async releaseAllDuringMaintenance() {
+          return [];
+        },
+        async endMaintenance() {},
+      },
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+      registry: harness.registry,
+    });
+
+    await expect(service.nuke(false)).resolves.toEqual({ releasedLeaseIds: [] });
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "error",
+        module: "daemon.nuke",
+        fields: { deviceId: "dev_1", error: "Error: reset exploded", platform: "ios" },
+      }),
+    ]);
   });
 });
