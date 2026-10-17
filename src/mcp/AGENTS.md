@@ -14,6 +14,7 @@ Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
 | `server.ts`       | `createMcpServer`: the tools, progress, logging messages             |
 | `contracts.ts`    | Tool schemas, cut from the contract's operations                     |
 | `connect.ts`      | `connectWithAutoLaunch`, `connectToRunningDaemon`                    |
+| `connect.test.ts` | The auto-launch loop's own test                                      |
 | `test-support.ts` | Helpers for this module's tests                                      |
 
 ## How it works
