@@ -253,14 +253,17 @@ final class HEVCDecoder {
         )
         guard let session else { throw CaptureError("no decompression session") }
         VTSessionSetProperty(session, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
-        var usingHardware: CFTypeRef?
+        // why: `Unmanaged`, because the property is written through a `void *` out-parameter that this
+        // side owns after the call — an `Optional<AnyObject>` slot takes the pointer as a bare address,
+        // which is what the compiler warns about, and nothing would ever release it.
+        var usingHardware: Unmanaged<CFTypeRef>?
         let hardwareStatus = VTSessionCopyProperty(
             session,
             key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
             allocator: kCFAllocatorDefault,
             valueOut: &usingHardware
         )
-        if hardwareStatus == 0, let enabled = usingHardware as? Bool {
+        if hardwareStatus == 0, let enabled = usingHardware?.takeRetainedValue() as? Bool {
             onConfiguration("HEVC decoder: \(enabled ? "hardware" : "software")")
         }
     }
