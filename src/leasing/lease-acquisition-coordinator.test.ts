@@ -1423,6 +1423,142 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
   });
 
+  it("performs no provisioning for a waiter the queue times out during its eviction", async () => {
+    let deadlineDue = false;
+    const harness = await createHarness({
+      lifecycle: (lifecycle) => ({
+        bootForLease: (...args) => lifecycle.bootForLease(...args),
+        dispose: (...args) => {
+          // why: an eviction is the waiter's own device work, so this is where a real one spends
+          // the seconds its `timeoutMs` covers. The clock moves here to land the armed deadline
+          // inside the attempt, which the queue's mid-attempt rule leaves un-rejected; the
+          // decision that follows the eviction is what finds the waiter past that deadline.
+          if (!deadlineDue) {
+            deadlineDue = true;
+            harness.clock.advance(30);
+          }
+          return lifecycle.dispose(...args);
+        },
+        shutdown: (...args) => lifecycle.shutdown(...args),
+        destroy: (...args) => lifecycle.destroy(...args),
+      }),
+    });
+    // why: the one device slot holds a device of another model, so the request can only be served
+    // by evicting it. It is leased first, so the request is queued before it is ever planned: only
+    // a queued waiter has an armed deadline for the eviction to spend.
+    const oldDevice = await seedReady(harness, { ...request, model: "iPhone SE" });
+    const held = await harness.coordinator.request(
+      { ...request, model: "iPhone SE" },
+      { ownerId: "holder", requesterId: "holder" },
+    );
+    const acquisition = harness.coordinator.request(request, {
+      ownerId: "late",
+      requesterId: "late",
+      timeoutMs: 20,
+    });
+    void acquisition.catch(() => undefined);
+    await settle();
+    expect(harness.coordinator.queueDepth).toBe(1);
+
+    // why: the lease ends without a reclaim, so the device stays `ready`, still of the old model:
+    // what the queued request evicts. The waiter's budget is 20 ms and the clock stands at 1_000,
+    // so the advance inside the eviction takes the deadline with it.
+    await harness.registry.beginRelease(held.lease.id);
+    await harness.registry.transitionDevice(oldDevice.id, "ready", {
+      event: "device.reclaimed",
+      payload: { deviceId: oldDevice.id, duration: 0, strategy: "wipe" },
+    });
+    harness.coordinator.kick();
+    await settle();
+
+    await expect(acquisition).rejects.toMatchObject({ name: "QueueTimeoutError" });
+    expect({
+      createdModels: harness.driver.calls
+        .filter((call) => call.operation === "provision")
+        .map((call) => (call.arguments[0] as { readonly model?: string }).model),
+      deviceStates: harness.registry.snapshot.devices.map((candidate) => candidate.state),
+      reservedRunning: harness.capacity.runningCapacity([]).global.reserved,
+    }).toEqual({
+      createdModels: ["iPhone SE"],
+      deviceStates: ["deleted"],
+      reservedRunning: 0,
+    });
+  });
+
+  it.each([
+    {
+      limits: { maxDevices: 1, maxRunning: 1 },
+      seed: "shutdown" as const,
+      victim: request,
+      work: "boot a shut-down device",
+    },
+    {
+      limits: { maxDevices: 1, maxRunning: 1 },
+      seed: "ready" as const,
+      victim: { ...request, model: "iPhone SE" },
+      work: "delete an idle device",
+    },
+    {
+      limits: { maxDevices: 2, maxRunning: 1 },
+      seed: "ready" as const,
+      victim: { ...request, model: "iPhone SE" },
+      work: "shut down an idle running device",
+    },
+  ])(
+    "does not go on to $work when the queue will not put the plan in flight",
+    async ({ limits, seed, victim }) => {
+      const harness = await createHarness(limits);
+      if (seed === "shutdown") {
+        await seedShutdown(harness, victim);
+      } else {
+        await seedReady(harness, victim);
+      }
+      const markProcessing = harness.queue.markProcessing.bind(harness.queue);
+      let markedProcessingCalls = 0;
+      let refuses = true;
+      // why: the queue refuses to put a waiter past its deadline in flight (its own rule, proved
+      // in wait-queue.test.ts), and the refusal can land on any plan the coordinator performs.
+      // The test above drives one plan kind through a real timeout; the stub stands at each of the
+      // others, where the state a real refusal needs is one the queue's own re-queue path creates.
+      harness.queue.markProcessing = (waiter) => {
+        markedProcessingCalls += 1;
+        return refuses ? false : markProcessing(waiter);
+      };
+
+      const acquisition = harness.coordinator.request(request, {
+        ownerId: "refused",
+        requesterId: "refused",
+      });
+      const outcome = promiseState(acquisition);
+      await settle();
+
+      expect({
+        deviceStates: harness.registry.snapshot.devices.map((candidate) => candidate.state),
+        leaseRequesters: harness.registry.snapshot.leases.map((lease) => lease.requesterId),
+        markedProcessingCalls,
+        outcome: outcome.state,
+        queueDepth: harness.coordinator.queueDepth,
+      }).toEqual({
+        deviceStates: [seed === "shutdown" ? "shutdown" : "ready"],
+        leaseRequesters: [],
+        markedProcessingCalls: 1,
+        outcome: "pending",
+        queueDepth: 0,
+      });
+
+      // why: the refused plan gave back the capacity reservation and device claim it held, so the
+      // next request is served rather than told the worker is full.
+      refuses = false;
+      await expect(
+        harness.coordinator.request(request, {
+          noWait: true,
+          ownerId: "next",
+          requesterId: "next",
+        }),
+      ).resolves.toMatchObject({ device: { spec: { model: "iPhone 16" } } });
+    },
+  );
+
   it("keeps admission closed until concurrent maintenance callers have all finished", async () => {
     const harness = await createHarness();
     await harness.coordinator.beginMaintenance();
