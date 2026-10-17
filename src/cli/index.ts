@@ -19,6 +19,7 @@ import {
   resolveSimlockHome,
   SocketPathTooLongError,
   SystemClock,
+  DAEMON_STARTUP_TIMEOUT_MS,
   type Clock,
   type DaemonLauncher,
   type Filesystem,
@@ -222,6 +223,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     private readonly clock: Clock,
     private readonly launcher: DaemonLauncher,
     private readonly checkConfig: () => Promise<void>,
+    private readonly startupTimeoutMs: number,
   ) {}
 
   async connect(endpoint: string): Promise<IpcConnection> {
@@ -232,7 +234,7 @@ class AutoLaunchIpcConnector implements IpcConnector {
     }
     await this.checkConfig();
     await this.launcher.launch();
-    const deadline = this.clock.now() + 5_000;
+    const deadline = this.clock.now() + this.startupTimeoutMs;
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
@@ -284,9 +286,15 @@ export function buildCliEnvironment(
   const requesterId = resolveRequesterId(env, String(process.pid));
   // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
   // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
-  const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher, async () => {
-    await loadConfig({ configPath, filesystem, modules: moduleConfigEntries, systemStats });
-  });
+  const autoLaunchIpc = new AutoLaunchIpcConnector(
+    ipc,
+    clock,
+    launcher,
+    async () => {
+      await loadConfig({ configPath, filesystem, modules: moduleConfigEntries, systemStats });
+    },
+    DAEMON_STARTUP_TIMEOUT_MS,
+  );
 
   const connect = async (
     connector: IpcConnector,

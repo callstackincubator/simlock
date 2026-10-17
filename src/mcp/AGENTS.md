@@ -34,8 +34,8 @@ Surface: [CLI.md](../../docs/CLI.md#simlock-mcp).
 6. **Reconnect** — the typed client never reconnects. `onConnectionLost` drops it; the next
    use builds a new one:
    - a tool call → `connectWithAutoLaunch`: launches the daemon only when nothing listens
-     (`connection-refused`, `endpoint-not-found`), retries every 50 ms for 5 s, else
-     `DAEMON_STARTUP_FAILED`;
+     (`connection-refused`, `endpoint-not-found`), retries every 50 ms for
+     `startupTimeoutMs` (default `DAEMON_STARTUP_TIMEOUT_MS`), else `DAEMON_STARTUP_FAILED`;
    - the renew timer → `connectToRunningDaemon`: never launches.
      The lease survives either way: the daemon released nothing.
 7. **End** — stdin EOF, `SIGINT`/`SIGTERM` or transport close → `McpSession.close`: stop

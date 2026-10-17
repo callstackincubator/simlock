@@ -27,7 +27,7 @@ Surface: [CLI.md](../../docs/CLI.md) — every command, flag and exit code.
    None, or a rejected one → an `agent` session and one stderr `notice` line.
 3. **Auto-launch** (`AutoLaunchIpcConnector`) — when nothing listens: load the config
    first (a bad one fails on this stderr), launch the daemon detached, retry every 50 ms
-   for 5 s.
+   for `DAEMON_STARTUP_TIMEOUT_MS`.
 4. **`simlock lease`** — `requestLease`; progress pushes as JSON lines on stderr; one result
    line on stdout, with the session's `role` (`--export-env`: shell lines). `--agent-id`
    sets the requester. Then, unless `--detach`:

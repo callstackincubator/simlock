@@ -7,7 +7,12 @@ export {
 export type { PathDetails } from "./filesystem.js";
 export { readPackageVersion } from "./package-version.js";
 export { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
-export { type DaemonLauncher, FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
+export {
+  DAEMON_STARTUP_TIMEOUT_MS,
+  type DaemonLauncher,
+  FakeDaemonLauncher,
+  NodeDaemonLauncher,
+} from "./daemon-launcher.js";
 export {
   type IpcConnection,
   type IpcConnector,

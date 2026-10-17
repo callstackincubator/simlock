@@ -7,6 +7,15 @@ export interface DaemonLauncher {
   launch(): Promise<void>;
 }
 
+/**
+ * why: this is not an expected wait -- a daemon boots in a second or two; 20 s is the ceiling
+ * for a loaded machine, long enough that a start is not reported failed while the daemon the
+ * caller itself launched is still coming up. It stays under the 30 s a caller gives the CLI
+ * process, so a start that gives up still gets to say so itself. Both frontends' launch-then-
+ * poll loops read this one bound; neither writes a number of its own (architecture rule 10).
+ */
+export const DAEMON_STARTUP_TIMEOUT_MS = 20_000;
+
 export interface NodeDaemonLauncherOptions {
   readonly args: readonly string[];
   readonly command: string;
