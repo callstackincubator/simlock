@@ -897,7 +897,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#defer(waiter);
       return undefined;
     }
-    this.options.queue.markProcessing(waiter);
+    // why: a refusal means the queue has just rejected this waiter at its deadline, so the device
+    // work this plan stands for would run for a requester who was already answered. The plan holds
+    // a capacity reservation or a device claim, so it gives both back here rather than at a
+    // performer that will never be reached.
+    if (!this.options.queue.markProcessing(waiter)) {
+      releasePlanResources(operation);
+      return undefined;
+    }
     return operation;
   }
 
@@ -1284,6 +1291,18 @@ function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
 /** `standard`: every release path asks for it; a holder cannot request another clean level. */
 function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
   return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
+}
+
+/**
+ * why: a plan handed out the capacity or device claim its operation needs; dropping the plan has
+ * to give it back, or the resource stays held with nobody left to release it.
+ */
+function releasePlanResources(plan: OperationPlan): void {
+  if (plan.kind === "provision") plan.reservation.release();
+  else if (plan.kind === "boot-shutdown") {
+    plan.capacityReservation.release();
+    plan.claim.release();
+  } else plan.claim.release();
 }
 
 function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
