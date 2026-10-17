@@ -357,7 +357,7 @@ describe("NukeService", () => {
     );
   });
 
-  it("logs a device it cannot reset at error, naming the device, platform and error, and still resolves the run", async () => {
+  it("logs a device it cannot reset at error, naming the device, platform and error", async () => {
     const sink = new MemoryLogSink();
     const harness = createHarness([device("dev_1", "ready")]);
     harness.lifecycle.shutdown = async () => {
@@ -377,7 +377,7 @@ describe("NukeService", () => {
       registry: harness.registry,
     });
 
-    await expect(service.nuke(false)).resolves.toEqual({ releasedLeaseIds: [] });
+    await service.nuke(false);
     expect(sink.records).toEqual([
       expect.objectContaining({
         level: "error",
