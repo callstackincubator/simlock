@@ -1312,8 +1312,8 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
 
   it("waits 20 s for a daemon it auto-launched: within the deadline it reports as running, past it the command reports a failed start", async () => {
     const cases = [
-      { bootMs: 19_900, exitCode: 0, label: "19.9 s", timedOut: false },
-      { bootMs: 20_100, exitCode: 1, label: "20.1 s", timedOut: true },
+      { bootMs: 19_900, exitCode: 0, label: "19.9 s" },
+      { bootMs: 20_100, exitCode: 1, label: "20.1 s" },
     ];
 
     // why: every case runs before anything is asserted, so the case that passes cannot hide
@@ -1333,7 +1333,6 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         return {
           exitCode,
           label: testCase.label,
-          timedOut: testCase.timedOut,
           timedOutStarting: output.stderr.includes("Timed out starting simlock daemon"),
           stdout: output.stdout,
           statusHealth: status.daemon?.health ?? after.stdout,
@@ -1348,7 +1347,6 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
         label: outcome.label,
         // why: the failed start is asserted as the timeout's wording, not the whole line or
         // its error code, so what the code reports can change without moving this test.
-        timedOut: outcome.timedOut,
         timedOutStarting: outcome.timedOutStarting,
         stdout: outcome.stdout,
       })),
@@ -1356,14 +1354,12 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
       {
         exitCode: 0,
         label: "19.9 s",
-        timedOut: false,
         timedOutStarting: false,
         stdout: '{"status":"running"}\n',
       },
       {
         exitCode: 1,
         label: "20.1 s",
-        timedOut: true,
         timedOutStarting: true,
         stdout: "",
       },
