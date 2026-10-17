@@ -1151,6 +1151,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       try {
         if (waiter.state === "rejected") return;
         await this.#grant(waiter, handoff.device, kind);
+      } catch (error: unknown) {
+        // why: a grant that failed to store leaves no lease behind (`#commit` mutates memory
+        // only after the file write), so the waiter is re-queued for a fresh grant like every
+        // sibling step; without this catch the error dies in `#track` and the waiter is never
+        // planned again -- no timer, no wake, and its request stays open for the process.
+        this.#logFailure(
+          kind === "provision"
+            ? "granting a provisioned device failed"
+            : "granting a booted device failed",
+          waiter,
+          handoff.device,
+          "grant",
+          error,
+        );
+        this.#defer(waiter);
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
