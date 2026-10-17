@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ScreenNotSupportedError, ScreenUnavailableError } from "../../core/index.js";
+import { ScreenUnavailableError } from "../../core/index.js";
 import { FakeBytePipeLauncher, FakeClock, MemoryFilesystem } from "../../ports/index.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 
@@ -11,18 +11,28 @@ const simulator = {
   driverData: {},
   physical: false,
 } as const;
+const physical = {
+  address: "UDID-1",
+  deviceId: "UDID-1",
+  driverData: {},
+  enrolledApps: [],
+  physical: true,
+} as const;
 const COMMAND = "/opt/simlock/simlock-screen-capture";
+const DEVICE_COMMAND = "/opt/simlock/simlock-device-capture";
 
-async function setup() {
+async function setup(options: { deviceCommand?: string } = {}) {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp("/opt/simlock");
   await filesystem.writeFileAtomic(COMMAND, "");
+  await filesystem.writeFileAtomic(DEVICE_COMMAND, "");
   const launcher = new FakeBytePipeLauncher();
   const clock = new FakeClock();
   const capture = createIosScreenCapture({
     baseEnvironment: { PATH: "/usr/bin" },
     clock,
     command: COMMAND,
+    ...(options.deviceCommand === undefined ? {} : { deviceCommand: options.deviceCommand }),
     deviceSet: "/home/.simlock/devices/ios",
     filesystem,
     launcher,
@@ -47,8 +57,8 @@ describe("iOS screen capture", () => {
     expect(launcher.starts).toEqual([]);
   });
 
-  it("runs the capture program on the device's UDID, inside Simlock's device set, with the stream's settings", async () => {
-    const { capture, launcher } = await setup();
+  it("runs the capture program on the device's UDID, inside Simlock's device set, with the stream's settings, and never the device program", async () => {
+    const { capture, launcher } = await setup({ deviceCommand: DEVICE_COMMAND });
     await capture.open(simulator, settings, new AbortController().signal);
     expect(launcher.starts).toEqual([
       {
@@ -69,16 +79,96 @@ describe("iOS screen capture", () => {
     ]);
   });
 
-  it("refuses a physical iPhone as not supported, without starting anything", async () => {
+  it("a physical iPhone starts the device program on its UDID with the stream's settings and without Simlock's device set", async () => {
+    const { capture, launcher } = await setup({ deviceCommand: DEVICE_COMMAND });
+    await capture.open(physical, settings, new AbortController().signal);
+    expect(launcher.starts).toEqual([
+      {
+        args: [
+          "UDID-1",
+          "--codec",
+          "avcc",
+          "--fps",
+          "30",
+          "--bitrate",
+          "1500000",
+          "--max-dimension",
+          "720",
+        ],
+        command: DEVICE_COMMAND,
+        env: { PATH: "/usr/bin" },
+      },
+    ]);
+  });
+
+  it("refuses a physical open with the build's own reason when the device program is missing, starts nothing, and a simulator open still works", async () => {
+    const { capture, filesystem, launcher } = await setup({ deviceCommand: DEVICE_COMMAND });
+    await filesystem.rm(DEVICE_COMMAND);
+    await expect(
+      capture.open(physical, settings, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenUnavailableError);
+    await expect(capture.open(physical, settings, new AbortController().signal)).rejects.toThrow(
+      `Physical iPhone streams need simlock-device-capture, which did not build on this Mac (it needs Xcode 27, CoreDevice 642.x); there is none at ${DEVICE_COMMAND}`,
+    );
+    expect(launcher.starts).toEqual([]);
+    await expect(
+      capture.open(simulator, settings, new AbortController().signal),
+    ).resolves.toBeDefined();
+  });
+
+  it("starts either program without SIMLOCK_COREDEVICE_INFO_PLIST, even when the daemon's environment has it", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/opt/simlock");
+    await filesystem.writeFileAtomic(COMMAND, "");
+    await filesystem.writeFileAtomic(DEVICE_COMMAND, "");
+    const launcher = new FakeBytePipeLauncher();
+    const capture = createIosScreenCapture({
+      baseEnvironment: {
+        PATH: "/usr/bin",
+        SIMLOCK_COREDEVICE_INFO_PLIST: "/tmp/another-coredevice.plist",
+      },
+      clock: new FakeClock(),
+      command: COMMAND,
+      deviceCommand: DEVICE_COMMAND,
+      deviceSet: "/home/.simlock/devices/ios",
+      filesystem,
+      launcher,
+    });
+    await capture.open(simulator, settings, new AbortController().signal);
+    await capture.open(physical, settings, new AbortController().signal);
+    expect(launcher.starts.map((start) => start.env)).toEqual([
+      { PATH: "/usr/bin", SIMLOCK_IOS_DEVICE_SET: "/home/.simlock/devices/ios" },
+      { PATH: "/usr/bin" },
+    ]);
+  });
+
+  // why: `deviceCommand` is optional on the options a host builds, so the refusal has a wording of its
+  // own for a worker that was never given a device program at all — which is not the same claim as a
+  // program that did not build, and is the only thing standing between a physical open and a spawn of
+  // the empty string.
+  it("refuses a physical open when the worker was given no device program at all, and a simulator open still works", async () => {
     const { capture, launcher } = await setup();
     await expect(
-      capture.open(
-        { ...simulator, enrolledApps: [], physical: true },
-        settings,
-        new AbortController().signal,
-      ),
-    ).rejects.toBeInstanceOf(ScreenNotSupportedError);
+      capture.open(physical, settings, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ScreenUnavailableError);
+    await expect(capture.open(physical, settings, new AbortController().signal)).rejects.toThrow(
+      "Physical iPhone streams need simlock-device-capture, which this worker was not given",
+    );
     expect(launcher.starts).toEqual([]);
+    await expect(
+      capture.open(simulator, settings, new AbortController().signal),
+    ).resolves.toBeDefined();
+    expect(await capture.unavailable()).toBeUndefined();
+  });
+
+  it("reports streaming available when only the device program is missing, and the simulator program's reason when that one is", async () => {
+    const { capture, filesystem } = await setup({ deviceCommand: DEVICE_COMMAND });
+    await filesystem.rm(DEVICE_COMMAND);
+    expect(await capture.unavailable()).toBeUndefined();
+
+    await filesystem.writeFileAtomic(DEVICE_COMMAND, "");
+    await filesystem.rm(COMMAND);
+    expect(await capture.unavailable()).toBe(`No screen capture program at ${COMMAND}`);
   });
 
   it("refuses as unavailable, and says why, when the capture program is not installed", async () => {

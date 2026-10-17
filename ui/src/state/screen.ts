@@ -85,10 +85,11 @@ export function useScreen(leaseId: string): Screen {
 }
 
 /**
- * why: the daemon names its reason in its own words and those words are kept, because they say what its
- * operator has to fix; the status only decides what to add, since a refusal the console can explain
- * better than the daemon did — a device that cannot be streamed at all — would otherwise leave the
- * reader with a sentence that does not say what to do.
+ * why: the daemon names its reason in its own words and those words reach the reader, because they
+ * say what its operator has to fix; the status only decides what to add or replace. A 415 is the one
+ * refusal whose words are not kept: every such message a driver writes names the kind of device it
+ * cannot stream, and which kinds can be streamed is the drivers' knowledge and not this side's, so
+ * the console says only that this device cannot be streamed and names no kind.
  */
 export function refusalOf(error: unknown): string {
   if (!(error instanceof ApiError)) {
@@ -100,7 +101,7 @@ export function refusalOf(error: unknown): string {
     return `${error.message} A stream is only offered where capabilities.stream.enabled is on, and only for a lease that is still held.`;
   }
   if (error.status === 415) {
-    return "This device cannot be streamed. A live screen is captured from a simulator or an emulator, not from a physical phone.";
+    return "This device cannot be streamed.";
   }
   return error.message;
 }

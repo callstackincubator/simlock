@@ -1,42 +1,21 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { DEVICE_READY_MS, waitFor, withHttpDaemon } from "./helpers/index.js";
+import {
+  DEVICE_READY_MS,
+  REPO_ROOT,
+  SCREEN_TAGS as TAG,
+  readScreenFrames as readFrames,
+  waitFor,
+  withHttpDaemon,
+} from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
-const TAG = { description: 0x01, keyframe: 0x02, meta: 0x05 } as const;
-
-interface Frame {
-  readonly tag: number;
-  readonly payload: Uint8Array;
-}
-
-// why: the body is an endless stream, so this reads frames until it has what it came for and then
-// lets go, rather than reading to an end that never comes.
-async function readFrames(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  enough: (frames: readonly Frame[]) => boolean,
-): Promise<Frame[]> {
-  const frames: Frame[] = [];
-  let buffer = new Uint8Array(0);
-  while (!enough(frames)) {
-    const step = await reader.read();
-    if (step.done) break;
-    const joined = new Uint8Array(buffer.length + step.value.length);
-    joined.set(buffer);
-    joined.set(step.value, buffer.length);
-    buffer = joined;
-    while (buffer.length >= 5) {
-      const length = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0);
-      if (buffer.length < 4 + length) break;
-      frames.push({ payload: buffer.slice(5, 4 + length), tag: buffer[4]! });
-      buffer = buffer.slice(4 + length);
-    }
-  }
-  return frames;
-}
+const SIMULATOR_PROGRAM = join(REPO_ROOT, "dist", "bin", "simlock-screen-capture");
 
 // why: `pgrep -x` matches the program's own name only; a pattern match would also find the shell
 // running this check, which is a capture that looks alive and is not.
@@ -156,5 +135,48 @@ describe.skipIf(process.platform !== "darwin")(
         }
       },
     );
+
+    it(
+      "the simulator capture program exits 64 on missing usage and 1 when its device is not there",
+      { timeout: 120_000 },
+      async () => {
+        expect(existsSync(SIMULATOR_PROGRAM), "run pnpm build first").toBe(true);
+        const noArgs = await run(SIMULATOR_PROGRAM, []);
+        expect(noArgs.code, "no arguments is a usage error").toBe(64);
+        const unknownUdid = await run(SIMULATOR_PROGRAM, [
+          "00000000-0000-0000-0000-000000000000",
+          "--codec",
+          "avcc",
+          "--fps",
+          "30",
+          "--bitrate",
+          "1500000",
+          "--max-dimension",
+          "720",
+        ]);
+        expect(unknownUdid.code, "a device that is not there fails to start").toBe(1);
+      },
+    );
   },
 );
+
+// why: `execFile` rejects on a non-zero exit, which is the whole claim here; the exit code is what
+// the test reads, so the rejection is unwrapped rather than caught per call site. `stdio[0]` is
+// `pipe` and not `ignore` because stdin is the capture's liveness handle: the driver hands it a live
+// pipe it closes only to stop, so a pipe hung up at birth is a stop asked for before the program
+// began -- which the iPhone program answers by going at once with exit 0, reporting no reason.
+async function run(
+  program: string,
+  args: readonly string[],
+): Promise<{ code: number; stderr: string }> {
+  const child = spawn(program, args, { stdio: ["pipe", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  const code = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (exitCode) => resolve(exitCode ?? -1));
+  });
+  return { code, stderr };
+}

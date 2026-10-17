@@ -971,9 +971,12 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
 
 // why: `pnpm build` puts both capture artifacts beside the compiled daemon (scripts/build-capture.mjs),
 // so a checkout that built finds them without configuration; `drivers.ios.screenCaptureCommand`
-// names another iOS program.
+// names another iOS simulator program and `drivers.ios.deviceCaptureCommand` another physical iPhone one.
 const PACKAGED_SCREEN_CAPTURE = fileURLToPath(
   new URL("../bin/simlock-screen-capture", import.meta.url),
+);
+const PACKAGED_DEVICE_CAPTURE = fileURLToPath(
+  new URL("../bin/simlock-device-capture", import.meta.url),
 );
 const PACKAGED_SCRCPY_SERVER = fileURLToPath(
   // fallow-ignore-next-line unresolved-import -- a file pnpm build copies into dist, not a module.
@@ -1121,6 +1124,7 @@ async function discoverIosDriver(
       screenCapture: {
         baseEnvironment: process.env,
         command: PACKAGED_SCREEN_CAPTURE,
+        deviceCommand: PACKAGED_DEVICE_CAPTURE,
         launcher: new NodeBytePipeLauncher(),
         onLog: (line) => logger.debug("Screen capture", { line }),
       },

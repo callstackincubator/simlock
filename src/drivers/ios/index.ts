@@ -214,6 +214,7 @@ export interface IosSimctlDriverOptions {
   // screen at all rather than one that fails on every open.
   readonly screenCapture?: {
     readonly command: string;
+    readonly deviceCommand?: string;
     readonly launcher: BytePipeLauncher;
     readonly baseEnvironment: NodeJS.ProcessEnv;
     readonly onLog?: (line: string) => void;
@@ -325,6 +326,13 @@ export class IosSimctlDriver implements Driver {
             baseEnvironment: options.screenCapture.baseEnvironment,
             clock: options.clock,
             command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
+            ...(options.screenCapture.deviceCommand === undefined &&
+            configuredDeviceCaptureCommand(options) === undefined
+              ? {}
+              : {
+                  deviceCommand:
+                    configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
+                }),
             deviceSet: deviceRoot,
             filesystem: options.filesystem,
             launcher: options.screenCapture.launcher,
@@ -1684,6 +1692,11 @@ class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
 
 function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
   const configured = options.driverConfig["screenCaptureCommand"];
+  return typeof configured === "string" && configured !== "" ? configured : undefined;
+}
+
+function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
+  const configured = options.driverConfig["deviceCaptureCommand"];
   return typeof configured === "string" && configured !== "" ? configured : undefined;
 }
 

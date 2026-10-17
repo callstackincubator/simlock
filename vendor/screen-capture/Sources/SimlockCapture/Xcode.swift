@@ -8,7 +8,7 @@ import Foundation
 
 /// The active developer directory — where this tool looks for the simulator's
 /// frameworks, and the one thing about the host machine it has to ask rather than know.
-enum Xcode {
+public enum Xcode {
     /// The directory `xcode-select` points at (`xcode-select -p`), e.g.
     /// `/Applications/Xcode.app/Contents/Developer`.
     ///
@@ -17,7 +17,7 @@ enum Xcode {
     /// is a guess about somebody's machine. When the question cannot be asked at all —
     /// `xcode-select` is not where it is expected to be — the answer falls back to the
     /// standard install location, which is the more likely answer than no answer.
-    static func developerDir() -> String {
+    public static func developerDir() -> String {
         guard let output = run("/usr/bin/xcode-select", ["-p"]),
               let path = String(data: output, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         else {

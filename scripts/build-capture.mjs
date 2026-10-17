@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // `pnpm build:capture`: puts the screen-capture artifacts beside the compiled daemon, which looks for
 // them there. The scrcpy server is copied into dist/vendor/scrcpy/ once its SHA-256 matches the pin in
-// vendor/scrcpy/SHA256SUMS.txt; a mismatch fails the build. On macOS with a Swift toolchain the iOS
-// capture program in vendor/screen-capture/ is built and copied to dist/bin/simlock-screen-capture.
-// Anywhere else it is skipped with a note, and the daemon reports iOS streams as unavailable.
+// vendor/scrcpy/SHA256SUMS.txt; a mismatch fails the build. On macOS with a Swift toolchain each
+// program of vendor/screen-capture/ is built with its own `swift build --product` and copied to
+// dist/bin/ — one failing does not skip the other, and the daemon reports the streams it lost.
+// Anywhere else the Swift build is skipped with a note, and the daemon reports iOS streams as
+// unavailable.
 // Each artifact ships with its upstream's NOTICE.md and LICENSES/ in dist/vendor/<dir>/, because the
 // package publishes dist/ and Apache-2.0 §4(a) asks that whoever gets a binary gets its license too.
 import { spawnSync } from "node:child_process";
@@ -39,30 +41,56 @@ function copyScrcpyServer() {
   copyNotices("scrcpy");
 }
 
+// why: one product per call, so a build that fails on one program is not what skips the other;
+// the caller decides what the pair of outcomes means.
+function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
+  const result = spawnSync(
+    "swift",
+    [
+      "build",
+      "-c",
+      "release",
+      "--product",
+      product,
+      "--package-path",
+      packagePath,
+      "--scratch-path",
+      scratch,
+    ],
+    { stdio: "inherit" },
+  );
+  // why: a failed spawn (no `swift` on the PATH) leaves `status` null, which is not 0 either, so
+  // this one test covers both the tool that is missing and the build that failed.
+  if (result.status !== 0) {
+    console.warn(
+      `build-capture: could not build ${product} (is Xcode installed and selected?); ${what} will be unavailable`,
+    );
+    return false;
+  }
+  const target = join(dist, "bin", product);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(join(scratch, "release", product), target);
+  chmodSync(target, 0o755);
+  return true;
+}
+
 function buildIosCapture() {
   if (process.platform !== "darwin") {
-    console.log("build-capture: not macOS, skipping the iOS screen-capture program");
+    console.log("build-capture: not macOS, skipping the iOS screen-capture programs");
     return;
   }
   const packagePath = join(root, "vendor/screen-capture");
   const scratch = join(packagePath, ".build/out");
-  const built = spawnSync(
-    "swift",
-    ["build", "-c", "release", "--package-path", packagePath, "--scratch-path", scratch],
-    { stdio: "inherit" },
+  // why: each program builds on its own -- the device program links a private framework the
+  // simulator program never needs, so one failing must not take the other's streams with it.
+  const products = [
+    ["simlock-screen-capture", "iOS screen streams"],
+    ["simlock-device-capture", "physical iPhone streams"],
+  ];
+  const copied = products.filter(([product, what]) =>
+    buildAndCopySwiftProduct(product, what, packagePath, scratch),
   );
-  if (built.error !== undefined || built.status !== 0) {
-    console.warn(
-      "build-capture: could not build the iOS screen-capture program (is Xcode installed and selected?); " +
-        "iOS screen streams will be unavailable",
-    );
-    return;
-  }
-  const target = join(dist, "bin/simlock-screen-capture");
-  mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(scratch, "release/simlock-screen-capture"), target);
-  chmodSync(target, 0o755);
-  copyNotices("screen-capture");
+  if (copied.length > 0) copyNotices("screen-capture");
 }
 
 copyScrcpyServer();

@@ -47,17 +47,26 @@ function scratchRepo(server: string, digest: string): string {
 }
 
 // why: a `swift` that writes the program where `swift build` would, so the claim about what ships
-// beside the iOS program is checked without a Swift toolchain.
+// beside the iOS programs is checked without a Swift toolchain. It honours `--product` like the
+// real build does, and fails the products named in SIMLOCK_FAKE_SWIFT_FAIL so a test can have one
+// program build and the other not.
 function fakeSwift(repo: string): string {
   const bin = join(repo, "fake-bin");
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   writeFileSync(
     join(bin, "swift"),
     [
       "#!/bin/sh",
-      'while [ "$1" != "--scratch-path" ]; do shift; done',
-      '/bin/mkdir -p "$2/release"',
-      'echo program > "$2/release/simlock-screen-capture"',
+      "product=''",
+      'scratch=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "--product" ]; then shift; product="$1"; fi',
+      '  if [ "$1" = "--scratch-path" ]; then shift; scratch="$1"; fi',
+      "  shift",
+      "done",
+      'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in *",$product,"*) exit 1 ;; esac',
+      '/bin/mkdir -p "$scratch/release"',
+      'echo program > "$scratch/release/$product"',
     ].join("\n"),
   );
   chmodSync(join(bin, "swift"), 0o755);
@@ -105,26 +114,43 @@ describe("scripts/build-capture.mjs", () => {
   });
 
   it.skipIf(process.platform !== "darwin")(
-    "ships the iOS capture program with serve-sim's NOTICE.md and license, and leaves them out when it is not built",
+    "builds each iOS capture program on its own, ships each one that built with serve-sim's NOTICE.md and license, and leaves out what did not build",
     () => {
       const repo = scratchRepo("the real server", sha256("the real server"));
-      const run = (path: string) =>
-        execFileSync(process.execPath, [join(repo, "scripts", "build-capture.mjs")], {
-          env: { ...process.env, PATH: path },
-          stdio: "pipe",
+      const run = (path: string, fail = "") =>
+        spawnSync(process.execPath, [join(repo, "scripts", "build-capture.mjs")], {
+          encoding: "utf8",
+          env: { ...process.env, PATH: path, SIMLOCK_FAKE_SWIFT_FAIL: fail },
         });
       const shipped = join(repo, "dist", "vendor", "screen-capture");
+      const simulatorProgram = join(repo, "dist", "bin", "simlock-screen-capture");
+      const deviceProgram = join(repo, "dist", "bin", "simlock-device-capture");
 
       run("");
-      expect(existsSync(join(repo, "dist", "bin", "simlock-screen-capture"))).toBe(false);
+      expect(existsSync(simulatorProgram)).toBe(false);
+      expect(existsSync(deviceProgram)).toBe(false);
       expect(existsSync(shipped)).toBe(false);
 
       run(fakeSwift(repo));
-      expect(existsSync(join(repo, "dist", "bin", "simlock-screen-capture"))).toBe(true);
+      expect(existsSync(simulatorProgram)).toBe(true);
+      expect(existsSync(deviceProgram)).toBe(true);
       expect(readFileSync(join(shipped, "NOTICE.md"), "utf8")).toBe("notice of screen-capture");
       expect(readFileSync(join(shipped, "LICENSES", "serve-sim.APACHE-2.0.txt"), "utf8")).toBe(
         "license of screen-capture",
       );
+
+      rmSync(join(repo, "dist"), { force: true, recursive: true });
+      const deviceFailed = run(fakeSwift(repo), "simlock-device-capture");
+      expect(existsSync(simulatorProgram)).toBe(true);
+      expect(existsSync(deviceProgram)).toBe(false);
+      expect(existsSync(join(shipped, "NOTICE.md"))).toBe(true);
+      expect(deviceFailed.stdout + deviceFailed.stderr).toMatch(/physical iPhone streams/iu);
+
+      rmSync(join(repo, "dist"), { force: true, recursive: true });
+      run(fakeSwift(repo), "simlock-screen-capture");
+      expect(existsSync(simulatorProgram)).toBe(false);
+      expect(existsSync(deviceProgram)).toBe(true);
+      expect(existsSync(join(shipped, "NOTICE.md"))).toBe(true);
     },
   );
 });

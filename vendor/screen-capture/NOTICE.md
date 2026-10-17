@@ -1,9 +1,13 @@
 # Vendored: serve-sim's capture and encoder
 
-A Swift package that streams the framebuffer of one booted iOS Simulator. The
-capture pipeline and the encoder came from **serve-sim** — the encoder rewritten
-here, but still serve-sim's file modified; the process around them — the CLI, the
-envelope, the build — is ours. Where exactly the line sits is per file, below.
+A Swift package holding two programs that stream one device's screen: a
+simulator's framebuffer, and a physical iPhone's media stream. The capture
+pipeline and the encoders behind the simulator program came from **serve-sim** —
+the encoders rewritten here, but still serve-sim's files modified; the process
+around them — the CLI, the envelope, the lifecycle, the build — is ours. The
+iPhone program is ours entirely, but for one HEVC capability string from
+**idevice** (MIT), recorded under "What is ours". Where exactly the line sits is
+per file, below.
 
 ## Upstream
 
@@ -33,23 +37,34 @@ carries no count of our _own_ lines: a stale count still reads as a fact.
 
 ## Where every file came from
 
-Our target is one flat directory, `Sources/simlock-screen-capture/`; upstream
-keeps the same files in two targets, `Sources/SimNative/` and
-`Sources/SimNativeSupport/`, and their paths are given per row.
+The four files serve-sim wrote as they are — unchanged or with one patch — and
+the four it wrote that we rewrote all live in two directories: the simulator
+source files under `Sources/simlock-screen-capture/`, and the four encoders under
+`Sources/SimlockCapture/` (the shared library both programs build on, which is
+otherwise all ours). Upstream keeps the same files in two targets,
+`Sources/SimNative/` and `Sources/SimNativeSupport/`, and their paths are given
+per row.
 
-| File in `Sources/simlock-screen-capture/` | Upstream path               | Origin                                                                            |
-| ----------------------------------------- | --------------------------- | --------------------------------------------------------------------------------- |
-| `SimFrameworks.swift`                     | `Sources/SimNative/`        | theirs, unchanged                                                                 |
-| `FramebufferSurfaceSelector.swift`        | `Sources/SimNativeSupport/` | theirs, unchanged                                                                 |
-| `DeviceDisplaySizes.swift`                | `Sources/SimNativeSupport/` | theirs, unchanged                                                                 |
-| `FrameCapture.swift`                      | `Sources/SimNative/`        | theirs, **one patch** (deviation 1)                                               |
-| `H264Encoder.swift`                       | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header |
-| `VideoEncoder.swift`                      | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header |
-| `PixelBufferUtils.swift`                  | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header |
-| `Xcode.swift`                             | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header |
-| `main.swift`                              | —                           | ours, entirely: the CLI, the frame envelope, the lifecycle                        |
-| `scripts/unframe.mjs`                     | —                           | ours, entirely: a hand-run diagnostic                                             |
-| `Package.swift`                           | —                           | ours, entirely                                                                    |
+| File                                                                                | Upstream path               | Origin                                                                                                                                                      |
+| ----------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `simlock-screen-capture/SimFrameworks.swift`                                        | `Sources/SimNative/`        | theirs, unchanged                                                                                                                                           |
+| `simlock-screen-capture/FramebufferSurfaceSelector.swift`                           | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                           |
+| `simlock-screen-capture/DeviceDisplaySizes.swift`                                   | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                           |
+| `simlock-screen-capture/FrameCapture.swift`                                         | `Sources/SimNative/`        | theirs, **one patch** (deviation 1)                                                                                                                         |
+| `SimlockCapture/H264Encoder.swift`                                                  | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
+| `SimlockCapture/VideoEncoder.swift`                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
+| `SimlockCapture/PixelBufferUtils.swift`                                             | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
+| `SimlockCapture/Xcode.swift`                                                        | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
+| `SimlockCapture/Lifecycle.swift`, `SimlockCapture/Options.swift`                    | —                           | ours, entirely: the option parser, the envelope, the lifecycle, the scaler, the encode loop                                                                 |
+| `simlock-screen-capture/main.swift`, `simlock-screen-capture/SimulatorSource.swift` | —                           | ours, entirely: the simulator program and its framebuffer as a `ScreenSource`                                                                               |
+| `simlock-device-capture/*` (five files)                                             | —                           | ours, entirely: the iPhone program — the version gate, the CoreDevice source, the RTP receiver, the decoder — rewritten from this repo's own PoC (ADR 0031) |
+| `SimlockMediaBridge/*`                                                              | —                           | ours, entirely: the negotiator bridge; it carries the `idevice` HEVC feature string below                                                                   |
+| `Stubs/*` (three interfaces)                                                        | —                           | ours, entirely: hand-written declarations for the parts of CoreDevice we call                                                                               |
+| `scripts/unframe.mjs`                                                               | —                           | ours, entirely: a hand-run diagnostic                                                                                                                       |
+| `Package.swift`                                                                     | —                           | ours, entirely                                                                                                                                              |
+
+To diff any of the eight serve-sim files, use the command at the end with the
+upstream path from its row and the file's path under `Sources/`.
 
 Four files were rewritten rather than copied, and they are still serve-sim's files,
 modified: each was written from upstream's file of the same name, so each carries the
@@ -186,18 +201,20 @@ curl -sL https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8b
   | diff -u - Sources/simlock-screen-capture/FrameCapture.swift
 ```
 
-That prints three things and nothing else — the `MODIFIED FILE` header Apache §4(b)
-asks for, the device-set patch, and the deleted `import SimNativeSupport` — which is
-the whole claim of this notice in one screenful. If that diff ever grows past those
-three, either someone edited upstream's capture logic or Apple moved something
+That prints four things and nothing else — the `MODIFIED FILE` header Apache §4(b)
+asks for, the device-set patch, the deleted `import SimNativeSupport`, and the
+`import SimlockCapture` that replaced it — which is the whole claim of this notice
+in one screenful. If that diff ever grows past those
+four, either someone edited upstream's capture logic or Apple moved something
 upstream, and both deserve to be noticed rather than committed. For any other file
 in the table, substitute its upstream path in both places — for the four rewritten
 ones it prints a whole-file rewrite, which is what their rows say:
 
 ```sh
 UPSTREAM=packages/serve-sim/Sources/SimNative/SimFrameworks.swift   # or SimNativeSupport/…
+LOCAL=Sources/simlock-screen-capture/SimFrameworks.swift   # the encoders live in Sources/SimlockCapture/
 curl -sL "https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8bd19bca9f9f67a9237931f44/$UPSTREAM" \
-  | diff -u - "Sources/simlock-screen-capture/$(basename "$UPSTREAM")"
+  | diff -u - "$LOCAL"
 ```
 
 Run it before and after an Xcode upgrade, and again before taking anything new
@@ -224,11 +241,41 @@ URL either returns that commit's bytes or fails.
 
 ## What is ours
 
-`main.swift`, `scripts/unframe.mjs` and `Package.swift`, plus `NOTICE.md` and the
-`LICENSES/` entry's file name. Everything else in `Sources/simlock-screen-capture/`
-is serve-sim's: three files unchanged, `FrameCapture.swift` with the one patch above,
-and the four rewritten files, which are serve-sim's files modified by us and are
-Apache-2.0 like the rest of serve-sim's code here.
+`Package.swift`, `NOTICE.md` and the `LICENSES/` entries' file names,
+`scripts/unframe.mjs`, the whole of `Sources/SimlockCapture/` but for the four
+encoder files (`Lifecycle.swift` and `Options.swift`: the option parser, the
+envelope, the lifecycle, the scaler, the encode loop), both programs'
+`main.swift` and `Sources/simlock-screen-capture/SimulatorSource.swift`, the
+whole of `Sources/simlock-device-capture/` and `Sources/SimlockMediaBridge/`,
+and the three interfaces under `Stubs/`. Everything else is serve-sim's: three
+files unchanged, `FrameCapture.swift` with the one patch above, and the four
+rewritten files, which are serve-sim's files modified by us and are Apache-2.0
+like the rest of serve-sim's code here.
+
+### idevice (MIT): the HEVC capability string
+
+`SimlockMediaBridge/SimlockMediaBridge.m` replaces the feature string the offer
+advertises for payload 100 (HEVC) with:
+
+```text
+FLS;MS:-1;LF:-1;LTR;CABAC;POS:0;EOD:1;HTS:2;RR:3;AR:16/9,5/8;XR:16/9,5/8;
+```
+
+That string is from the **idevice** project — <https://github.com/jkcoxson/idevice>
+(`master`, `3854a5df4a5a6dee71ffce4d8befc2ea356a8065` when taken), MIT,
+`Copyright 2026 Jackson Coxson`, verbatim:
+[`LICENSES/idevice.MIT.txt`](LICENSES/idevice.MIT.txt), re-fetched with:
+
+```sh
+curl -sL https://raw.githubusercontent.com/jkcoxson/idevice/master/LICENSE.txt \
+  | diff -u - LICENSES/idevice.MIT.txt
+```
+
+It is the receiver's documented standalone-decoder preset; every other spelling
+the iPhone has been offered paints torn pictures. The file it lives in is
+otherwise ours, and carrying one MIT string inside an MIT file needs no
+relicensing — the notice above and the license file travel with it, which is all
+the license asks.
 
 Ours is under the project's MIT license, like the rest of this repository. That is
 permitted rather than a relicensing: Apache-2.0 lets a licensee add its own terms to

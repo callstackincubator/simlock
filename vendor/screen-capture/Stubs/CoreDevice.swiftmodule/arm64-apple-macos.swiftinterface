@@ -1,0 +1,98 @@
+// swift-interface-format-version: 1.0
+// swift-compiler-version: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+// swift-module-flags: -target arm64-apple-macos26.0 -enable-library-evolution -swift-version 5 -module-name CoreDevice
+// Hand-written stub for /Library/Developer/PrivateFrameworks/CoreDevice.framework (the client side
+// of coredeviced). Apple ships no module interface for it, so this file declares only the members
+// simlock-device-capture calls, with the signatures verified against the installed CoreDevice 642.x
+// binary. The version pin in CoreDeviceVersion is what keeps this honest: an optimized client that
+// guessed a wrong layout is the reason `-Onone` is load-bearing in Package.swift.
+//
+// A new Xcode major turns iPhone streams off until this file is checked against that release and the
+// pin moves with it.
+import Swift
+import Foundation
+import Dispatch
+import CoreDeviceTypes
+import CoreDeviceProtocols
+import Network
+import XPC
+
+public protocol CoreDeviceServiceConnection {
+}
+
+public struct CoreDeviceService {
+  public static var sharedConnection: any CoreDevice.CoreDeviceServiceConnection { get }
+}
+
+public class DeviceManager {
+  public init(serviceConnection: any CoreDevice.CoreDeviceServiceConnection)
+  final public func allDevices() -> [CoreDevice.RemoteDevice]
+}
+
+public class RemoteDevice {
+  final public var id: Foundation.UUID { get }
+  final public var description: Swift.String { get }
+  public var deviceInfo: CoreDeviceProtocols.DeviceInfo { get }
+}
+
+// ---- The media stream, reached through the same service connection ----
+
+public enum CodableValue { public init?(_ value: Any) }
+public struct MediaStreamHelper { public static func getNegotiatorOptions(for: CoreDeviceProtocols.DeviceInfo) -> [String: Any] }
+public struct DeviceMediaStream {
+ public static var kAVCMediaStreamOptionClientName: String { get }
+ public static var kAVCMediaStreamOptionClientSessionID: String { get }
+ public enum StreamType { case audio; case video }
+ public enum Direction { case input; case output }
+ public struct SupportInfo { public var supportedFeatures: UInt64 { get }; public var description: String { get } }
+ public struct SupportInfoResponse { public var client: SupportInfo { get }; public var device: SupportInfo { get }; public var common: SupportInfo { get } }
+ public struct StartRequest {
+  public init(timeout: UInt, type: StreamType, direction: Direction, negotiatorOffer: Foundation.Data, clientSupportedFeatures: UInt64, receiverIP: String?, receiverPort: UInt16?, options: [String: CodableValue])
+ }
+ public struct StartResponse : Encodable { public var connection: ConnectionInfo { get }; public var negotiatorAnswer: Foundation.Data { get }; public func encode(to: any Encoder) throws }
+ public struct ConnectionInfo : Encodable { public var receiver: NetworkInfo { get }; public var sender: NetworkInfo { get }; public var streamConfig: MediaStreamConfig { get }; public func encode(to: any Encoder) throws }
+ public struct NetworkInfo { public var ipv6Address: String { get }; public var port: UInt16 { get } }
+ public struct MediaStreamConfig { public var StreamInputID: Int { get } }
+ public struct StopRequest { public init(stopAll: Bool, identifiers: [UInt32]?) }
+ public struct StopResponse : Encodable { public func encode(to: any Encoder) throws }
+}
+extension RemoteDevice {
+ public var mediaStreamSupportInfo: DeviceMediaStream.SupportInfoResponse { get async throws }
+ public func startMediaStream(with: DeviceMediaStream.StartRequest) async throws -> DeviceMediaStream.StartResponse
+ public func stopMediaStream(with: DeviceMediaStream.StopRequest) async throws -> DeviceMediaStream.StopResponse
+}
+
+public struct NetworkUtils {
+ public static func withSharedSocketDictionary<A>(sourceAddress: Network.IPv6Address, port: UInt16, remoteAddress: Network.IPv6Address, remotePort: UInt16, body: (XPC.xpc_object_t) throws -> A) throws -> A
+}
+
+// ---- The usage assertion that loads a device's services ----
+
+// DeviceKit's device interaction model acquires these states before media use, and CoreDevice's own
+// media stream needs the services loaded behind them.
+public struct AssertableDeviceState : Swift.Hashable {
+  public static var developerModeEnabledIfRequired: CoreDevice.AssertableDeviceState { get }
+  public static var coreDeviceServicesLoaded: CoreDevice.AssertableDeviceState { get }
+  public static var extendedDeviceInfoLoaded: CoreDevice.AssertableDeviceState { get }
+  public static var remoteServiceDiscoveryTrustedConnectivityAvailable: CoreDevice.AssertableDeviceState { get }
+  public static var secureNetworkingAvailable: CoreDevice.AssertableDeviceState { get }
+  public static func == (lhs: CoreDevice.AssertableDeviceState, rhs: CoreDevice.AssertableDeviceState) -> Swift.Bool
+  public func hash(into hasher: inout Swift.Hasher)
+  public var hashValue: Swift.Int { get }
+}
+public struct UsageAssertionRequirements {
+  public init(deviceStates: Swift.Set<CoreDevice.AssertableDeviceState>, capabilities: Swift.Set<CoreDevice.Capability>)
+}
+public class DeviceUsageAssertion {
+  public func releaseAssertion()
+  public func registerInvalidationHandler(invokingOnQueue: Dispatch.DispatchQueue?, handler: @escaping (Swift.Error?) -> Swift.Void)
+}
+extension RemoteDevice {
+  public func acquireDeviceUsageAssertion(withReason: Swift.String, requirements: CoreDevice.UsageAssertionRequirements) async throws -> CoreDevice.DeviceUsageAssertion
+}
+
+public struct Capability : Swift.Hashable {
+  public static func == (lhs: CoreDevice.Capability, rhs: CoreDevice.Capability) -> Swift.Bool
+  public func hash(into hasher: inout Swift.Hasher)
+  public var hashValue: Swift.Int { get }
+}
