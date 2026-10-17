@@ -199,7 +199,7 @@ async function createHarness(
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
   });
 
-  return { clock, driver, engine, eventBus, filesystem, reaper, registry };
+  return { clock, driver, engine, eventBus, executor, filesystem, reaper, registry };
 }
 
 async function seedReady(harness: Awaited<ReturnType<typeof createHarness>>) {
@@ -647,6 +647,39 @@ describe("CleanupReaper", () => {
         .sort(),
     ).toEqual([idleReady.id, idleShutdown.id].sort());
 
+    harness.reaper.dispose();
+  });
+
+  it("logs a cleanup action that throws at error, naming the action, rule and target, and still resolves the run", async () => {
+    const sink = new MemoryLogSink();
+    const rule: CleanupRule = {
+      evaluate: () => [
+        { action: "shutdown", reason: "test cleanup", rule: "test-rule", target: "dev_1" },
+      ],
+      name: "test-rule",
+    };
+    const harness = await createHarness(
+      [rule],
+      {},
+      { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), tickMs: 10_000 },
+    );
+    await seedReady(harness);
+    vi.spyOn(harness.executor, "execute").mockRejectedValue(new Error("action exploded"));
+
+    await expect(harness.reaper.run()).resolves.toHaveLength(1);
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "error",
+        module: "daemon.reaper",
+        fields: {
+          action: "shutdown",
+          error: "Error: action exploded",
+          rule: "test-rule",
+          step: "cleanup",
+          target: "dev_1",
+        },
+      }),
+    ]);
     harness.reaper.dispose();
   });
 
