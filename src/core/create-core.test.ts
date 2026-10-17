@@ -601,8 +601,9 @@ describe("createCore", () => {
   });
 
   describe("the warm pool over budget with a device on a platform that has no driver", () => {
-    // why: one tick plus a millisecond, because a failed shutdown pauses its device for exactly a
-    // tick; advancing less would let a pass decline the proposal without acting on it at all.
+    // why: one tick plus a second, because a failed shutdown pauses its device for exactly a
+    // tick; advancing to the tick's end or less would let a pass decline the proposal without
+    // acting on it at all.
     const PAST_A_TICK = 31_000;
 
     async function overBudgetWithARefusedPlatformsDeviceFirst() {
