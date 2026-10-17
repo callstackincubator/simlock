@@ -1332,17 +1332,17 @@ describe("QuarantineCoordinator enterFromStalledTransition under the device's re
     return { ...harness, enter };
   }
 
-  it("enterFromStalledTransition checks the state of the device it was given, not of another, and writes nothing for an id the registry does not hold", async () => {
+  it("enterFromStalledTransition checks the state of the device it was given, not of another, answers no and writes nothing for an id the registry does not hold, and answers yes when it enters", async () => {
     const bystander: VirtualDevice = { ...device("dev_other", "other-driver-id"), state: "ready" };
     const harness = await createHarness({ others: [bystander] });
     harness.registry.forceState(harness.target.id, "reclaiming");
-    const enter = (deviceId: string): Promise<void> =>
+    const enter = (deviceId: string) =>
       harness.coordinator.enterFromStalledTransition(deviceId, "reclaiming");
 
-    await expect(enter("dev_missing")).resolves.toBeUndefined();
+    await expect(enter("dev_missing")).resolves.toBe(false);
     expect(eventsOf(harness.bus)).toEqual([]);
 
-    await enter(harness.target.id);
+    await expect(enter(harness.target.id)).resolves.toBe(true);
 
     expect(eventsOf(harness.bus).map((event) => event.event)).toEqual(["device.quarantined"]);
     expect(

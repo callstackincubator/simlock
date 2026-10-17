@@ -37,6 +37,7 @@ import {
 } from "../core/index.js";
 import { createCapacityStrategy, readyTransitionUpdate } from "../core/testing.js";
 import { FakeDriver } from "../core/testing.js";
+import { QuarantineCoordinator } from "../core/testing.js";
 import {
   LeaseAcquisitionCoordinator,
   type LeaseAcquisitionCoordinatorOptions,
@@ -153,6 +154,7 @@ async function createHarness(
     readonly logger?: Logger;
     readonly maxDevices?: number;
     readonly maxRunning?: number;
+    readonly quarantine?: LeaseAcquisitionCoordinatorOptions["quarantine"];
     /** The class preference lists the daemon would build from config and the drivers. */
     readonly preferences?: ModelPreferences;
     /** Stands in for the catalog reader a class request reads, when a test scripts it. */
@@ -177,9 +179,10 @@ async function createHarness(
   const decisions = new SerializedDecision();
   const claims = new DeviceOperationClaims();
   const catalog = new DriverCatalog(drivers, { preferences: options.preferences ?? {} });
+  const appConfig = config(options.maxDevices, options.maxRunning);
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(
-      config(options.maxDevices, options.maxRunning).capacity,
+      appConfig.capacity,
       new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * gibibyte,
@@ -187,6 +190,19 @@ async function createHarness(
     ),
   );
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
+  // why: quarantine's kick wakes this coordinator's queue, and `coordinator` is only assigned below.
+  const quarantine =
+    options.quarantine ??
+    new QuarantineCoordinator({
+      claims,
+      clock,
+      config: appConfig.warmPool.quarantine,
+      decisions,
+      drivers: catalog,
+      eventBus: bus,
+      notifyAvailability: () => coordinator?.kick(),
+      registry,
+    });
   const provisioner = new DeviceProvisioner({
     catalog,
     claims,
@@ -260,6 +276,7 @@ async function createHarness(
     planner: new AcquisitionPlanner(capacity, claims),
     provisioner,
     queue,
+    quarantine,
     registry,
     requests: new LeaseRequestBook({
       decisions,
@@ -1454,7 +1471,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(acquisition).rejects.toMatchObject({ name: "RequestCancelledError" });
   });
 
-  it("A failed destroy after a shut-down device fails to boot for a waiter logs the device id and the error, and fences the device under a boot claim owned by a request, not an ownerless one.", async () => {
+  it("A failed destroy after a shut-down device fails to boot for a waiter logs the device id and the error.", async () => {
     const { logger, sink } = capturingLogger();
     const harness = await createHarness({ logger });
     const shutdown = await seedShutdown(harness);
@@ -1476,11 +1493,6 @@ describe("LeaseAcquisitionCoordinator", () => {
         },
       }),
     ]);
-    // An ownerless boot claim is the warm pool's: a request would wait for it until its own timeout.
-    expect(harness.claims.claim(shutdown.id)).toEqual({
-      kind: "boot",
-      owner: expect.stringMatching(/^req_/),
-    });
   });
 
   it("A shut-down device that fails to boot for a waiter and then fails to be destroyed is quarantined, unclaimed, and counts once against running capacity.", async () => {
@@ -1590,28 +1602,36 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
   });
 
-  it("A failed boot whose destroy throws keeps the waiter's running slot and fences the device under its waiter.", async () => {
-    const harness = await createHarness({
-      lifecycle: (lifecycle) => ({
-        bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
-        dispose: (...args) => lifecycle.dispose(...args),
-        shutdown: (...args) => lifecycle.shutdown(...args),
-        destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
-      }),
-    });
-    const shutdown = await seedShutdown(harness);
-    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+  it.each([
+    ["answers that another operation owns the device", async (): Promise<boolean> => false],
+    ["throws", async (): Promise<boolean> => Promise.reject(new Error("state.json write failed"))],
+  ] as const)(
+    "A failed boot whose destroy throws frees the waiter's running slot and leaves no fence, even when quarantine %s.",
+    async (_label, enterFromStalledTransition) => {
+      const harness = await createHarness({
+        lifecycle: (lifecycle) => ({
+          bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+          dispose: (...args) => lifecycle.dispose(...args),
+          shutdown: (...args) => lifecycle.shutdown(...args),
+          destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
+        }),
+        quarantine: { enterFromStalledTransition },
+      });
+      const shutdown = await seedShutdown(harness);
+      harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
 
-    await expect(
-      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
-    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+      await expect(
+        harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+      ).rejects.toMatchObject({ name: "BootTimeoutError" });
+      await settle();
 
-    expect(harness.claims.claim(shutdown.id)).toEqual({
-      kind: "boot",
-      owner: expect.stringMatching(/^req_/),
-    });
-    expect(harness.capacity.runningCapacity([]).global.reserved).toBe(1);
-  });
+      expect(harness.claims.claim(shutdown.id)).toBeUndefined();
+      expect(harness.capacity.runningCapacity([]).global.reserved).toBe(0);
+      await expect(
+        harness.coordinator.request(request, { ownerId: "second", requesterId: "second" }),
+      ).resolves.toMatchObject({ device: { id: shutdown.id, state: "leased" } });
+    },
+  );
 
   it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
     // The warm pool's boot reserves its own slot and claims the device in one decision. Here it

@@ -134,7 +134,7 @@ export interface DoctorReport {
 }
 
 export interface DoctorQuarantine {
-  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<void>;
+  enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
 }
 
 export interface DoctorOptions {
