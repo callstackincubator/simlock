@@ -25,7 +25,7 @@ The driver hands the capture one `ScreenTarget` per device: `serial`, `run(args,
 
 - **Emulator** (`index.ts` of the driver): `adb -s <serial> …` with the driver's scoped env, connections to Simlock's
   own adb server.
-- **Physical phone** (`physical-handler.ts`): each of `run`, `spawn` and `connect` first passes the 5037 protocol
+- **Physical phone** (`../physical-handler.ts`): each of `run`, `spawn` and `connect` first passes the 5037 protocol
   check every other phone command passes; a closed check sends nothing and throws `ScreenUnavailableError` with its
   message. An open one runs `adb -P 5037 -s <deviceId> …` with that server's env (Simlock's port in it,
   `ANDROID_ADB_SERVER_ADDRESS`, `ADB_SERVER_SOCKET` and `ANDROID_SERIAL` removed), or connects to port 5037.
