@@ -4,7 +4,7 @@
 // Hand-written stub for /Library/Developer/PrivateFrameworks/CoreDevice.framework (the client side
 // of coredeviced). Apple ships no module interface for it, so this file declares only the members
 // simlock-device-capture calls, with the signatures verified against the installed CoreDevice 642.x
-// binary. The version pin in CoreDeviceSource is what keeps this honest: an optimized client that
+// binary. The version pin in CoreDeviceVersion is what keeps this honest: an optimized client that
 // guessed a wrong layout is the reason `-Onone` is load-bearing in Package.swift.
 //
 // A new Xcode major turns iPhone streams off until this file is checked against that release and the
