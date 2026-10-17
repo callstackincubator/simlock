@@ -4684,9 +4684,10 @@ function scriptedListRunner(): ScriptedProcessRunner {
 }
 
 /**
- * why: Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled out
- * here rather than imported: no driver code knows about this path yet, and a test that failed to
- * compile would prove nothing (#79).
+ * why: Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled
+ * out here rather than imported from the driver, which keeps its own copy of the same path: this
+ * suite reads the store as the OS lays it out, so a fixture stays a fact about macOS rather than
+ * about what the driver happens to look at (#79).
  */
 const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
 

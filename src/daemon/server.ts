@@ -216,9 +216,9 @@ export interface DaemonServerCommonOptions {
    */
   readonly dispose?: () => void | Promise<void>;
   /**
-   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, started only after
-   * `start()` resolves -- see `main.ts`) before anything else in `stop()` runs, so no
-   * request arriving through it can ever observe a stopping engine. A no-op default when
+   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, which `main.ts` starts
+   * from `onSocketClaimed`, partway through `start()`) before anything else in `stop()` runs, so
+   * no request arriving through it can ever observe a stopping engine. A no-op default when
    * no auxiliary frontend is running.
    */
   readonly stopAuxiliary?: () => Promise<void>;
@@ -369,13 +369,6 @@ export class DaemonServer {
       });
       this.#dispatcher = this.#workerDispatcher;
     } else {
-      // why: Gateway mode (ADR 0005 §32): the handlers come ready-made, and there is no engine to
-      // hold. Owner-routed facts are inert here, deliberately: the gateway issues no leases of
-      // its own in this PR, and a worker's republished `lease.expired` names *that worker's*
-      // owner, not a gateway client's principal -- routing one to a gateway connection would
-      // push another machine's fact at the wrong holder. #118/#119 relay lease-scoped pushes,
-      // with the gateway's own lease index to route them by; until then this is inert rather
-      // than wrong.
       this.#engine = undefined;
       this.#dispatcher = options.dispatcher;
       // why: #118: a gateway now issues leases of its own, and `GatewayOwnerRoutedFacts` (built by
@@ -502,10 +495,10 @@ export class DaemonServer {
       return;
     }
 
-    // why: Subscribed only now, after convergence, not before `start()` claimed the socket. Under
-    // ADR 0004 convergence releases nothing at all (the orphan sweep is gone), so the only
-    // lease fact it can still emit is a `lease.expired` for a lease whose deadline passed
-    // while no daemon was running.
+    // why: Subscribed only now, after convergence, not before `start()` claimed the socket.
+    // Convergence ends every lease whose device the startup read does not find running, so the
+    // lease facts this window can emit are a `lease.expired` for a lease whose deadline passed
+    // while no daemon ran and a `lease.released` (`device-lost`) for one whose device is gone.
     //
     // Such a `lease-lost` push can genuinely be missed, and that is accepted rather than
     // assumed away: the socket has been accepting connections since the claim, `hello` is
@@ -527,8 +520,7 @@ export class DaemonServer {
     //
     // `device.crash-detected` / `device.recovered` re-checked: the health monitor
     // that emits them is only started after convergence too (see `createLeasing` /
-    // `DaemonServer` startup wiring), so neither can fire during this window either
-    // -- the same "nothing emitted during convergence needs a push" argument holds.
+    // `DaemonServer` startup wiring), so neither can fire during this window either.
     this.#unsubscribeLeaseLost.push(
       this.#ownerRoutedFacts.subscribe((fact) => {
         switch (fact.type) {
@@ -894,9 +886,8 @@ export class DaemonServer {
     const clientRange: ProtocolRange =
       payload.protocolRange ?? normalizeProtocolVersion(payload.protocolVersion as number);
     const negotiated = negotiateProtocolVersion(clientRange, this.#protocolRange);
-    // why: ADR §5's seam: `#resolveRole` is `resolveAgentRole` (always "agent") until PR 2 supplies
-    // a real credential-checking resolver -- see `session.ts`. A resolver that rejects a bad
-    // credential throws here, before `connection.helloReceived` is ever set, which is why this
+    // why: A resolver that rejects a bad credential throws here, before
+    // `connection.helloReceived` is ever set, which is why this
     // whole block is wrapped: nothing after it should be able to run for a rejected `hello` --
     // including the version-mismatch path just below. Credential verification and role
     // resolution run *before* the version check, and independently of its outcome: ADR §6's
@@ -1603,9 +1594,8 @@ function quietDeferred(): {
 }
 
 /**
- * why: An `OwnerRoutedFacts` that never emits -- what a gateway gets, since it has no local leases
- * to report facts about (see the constructor's comment). A named function rather than an inline
- * object literal so the intent reads at the one place that would otherwise be a bare `{}`.
+ * why: An `OwnerRoutedFacts` that never emits. A named function rather than an inline object
+ * literal so the intent reads at the one place that would otherwise be a bare `{}`.
  */
 function inertOwnerRoutedFacts(): OwnerRoutedFacts & { dispose(): void } {
   return {
@@ -1634,9 +1624,10 @@ function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
 }
 
 /**
- * why: Resolves the wire `code` for a socket response. `ProtocolError` is socket-framing-specific
- * (thrown only while parsing a request frame, before a `Session` exists -- see its own doc) and
- * stays local to this file; every other error this daemon can throw is classified by the one
+ * why: Resolves the wire `code` for a socket response. `ProtocolError` is this file's own
+ * socket-framing error and carries the `code` the framing already decided (`BAD_FRAME`,
+ * `BAD_REQUEST`, `UNKNOWN_REQUEST`), so it answers for itself and never reaches the shared
+ * dispatcher; every other error this daemon can throw is classified by the one
  * shared table both transports read -- see `./error-code.js`'s module doc (ADR 0003 §7, review
  * finding B5: this used to be its own hand-written `instanceof` chain that silently drifted
  * from HTTP's).
